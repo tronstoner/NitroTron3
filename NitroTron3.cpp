@@ -66,6 +66,19 @@ static float RemapKnob(float raw) {
   return v;
 }
 
+// Wavefold: drive signal and reflect at ±PEAK boundaries
+// Normalized so triangle's 1.4x boost passes through at amount=0
+// amount 0 = passthrough, 1 = heavily folded
+static float Wavefold(float x, float amount) {
+  constexpr float PEAK = 1.4f;  // matches triangle boost in moog_osc.h
+  x *= 1.f + amount * 4.f;
+  float norm = x / PEAK;
+  float t = fmodf(norm + 1.f, 4.f);
+  if (t < 0.f) t += 4.f;
+  float folded = (t < 2.f) ? (t - 1.f) : (3.f - t);
+  return folded * PEAK;
+}
+
 // ---------------------------------------------------------------------------
 // Audio callback
 // ---------------------------------------------------------------------------
@@ -101,9 +114,19 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float midi_note = static_cast<float>(base_note + semitone);
   float freq1 = MidiToFreq(midi_note + fine);
 
-  // K4: tone — ladder cutoff (exponential 80 Hz – 8 kHz)
-  float cutoff = MapCutoff(hw.GetKnobValue(Hothouse::KNOB_4));
-  ladder.SetCutoff(cutoff + LADDER_CUTOFF_OFFSET);
+  // K4: tone / wavefold
+  // In SAW/SQUARE: full range controls ladder cutoff (80 Hz – 8 kHz)
+  // In TRI: CCW→noon = cutoff (80 Hz – 8 kHz), noon→CW = wavefolding (filter stays open)
+  float k4 = hw.GetKnobValue(Hothouse::KNOB_4);
+  float fold_amount = 0.f;
+
+  if (wf == MoogOsc::TRI) {
+    float cutoff_knob = (k4 < 0.5f) ? (k4 * 2.f) : 1.f;  // full open at noon
+    ladder.SetCutoff(MapCutoff(cutoff_knob) + LADDER_CUTOFF_OFFSET);
+    if (k4 > 0.5f) fold_amount = (k4 - 0.5f) * 2.f;
+  } else {
+    ladder.SetCutoff(MapCutoff(k4) + LADDER_CUTOFF_OFFSET);
+  }
   ladder.SetDrive(LADDER_DRIVE);
 
   // --- K5: osc2 detune (-12 to +12 semitones) ---
@@ -146,9 +169,14 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Envelope follower tracks input amplitude
       float env_val = env.Process(dry);
 
-      // Both oscillators mixed before filter
+      // Both oscillators — wavefold always applied in TRI mode (no-op at amount=0)
       float o1 = osc1.Process(freq1);
-      float o2 = osc2.Process(freq2) * osc2_level;
+      float o2 = osc2.Process(freq2);
+      if (wf == MoogOsc::TRI) {
+        o1 = Wavefold(o1, fold_amount);
+        o2 = Wavefold(o2, fold_amount);
+      }
+      o2 *= osc2_level;
 
       // Unity gain compensation: scale by 1/sqrt(1 + level²)
       float gain = 1.f / sqrtf(1.f + osc2_level * osc2_level);
