@@ -35,7 +35,8 @@ enum DroneMode { DRONE_FIXED, DRONE_TRACK };
 Led led_bypass;
 Led led_status;
 bool bypass = true;
-float last_env = 0.f;  // smoothed envelope for per-block modulation
+float last_env = 0.f;   // smoothed envelope for per-block modulation
+int wrap_note = 9;       // wrap point for tracking mode, set by mode 1 (default A)
 
 // LED blink state
 uint32_t led_blink_counter = 0;
@@ -135,27 +136,27 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float fine = Mapf(hw.GetKnobValue(Hothouse::KNOB_3), -0.5f, 0.5f);
 
   if (drone_mode == DRONE_FIXED) {
-    // K1: ±12 semitone offset from A, center dead zone = A (same feel as tracking mode)
+    // K1: ±12 semitone offset from A, center dead zone = A
     float k1 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_1));
     int semi_offset = MapDetuneKnob(k1, 12);
+    // Store the selected note as wrap point for tracking mode
+    wrap_note = (9 + semi_offset % 12 + 12) % 12;
     // K2: octave (7 positions: C-1 through C5)
     int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
     int base_note = 12 + octave * 12;
-    midi_note = static_cast<float>(base_note + 9 + semi_offset);  // 9 = A
+    midi_note = static_cast<float>(base_note + 9 + semi_offset);
   } else {
-    // Extract pitch class, wrapping at A.
-    // Range: A,A#,B,C,C#,D,D#,E,F,F#,G,G# — wrap at G#→A boundary.
+    // Extract pitch class, wrapping at the note set by mode 1's K1.
     // Octave errors are harmless: E2 and E3 both give the same pitch class.
-    constexpr int WRAP_NOTE = 9;  // A — wrap at G#→A boundary
     int tracked = static_cast<int>(tracker.GetMidiNote());
-    int pitch_class = ((tracked - WRAP_NOTE) % 12 + 12) % 12;
+    int pitch_class = ((tracked - wrap_note) % 12 + 12) % 12;
     // K1: semitone offset (-12 to +12, center dead zone = unison)
     float k1 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_1));
     int semi_offset = MapDetuneKnob(k1, 12);
     // K2: target octave (same as fixed mode: C-1 through C5)
     int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
     int base_note = 12 + octave * 12;
-    midi_note = static_cast<float>(base_note + WRAP_NOTE + pitch_class + semi_offset);
+    midi_note = static_cast<float>(base_note + wrap_note + pitch_class + semi_offset);
   }
 
   float freq1 = MidiToFreq(midi_note + fine);
