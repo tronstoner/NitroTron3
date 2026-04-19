@@ -17,7 +17,8 @@ Hothouse hw;
 // ---------------------------------------------------------------------------
 // DSP
 // ---------------------------------------------------------------------------
-MoogOsc     osc;
+MoogOsc     osc1;
+MoogOsc     osc2;
 MoogLadder  ladder;
 EnvFollower env;
 
@@ -57,6 +58,14 @@ static float MidiToFreq(float note) {
   return 440.f * powf(2.f, (note - 69.f) / 12.f);
 }
 
+// Remap pot range — physical pots don't reach true 0.0/1.0
+static float RemapKnob(float raw) {
+  float v = (raw - 0.01f) / 0.96f;
+  if (v < 0.f) v = 0.f;
+  if (v > 1.f) v = 1.f;
+  return v;
+}
+
 // ---------------------------------------------------------------------------
 // Audio callback
 // ---------------------------------------------------------------------------
@@ -67,13 +76,16 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // Bypass toggle — FOOTSWITCH_2
   bypass ^= hw.switches[Hothouse::FOOTSWITCH_2].RisingEdge();
 
-  // Waveform select — Switch 1
+  // Waveform select — Switch 1 (both oscillators share waveform)
+  MoogOsc::Waveform wf = MoogOsc::SAW;
   switch (hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_1)) {
-    case Hothouse::TOGGLESWITCH_UP:     osc.waveform = MoogOsc::SAW;    break;
-    case Hothouse::TOGGLESWITCH_MIDDLE: osc.waveform = MoogOsc::TRI;    break;
-    case Hothouse::TOGGLESWITCH_DOWN:   osc.waveform = MoogOsc::SQUARE; break;
+    case Hothouse::TOGGLESWITCH_UP:     wf = MoogOsc::SAW;    break;
+    case Hothouse::TOGGLESWITCH_MIDDLE: wf = MoogOsc::TRI;    break;
+    case Hothouse::TOGGLESWITCH_DOWN:   wf = MoogOsc::SQUARE; break;
     default: break;
   }
+  osc1.waveform = wf;
+  osc2.waveform = wf;
 
   // --- Pitch controls ---
   // K1: semitone (0–11 quantized, C through B)
@@ -83,23 +95,46 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
   int base_note = 12 + octave * 12;
 
-  // K3: fine tune (±50 cents = ±0.5 semitones)
+  // K3: fine tune (±50 cents = ±0.5 semitones) — osc1 only
   float fine = Mapf(hw.GetKnobValue(Hothouse::KNOB_3), -0.5f, 0.5f);
 
-  float midi_note = static_cast<float>(base_note + semitone) + fine;
-  float freq = MidiToFreq(midi_note);
+  float midi_note = static_cast<float>(base_note + semitone);
+  float freq1 = MidiToFreq(midi_note + fine);
 
   // K4: tone — ladder cutoff (exponential 80 Hz – 8 kHz)
   float cutoff = MapCutoff(hw.GetKnobValue(Hothouse::KNOB_4));
   ladder.SetCutoff(cutoff + LADDER_CUTOFF_OFFSET);
   ladder.SetDrive(LADDER_DRIVE);
 
+  // --- K5: osc2 detune (-12 to +12 semitones) ---
+  // Dead zone at center = osc2 off. Outside = ±1–12 semitone steps.
+  constexpr float DEAD_LO = 0.46f;
+  constexpr float DEAD_HI = 0.54f;
+
+  float k5 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_5));
+  float osc2_level = 0.f;
+  int   osc2_semi  = 0;
+
+  if (k5 >= DEAD_LO && k5 <= DEAD_HI) {
+    // Dead zone — osc2 off
+    osc2_level = 0.f;
+  } else if (k5 < DEAD_LO) {
+    // Detune down: 0.0 → -12, approaching DEAD_LO → -1
+    osc2_level = 1.f;
+    float pos = k5 / DEAD_LO;
+    osc2_semi = -(12 - Quantize(pos, 12));
+  } else {
+    // Detune up: DEAD_HI → +1, 1.0 → +12
+    osc2_level = 1.f;
+    float pos = (k5 - DEAD_HI) / (1.f - DEAD_HI);
+    osc2_semi = Quantize(pos, 12) + 1;
+  }
+
+  // Osc2 frequency: same base note (no fine tune), offset by detune semitones
+  float freq2 = MidiToFreq(midi_note + static_cast<float>(osc2_semi));
+
   // K6: mix (dry/wet blend, 0 = full dry, 1 = full wet)
-  float mix = hw.GetKnobValue(Hothouse::KNOB_6);
-  // Remap pot range — physical pots don't reach true 0.0/1.0
-  mix = (mix - 0.01f) / 0.96f;
-  if (mix < 0.f) mix = 0.f;
-  if (mix > 1.f) mix = 1.f;
+  float mix = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_6));
 
   // Render audio
   for (size_t i = 0; i < size; i++) {
@@ -111,12 +146,18 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Envelope follower tracks input amplitude
       float env_val = env.Process(dry);
 
-      // Oscillator → ladder filter → VCA (envelope controls amplitude)
-      float osc_out  = osc.Process(freq);
-      float filtered = ladder.Process(osc_out);
-      float wet      = filtered * env_val * OSC_GAIN;
+      // Both oscillators mixed before filter
+      float o1 = osc1.Process(freq1);
+      float o2 = osc2.Process(freq2) * osc2_level;
 
-      // Mix dry + wet
+      // Unity gain compensation: scale by 1/sqrt(1 + level²)
+      float gain = 1.f / sqrtf(1.f + osc2_level * osc2_level);
+      float osc_mix = (o1 + o2) * gain;
+
+      // Ladder filter → VCA → mix
+      float filtered = ladder.Process(osc_mix);
+      float wet = filtered * env_val * OSC_GAIN;
+
       out[0][i] = out[1][i] = dry * DRY_TRIM * (1.f - mix) + wet * mix;
     }
   }
@@ -131,7 +172,8 @@ int main() {
   hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
 
   float sr = hw.AudioSampleRate();
-  osc.Init(sr);
+  osc1.Init(sr);
+  osc2.Init(sr);
   ladder.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
@@ -155,7 +197,7 @@ int main() {
     //   Tri    = slow blink (~1 Hz)
     //   Square = fast blink (~4 Hz)
     bool led1_on = false;
-    switch (osc.waveform) {
+    switch (osc1.waveform) {
       case MoogOsc::SAW:    led1_on = true; break;
       case MoogOsc::TRI:    led1_on = (led_blink_counter % 100) < 50; break;
       case MoogOsc::SQUARE: led1_on = (led_blink_counter % 25) < 12;  break;

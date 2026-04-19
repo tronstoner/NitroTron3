@@ -18,7 +18,7 @@ NitroTron3/
 ├── constants.h                 # compile-time DSP constants (populated via tuning mode)
 ├── moog_osc.h                  # MoogOsc class — parabolic waveshaper + PolyBLEP
 ├── moog_ladder.h               # Huovilainen Moog ladder filter (24 dB/oct LP)
-├── env_follower.h              # Moog envelope follower (rectifier → 4-pole LP → gate)
+├── env_follower.h              # Moog envelope follower (rectifier → 4-pole LP)
 ├── Makefile
 ├── lib/
 │   └── HothouseExamples/       # submodule
@@ -61,11 +61,11 @@ Complete Mode A drone effect: PolyBLEP oscillator → Huovilainen ladder filter 
 ### Signal Chain
 
 ```
-Input ──┬──────────────────────────────────────► [Mix K6] ──► Output
-        │                                           ▲
-        └──► [EnvFollower] ──► [VCA gain]           │
-                                 │                  │
-                        [MoogOsc K1-K3] ──► [Ladder K4] ──┘
+Input ──┬──────────────────────────────────────────► [Mix K6] ──► Output
+        │                                               ▲
+        └──► [EnvFollower] ──► [VCA gain]               │
+                                 │                      │
+                    [Osc1 K1-K3] + [Osc2 K5] ──► [Ladder K4] ──┘
 ```
 
 ### Controls
@@ -76,7 +76,7 @@ Input ──┬─────────────────────�
 | KNOB 2 | Octave | 7 positions: C-1, C0, C1, C2, C3, C4, C5 |
 | KNOB 3 | Fine tune | ±50 cents continuous |
 | KNOB 4 | Tone (ladder cutoff) | 80 Hz – 8 kHz, exponential. Moog ladder lowpass cutoff frequency |
-| KNOB 5 | Unused |  |
+| KNOB 5 | Osc 2 detune | Center = off (dead zone). Outside center = ±1–12 semitone steps. Not affected by fine tune |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
 | SWITCH 2 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |

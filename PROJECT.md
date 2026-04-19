@@ -116,7 +116,7 @@ Per-mode preset data structures live in each mode's spec file.
 - **Stage 1** — DONE. MoogOsc class (parabolic + PolyBLEP, saw/tri/square).
 - **Stage 2** — DONE. Huovilainen ladder filter with per-stage tanh saturation.
 - **Stage 3** — DONE. Pitch controls: K1=semitone (12 steps), K2=octave (C-1–C5), K3=fine tune (±50 cents).
-- **Stage 4** — DONE. Envelope follower (Moog topology) + VCA + dry/wet mix. All 6 knobs wired. Mode A is fully playable.
+- **Stage 4** — DONE. Envelope follower (Moog topology, no gate) + VCA + dry/wet mix. Second oscillator on K5 (±12 semitone detune with center dead zone). All 6 knobs wired. Mode A is fully playable.
 - **Tuning mode** — DEFERRED. USB serial (`StartLog`) freezes the pedal when a terminal connects. Ear-tuning via constants.h for now.
 - **Next** — Stage 5 (preset system) or polish/tune constants by ear. See timeline below.
 

@@ -8,7 +8,6 @@ constexpr float OSC_PEAK_GAIN    = 1.000f;  // pre-filter oscillator trim
 
 // --- Envelope follower (Tuning Page 2) --- (Stage 3)
 constexpr float ENV_LP_CUTOFF_HZ = 50.0f;   // envelope LP cutoff (higher = faster tracking)
-constexpr float ENV_THRESHOLD    = 0.002f;   // gate threshold (low to avoid cutting quiet dynamics)
 constexpr float ENV_PRE_GAIN     = 1.000f;   // input gain before rectifier
 constexpr float ENV_ATTACK_BIAS  = 1.000f;   // filter asymmetry, attack
 constexpr float ENV_RELEASE_BIAS = 1.000f;   // filter asymmetry, release

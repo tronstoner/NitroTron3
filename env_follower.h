@@ -3,7 +3,7 @@
 #include <cmath>
 
 // Moog MoogerFooger envelope follower topology:
-// Full wave rectifier → 4-pole (24 dB/oct) lowpass → threshold gate.
+// Full wave rectifier → 4-pole (24 dB/oct) lowpass.
 //
 // The 4-pole LP is implemented as 4 cascaded one-pole filters.
 // Cutoff default is 33 Hz (Moog canonical). Attack/release behavior
