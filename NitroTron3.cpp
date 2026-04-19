@@ -35,6 +35,7 @@ enum DroneMode { DRONE_FIXED, DRONE_TRACK };
 Led led_bypass;
 Led led_status;
 bool bypass = true;
+float last_env = 0.f;  // smoothed envelope for per-block modulation
 
 // LED blink state
 uint32_t led_blink_counter = 0;
@@ -134,21 +135,27 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float fine = Mapf(hw.GetKnobValue(Hothouse::KNOB_3), -0.5f, 0.5f);
 
   if (drone_mode == DRONE_FIXED) {
-    // K1: semitone (0–11, absolute)
-    int semitone = Quantize(hw.GetKnobValue(Hothouse::KNOB_1), 12);
+    // K1: ±12 semitone offset from A, center dead zone = A (same feel as tracking mode)
+    float k1 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_1));
+    int semi_offset = MapDetuneKnob(k1, 12);
     // K2: octave (7 positions: C-1 through C5)
     int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
     int base_note = 12 + octave * 12;
-    midi_note = static_cast<float>(base_note + semitone);
+    midi_note = static_cast<float>(base_note + 9 + semi_offset);  // 9 = A
   } else {
+    // Extract pitch class, wrapping at A.
+    // Range: A,A#,B,C,C#,D,D#,E,F,F#,G,G# — wrap at G#→A boundary.
+    // Octave errors are harmless: E2 and E3 both give the same pitch class.
+    constexpr int WRAP_NOTE = 9;  // A — wrap at G#→A boundary
+    int tracked = static_cast<int>(tracker.GetMidiNote());
+    int pitch_class = ((tracked - WRAP_NOTE) % 12 + 12) % 12;
     // K1: semitone offset (-12 to +12, center dead zone = unison)
     float k1 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_1));
     int semi_offset = MapDetuneKnob(k1, 12);
-    // K2: octave offset (7 positions → -3 to +3)
-    int oct_offset = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7) - 3;
-    // Base = tracked pitch
-    float tracked = tracker.GetMidiNote();
-    midi_note = tracked + static_cast<float>(semi_offset + oct_offset * 12);
+    // K2: target octave (same as fixed mode: C-1 through C5)
+    int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
+    int base_note = 12 + octave * 12;
+    midi_note = static_cast<float>(base_note + WRAP_NOTE + pitch_class + semi_offset);
   }
 
   float freq1 = MidiToFreq(midi_note + fine);
@@ -157,13 +164,17 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float k4 = hw.GetKnobValue(Hothouse::KNOB_4);
   float fold_amount = 0.f;
 
+  float base_cutoff;
   if (wf == MoogOsc::TRI) {
     float cutoff_knob = (k4 < 0.5f) ? (k4 * 2.f) : 1.f;
-    ladder.SetCutoff(MapCutoff(cutoff_knob) + LADDER_CUTOFF_OFFSET);
+    base_cutoff = MapCutoff(cutoff_knob);
     if (k4 > 0.5f) fold_amount = (k4 - 0.5f) * 2.f;
   } else {
-    ladder.SetCutoff(MapCutoff(k4) + LADDER_CUTOFF_OFFSET);
+    base_cutoff = MapCutoff(k4);
   }
+  // Envelope opens the filter slightly when playing harder
+  float mod_cutoff = base_cutoff * (1.f + last_env * ENV_FILTER_MOD * 20.f);
+  ladder.SetCutoff(mod_cutoff + LADDER_CUTOFF_OFFSET);
   ladder.SetDrive(LADDER_DRIVE);
 
   // --- K5: osc2 detune (-12 to +12 semitones, center dead zone) ---
@@ -187,17 +198,22 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Envelope follower tracks input amplitude
       float env_val = env.Process(dry);
 
-      // Pitch tracker — gated on envelope to skip noise during silence
-      if (drone_mode == DRONE_TRACK) tracker.Process(dry, env_val);
+      // Feed pitch tracker (cheap — just filters and buffers)
+      if (drone_mode == DRONE_TRACK) tracker.Feed(dry, env_val);
 
       // Both oscillators — wavefold always applied in TRI mode
       float o1 = osc1.Process(freq1);
       float o2 = osc2.Process(freq2);
       if (wf == MoogOsc::TRI) {
-        o1 = Wavefold(o1, fold_amount);
-        o2 = Wavefold(o2, fold_amount);
+        // Envelope adds subtle dynamic grit to the fold
+        float dyn_fold = fold_amount + env_val * ENV_FOLD_MOD;
+        o1 = Wavefold(o1, dyn_fold);
+        o2 = Wavefold(o2, dyn_fold);
       }
       o2 *= osc2_level;
+
+      // Update smoothed envelope for next block's filter modulation
+      last_env += 0.1f * (env_val - last_env);
 
       // Unity gain compensation
       float gain = 1.f / sqrtf(1.f + osc2_level * osc2_level);
@@ -251,6 +267,9 @@ int main() {
     }
     led_status.Set(led1_on ? 1.f : 0.f);
     led_status.Update();
+
+    // --- Pitch tracker: run YIN in main loop (heavy, not time-critical) ---
+    tracker.Update();
 
     // --- FS1: hold 2 s → DFU bootloader ---
     hw.CheckResetToBootloader();

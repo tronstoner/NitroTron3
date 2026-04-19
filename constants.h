@@ -13,6 +13,10 @@ constexpr float ENV_ATTACK_BIAS  = 1.000f;   // filter asymmetry, attack
 constexpr float ENV_RELEASE_BIAS = 1.000f;   // filter asymmetry, release
 
 
+// --- Envelope modulation ---
+constexpr float ENV_FILTER_MOD   = 0.300f;   // envelope → filter cutoff (subtle opening)
+constexpr float ENV_FOLD_MOD     = 0.150f;   // envelope → wavefold amount (subtle grit)
+
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 2.000f;   // final osc level into mix
 constexpr float LADDER_DRIVE     = 1.000f;   // ladder input gain

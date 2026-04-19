@@ -3,11 +3,10 @@
 #include <cmath>
 
 // YIN pitch tracker for bass guitar.
-// Input is decimated 4x (48kHz → 12kHz) for efficiency.
-// YIN difference function with cumulative mean normalization finds
-// the fundamental period even when harmonics are stronger.
+// Split into Feed() (audio callback, cheap) and Update() (main loop, heavy).
+// Input is decimated 4x (48kHz → 12kHz) with proper anti-aliasing.
+// YIN difference function with cumulative mean normalization.
 // Output quantized to nearest MIDI semitone.
-// Holds last detected note on silence.
 class PitchTracker {
  public:
   void Init(float sample_rate) {
@@ -15,16 +14,21 @@ class PitchTracker {
     dec_sr_ = sr_ / DEC;
     hp_coeff_ = 1.f - expf(-6.2831853f * 25.f / sr_);
     hp_[0] = hp_[1] = 0.f;
+    // LP at 400 Hz — isolates fundamental, rejects harmonics that cause
+    // octave-up errors in YIN. Also serves as anti-alias for 4x decimation.
+    aa_coeff_ = 1.f - expf(-6.2831853f * 400.f / sr_);
+    for (int i = 0; i < 4; i++) aa_[i] = 0.f;
     for (int i = 0; i < BUF_SIZE; i++) buf_[i] = 0.f;
-    write_pos_ = 0;
-    dec_accum_ = 0.f;
-    dec_count_ = 0;
-    hop_count_ = 0;
-    midi_note_ = 36.f;
+    write_pos_    = 0;
+    dec_accum_    = 0.f;
+    dec_count_    = 0;
+    hop_count_    = 0;
+    needs_update_ = false;
+    midi_note_    = 36.f;
   }
 
-  void Process(float in, float env_level) {
-    // Skip tracking during silence
+  // Called every sample in the audio callback. Cheap — just filters and buffers.
+  void Feed(float in, float env_level) {
     if (env_level < 0.001f) return;
 
     // HP filter (DC blocking at 25 Hz)
@@ -32,8 +36,14 @@ class PitchTracker {
     hp_[1] += hp_coeff_ * (hp_[0] - hp_[1]);
     float hpf = in - hp_[1];
 
-    // Decimate 4x (simple averaging)
-    dec_accum_ += hpf;
+    // 4-pole anti-aliasing LP at 1.5 kHz before decimation
+    aa_[0] += aa_coeff_ * (hpf - aa_[0]);
+    aa_[1] += aa_coeff_ * (aa_[0] - aa_[1]);
+    aa_[2] += aa_coeff_ * (aa_[1] - aa_[2]);
+    aa_[3] += aa_coeff_ * (aa_[2] - aa_[3]);
+
+    // Decimate 4x
+    dec_accum_ += aa_[3];
     dec_count_++;
     if (dec_count_ < DEC) return;
 
@@ -45,10 +55,18 @@ class PitchTracker {
     buf_[write_pos_] = decimated;
     write_pos_ = (write_pos_ + 1) & BUF_MASK;
 
-    // Run YIN every HOP decimated samples (~5.3 ms)
+    // Flag YIN to run in main loop
     hop_count_++;
-    if (hop_count_ < HOP) return;
-    hop_count_ = 0;
+    if (hop_count_ >= HOP) {
+      hop_count_ = 0;
+      needs_update_ = true;
+    }
+  }
+
+  // Called in the main loop. Runs YIN when ready — heavy but not time-critical.
+  void Update() {
+    if (!needs_update_) return;
+    needs_update_ = false;
     RunYin();
   }
 
@@ -56,9 +74,9 @@ class PitchTracker {
 
  private:
   static constexpr int DEC      = 4;
-  static constexpr int BUF_SIZE = 1024;  // at 12kHz = ~85ms
+  static constexpr int BUF_SIZE = 1024;
   static constexpr int BUF_MASK = BUF_SIZE - 1;
-  static constexpr int W        = 300;   // analysis window (~25ms at 12kHz)
+  static constexpr int W        = 400;   // analysis window (~33ms at 12kHz)
   static constexpr int MIN_LAG  = 24;    // ~500 Hz at 12kHz
   static constexpr int MAX_LAG  = 400;   // ~30 Hz at 12kHz
   static constexpr int HOP      = 64;    // hop size (~5.3ms at 12kHz)
@@ -69,32 +87,32 @@ class PitchTracker {
   float dec_accum_     = 0.f;
   int   dec_count_     = 0;
   int   hop_count_     = 0;
+  volatile bool needs_update_ = false;
   float sr_            = 48000.f;
   float dec_sr_        = 12000.f;
   float hp_coeff_      = 0.f;
   float hp_[2]         = {};
+  float aa_coeff_      = 0.f;
+  float aa_[4]         = {};
   float midi_note_     = 36.f;
 
-  // Read from ring buffer. offset=0 = newest sample.
   float Buf(int offset) const {
     return buf_[(write_pos_ - 1 - offset + BUF_SIZE) & BUF_MASK];
   }
 
   void RunYin() {
-    float cum_sum  = 0.f;
+    float cum_sum   = 0.f;
     bool  was_below = false;
     int   best_tau  = -1;
     float best_dp   = 1.f;
 
     for (int tau = 1; tau <= MAX_LAG; tau++) {
-      // Difference function: d(tau) = sum((x[j] - x[j+tau])^2)
       float d = 0.f;
       for (int j = 0; j < W; j++) {
         float diff = Buf(j) - Buf(j + tau);
         d += diff * diff;
       }
 
-      // Cumulative mean normalization
       cum_sum += d;
       float d_prime = (cum_sum > 0.f)
                         ? (d * static_cast<float>(tau) / cum_sum)
@@ -108,7 +126,6 @@ class PitchTracker {
             best_tau = tau;
           }
         } else if (was_below) {
-          // Passed the dip — found the fundamental, stop
           break;
         }
       }

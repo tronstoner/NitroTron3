@@ -73,14 +73,14 @@ Input ──┬─────────────────────�
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Semitone / Interval | **Fixed**: 12 steps (C–B). **Track**: ±12 semitone offset, center dead zone = unison |
-| KNOB 2 | Octave | **Fixed**: 7 positions (C-1–C5). **Track**: 7 positions (-3 to +3 octave offset) |
+| KNOB 1 | Semitone / Interval | ±12 semitone offset, center dead zone. **Fixed**: center = A. **Track**: center = tracked note. Same physical feel in both modes |
+| KNOB 2 | Octave | 7 positions (C-1–C5). In tracking mode: sets which octave the tracked note plays in |
 | KNOB 3 | Fine tune | ±50 cents continuous (osc1 only — creates beating with osc2) |
 | KNOB 4 | Tone / Wavefold | SAW/SQ: full range ladder cutoff (80 Hz–8 kHz). TRI: CCW→noon = cutoff, noon→CW = wavefolding (filter stays fully open) |
 | KNOB 5 | Osc 2 detune | Center = off (dead zone). Outside center = ±1–12 semitone steps. Not affected by fine tune |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
-| SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1/K2 set absolute note)<br/>**MIDDLE** - Pitch tracking (osc follows bass, K1/K2 are relative offsets)<br/>**DOWN** - (TBD, same as Fixed) |
+| SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1/K2 set absolute note)<br/>**MIDDLE** - Pitch tracking (osc plays tracked pitch class in K2's octave, K1 adds interval offset)<br/>**DOWN** - (TBD, same as Fixed) |
 | SWITCH 3 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |
 | FOOTSWITCH 1 | Bootloader | Hold 2 s → enter DFU bootloader for flashing |
 | FOOTSWITCH 2 | Bypass | Toggles effect on/off. LED 2 on = effect active. The bypassed signal is buffered |
