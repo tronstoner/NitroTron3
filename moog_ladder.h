@@ -17,12 +17,11 @@ class MoogLadder {
   void SetCutoff(float freq) {
     if (freq < 20.f) freq = 20.f;
     if (freq > sr_ * 0.45f) freq = sr_ * 0.45f;
-    // Huovilainen frequency coefficient
-    // fc = 2 * sr * tan(pi * freq / sr) — bilinear pre-warp
-    // Approximation for efficiency:
+    // Huovilainen frequency coefficient with bilinear pre-warp
     float fc = 2.f * sr_ * tanf(3.14159265f * freq / sr_);
-    // Normalized coefficient: g = fc / (2 * sr)
     g_ = fc / (2.f * sr_);
+    // Clamp g below 1.0 for stability — prevents runaway at high cutoffs
+    if (g_ > 0.95f) g_ = 0.95f;
   }
 
   // Set input drive (gain before filter, adds tanh character)

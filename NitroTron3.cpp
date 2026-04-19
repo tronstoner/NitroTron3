@@ -174,6 +174,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   }
   // Envelope opens the filter slightly when playing harder
   float mod_cutoff = base_cutoff * (1.f + last_env * ENV_FILTER_MOD * 20.f);
+  if (mod_cutoff > 10000.f) mod_cutoff = 10000.f;
   ladder.SetCutoff(mod_cutoff + LADDER_CUTOFF_OFFSET);
   ladder.SetDrive(LADDER_DRIVE);
 
@@ -205,8 +206,9 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       float o1 = osc1.Process(freq1);
       float o2 = osc2.Process(freq2);
       if (wf == MoogOsc::TRI) {
-        // Envelope adds subtle dynamic grit to the fold
-        float dyn_fold = fold_amount + env_val * ENV_FOLD_MOD;
+        // Envelope adds dynamic grit, scaled up to be audible, capped for safety
+        float dyn_fold = fold_amount + env_val * ENV_FOLD_MOD * 5.f;
+        if (dyn_fold > 1.f) dyn_fold = 1.f;
         o1 = Wavefold(o1, dyn_fold);
         o2 = Wavefold(o2, dyn_fold);
       }

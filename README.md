@@ -57,16 +57,20 @@ make program-dfu  # flash via DFU bootloader
 
 ## Current state — Stage 4 (Full Drone Effect)
 
-Complete Mode A drone effect: PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. The oscillator only sounds when you play — amplitude follows the bass input's dynamics.
+Complete Mode A drone effect: PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. The oscillator only sounds when you play — amplitude follows the bass input's dynamics. Envelope subtly modulates filter cutoff and wavefold amount for dynamic response.
 
 ### Signal Chain
 
 ```
 Input ──┬──────────────────────────────────────────► [Mix K6] ──► Output
         │                                               ▲
-        └──► [EnvFollower] ──► [VCA gain]               │
-                                 │                      │
-                    [Osc1 K1-K3] + [Osc2 K5] ──► [Ladder K4] ──┘
+        └──► [EnvFollower] ──┬──► [VCA gain]            │
+                             │       │                  │
+                             │  [Osc1 K1-K3] + [Osc2 K5]
+                             │       │                  │
+                             ├──► [Wavefold] (TRI mode) │
+                             │       │                  │
+                             └──► [Ladder K4] ──────────┘
 ```
 
 ### Controls
