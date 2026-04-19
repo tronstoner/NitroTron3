@@ -14,6 +14,9 @@ This is a DIY digital bass effects pedal project built on the Electro-Smith Dais
 **Adjusting tuning mode, or helping the user dial in constants:**
 - `TUNING.md` — tuning-mode entry/exit, page layout, serial print format, dev flash slot, workflow.
 
+**Working on pitch tracking:**
+- `PITCH_TRACKING.md` — research, algorithm comparison (zero-crossing vs YIN vs MPM), signal conditioning, implementation plan.
+
 **Working on Mode B (Granular) or Mode C (Freq Shift):**
 - Specs not yet written. If the user asks to start on these, first help spec them — create `MODE_B_GRANULAR.md` or `MODE_C_FREQSHIFT.md` following the structure of `MODE_A_DRONE.md`.
 

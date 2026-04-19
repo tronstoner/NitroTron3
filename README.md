@@ -19,6 +19,7 @@ NitroTron3/
 ├── moog_osc.h                  # MoogOsc class — parabolic waveshaper + PolyBLEP
 ├── moog_ladder.h               # Huovilainen Moog ladder filter (24 dB/oct LP)
 ├── env_follower.h              # Moog envelope follower (rectifier → 4-pole LP)
+├── pitch_tracker.h             # Zero-crossing pitch tracker for bass
 ├── Makefile
 ├── lib/
 │   └── HothouseExamples/       # submodule
@@ -72,14 +73,14 @@ Input ──┬─────────────────────�
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Semitone | 12 quantized steps: C, C#, D, D#, E, F, F#, G, G#, A, A#, B |
-| KNOB 2 | Octave | 7 positions: C-1, C0, C1, C2, C3, C4, C5 |
-| KNOB 3 | Fine tune | ±50 cents continuous |
+| KNOB 1 | Semitone / Interval | **Fixed**: 12 steps (C–B). **Track**: ±12 semitone offset, center dead zone = unison |
+| KNOB 2 | Octave | **Fixed**: 7 positions (C-1–C5). **Track**: 7 positions (-3 to +3 octave offset) |
+| KNOB 3 | Fine tune | ±50 cents continuous (osc1 only — creates beating with osc2) |
 | KNOB 4 | Tone / Wavefold | SAW/SQ: full range ladder cutoff (80 Hz–8 kHz). TRI: CCW→noon = cutoff, noon→CW = wavefolding (filter stays fully open) |
 | KNOB 5 | Osc 2 detune | Center = off (dead zone). Outside center = ±1–12 semitone steps. Not affected by fine tune |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
-| SWITCH 2 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |
+| SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1/K2 set absolute note)<br/>**MIDDLE** - Pitch tracking (osc follows bass, K1/K2 are relative offsets)<br/>**DOWN** - (TBD, same as Fixed) |
 | SWITCH 3 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |
 | FOOTSWITCH 1 | Bootloader | Hold 2 s → enter DFU bootloader for flashing |
 | FOOTSWITCH 2 | Bypass | Toggles effect on/off. LED 2 on = effect active. The bypassed signal is buffered |

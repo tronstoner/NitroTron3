@@ -5,6 +5,7 @@
 #include "moog_osc.h"
 #include "moog_ladder.h"
 #include "env_follower.h"
+#include "pitch_tracker.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -17,10 +18,16 @@ Hothouse hw;
 // ---------------------------------------------------------------------------
 // DSP
 // ---------------------------------------------------------------------------
-MoogOsc     osc1;
-MoogOsc     osc2;
-MoogLadder  ladder;
-EnvFollower env;
+MoogOsc      osc1;
+MoogOsc      osc2;
+MoogLadder   ladder;
+EnvFollower  env;
+PitchTracker tracker;
+
+// ---------------------------------------------------------------------------
+// Drone sub-modes (Switch 2)
+// ---------------------------------------------------------------------------
+enum DroneMode { DRONE_FIXED, DRONE_TRACK };
 
 // ---------------------------------------------------------------------------
 // State
@@ -66,11 +73,24 @@ static float RemapKnob(float raw) {
   return v;
 }
 
+// Map knob with center dead zone to ±N semitone steps.
+// Returns 0 in dead zone, -N..-1 below, +1..+N above.
+static int MapDetuneKnob(float knob, int steps) {
+  constexpr float DEAD_LO = 0.46f;
+  constexpr float DEAD_HI = 0.54f;
+  if (knob >= DEAD_LO && knob <= DEAD_HI) return 0;
+  if (knob < DEAD_LO) {
+    float pos = knob / DEAD_LO;
+    return -(steps - Quantize(pos, steps));
+  }
+  float pos = (knob - DEAD_HI) / (1.f - DEAD_HI);
+  return Quantize(pos, steps) + 1;
+}
+
 // Wavefold: drive signal and reflect at ±PEAK boundaries
 // Normalized so triangle's 1.4x boost passes through at amount=0
-// amount 0 = passthrough, 1 = heavily folded
 static float Wavefold(float x, float amount) {
-  constexpr float PEAK = 1.4f;  // matches triangle boost in moog_osc.h
+  constexpr float PEAK = 1.4f;
   x *= 1.f + amount * 4.f;
   float norm = x / PEAK;
   float t = fmodf(norm + 1.f, 4.f);
@@ -100,28 +120,45 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   osc1.waveform = wf;
   osc2.waveform = wf;
 
-  // --- Pitch controls ---
-  // K1: semitone (0–11 quantized, C through B)
-  int semitone = Quantize(hw.GetKnobValue(Hothouse::KNOB_1), 12);
+  // Drone sub-mode — Switch 2
+  DroneMode drone_mode = DRONE_FIXED;
+  switch (hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_2)) {
+    case Hothouse::TOGGLESWITCH_UP:     drone_mode = DRONE_FIXED; break;
+    case Hothouse::TOGGLESWITCH_MIDDLE: drone_mode = DRONE_TRACK; break;
+    case Hothouse::TOGGLESWITCH_DOWN:   drone_mode = DRONE_FIXED; break; // TBD
+    default: break;
+  }
 
-  // K2: octave (7 positions: C-1 through C5)
-  int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
-  int base_note = 12 + octave * 12;
-
-  // K3: fine tune (±50 cents = ±0.5 semitones) — osc1 only
+  // --- Pitch controls (mode-dependent) ---
+  float midi_note = 0.f;
   float fine = Mapf(hw.GetKnobValue(Hothouse::KNOB_3), -0.5f, 0.5f);
 
-  float midi_note = static_cast<float>(base_note + semitone);
+  if (drone_mode == DRONE_FIXED) {
+    // K1: semitone (0–11, absolute)
+    int semitone = Quantize(hw.GetKnobValue(Hothouse::KNOB_1), 12);
+    // K2: octave (7 positions: C-1 through C5)
+    int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
+    int base_note = 12 + octave * 12;
+    midi_note = static_cast<float>(base_note + semitone);
+  } else {
+    // K1: semitone offset (-12 to +12, center dead zone = unison)
+    float k1 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_1));
+    int semi_offset = MapDetuneKnob(k1, 12);
+    // K2: octave offset (7 positions → -3 to +3)
+    int oct_offset = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7) - 3;
+    // Base = tracked pitch
+    float tracked = tracker.GetMidiNote();
+    midi_note = tracked + static_cast<float>(semi_offset + oct_offset * 12);
+  }
+
   float freq1 = MidiToFreq(midi_note + fine);
 
   // K4: tone / wavefold
-  // In SAW/SQUARE: full range controls ladder cutoff (80 Hz – 8 kHz)
-  // In TRI: CCW→noon = cutoff (80 Hz – 8 kHz), noon→CW = wavefolding (filter stays open)
   float k4 = hw.GetKnobValue(Hothouse::KNOB_4);
   float fold_amount = 0.f;
 
   if (wf == MoogOsc::TRI) {
-    float cutoff_knob = (k4 < 0.5f) ? (k4 * 2.f) : 1.f;  // full open at noon
+    float cutoff_knob = (k4 < 0.5f) ? (k4 * 2.f) : 1.f;
     ladder.SetCutoff(MapCutoff(cutoff_knob) + LADDER_CUTOFF_OFFSET);
     if (k4 > 0.5f) fold_amount = (k4 - 0.5f) * 2.f;
   } else {
@@ -129,29 +166,10 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   }
   ladder.SetDrive(LADDER_DRIVE);
 
-  // --- K5: osc2 detune (-12 to +12 semitones) ---
-  // Dead zone at center = osc2 off. Outside = ±1–12 semitone steps.
-  constexpr float DEAD_LO = 0.46f;
-  constexpr float DEAD_HI = 0.54f;
-
+  // --- K5: osc2 detune (-12 to +12 semitones, center dead zone) ---
   float k5 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_5));
-  float osc2_level = 0.f;
-  int   osc2_semi  = 0;
-
-  if (k5 >= DEAD_LO && k5 <= DEAD_HI) {
-    // Dead zone — osc2 off
-    osc2_level = 0.f;
-  } else if (k5 < DEAD_LO) {
-    // Detune down: 0.0 → -12, approaching DEAD_LO → -1
-    osc2_level = 1.f;
-    float pos = k5 / DEAD_LO;
-    osc2_semi = -(12 - Quantize(pos, 12));
-  } else {
-    // Detune up: DEAD_HI → +1, 1.0 → +12
-    osc2_level = 1.f;
-    float pos = (k5 - DEAD_HI) / (1.f - DEAD_HI);
-    osc2_semi = Quantize(pos, 12) + 1;
-  }
+  int osc2_semi = MapDetuneKnob(k5, 12);
+  float osc2_level = (osc2_semi == 0 && k5 >= 0.46f && k5 <= 0.54f) ? 0.f : 1.f;
 
   // Osc2 frequency: same base note (no fine tune), offset by detune semitones
   float freq2 = MidiToFreq(midi_note + static_cast<float>(osc2_semi));
@@ -169,7 +187,10 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Envelope follower tracks input amplitude
       float env_val = env.Process(dry);
 
-      // Both oscillators — wavefold always applied in TRI mode (no-op at amount=0)
+      // Pitch tracker — gated on envelope to skip noise during silence
+      if (drone_mode == DRONE_TRACK) tracker.Process(dry, env_val);
+
+      // Both oscillators — wavefold always applied in TRI mode
       float o1 = osc1.Process(freq1);
       float o2 = osc2.Process(freq2);
       if (wf == MoogOsc::TRI) {
@@ -178,7 +199,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       }
       o2 *= osc2_level;
 
-      // Unity gain compensation: scale by 1/sqrt(1 + level²)
+      // Unity gain compensation
       float gain = 1.f / sqrtf(1.f + osc2_level * osc2_level);
       float osc_mix = (o1 + o2) * gain;
 
@@ -205,6 +226,7 @@ int main() {
   ladder.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
+  tracker.Init(sr);
 
   led_bypass.Init(hw.seed.GetPin(Hothouse::LED_2), false);
   led_status.Init(hw.seed.GetPin(Hothouse::LED_1), false);
@@ -221,9 +243,6 @@ int main() {
     led_bypass.Update();
 
     // --- LED 1: waveform indicator (blink rate) ---
-    //   Saw    = solid on
-    //   Tri    = slow blink (~1 Hz)
-    //   Square = fast blink (~4 Hz)
     bool led1_on = false;
     switch (osc1.waveform) {
       case MoogOsc::SAW:    led1_on = true; break;
