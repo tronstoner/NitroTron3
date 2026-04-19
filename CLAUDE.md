@@ -37,6 +37,30 @@ This is a DIY digital bass effects pedal project built on the Electro-Smith Dais
 - Hothouse DSP Pedal Kit (6 knobs, 3× 3-position toggles, 2 footswitches, LED, true-bypass relay)
 - Hammond 125B enclosure
 
+## Controls documentation format
+
+When documenting controls in the README, always use the full template listing every physical control, even if unused. This ensures the current state of the pedal is always clear at a glance. Template:
+
+```
+### Controls
+
+| CONTROL | DESCRIPTION | NOTES |
+|-|-|-|
+| KNOB 1 | Unused |  |
+| KNOB 2 | Unused |  |
+| KNOB 3 | Unused |  |
+| KNOB 4 | Unused |  |
+| KNOB 5 | Unused |  |
+| KNOB 6 | Unused |  |
+| SWITCH 1 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |
+| SWITCH 2 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |
+| SWITCH 3 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |
+| FOOTSWITCH 1 | Unused |  |
+| FOOTSWITCH 2 | Bypass | The bypassed signal is buffered |
+```
+
+**MANDATORY: After every code change that touches controls, knobs, switches, footswitches, or LEDs, update the README controls and LEDs tables before considering the task complete.** This is not optional — the README is the only user-facing reference for what the pedal does. Include separate tables for each mode if applicable.
+
 ## Staging (summary — detail in `PROJECT.md`)
 
 0. Hardware bring-up + passthrough

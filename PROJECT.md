@@ -110,37 +110,48 @@ Per-mode preset data structures live in each mode's spec file.
 
 ---
 
+## Current Status
+
+- **Stage 0** — DONE. Hardware confirmed, clean passthrough works.
+- **Stage 1** — DONE. MoogOsc class (parabolic + PolyBLEP, saw/tri/square).
+- **Stage 2** — DONE. Huovilainen ladder filter with per-stage tanh saturation.
+- **Stage 3** — DONE. Pitch controls: K1=semitone (12 steps), K2=octave (C-1–C5), K3=fine tune (±50 cents).
+- **Stage 4** — DONE. Envelope follower (Moog topology) + VCA + dry/wet mix. All 6 knobs wired. Mode A is fully playable.
+- **Tuning mode** — DEFERRED. USB serial (`StartLog`) freezes the pedal when a terminal connects. Ear-tuning via constants.h for now.
+- **Next** — Stage 5 (preset system) or polish/tune constants by ear. See timeline below.
+
 ## Staged Development Timeline
 
-Small iterations. Each stage produces a working, testable artifact. Tuning mode (see `TUNING.md`) is built in Stage 1 and used throughout.
+Small iterations. Each stage produces a working, testable artifact.
 
-### Stage 0 — Hardware bring-up (~1 evening)
+### Stage 0 — Hardware bring-up ✓
 Flash Hothouse blink example. Confirm clean audio passthrough with bass → Daisy → amp. No DSP. Proves the hardware before any original code.
 
-### Stage 1 — Oscillator + tuning mode scaffold (~1–2 evenings)
-PolyBLEP oscillator at fixed pitch (110 Hz). Tuning mode entry/exit, page 1 (oscillator character) implemented. Rough tune of `k` (parabolic curve) by ear. Serial print workflow validated.
+### Stage 1 — Oscillator ✓
+MoogOsc class (parabolic waveshaper + PolyBLEP). Fixed 110 Hz pitch, output to both channels. Knobs control oscillator character for ear-tuning. Waveform toggle wired.
 
-### Stage 2 — Huovilainen ladder filter (~1 evening)
-Ladder filter on oscillator output. Tuning mode page 3 (stage/mix) gets ladder parameters. Tune ladder drive and nonlinearity character.
+### Stage 2 — Huovilainen ladder filter ✓
+Ladder filter on oscillator output. K5 controls cutoff (80 Hz – 8 kHz, exponential). Drive and cutoff offset from compile-time constants. Per-stage tanh saturation for Moog warmth.
 
-### Stage 3 — Envelope follower + VCA (~1–2 evenings)
-Bass input → rectifier → 4-pole 33 Hz LP → gate → VCA on oscillator. Tuning mode page 2 (envelope) gets follower parameters. **Full re-tune pass of all pages against bass in context** — this is the real tuning pass. `k`, `OSC_GAIN`, envelope threshold all finalized against actual playing.
+### Stage 3 — Pitch controls ✓
+K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=fine tune (±50 cents continuous). Oscillator plays selectable pitches through the ladder filter.
 
-### Stage 4 — Final UX mapping (~1 evening)
-Normal-mode knob assignments applied: semitone, octave, fine tune, tone, mix, envelope sensitivity. Waveform toggle wired. Mode A is now fully playable.
+### Stage 4 — Envelope follower + VCA + mix ✓
+Bass input → rectifier → 4-pole 33 Hz LP → threshold gate → VCA gain on oscillator. K4=tone (ladder cutoff), K5=mix (dry/wet), K6=envelope sensitivity. All 6 knobs wired. Mode A is fully playable.
 
-### Stage 5 — Preset system (~1–2 evenings)
+### Stage 5 — Preset system
 FS2 short/long press logic, 3 slots for Mode A, flash storage via `PersistentStorage`.
 
-### Stage 6 — Multi-mode scaffold (~1 evening)
+### Stage 6 — Multi-mode scaffold
 Toggle 3 dispatches to `ProcessDrone()`. Modes B and C are stubs (dry passthrough). Architecture ready for future mode specs.
 
 ### Stage 7 — Enclosure
 Drill Hammond 125B to Hothouse template. Finish and label.
 
-### Future stages (separate specs)
-- Mode B — Granular Glitch: spec + implement
-- Mode C — Frequency Shifter: spec + implement
+### Deferred
+- **Tuning mode** — USB serial workflow needs a fix (freezes on terminal connect). Will revisit after core effect is playable.
+- **Mode B** — Granular Glitch: spec + implement
+- **Mode C** — Frequency Shifter: spec + implement
 
 ---
 
