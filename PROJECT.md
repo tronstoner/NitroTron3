@@ -120,8 +120,9 @@ Per-mode preset data structures live in each mode's spec file.
 - **Pitch tracking** — DONE. YIN algorithm with 4x decimation, anti-alias LP at 400 Hz. Three drone sub-modes on Switch 2: fixed pitch, octave-locked tracking (pitch class in target octave), direct tracking. Wrap point set by K1 in fixed mode (default A). See `PITCH_TRACKING.md` for research and improvement plan.
 - **Wavefolding** — DONE. Triangle mode: K4 noon→CW applies wavefolding. Envelope subtly modulates fold amount and filter cutoff for dynamic response.
 - **Per-waveform gains** — DONE. Independent level trim for saw/tri/square in constants.h.
-- **Tuning mode** — DEFERRED. USB serial (`StartLog`) freezes the pedal when a terminal connects. Ear-tuning via constants.h for now.
-- **Next** — Stage 5 (preset system), wrap point persistence, or further pitch tracking improvements (see `PITCH_TRACKING.md`). Switch 3 is unused.
+- **Serial logging** — TODO. Earlier freeze was caused by printing from the audio callback, not by `StartLog(false)`. Fix: print from main loop only, throttled, using `FLT_FMT3` macros. Should be quick to re-enable.
+- **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
+- **Next** — Re-enable serial logging (quick fix), then: pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), preset system (Stage 5), wrap point persistence. Switch 3 is unused.
 
 ## Staged Development Timeline
 
