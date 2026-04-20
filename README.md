@@ -14,21 +14,28 @@ This repo uses [HothouseExamples](https://github.com/clevelandmusicco/HothouseEx
 
 ```
 NitroTron3/
-├── NitroTron3.cpp              # main source
-├── constants.h                 # compile-time DSP constants (populated via tuning mode)
-├── moog_osc.h                  # MoogOsc class — parabolic waveshaper + PolyBLEP
-├── moog_ladder.h               # Huovilainen Moog ladder filter (24 dB/oct LP)
-├── env_follower.h              # Moog envelope follower (rectifier → 4-pole LP)
-├── pitch_tracker.h             # YIN pitch tracker for bass (4x decimation)
-├── Makefile
+├── src/                        # source code
+│   ├── NitroTron3.cpp          # main application
+│   ├── constants.h             # compile-time DSP constants
+│   ├── moog_osc.h              # MoogOsc class — parabolic waveshaper + PolyBLEP
+│   ├── moog_ladder.h           # Huovilainen Moog ladder filter (24 dB/oct LP)
+│   ├── env_follower.h          # Moog envelope follower (rectifier → 4-pole LP)
+│   └── pitch_tracker.h         # YIN pitch tracker for bass (4x decimation)
+├── docs/                       # specs, plans, research
+│   ├── PROJECT.md              # top-level plan, staging, architecture
+│   ├── MODE_A_DRONE.md         # Mode A full spec
+│   ├── TUNING.md               # tuning-mode spec
+│   └── PITCH_TRACKING.md       # pitch tracking research + plan
 ├── lib/
 │   └── HothouseExamples/       # submodule
 │       ├── libDaisy/            # nested submodule — hardware abstraction
 │       ├── DaisySP/             # nested submodule — DSP library
 │       └── src/
-│           ├── hothouse.h       # Hothouse hardware proxy (compiled by our Makefile)
+│           ├── hothouse.h       # Hothouse hardware proxy
 │           └── hothouse.cpp
-└── .vscode/                    # build/debug tasks, IntelliSense config
+├── Makefile
+├── README.md
+└── CLAUDE.md
 ```
 
 ## Getting started

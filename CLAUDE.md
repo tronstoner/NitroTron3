@@ -4,32 +4,44 @@ This is a DIY digital bass effects pedal project built on the Electro-Smith Dais
 
 ## Read first, always
 
-- `PROJECT.md` — top-level plan, hardware, staging timeline, multi-mode architecture.
+- `docs/PROJECT.md` — top-level plan, hardware, staging timeline, multi-mode architecture.
 
 ## Read for specific tasks
 
 **Working on DSP / Mode A code:**
-- `MODE_A_DRONE.md` — oscillator, envelope follower, ladder filter, controls, presets, compile-time constants.
+- `docs/MODE_A_DRONE.md` — oscillator, envelope follower, ladder filter, controls, presets, compile-time constants.
 
 **Adjusting tuning mode, or helping the user dial in constants:**
-- `TUNING.md` — tuning-mode entry/exit, page layout, serial print format, dev flash slot, workflow.
+- `docs/TUNING.md` — tuning-mode entry/exit, page layout, serial print format, dev flash slot, workflow.
 
 **Working on pitch tracking:**
-- `PITCH_TRACKING.md` — research, algorithm comparison (zero-crossing vs YIN vs MPM), signal conditioning, implementation plan.
+- `docs/PITCH_TRACKING.md` — research, algorithm comparison (zero-crossing vs YIN vs MPM), signal conditioning, implementation plan.
 
 **Working on Mode B (Granular) or Mode C (Freq Shift):**
-- Specs not yet written. If the user asks to start on these, first help spec them — create `MODE_B_GRANULAR.md` or `MODE_C_FREQSHIFT.md` following the structure of `MODE_A_DRONE.md`.
+- Specs not yet written. If the user asks to start on these, first help spec them — create `docs/MODE_B_GRANULAR.md` or `docs/MODE_C_FREQSHIFT.md` following the structure of `docs/MODE_A_DRONE.md`.
 
 ## Repository structure
+
+```
+NitroTron3/
+├── src/                        # all source code (.cpp, .h)
+├── docs/                       # specs, plans, research
+├── lib/HothouseExamples/       # submodule (libDaisy + DaisySP)
+├── build/                      # compiled output (gitignored)
+├── Makefile                    # build system (root)
+├── README.md                   # user-facing docs + control tables
+└── CLAUDE.md                   # this file
+```
+
+**Convention:** Source code lives in `src/`. Documentation and specs live in `docs/`. The Makefile stays at the project root. README.md and CLAUDE.md stay at root for discoverability.
+
+## Project conventions
 
 - All dependencies live under `lib/HothouseExamples/` — a single git submodule that contains libDaisy and DaisySP as nested submodules.
 - The Hothouse hardware proxy (`hothouse.h` / `hothouse.cpp`) is compiled from `lib/HothouseExamples/src/` — it is not copied into this repo.
 - The Makefile references all libraries via `lib/HothouseExamples/` relative paths. No sibling-directory dependencies.
 - After cloning, the libraries must be built once: `make -C lib/HothouseExamples/libDaisy && make -C lib/HothouseExamples/DaisySP`.
-
-## Project conventions
-
-- Compile-time constants for DSP parameters live in `constants.h` and are populated via the tuning-mode workflow described in `TUNING.md`. Do not hand-edit values outside that workflow unless explicitly asked.
+- Compile-time constants for DSP parameters live in `src/constants.h` and are populated via the tuning-mode workflow described in `docs/TUNING.md`. Do not hand-edit values outside that workflow unless explicitly asked.
 - Stages are incremental. When working on Stage N, assume stages 0 through N-1 are complete and tested. If the current state is unclear, ask the user which stage they are on.
 - Tuning mode is part of the main binary, not a separate build. No `#ifdef DEV_MODE` guards around tuning code.
 - DaisySP is the preferred DSP library. The Huovilainen ladder and parabolic oscillator shaper are implemented directly because DaisySP does not ship them.
@@ -64,7 +76,7 @@ When documenting controls in the README, always use the full template listing ev
 
 **MANDATORY: After every code change that touches controls, knobs, switches, footswitches, or LEDs, update the README controls and LEDs tables before considering the task complete.** This is not optional — the README is the only user-facing reference for what the pedal does. Include separate tables for each mode if applicable.
 
-## Staging (summary — detail in `PROJECT.md`)
+## Staging (summary — detail in `docs/PROJECT.md`)
 
 0. Hardware bring-up + passthrough
 1. Oscillator + tuning mode scaffold

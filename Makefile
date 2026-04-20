@@ -5,8 +5,8 @@ TARGET = NitroTron3
 #USE_DAISYSP_LGPL=1
 
 # Sources and Hothouse header files
-CPP_SOURCES = NitroTron3.cpp lib/HothouseExamples/src/hothouse.cpp
-C_INCLUDES = -Ilib/HothouseExamples/src
+CPP_SOURCES = src/NitroTron3.cpp lib/HothouseExamples/src/hothouse.cpp
+C_INCLUDES = -Isrc -Ilib/HothouseExamples/src
 
 # Library Locations
 LIBDAISY_DIR = lib/HothouseExamples/libDaisy
