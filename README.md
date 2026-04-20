@@ -1,6 +1,6 @@
 # NitroTron3
 
-A DIY digital bass effects pedal built on the Electro-Smith Daisy Seed and Cleveland Music Co. Hothouse DSP kit.
+A DIY digital bass effects pedal built on the Electro-Smith Daisy Seed and Cleveland Music Co. Hothouse DSP kit. Licensed under [GPL v3](LICENSE).
 
 ## Hardware
 
@@ -33,9 +33,12 @@ NitroTron3/
 │       └── src/
 │           ├── hothouse.h       # Hothouse hardware proxy
 │           └── hothouse.cpp
+├── .agents/skills/             # reusable agent task recipes
 ├── Makefile
 ├── README.md
-└── CLAUDE.md
+├── AGENTS.md                   # AI agent instructions
+├── CLAUDE.md                   # Claude Code config
+└── LICENSE                     # GPL v3
 ```
 
 ## Getting started
