@@ -27,7 +27,7 @@ PitchTracker tracker;
 // ---------------------------------------------------------------------------
 // Drone sub-modes (Switch 2)
 // ---------------------------------------------------------------------------
-enum DroneMode { DRONE_FIXED, DRONE_TRACK };
+enum DroneMode { DRONE_FIXED, DRONE_TRACK, DRONE_TRACK_DIRECT };
 
 // ---------------------------------------------------------------------------
 // State
@@ -90,9 +90,9 @@ static int MapDetuneKnob(float knob, int steps) {
 }
 
 // Wavefold: drive signal and reflect at ±PEAK boundaries
-// Normalized so triangle's 1.4x boost passes through at amount=0
+// Normalized so triangle gain passes through at amount=0
 static float Wavefold(float x, float amount) {
-  constexpr float PEAK = 1.4f;
+  const float PEAK = OSC_TRI_GAIN;
   x *= 1.f + amount * 4.f;
   float norm = x / PEAK;
   float t = fmodf(norm + 1.f, 4.f);
@@ -127,7 +127,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   switch (hw.GetToggleswitchPosition(Hothouse::TOGGLESWITCH_2)) {
     case Hothouse::TOGGLESWITCH_UP:     drone_mode = DRONE_FIXED; break;
     case Hothouse::TOGGLESWITCH_MIDDLE: drone_mode = DRONE_TRACK; break;
-    case Hothouse::TOGGLESWITCH_DOWN:   drone_mode = DRONE_FIXED; break; // TBD
+    case Hothouse::TOGGLESWITCH_DOWN:   drone_mode = DRONE_TRACK_DIRECT; break;
     default: break;
   }
 
@@ -145,7 +145,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
     int base_note = 12 + octave * 12;
     midi_note = static_cast<float>(base_note + 9 + semi_offset);
-  } else {
+  } else if (drone_mode == DRONE_TRACK) {
     // Extract pitch class, wrapping at the note set by mode 1's K1.
     // Octave errors are harmless: E2 and E3 both give the same pitch class.
     int tracked = static_cast<int>(tracker.GetMidiNote());
@@ -157,6 +157,13 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     int octave = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7);
     int base_note = 12 + octave * 12;
     midi_note = static_cast<float>(base_note + wrap_note + pitch_class + semi_offset);
+  } else {
+    // DRONE_TRACK_DIRECT: osc follows exact tracked pitch, K1/K2 are relative offsets
+    float tracked = tracker.GetMidiNote();
+    float k1 = RemapKnob(hw.GetKnobValue(Hothouse::KNOB_1));
+    int semi_offset = MapDetuneKnob(k1, 12);
+    int oct_offset = Quantize(hw.GetKnobValue(Hothouse::KNOB_2), 7) - 3;
+    midi_note = tracked + static_cast<float>(semi_offset + oct_offset * 12);
   }
 
   float freq1 = MidiToFreq(midi_note + fine);
@@ -201,7 +208,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       float env_val = env.Process(dry);
 
       // Feed pitch tracker (cheap — just filters and buffers)
-      if (drone_mode == DRONE_TRACK) tracker.Feed(dry, env_val);
+      if (drone_mode != DRONE_FIXED) tracker.Feed(dry, env_val);
 
       // Both oscillators — wavefold always applied in TRI mode
       float o1 = osc1.Process(freq1);
@@ -226,7 +233,10 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       float filtered = ladder.Process(osc_mix);
       float wet = filtered * env_val * OSC_GAIN;
 
-      out[0][i] = out[1][i] = dry * DRY_TRIM * (1.f - mix) + wet * mix;
+      // Equal-power crossfade — no volume dip at center
+      float dry_gain = sqrtf(1.f - mix);
+      float wet_gain = sqrtf(mix);
+      out[0][i] = out[1][i] = dry * DRY_TRIM * dry_gain + wet * wet_gain;
     }
   }
 }

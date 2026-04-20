@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include "constants.h"
 
 class MoogOsc {
  public:
@@ -34,7 +35,7 @@ class MoogOsc {
         shaped += dcTrim;
         // PolyBLEP at wrap discontinuity
         shaped -= PolyBlep(phase_, inc);
-        out = shaped;
+        out = shaped * OSC_SAW_GAIN;
         break;
       }
       case TRI: {
@@ -42,8 +43,7 @@ class MoogOsc {
         float tri = 2.f * fabsf(2.f * phase_ - 1.f) - 1.f;
         // Slight parabolic warmth (minimal effect on triangle)
         tri += k * 0.25f * (tri - tri * fabsf(tri));
-        // Boost to compensate for lower harmonic energy vs saw/square
-        out = tri * 1.4f;
+        out = tri * OSC_TRI_GAIN;
         break;
       }
       case SQUARE: {
@@ -54,7 +54,7 @@ class MoogOsc {
         float shifted = phase_ + 0.5f;
         if (shifted >= 1.f) shifted -= 1.f;
         sq -= PolyBlep(shifted, inc);
-        out = sq;
+        out = sq * OSC_SQR_GAIN;
         break;
       }
     }

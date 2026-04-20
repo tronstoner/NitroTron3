@@ -116,9 +116,12 @@ Per-mode preset data structures live in each mode's spec file.
 - **Stage 1** — DONE. MoogOsc class (parabolic + PolyBLEP, saw/tri/square).
 - **Stage 2** — DONE. Huovilainen ladder filter with per-stage tanh saturation.
 - **Stage 3** — DONE. Pitch controls: K1=semitone (12 steps), K2=octave (C-1–C5), K3=fine tune (±50 cents).
-- **Stage 4** — DONE. Envelope follower (Moog topology, no gate) + VCA + dry/wet mix. Second oscillator on K5 (±12 semitone detune with center dead zone). All 6 knobs wired. Mode A is fully playable.
+- **Stage 4** — DONE. Envelope follower (Moog topology, no gate) + VCA + equal-power dry/wet mix. Second oscillator on K5 (±12 semitone detune with center dead zone). All 6 knobs wired. Mode A is fully playable.
+- **Pitch tracking** — DONE. YIN algorithm with 4x decimation, anti-alias LP at 400 Hz. Three drone sub-modes on Switch 2: fixed pitch, octave-locked tracking (pitch class in target octave), direct tracking. Wrap point set by K1 in fixed mode (default A). See `PITCH_TRACKING.md` for research and improvement plan.
+- **Wavefolding** — DONE. Triangle mode: K4 noon→CW applies wavefolding. Envelope subtly modulates fold amount and filter cutoff for dynamic response.
+- **Per-waveform gains** — DONE. Independent level trim for saw/tri/square in constants.h.
 - **Tuning mode** — DEFERRED. USB serial (`StartLog`) freezes the pedal when a terminal connects. Ear-tuning via constants.h for now.
-- **Next** — Stage 5 (preset system) or polish/tune constants by ear. See timeline below.
+- **Next** — Stage 5 (preset system), wrap point persistence, or further pitch tracking improvements (see `PITCH_TRACKING.md`). Switch 3 is unused.
 
 ## Staged Development Timeline
 
@@ -136,8 +139,8 @@ Ladder filter on oscillator output. K5 controls cutoff (80 Hz – 8 kHz, exponen
 ### Stage 3 — Pitch controls ✓
 K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=fine tune (±50 cents continuous). Oscillator plays selectable pitches through the ladder filter.
 
-### Stage 4 — Envelope follower + VCA + mix ✓
-Bass input → rectifier → 4-pole 33 Hz LP → threshold gate → VCA gain on oscillator. K4=tone (ladder cutoff), K5=mix (dry/wet), K6=envelope sensitivity. All 6 knobs wired. Mode A is fully playable.
+### Stage 4 — Envelope follower + VCA + mix + tracking + wavefold ✓
+Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. K1 sets wrap point for tracking. All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
 
 ### Stage 5 — Preset system
 FS2 short/long press logic, 3 slots for Mode A, flash storage via `PersistentStorage`.
