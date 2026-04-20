@@ -138,7 +138,7 @@ LED 1 indicates the active preset using a Roman-numeral-inspired encoding with t
 | Preset 7 | VII | long, short, short |
 | Preset 8 | VIII | long, short, short, short |
 
-Default timing: I = 150 ms, V = 800 ms, element gap = 200 ms, repeat gap = 600 ms. Selecting a preset always restarts the blink pattern from the beginning.
+Default timing: I = 150 ms, V = 950 ms, element gap = 200 ms, repeat gap = 600 ms. Selecting a preset always restarts the blink pattern from the beginning.
 
 **Implementation note:** firmware should use a pre-computed lookup table of `{duration_ms, led_on}` step arrays per preset — no runtime pattern logic. The interactive demo (`docs/ux-demo.html`) can be used to tune timing constants before generating the table.
 
