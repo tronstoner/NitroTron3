@@ -229,7 +229,7 @@ struct DronePreset {
 };
 ```
 
-9-byte payload (with padding). 5 preset slots + 1 edit buffer per mode, stored in `PersistentStorage`. See `PROJECT.md` Preset System for full UX spec.
+9-byte payload (with padding). 8 preset slots + 1 edit buffer per mode, stored in `PersistentStorage`. See `PROJECT.md` Preset System for full UX spec.
 
 ---
 

@@ -380,15 +380,30 @@
       <h3>Timing Constants</h3>
 
       <div class="const-group">
-        <div class="const-group-title">Preset LED (LED 1)</div>
+        <div class="const-group-title">Preset LED (LED 1) — Roman numeral</div>
         <div class="const-row">
-          <label>Blink on time</label>
-          <input type="number" id="cBlinkOn" value="200" step="10" min="20" max="500">
+          <label>I (short) on</label>
+          <input type="number" id="cShortOn" value="150" step="10" min="20" max="500">
           <span class="unit">ms</span>
         </div>
         <div class="const-row">
-          <label>Blink off time</label>
-          <input type="number" id="cBlinkOff" value="200" step="10" min="20" max="500">
+          <label>V (long) on</label>
+          <input type="number" id="cLongOn" value="800" step="50" min="200" max="1500">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>X (flicker) duration</label>
+          <input type="number" id="cFlickerDur" value="800" step="50" min="200" max="1500">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>X (flicker) rate</label>
+          <input type="number" id="cFlickerRate" value="30" step="10" min="20" max="150">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Element gap</label>
+          <input type="number" id="cElemGap" value="200" step="10" min="50" max="500">
           <span class="unit">ms</span>
         </div>
         <div class="const-row">
@@ -474,7 +489,7 @@ function C(id) { return parseInt(document.getElementById(id).value, 10); }
 
 // ── State ───────────────────────────────────────────────────
 const NUM_MODES = 3;
-const NUM_PRESETS = 5;
+const NUM_PRESETS = 8;
 const MODE_NAMES = ['A (Drone)', 'B (Granular)', 'C (FreqShift)'];
 const SW3_LABELS = ['Drone', 'Granular', 'FreqShift'];
 const SW_LABELS = [['UP','MID','DOWN'],['UP','MID','DOWN'], SW3_LABELS];
@@ -574,8 +589,23 @@ function stopLed2Pattern() {
   if (saveConfirmTimer) { clearTimeout(saveConfirmTimer); saveConfirmTimer = null; }
 }
 
-// N blinks with fixed on/off timing, then a repeat gap.
-let led1Generation = 0; // incremented on every restart to kill stale callbacks
+// Roman numeral LED pattern:
+// I = short blink, V = long blink, X = rapid flicker
+// 1=I, 2=II, 3=III, 4=IV, 5=V, 6=VI, 7=VII, 8=VIII, 9=IX
+const ROMAN = [
+  null,
+  ['I'],             // 1
+  ['I','I'],         // 2
+  ['I','I','I'],     // 3
+  ['I','V'],         // 4
+  ['V'],             // 5
+  ['V','I'],         // 6
+  ['V','I','I'],     // 7
+  ['V','I','I','I'], // 8
+  // 9+ defined but not used with NUM_PRESETS=8
+];
+
+let led1Generation = 0;
 
 function startPresetBlink(presetNum) {
   stopLed1Pattern();
@@ -587,20 +617,40 @@ function startPresetBlink(presetNum) {
     return;
   }
 
-  const onTime = C('cBlinkOn');
-  const offTime = C('cBlinkOff');
+  const shortOn = C('cShortOn');
+  const longOn = C('cLongOn');
+  const flickerDur = C('cFlickerDur');
+  const flickerRate = C('cFlickerRate');
+  const elemGap = C('cElemGap');
   const repeatGap = C('cRepeatGap');
   const gen = led1Generation;
+  const symbols = ROMAN[presetNum];
 
+  // Build timeline: each entry is [duration, led_on] or 'flicker' for X
   const steps = [];
-  for (let i = 0; i < presetNum; i++) {
-    steps.push([onTime, true]);
-    steps.push([i < presetNum - 1 ? offTime : repeatGap, false]);
+  for (let i = 0; i < symbols.length; i++) {
+    if (symbols[i] === 'I') {
+      steps.push([shortOn, true]);
+    } else if (symbols[i] === 'V') {
+      steps.push([longOn, true]);
+    } else if (symbols[i] === 'X') {
+      // Flicker: alternating fast on/off for flickerDur total
+      const cycles = Math.floor(flickerDur / (flickerRate * 2));
+      for (let c = 0; c < cycles; c++) {
+        steps.push([flickerRate, true]);
+        steps.push([flickerRate, false]);
+      }
+    }
+    // Gap between elements (not after last)
+    if (i < symbols.length - 1) {
+      steps.push([elemGap, false]);
+    }
   }
+  steps.push([repeatGap, false]);
 
   let idx = 0;
   function tick() {
-    if (gen !== led1Generation) return; // stale callback, abort
+    if (gen !== led1Generation) return;
     const [dur, on] = steps[idx];
     setLed(1, on);
     led1Timer = setTimeout(() => {
@@ -610,7 +660,8 @@ function startPresetBlink(presetNum) {
   }
 
   tick();
-  document.getElementById('sdLed1').textContent = `Preset ${presetNum} (${presetNum}x)`;
+  const romanStr = symbols.join('');
+  document.getElementById('sdLed1').textContent = `Preset ${presetNum} (${romanStr})`;
   updateDisplay();
 }
 

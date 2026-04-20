@@ -2,7 +2,7 @@
 
 ## Overview
 
-A multi-mode digital effects pedal for bass guitar, built on the Electro-Smith Daisy Seed. Three independent effect modes are selectable via Switch 3, each with an edit buffer and 5 stored presets. Only the active mode runs at any time — inactive modes have zero CPU cost.
+A multi-mode digital effects pedal for bass guitar, built on the Electro-Smith Daisy Seed. Three independent effect modes are selectable via Switch 3, each with an edit buffer and 8 stored presets. Only the active mode runs at any time — inactive modes have zero CPU cost.
 
 **Mode A — Drone OSC** (fully specced in `MODE_A_DRONE.md`)
 Inspired by the Moog MoogerFooger FreqBox (MF-102). An internally generated oscillator, amplitude-controlled by an envelope follower tracking the bass input, mixed back with the dry signal. No oscillator sync, no FM modulation.
@@ -97,13 +97,13 @@ Inspired by the EHX Ring Thing UX, adapted for a two-LED, two-footswitch interfa
 ### Slots
 
 - **Edit buffer** — the live working state. One per mode, persisted to flash for power-cycle recall. On startup, knob positions are read into the edit buffer (panel mode).
-- **5 stored presets per mode** — 15 slots total across three modes. Independent per mode: switching modes loads that mode's own edit buffer and presets.
+- **8 stored presets per mode** — 24 slots total across three modes. Independent per mode: switching modes loads that mode's own edit buffer and presets.
 
 Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`. Per-mode preset data structures live in each mode's spec file.
 
 ### Navigation (Normal Mode)
 
-**FS1 short press** cycles through: Manual → Preset 1 → Preset 2 → Preset 3 → Preset 4 → Preset 5 → Manual → …
+**FS1 short press** cycles through: Manual → Preset 1 → … → Preset 8 → Manual → …
 
 Loading a preset copies its stored values into the edit buffer. Knob values jump immediately — no pickup mode.
 
@@ -122,20 +122,23 @@ While dirty:
 
 ### LED Preset Indication (LED 1)
 
-LED 1 indicates the active preset by blinking N times, then pausing:
+LED 1 indicates the active preset using a Roman-numeral-inspired encoding with three blink types: **I** (short blink), **V** (long blink), **X** (rapid flicker).
 
-| State | LED 1 pattern |
-|---|---|
-| Manual (no preset) | Off (mode-specific use, e.g. waveform indicator in Mode A) |
-| Preset 1 | 1 blink |
-| Preset 2 | 2 blinks |
-| Preset 3 | 3 blinks |
-| Preset 4 | 4 blinks |
-| Preset 5 | 5 blinks |
+| State | Symbol | LED 1 pattern |
+|---|---|---|
+| Manual (no preset) | — | Off (mode-specific use, e.g. waveform indicator in Mode A) |
+| Preset 1 | I | short |
+| Preset 2 | II | short, short |
+| Preset 3 | III | short, short, short |
+| Preset 4 | IV | short, long |
+| Preset 5 | V | long |
+| Preset 6 | VI | long, short |
+| Preset 7 | VII | long, short, short |
+| Preset 8 | VIII | long, short, short, short |
 
-Default timing: 200 ms on, 200 ms off, 600 ms repeat gap. Selecting a preset always restarts the blink pattern from the beginning.
+Default timing: I = 150 ms, V = 800 ms, element gap = 200 ms, repeat gap = 600 ms. Selecting a preset always restarts the blink pattern from the beginning.
 
-The slot count (currently 5) can be expanded later without changing the UX paradigm.
+**Implementation note:** firmware should use a pre-computed lookup table of `{duration_ms, led_on}` step arrays per preset — no runtime pattern logic. The interactive demo (`docs/ux-demo.html`) can be used to tune timing constants before generating the table.
 
 ### Save Mode
 
@@ -146,7 +149,7 @@ The slot count (currently 5) can be expanded later without changing the UX parad
 - **LED 1** shows the target slot's blink pattern.
 
 While in save mode:
-- **FS1 short press** → **cycles through target slots** (1 → 2 → 3 → 4 → 5 → 1 → …). LED 1 updates to show the new target. Starts at the pre-selected slot, so one press moves to the next.
+- **FS1 short press** → **cycles through target slots** (1 → 2 → … → 8 → 1 → …). LED 1 updates to show the new target. Starts at the pre-selected slot, so one press moves to the next.
 - **FS2 long press** → **confirms save**. Edit buffer is written to the selected slot. LED 2 flashes rapidly for ~1 second to confirm success. Returns to normal mode (preset now clean).
 - **FS2 short press** → **cancels save**. Returns to normal mode, no write performed.
 
