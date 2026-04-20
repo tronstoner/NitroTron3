@@ -35,6 +35,11 @@ NitroTron3/
 
 **Convention:** Source code lives in `src/`. Documentation and specs live in `docs/`. The Makefile stays at the project root. README.md and CLAUDE.md stay at root for discoverability.
 
+## Git rules
+
+- **Never `git commit` without explicit user confirmation.** Prepare the message, show what will be committed, and wait for the user to say "commit" or equivalent.
+- **Never `git push`.** Only the user pushes.
+
 ## Project conventions
 
 - All dependencies live under `lib/HothouseExamples/` — a single git submodule that contains libDaisy and DaisySP as nested submodules.
