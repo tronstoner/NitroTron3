@@ -2,21 +2,22 @@
 
 ## Current Implementation
 
-Simple zero-crossing tracker (`pitch_tracker.h`):
-- 4-pole LP at 150 Hz isolates fundamental
-- Positive-going zero crossings timed with hysteresis (0.003)
-- Period smoothed with one-pole filter (coeff 0.15)
-- Octave-jump rejection (reject ~2x or ~0.5x period changes)
+YIN pitch tracker (`pitch_tracker.h`):
+- 4x decimation (48 kHz → 12 kHz) with 4-pole anti-alias LP at 400 Hz
+- 2-pole HP at 25 Hz for DC blocking
+- YIN difference function with cumulative mean normalization (threshold 0.15)
+- Early termination on first dip below threshold
+- Ring buffer 1024 samples, analysis window 400, hop 64 (~5.3 ms updates)
+- Envelope gating — skips tracking during silence
+- Heavy computation (RunYin) runs in main loop, not audio callback
 - Output quantized to nearest MIDI semitone
+- Phases 1–2 complete.
 
 ### Known Limitations
 
-- Measures one period at a time — no waveform-shape information
-- Bass pickups emphasize harmonics over fundamental (they sense dv/dt), causing octave-up errors
-- Octave-jump rejection heuristic is fragile
-- No highpass filter — DC offset and rumble can shift zero crossings
-- Low notes (B0 at 31 Hz) need ~65ms for 2 periods, tracking is sluggish
-- No onset detection — wastes the first few cycles
+- Glitches at note beginnings — YIN needs ~2 periods before reliable detection
+- No note-bend tracking — output is quantized to semitones (fine for octave-locked mode, limiting for direct tracking)
+- Harmonic confusion still possible on some notes despite 400 Hz LP
 
 ---
 
@@ -114,26 +115,31 @@ Independent of algorithm choice. Detects envelope attack and uses the first clea
 
 ## Implementation Plan
 
-### Phase 1 — Signal Conditioning (current zero-crossing tracker)
-- [ ] Add 2-pole HP at 25 Hz before the LP
-- [ ] Gate pitch detection on envelope follower (skip tracking when envelope < threshold)
-- [ ] Lower LP cutoff to 120 Hz
-- [ ] Test and evaluate tracking accuracy on all strings
+### Phase 1 — Signal Conditioning ✓
+- [x] Add 2-pole HP at 25 Hz before the LP
+- [x] Gate pitch detection on envelope follower
+- [x] Anti-alias LP at 400 Hz (serves both harmonic rejection and decimation)
 
-### Phase 2 — YIN with FFT Acceleration
-- [ ] Implement ring buffer (2048 samples)
-- [ ] Implement YIN difference function + cumulative mean normalization
-- [ ] Integrate CMSIS-DSP FFT for acceleration (`arm_cfft_f32` or `arm_rfft_fast_f32`)
-- [ ] Parabolic interpolation for sub-sample accuracy
-- [ ] Quantize output to semitones
-- [ ] Tune threshold parameter against real bass playing
-- [ ] Compare latency and accuracy vs zero-crossing
+### Phase 2 — YIN ✓
+- [x] Implement ring buffer (1024 samples at 12 kHz decimated rate)
+- [x] Implement YIN difference function + cumulative mean normalization
+- [x] 4x decimation for efficiency (no FFT needed — naive YIN fast enough at 12 kHz)
+- [x] Early termination on first dip
+- [x] Move heavy computation to main loop (fixes audio glitches)
+- [x] Quantize output to semitones
+- [ ] Parabolic interpolation for sub-sample accuracy (skipped — not needed for semitone quantization)
 
-### Phase 3 — Onset Detection (optional)
+### Phase 3 — Onset Detection
 - [ ] Detect envelope attack (rising edge above threshold)
 - [ ] On onset: use first clean zero-crossing cycle for initial estimate
 - [ ] Refine with YIN once 2 periods available
-- [ ] Evaluate latency improvement
+- [ ] Evaluate latency improvement — should fix glitches at note beginnings
+
+### Phase 4 — Continuous Pitch for Direct Tracking
+- [ ] Add unquantized pitch output to PitchTracker (raw MIDI note as float, no roundf)
+- [ ] Apply smoothing to raw pitch to avoid jitter without killing bends
+- [ ] Direct tracking mode (Switch 2 down) uses continuous pitch — follows bends
+- [ ] Octave-locked mode (Switch 2 middle) stays quantized to semitones
 
 ---
 
