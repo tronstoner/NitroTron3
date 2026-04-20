@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NitroTron3 UX Demo</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --panel: #16213e;
+    --panel-border: #0f3460;
+    --accent: #e94560;
+    --text: #eee;
+    --dim: #888;
+    --knob-bg: #2a2a4a;
+    --knob-ring: #444;
+    --led-off: #331a1a;
+    --led-red: #ff2020;
+    --led-glow: 0 0 12px 4px rgba(255,32,32,0.6);
+    --sw-bg: #333;
+    --sw-handle: #aaa;
+    --fs-bg: #555;
+    --fs-pressed: #333;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    min-height: 100vh;
+  }
+  .main { display: flex; flex: 1; gap: 16px; padding: 16px; }
+
+  /* Pedal panel */
+  .pedal-container { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .pedal {
+    background: var(--panel);
+    border: 2px solid var(--panel-border);
+    border-radius: 12px;
+    padding: 24px 20px;
+    width: 340px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+  .pedal-title {
+    font-size: 18px;
+    font-weight: bold;
+    letter-spacing: 3px;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+
+  /* Knobs */
+  .knobs-row { display: flex; gap: 12px; justify-content: center; }
+  .knob-wrapper { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .knob-label { font-size: 10px; color: var(--dim); }
+  .knob-value { font-size: 9px; color: var(--dim); }
+  .knob {
+    width: 48px; height: 48px;
+    background: var(--knob-bg);
+    border: 2px solid var(--knob-ring);
+    border-radius: 50%;
+    position: relative;
+    cursor: grab;
+    user-select: none;
+  }
+  .knob:active { cursor: grabbing; }
+  .knob-indicator {
+    position: absolute;
+    width: 3px; height: 16px;
+    background: var(--accent);
+    top: 4px; left: 50%;
+    transform-origin: bottom center;
+    transform: translateX(-50%);
+    border-radius: 1px;
+  }
+
+  /* Switches */
+  .switches-row { display: flex; gap: 24px; justify-content: center; }
+  .switch-wrapper { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .switch-label { font-size: 10px; color: var(--dim); }
+  .switch-val { font-size: 9px; color: var(--dim); min-height: 14px; }
+  .toggle-switch {
+    width: 22px; height: 52px;
+    background: var(--sw-bg);
+    border-radius: 11px;
+    position: relative;
+    cursor: pointer;
+    border: 1px solid #555;
+  }
+  .toggle-handle {
+    width: 18px; height: 18px;
+    background: var(--sw-handle);
+    border-radius: 50%;
+    position: absolute;
+    left: 1px;
+    transition: top 0.15s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  }
+  .toggle-switch[data-pos="0"] .toggle-handle { top: 2px; }
+  .toggle-switch[data-pos="1"] .toggle-handle { top: 16px; }
+  .toggle-switch[data-pos="2"] .toggle-handle { top: 30px; }
+
+  /* LEDs */
+  .leds-row { display: flex; gap: 40px; justify-content: center; align-items: center; }
+  .led-wrapper { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .led-label { font-size: 10px; color: var(--dim); }
+  .led {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--led-off);
+    border: 1px solid #442222;
+    transition: background 0.04s, box-shadow 0.04s;
+  }
+  .led.on {
+    background: var(--led-red);
+    box-shadow: var(--led-glow);
+  }
+
+  /* Footswitches */
+  .footswitches-row { display: flex; gap: 60px; justify-content: center; }
+  .fs-wrapper { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .fs-label { font-size: 10px; color: var(--dim); }
+  .footswitch {
+    width: 44px; height: 44px;
+    background: var(--fs-bg);
+    border: 2px solid #777;
+    border-radius: 50%;
+    cursor: pointer;
+    user-select: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; color: var(--dim);
+    transition: background 0.1s;
+  }
+  .footswitch:active, .footswitch.held {
+    background: var(--fs-pressed);
+    border-color: var(--accent);
+  }
+
+  /* State display */
+  .state-display {
+    background: #111;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    width: 340px;
+    font-size: 11px;
+    line-height: 1.8;
+  }
+  .state-display .row { display: flex; justify-content: space-between; }
+  .state-display .label { color: var(--dim); }
+  .state-display .value { color: var(--accent); font-weight: bold; }
+
+  /* Right panel */
+  .right-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    flex: 1;
+    min-width: 320px;
+    max-width: 480px;
+  }
+
+  /* Constants editor */
+  .constants-panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .constants-panel h3 {
+    font-size: 13px;
+    margin-bottom: 12px;
+    color: var(--accent);
+  }
+  .const-group { margin-bottom: 12px; }
+  .const-group-title { font-size: 11px; color: var(--dim); margin-bottom: 6px; }
+  .const-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .const-row label { font-size: 11px; flex: 1; }
+  .const-row input {
+    width: 70px;
+    background: #111;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: var(--text);
+    padding: 3px 6px;
+    font-size: 11px;
+    font-family: inherit;
+    text-align: right;
+  }
+  .const-row .unit { font-size: 10px; color: var(--dim); width: 28px; }
+
+  /* Event log */
+  .log-panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 16px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
+  }
+  .log-panel h3 {
+    font-size: 13px;
+    margin-bottom: 8px;
+    color: var(--accent);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .log-panel h3 button {
+    background: none;
+    border: 1px solid #555;
+    color: var(--dim);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .log-entries {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.6;
+    max-height: 400px;
+  }
+  .log-entry { border-bottom: 1px solid #222; padding: 2px 0; }
+  .log-time { color: var(--dim); margin-right: 6px; }
+  .log-action { color: #6dce6d; }
+  .log-state { color: #6db3ce; }
+  .log-warn { color: #ceaa3d; }
+
+  /* Help */
+  .help {
+    font-size: 11px;
+    color: var(--dim);
+    line-height: 1.6;
+    padding: 8px 12px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+  }
+  .help kbd {
+    background: #333;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="main">
+  <div class="pedal-container">
+    <div class="pedal">
+      <div class="pedal-title">NitroTron3</div>
+
+      <!-- Knobs row 1 -->
+      <div class="knobs-row">
+        <div class="knob-wrapper">
+          <div class="knob-label">K1</div>
+          <div class="knob" data-knob="0"><div class="knob-indicator"></div></div>
+          <div class="knob-value" id="kv0">0.50</div>
+        </div>
+        <div class="knob-wrapper">
+          <div class="knob-label">K2</div>
+          <div class="knob" data-knob="1"><div class="knob-indicator"></div></div>
+          <div class="knob-value" id="kv1">0.50</div>
+        </div>
+        <div class="knob-wrapper">
+          <div class="knob-label">K3</div>
+          <div class="knob" data-knob="2"><div class="knob-indicator"></div></div>
+          <div class="knob-value" id="kv2">0.50</div>
+        </div>
+      </div>
+      <div class="knobs-row">
+        <div class="knob-wrapper">
+          <div class="knob-label">K4</div>
+          <div class="knob" data-knob="3"><div class="knob-indicator"></div></div>
+          <div class="knob-value" id="kv3">0.50</div>
+        </div>
+        <div class="knob-wrapper">
+          <div class="knob-label">K5</div>
+          <div class="knob" data-knob="4"><div class="knob-indicator"></div></div>
+          <div class="knob-value" id="kv4">0.50</div>
+        </div>
+        <div class="knob-wrapper">
+          <div class="knob-label">K6 Mix</div>
+          <div class="knob" data-knob="5"><div class="knob-indicator"></div></div>
+          <div class="knob-value" id="kv5">0.50</div>
+        </div>
+      </div>
+
+      <!-- Switches -->
+      <div class="switches-row">
+        <div class="switch-wrapper">
+          <div class="switch-label">SW1</div>
+          <div class="toggle-switch" data-switch="0" data-pos="0">
+            <div class="toggle-handle"></div>
+          </div>
+          <div class="switch-val" id="sv0">UP</div>
+        </div>
+        <div class="switch-wrapper">
+          <div class="switch-label">SW2</div>
+          <div class="toggle-switch" data-switch="1" data-pos="0">
+            <div class="toggle-handle"></div>
+          </div>
+          <div class="switch-val" id="sv1">UP</div>
+        </div>
+        <div class="switch-wrapper">
+          <div class="switch-label">SW3 Mode</div>
+          <div class="toggle-switch" data-switch="2" data-pos="0">
+            <div class="toggle-handle"></div>
+          </div>
+          <div class="switch-val" id="sv2">Drone</div>
+        </div>
+      </div>
+
+      <!-- LEDs -->
+      <div class="leds-row">
+        <div class="led-wrapper">
+          <div class="led-label">LED 1</div>
+          <div class="led" id="led1"></div>
+        </div>
+        <div class="led-wrapper">
+          <div class="led-label">LED 2</div>
+          <div class="led" id="led2"></div>
+        </div>
+      </div>
+
+      <!-- Footswitches -->
+      <div class="footswitches-row">
+        <div class="fs-wrapper">
+          <div class="fs-label">FS1 Preset</div>
+          <div class="footswitch" id="fs1">FS1</div>
+        </div>
+        <div class="fs-wrapper">
+          <div class="fs-label">FS2 Bypass</div>
+          <div class="footswitch" id="fs2">FS2</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- State display -->
+    <div class="state-display" id="stateDisplay">
+      <div class="row"><span class="label">Pedal state:</span><span class="value" id="sdState">NORMAL</span></div>
+      <div class="row"><span class="label">Mode:</span><span class="value" id="sdMode">A (Drone)</span></div>
+      <div class="row"><span class="label">Preset:</span><span class="value" id="sdPreset">Manual</span></div>
+      <div class="row"><span class="label">Dirty:</span><span class="value" id="sdDirty">No</span></div>
+      <div class="row"><span class="label">Bypass:</span><span class="value" id="sdBypass">Off (active)</span></div>
+      <div class="row"><span class="label">Save target:</span><span class="value" id="sdSaveTarget">-</span></div>
+      <div class="row"><span class="label">LED 1:</span><span class="value" id="sdLed1">Off</span></div>
+      <div class="row"><span class="label">LED 2:</span><span class="value" id="sdLed2">Solid on</span></div>
+    </div>
+
+    <div class="help">
+      <strong>Controls:</strong><br>
+      <kbd>Click+drag</kbd> knobs up/down to turn<br>
+      <kbd>Click</kbd> toggles to cycle UP/MID/DOWN<br>
+      <kbd>Click</kbd> footswitch for short press<br>
+      <kbd>Hold</kbd> footswitch for long press (hold until border turns red)<br>
+      Hold <kbd>FS1+FS2</kbd> 2s for bootloader
+    </div>
+  </div>
+
+  <div class="right-panel">
+    <!-- Constants -->
+    <div class="constants-panel">
+      <h3>Timing Constants</h3>
+
+      <div class="const-group">
+        <div class="const-group-title">Preset LED (LED 1)</div>
+        <div class="const-row">
+          <label>Blink on time</label>
+          <input type="number" id="cBlinkOn" value="200" step="10" min="20" max="500">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Blink off time</label>
+          <input type="number" id="cBlinkOff" value="200" step="10" min="20" max="500">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Repeat gap</label>
+          <input type="number" id="cRepeatGap" value="600" step="50" min="100" max="2000">
+          <span class="unit">ms</span>
+        </div>
+      </div>
+
+      <div class="const-group">
+        <div class="const-group-title">Dirty indicator (LED 2)</div>
+        <div class="const-row">
+          <label>Flash on time</label>
+          <input type="number" id="cDirtyOn" value="50" step="10" min="20" max="500">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Flash off time</label>
+          <input type="number" id="cDirtyOff" value="50" step="10" min="20" max="500">
+          <span class="unit">ms</span>
+        </div>
+      </div>
+
+      <div class="const-group">
+        <div class="const-group-title">Save mode (LED 2)</div>
+        <div class="const-row">
+          <label>Blink on time</label>
+          <input type="number" id="cSaveModeOn" value="150" step="10" min="20" max="300">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Blink off time</label>
+          <input type="number" id="cSaveModeOff" value="150" step="10" min="20" max="300">
+          <span class="unit">ms</span>
+        </div>
+      </div>
+
+      <div class="const-group">
+        <div class="const-group-title">Save confirm (LED 2)</div>
+        <div class="const-row">
+          <label>Burst duration</label>
+          <input type="number" id="cSaveConfirmDur" value="500" step="100" min="200" max="3000">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Burst on time</label>
+          <input type="number" id="cSaveConfirmOn" value="75" step="5" min="10" max="200">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Burst off time</label>
+          <input type="number" id="cSaveConfirmOff" value="75" step="5" min="10" max="200">
+          <span class="unit">ms</span>
+        </div>
+      </div>
+
+      <div class="const-group">
+        <div class="const-group-title">Footswitch timing</div>
+        <div class="const-row">
+          <label>Long press threshold</label>
+          <input type="number" id="cLongPress" value="700" step="50" min="200" max="2000">
+          <span class="unit">ms</span>
+        </div>
+        <div class="const-row">
+          <label>Bootloader hold time</label>
+          <input type="number" id="cBootHold" value="2000" step="100" min="1000" max="5000">
+          <span class="unit">ms</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Event log -->
+    <div class="log-panel">
+      <h3>Event Log <button onclick="clearLog()">Clear</button></h3>
+      <div class="log-entries" id="logEntries"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Constants (read from form) ──────────────────────────────
+function C(id) { return parseInt(document.getElementById(id).value, 10); }
+
+// ── State ───────────────────────────────────────────────────
+const NUM_MODES = 3;
+const NUM_PRESETS = 5;
+const MODE_NAMES = ['A (Drone)', 'B (Granular)', 'C (FreqShift)'];
+const SW3_LABELS = ['Drone', 'Granular', 'FreqShift'];
+const SW_LABELS = [['UP','MID','DOWN'],['UP','MID','DOWN'], SW3_LABELS];
+
+let state = {
+  mode: 0,            // 0-2, from SW3
+  preset: 0,          // 0 = manual, 1-5 = preset
+  dirty: false,
+  bypass: false,
+  saveMode: false,
+  saveTarget: 0,      // 1-5 in save mode
+  bootloaderCountdown: false,
+};
+
+// Per-mode storage: edit buffers and preset slots
+let storage = [];
+for (let m = 0; m < NUM_MODES; m++) {
+  let modeData = {
+    editBuffer: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    presets: []
+  };
+  for (let p = 0; p < NUM_PRESETS; p++) {
+    modeData.presets.push([
+      Math.random() * 0.8 + 0.1,
+      Math.random() * 0.8 + 0.1,
+      Math.random() * 0.8 + 0.1,
+      Math.random() * 0.8 + 0.1,
+      Math.random() * 0.8 + 0.1,
+      Math.random() * 0.8 + 0.1,
+    ]);
+  }
+  storage.push(modeData);
+}
+
+let knobValues = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
+let switchPositions = [0, 0, 0]; // 0=UP, 1=MID, 2=DOWN
+
+// ── LED state ───────────────────────────────────────────────
+let led1On = false;
+let led2On = true; // on = effect active (not bypassed)
+let led1Timer = null;
+let led2Timer = null;
+let saveConfirmTimer = null;
+
+// ── DOM refs ────────────────────────────────────────────────
+const led1El = document.getElementById('led1');
+const led2El = document.getElementById('led2');
+const fs1El = document.getElementById('fs1');
+const fs2El = document.getElementById('fs2');
+
+// ── Logging ─────────────────────────────────────────────────
+const logEl = document.getElementById('logEntries');
+const startTime = Date.now();
+
+function log(msg, cls = 'action') {
+  const t = ((Date.now() - startTime) / 1000).toFixed(1);
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${t}s</span><span class="log-${cls}">${msg}</span>`;
+  logEl.prepend(entry);
+  // Keep max 100
+  while (logEl.children.length > 100) logEl.removeChild(logEl.lastChild);
+}
+
+function clearLog() { logEl.innerHTML = ''; }
+
+// ── State display ───────────────────────────────────────────
+function updateDisplay() {
+  const $ = id => document.getElementById(id);
+  let stateStr = 'NORMAL';
+  if (state.saveMode) stateStr = 'SAVE MODE';
+  if (state.bootloaderCountdown) stateStr = 'BOOTLOADER...';
+  $('sdState').textContent = stateStr;
+  $('sdMode').textContent = MODE_NAMES[state.mode];
+  $('sdPreset').textContent = state.preset === 0 ? 'Manual' : `Preset ${state.preset}`;
+  $('sdDirty').textContent = state.dirty ? 'Yes' : 'No';
+  $('sdBypass').textContent = state.bypass ? 'On (bypassed)' : 'Off (active)';
+  $('sdSaveTarget').textContent = state.saveMode ? `Preset ${state.saveTarget}` : '-';
+}
+
+// ── LED control ─────────────────────────────────────────────
+function setLed(n, on) {
+  const el = n === 1 ? led1El : led2El;
+  if (on) el.classList.add('on');
+  else el.classList.remove('on');
+  if (n === 1) led1On = on;
+  else led2On = on;
+}
+
+function stopLed1Pattern() {
+  if (led1Timer) { clearTimeout(led1Timer); led1Timer = null; }
+  setLed(1, false);
+}
+
+function stopLed2Pattern() {
+  if (led2Timer) { clearTimeout(led2Timer); led2Timer = null; }
+  if (saveConfirmTimer) { clearTimeout(saveConfirmTimer); saveConfirmTimer = null; }
+}
+
+// N blinks with fixed on/off timing, then a repeat gap.
+let led1Generation = 0; // incremented on every restart to kill stale callbacks
+
+function startPresetBlink(presetNum) {
+  stopLed1Pattern();
+  led1Generation++;
+  if (presetNum === 0) {
+    setLed(1, false);
+    document.getElementById('sdLed1').textContent = 'Off (manual)';
+    updateDisplay();
+    return;
+  }
+
+  const onTime = C('cBlinkOn');
+  const offTime = C('cBlinkOff');
+  const repeatGap = C('cRepeatGap');
+  const gen = led1Generation;
+
+  const steps = [];
+  for (let i = 0; i < presetNum; i++) {
+    steps.push([onTime, true]);
+    steps.push([i < presetNum - 1 ? offTime : repeatGap, false]);
+  }
+
+  let idx = 0;
+  function tick() {
+    if (gen !== led1Generation) return; // stale callback, abort
+    const [dur, on] = steps[idx];
+    setLed(1, on);
+    led1Timer = setTimeout(() => {
+      idx = (idx + 1) % steps.length;
+      tick();
+    }, dur);
+  }
+
+  tick();
+  document.getElementById('sdLed1').textContent = `Preset ${presetNum} (${presetNum}x)`;
+  updateDisplay();
+}
+
+function startLed2Normal() {
+  stopLed2Pattern();
+  if (state.bypass) {
+    setLed(2, false);
+    document.getElementById('sdLed2').textContent = 'Off (bypassed)';
+  } else if (state.dirty) {
+    // Rapid flash for dirty — use setTimeout chain for correct alternating timing
+    const onTime = C('cDirtyOn');
+    const offTime = C('cDirtyOff');
+    function dirtyTick(isOn) {
+      setLed(2, isOn);
+      led2Timer = setTimeout(() => dirtyTick(!isOn), isOn ? onTime : offTime);
+    }
+    dirtyTick(true);
+    document.getElementById('sdLed2').textContent = 'Rapid flash (dirty)';
+  } else {
+    setLed(2, true);
+    document.getElementById('sdLed2').textContent = 'Solid on (active)';
+  }
+}
+
+function startLed2SaveMode() {
+  stopLed2Pattern();
+  const onTime = C('cSaveModeOn');
+  const offTime = C('cSaveModeOff');
+  function saveTick(isOn) {
+    setLed(2, isOn);
+    led2Timer = setTimeout(() => saveTick(!isOn), isOn ? onTime : offTime);
+  }
+  saveTick(true);
+  document.getElementById('sdLed2').textContent = 'Fast blink (save mode)';
+}
+
+function startLed2SaveConfirm(callback) {
+  stopLed2Pattern();
+  const dur = C('cSaveConfirmDur');
+  const onTime = C('cSaveConfirmOn');
+  const offTime = C('cSaveConfirmOff');
+  function burstTick(isOn) {
+    setLed(2, isOn);
+    led2Timer = setTimeout(() => burstTick(!isOn), isOn ? onTime : offTime);
+  }
+  burstTick(true);
+  document.getElementById('sdLed2').textContent = 'Burst flash (save confirmed!)';
+
+  saveConfirmTimer = setTimeout(() => {
+    stopLed2Pattern();
+    if (callback) callback();
+  }, dur);
+}
+
+// ── Knob interaction ────────────────────────────────────────
+const knobs = document.querySelectorAll('.knob');
+let activeKnob = null;
+let knobStartY = 0;
+let knobStartVal = 0;
+
+knobs.forEach(knob => {
+  const idx = parseInt(knob.dataset.knob);
+
+  knob.addEventListener('mousedown', e => {
+    e.preventDefault();
+    activeKnob = idx;
+    knobStartY = e.clientY;
+    knobStartVal = knobValues[idx];
+  });
+
+  // Update visual
+  updateKnobVisual(idx);
+});
+
+function updateKnobVisual(idx) {
+  const knob = document.querySelector(`[data-knob="${idx}"]`);
+  const indicator = knob.querySelector('.knob-indicator');
+  // Map 0-1 to -135 to +135 degrees
+  const angle = -135 + knobValues[idx] * 270;
+  indicator.style.transform = `translateX(-50%) rotate(${angle}deg)`;
+  document.getElementById(`kv${idx}`).textContent = knobValues[idx].toFixed(2);
+}
+
+document.addEventListener('mousemove', e => {
+  if (activeKnob === null) return;
+  const delta = (knobStartY - e.clientY) / 150;
+  knobValues[activeKnob] = Math.max(0, Math.min(1, knobStartVal + delta));
+  updateKnobVisual(activeKnob);
+  onKnobChanged(activeKnob);
+});
+
+document.addEventListener('mouseup', () => { activeKnob = null; });
+
+function onKnobChanged(idx) {
+  // Update edit buffer
+  storage[state.mode].editBuffer[idx] = knobValues[idx];
+
+  // Only go dirty when a preset is loaded, not in manual mode, not in save mode
+  if (state.preset > 0 && !state.dirty && !state.saveMode) {
+    state.dirty = true;
+    log(`Preset ${state.preset} edited (dirty)`, 'warn');
+    startLed2Normal();
+    updateDisplay();
+  }
+}
+
+// ── Toggle switches ─────────────────────────────────────────
+const toggles = document.querySelectorAll('.toggle-switch');
+toggles.forEach(sw => {
+  sw.addEventListener('click', () => {
+    const idx = parseInt(sw.dataset.switch);
+    let pos = parseInt(sw.dataset.pos);
+    pos = (pos + 1) % 3;
+    sw.dataset.pos = pos;
+    switchPositions[idx] = pos;
+    document.getElementById(`sv${idx}`).textContent = SW_LABELS[idx][pos];
+
+    if (idx === 2) {
+      // Mode switch
+      onModeChanged(pos);
+    }
+
+    log(`SW${idx + 1} → ${SW_LABELS[idx][pos]}`, 'state');
+  });
+});
+
+function onModeChanged(newMode) {
+  // Save current edit buffer
+  storage[state.mode].editBuffer = [...knobValues];
+
+  state.mode = newMode;
+  state.preset = 0;
+  state.dirty = false;
+  state.saveMode = false;
+
+  // Load new mode's edit buffer
+  knobValues = [...storage[newMode].editBuffer];
+  for (let i = 0; i < 6; i++) updateKnobVisual(i);
+
+  startPresetBlink(0);
+  startLed2Normal();
+  updateDisplay();
+  log(`Mode → ${MODE_NAMES[newMode]}, back to Manual`, 'state');
+}
+
+// ── Footswitch handling ─────────────────────────────────────
+let fs1DownTime = null;
+let fs2DownTime = null;
+let bothDownTime = null;
+let bootloaderTimer = null;
+let fs1LongFired = false;
+let fs2LongFired = false;
+
+
+// FS1
+fs1El.addEventListener('mousedown', e => {
+  e.preventDefault();
+  fs1DownTime = Date.now();
+  fs1LongFired = false;
+  fs1El.classList.add('held');
+  checkBothDown();
+});
+
+fs1El.addEventListener('mouseup', e => {
+  e.preventDefault();
+  fs1El.classList.remove('held');
+  cancelBothDown();
+  if (fs1DownTime === null) return;
+  const dur = Date.now() - fs1DownTime;
+  fs1DownTime = null;
+  if (fs1LongFired) return;
+
+  // Short press
+  onFs1ShortPress();
+});
+
+fs1El.addEventListener('mouseleave', () => {
+  if (fs1DownTime !== null) {
+    fs1El.classList.remove('held');
+    cancelBothDown();
+    const dur = Date.now() - fs1DownTime;
+    fs1DownTime = null;
+    if (!fs1LongFired) onFs1ShortPress();
+  }
+});
+
+// FS2
+fs2El.addEventListener('mousedown', e => {
+  e.preventDefault();
+  fs2DownTime = Date.now();
+  fs2LongFired = false;
+  fs2El.classList.add('held');
+  checkBothDown();
+
+  // Start long-press detection for FS2
+  fs2LongTimer = setTimeout(() => {
+    if (fs2DownTime !== null && !isCheckingBoot()) {
+      fs2LongFired = true;
+      onFs2LongPress();
+    }
+  }, C('cLongPress'));
+});
+
+fs2El.addEventListener('mouseup', e => {
+  e.preventDefault();
+  fs2El.classList.remove('held');
+  cancelBothDown();
+  clearTimeout(fs2LongTimer);
+  if (fs2DownTime === null) return;
+  const dur = Date.now() - fs2DownTime;
+  fs2DownTime = null;
+  if (fs2LongFired) return;
+
+  // Short press
+  onFs2ShortPress();
+});
+
+fs2El.addEventListener('mouseleave', () => {
+  if (fs2DownTime !== null) {
+    fs2El.classList.remove('held');
+    cancelBothDown();
+    clearTimeout(fs2LongTimer);
+    const dur = Date.now() - fs2DownTime;
+    fs2DownTime = null;
+    if (!fs2LongFired) onFs2ShortPress();
+  }
+});
+
+let fs2LongTimer = null;
+
+// Bootloader: both held
+function isCheckingBoot() { return bothDownTime !== null; }
+
+function checkBothDown() {
+  if (fs1DownTime !== null && fs2DownTime !== null) {
+    bothDownTime = Date.now();
+    state.bootloaderCountdown = true;
+    updateDisplay();
+    log('Both footswitches held — bootloader in ' + (C('cBootHold') / 1000) + 's...', 'warn');
+
+    bootloaderTimer = setTimeout(() => {
+      log('BOOTLOADER MODE ENTERED', 'warn');
+      state.bootloaderCountdown = false;
+      // Flash both LEDs
+      let count = 0;
+      const flash = setInterval(() => {
+        setLed(1, count % 2 === 0);
+        setLed(2, count % 2 === 0);
+        count++;
+        if (count > 10) {
+          clearInterval(flash);
+          setLed(1, false);
+          setLed(2, false);
+          log('(Reset pedal to exit bootloader)', 'warn');
+        }
+      }, 150);
+      updateDisplay();
+    }, C('cBootHold'));
+  }
+}
+
+function cancelBothDown() {
+  if (bothDownTime !== null) {
+    bothDownTime = null;
+    state.bootloaderCountdown = false;
+    if (bootloaderTimer) { clearTimeout(bootloaderTimer); bootloaderTimer = null; }
+    updateDisplay();
+  }
+}
+
+// ── FS1 actions ─────────────────────────────────────────────
+function onFs1ShortPress() {
+  if (state.saveMode) {
+    // Cycle target slot
+    state.saveTarget = (state.saveTarget % NUM_PRESETS) + 1;
+    startPresetBlink(state.saveTarget);
+
+    log(`Save target → Preset ${state.saveTarget}`, 'action');
+    updateDisplay();
+    return;
+  }
+
+  if (state.dirty && state.preset > 0) {
+    // Reload current preset
+    const presetData = storage[state.mode].presets[state.preset - 1];
+    knobValues = [...presetData];
+    storage[state.mode].editBuffer = [...presetData];
+    for (let i = 0; i < 6; i++) updateKnobVisual(i);
+    state.dirty = false;
+    log(`Preset ${state.preset} reloaded (reverted)`, 'action');
+    startLed2Normal();
+    updateDisplay();
+    return;
+  }
+
+  // Cycle: Manual → 1 → 2 → 3 → 4 → 5 → Manual
+  state.preset = (state.preset + 1) % (NUM_PRESETS + 1);
+  state.dirty = false;
+
+  if (state.preset === 0) {
+    // Manual mode: read current knob positions as edit buffer
+    storage[state.mode].editBuffer = [...knobValues];
+    log('→ Manual mode', 'action');
+  } else {
+    // Load preset
+    const presetData = storage[state.mode].presets[state.preset - 1];
+    knobValues = [...presetData];
+    storage[state.mode].editBuffer = [...presetData];
+    for (let i = 0; i < 6; i++) updateKnobVisual(i);
+    log(`→ Preset ${state.preset} loaded [${presetData.map(v => v.toFixed(2)).join(', ')}]`, 'action');
+  }
+
+  startPresetBlink(state.preset);
+  startLed2Normal();
+  updateDisplay();
+}
+
+// ── FS2 actions ─────────────────────────────────────────────
+function onFs2ShortPress() {
+  if (state.saveMode) {
+    // Cancel save
+    log('Save cancelled', 'warn');
+    exitSaveMode();
+    return;
+  }
+
+  // Normal: toggle bypass
+  state.bypass = !state.bypass;
+  log(`Bypass ${state.bypass ? 'ON (muted)' : 'OFF (active)'}`, 'state');
+  startLed2Normal();
+  updateDisplay();
+}
+
+function onFs2LongPress() {
+  if (state.saveMode) {
+    // Confirm save
+    const slot = state.saveTarget;
+    storage[state.mode].presets[slot - 1] = [...storage[state.mode].editBuffer];
+    log(`SAVED to Mode ${MODE_NAMES[state.mode]} Preset ${slot}!`, 'action');
+
+    state.saveMode = false;
+    state.preset = slot;
+    state.dirty = false;
+  
+
+    startLed2SaveConfirm(() => {
+      startPresetBlink(state.preset);
+      startLed2Normal();
+      updateDisplay();
+    });
+    startPresetBlink(state.preset);
+    updateDisplay();
+    return;
+  }
+
+  // Enter save mode
+  state.saveMode = true;
+  state.saveTarget = state.preset > 0 ? state.preset : 1; // Pre-select current preset, or Preset 1 from manual
+  log(`Save mode entered (target: Preset ${state.saveTarget})`, 'state');
+  startLed2SaveMode();
+  startPresetBlink(state.saveTarget);
+  updateDisplay();
+}
+
+function exitSaveMode() {
+  state.saveMode = false;
+  startPresetBlink(state.preset);
+  startLed2Normal();
+  updateDisplay();
+}
+
+// ── Init ────────────────────────────────────────────────────
+startPresetBlink(0);
+startLed2Normal();
+updateDisplay();
+log('Pedal powered on — Manual mode', 'state');
+
+// Re-apply LED patterns when constants change
+document.querySelectorAll('.constants-panel input').forEach(input => {
+  input.addEventListener('change', () => {
+    // Restart current LED patterns with new values
+    if (state.saveMode) {
+      startLed2SaveMode();
+    } else {
+      startLed2Normal();
+    }
+    startPresetBlink(state.saveMode ? state.saveTarget : state.preset);
+    log(`Constant updated: ${input.id}=${input.value}`, 'state');
+  });
+});
+</script>
+</body>
+</html>

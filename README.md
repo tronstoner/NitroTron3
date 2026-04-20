@@ -95,16 +95,17 @@ Input ──┬─────────────────────�
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
 | SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** - Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval)<br/>**DOWN** - Direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
-| SWITCH 3 | Unused | **UP** - <br/>**MIDDLE** - <br/>**DOWN** -  |
-| FOOTSWITCH 1 | Bootloader | Hold 2 s → enter DFU bootloader for flashing |
-| FOOTSWITCH 2 | Bypass | Toggles effect on/off. LED 2 on = effect active. The bypassed signal is buffered |
+| SWITCH 3 | Mode select | **UP** - Mode A (Drone)<br/>**MIDDLE** - Mode B (Granular Glitch, future)<br/>**DOWN** - Mode C (Freq Shift, future) |
+| FOOTSWITCH 1 | Preset | Short press: cycle Manual → Preset 1–5 (reload current if edited). In save mode: cycle target slot |
+| FOOTSWITCH 2 | Bypass / Save | Short press: bypass on/off. Long press: enter save mode (long press again = save, short press = cancel). Buffered bypass |
+| FS1 + FS2 held 2 s | Bootloader | Enter DFU bootloader for flashing |
 
 ### LEDs
 
 | LED | DESCRIPTION |
 |-|-|
-| LED 1 (left) | Waveform indicator: solid = Saw, slow blink = Triangle, fast blink = Square |
-| LED 2 (right) | Bypass: on = effect active, off = bypassed |
+| LED 1 (left) | Preset indicator: 1–5 blinks in 1.5 s window = preset number. Manual mode: waveform indicator (solid = Saw, slow blink = Triangle, fast blink = Square) |
+| LED 2 (right) | Bypass on = effect active. Rapid flash = preset edited (dirty). Fast blink = save mode. Burst flash ~1 s = save confirmed |
 
 ## Updating dependencies
 

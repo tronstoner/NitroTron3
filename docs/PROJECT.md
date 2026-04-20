@@ -2,13 +2,13 @@
 
 ## Overview
 
-A multi-mode digital effects pedal for bass guitar, built on the Electro-Smith Daisy Seed. Three independent effect modes are selectable via a toggle switch, each with 3 preset slots. Only the active mode runs at any time — inactive modes have zero CPU cost.
+A multi-mode digital effects pedal for bass guitar, built on the Electro-Smith Daisy Seed. Three independent effect modes are selectable via Switch 3, each with an edit buffer and 5 stored presets. Only the active mode runs at any time — inactive modes have zero CPU cost.
 
-**Mode A — Drone OSC** (primary, fully specced in `MODE_A_DRONE.md`)
+**Mode A — Drone OSC** (fully specced in `MODE_A_DRONE.md`)
 Inspired by the Moog MoogerFooger FreqBox (MF-102). An internally generated oscillator, amplitude-controlled by an envelope follower tracking the bass input, mixed back with the dry signal. No oscillator sync, no FM modulation.
 
-**Mode B — Granular Glitch** (placeholder, to be specced later)
-Buffer-based granular processor. Modest grain count (8–16) is within the Daisy's capabilities. The 64MB SDRAM provides several minutes of audio buffer. Community precedent exists (Qu-Bit Stardust runs on Daisy).
+**Mode B — Granular Glitch** (fully specced in `MODE_B_GRANULAR.md`)
+Inspired by the Chase Bliss Mood's "micro-looper as collaborator" philosophy. Rolling buffer → grain scheduler → pitch-shifted voices → gesture-reactive tonal shaping → feedback loop. The wet output sits above the dry bass in frequency and rhythmically around it. Reuses EnvFollower, PitchTracker, MoogLadder, and wavefolder from Mode A.
 
 **Mode C — Frequency Shifter** (placeholder, to be specced later)
 Single sideband frequency shift via Hilbert transform. Moderate CPU load, comfortably within budget.
@@ -79,12 +79,12 @@ These are consistent across all modes:
 
 | Control | Function |
 |---|---|
-| Toggle 3 | Mode select — Drone / Granular / Freq Shift |
-| Toggle 2 | Preset select — A / B / C (per active mode) |
-| Footswitch 1 | Bypass (true bypass via Hothouse relay) |
-| Footswitch 2 | Short press: recall live knob state · Long press: save to active preset |
+| Switch 3 | Mode select — Drone / Granular / Freq Shift |
+| Footswitch 1 | Preset navigation (see Preset System below) |
+| Footswitch 2 | Bypass (true bypass via Hothouse relay). Long press: save mode |
+| FS1 + FS2 held 2 s | Enter DFU bootloader for flashing |
 
-Mode-specific knob and toggle assignments are documented in each mode's spec file.
+Switches 1–2 and knobs 1–6 are mode-specific — see each mode's spec file.
 
 See `TUNING.md` for the tuning-mode override that repurposes controls during development.
 
@@ -92,13 +92,80 @@ See `TUNING.md` for the tuning-mode override that repurposes controls during dev
 
 ## Preset System
 
-- **9 preset slots total** — 3 per mode, independent per mode
-- Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`
-- Short press on FS2: jump to live knob values (no pickup mode — values jump immediately)
-- Long press on FS2: save current knob state to active preset slot
-- LED confirms flash save (~50 ms blink)
+Inspired by the EHX Ring Thing UX, adapted for a two-LED, two-footswitch interface.
 
-Per-mode preset data structures live in each mode's spec file.
+### Slots
+
+- **Edit buffer** — the live working state. One per mode, persisted to flash for power-cycle recall. On startup, knob positions are read into the edit buffer (panel mode).
+- **5 stored presets per mode** — 15 slots total across three modes. Independent per mode: switching modes loads that mode's own edit buffer and presets.
+
+Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`. Per-mode preset data structures live in each mode's spec file.
+
+### Navigation (Normal Mode)
+
+**FS1 short press** cycles through: Manual → Preset 1 → Preset 2 → Preset 3 → Preset 4 → Preset 5 → Manual → …
+
+Loading a preset copies its stored values into the edit buffer. Knob values jump immediately — no pickup mode.
+
+**Manual mode** = the current edit buffer with no preset loaded. On startup the pedal always enters manual mode and reads the current knob positions into the edit buffer.
+
+### Dirty State (Preset Edited)
+
+When a preset is loaded and any knob is moved, the edit buffer diverges from the stored preset. This is the **dirty** state:
+
+- **LED 2** switches from solid on to a **rapid flash** pattern, indicating the loaded preset has been altered. (Inspired by EHX pedals that flash LEDs to indicate edited presets.)
+- The stored preset slot is not modified — only the edit buffer changes.
+
+While dirty:
+- **FS1 short press** → **reloads the current preset**, reverting the edit buffer to the stored values. This is a performance feature: tweak parameters live, then instantly reset to the saved state. LED 2 returns to solid.
+- **FS1 short press** does **not** cycle to the next preset while dirty. You must reload first, then press again to cycle.
+
+### LED Preset Indication (LED 1)
+
+LED 1 indicates the active preset by blinking N times, then pausing:
+
+| State | LED 1 pattern |
+|---|---|
+| Manual (no preset) | Off (mode-specific use, e.g. waveform indicator in Mode A) |
+| Preset 1 | 1 blink |
+| Preset 2 | 2 blinks |
+| Preset 3 | 3 blinks |
+| Preset 4 | 4 blinks |
+| Preset 5 | 5 blinks |
+
+Default timing: 200 ms on, 200 ms off, 600 ms repeat gap. Selecting a preset always restarts the blink pattern from the beginning.
+
+The slot count (currently 5) can be expanded later without changing the UX paradigm.
+
+### Save Mode
+
+**FS2 long press** → enters save mode.
+
+- **Target slot is pre-selected** to the currently loaded preset. If you loaded Preset 3 and tweaked it, save targets Preset 3 by default — no need to remember or cycle.
+- **LED 2** blinks fast (distinct from the dirty-state flash) to indicate save mode.
+- **LED 1** shows the target slot's blink pattern.
+
+While in save mode:
+- **FS1 short press** → **cycles through target slots** (1 → 2 → 3 → 4 → 5 → 1 → …). LED 1 updates to show the new target. Starts at the pre-selected slot, so one press moves to the next.
+- **FS2 long press** → **confirms save**. Edit buffer is written to the selected slot. LED 2 flashes rapidly for ~1 second to confirm success. Returns to normal mode (preset now clean).
+- **FS2 short press** → **cancels save**. Returns to normal mode, no write performed.
+
+Save mode also times out after a few seconds of inactivity (returns to normal mode, no save).
+
+**Saving from manual mode:** FS2 long press enters save mode with target defaulting to Preset 1. Use FS1 to cycle to the desired slot, then FS2 long press to confirm. The current edit buffer is always what gets saved.
+
+### Knob Behavior
+
+- **On preset load:** values jump immediately to stored values. No pickup, no interpolation.
+- **After load:** moving any knob overrides that parameter in the edit buffer. The stored preset is not modified (dirty state).
+- **Manual mode on startup:** all knob positions are read and applied to the edit buffer.
+
+### Bootloader Entry
+
+**Hold both FS1 and FS2 simultaneously for 2 seconds** → enters DFU bootloader for flashing. This combination cannot be triggered accidentally during normal preset or bypass operation because:
+- FS1 and FS2 are never both actionable at the same time in normal use (FS1 = preset, FS2 = bypass)
+- The 2-second hold window rejects accidental simultaneous taps
+- Detection requires both switches to be held continuously — if either is released early, the timer resets
 
 ---
 
@@ -122,7 +189,9 @@ Per-mode preset data structures live in each mode's spec file.
 - **Per-waveform gains** — DONE. Independent level trim for saw/tri/square in constants.h.
 - **Serial logging** — TODO. Earlier freeze was caused by printing from the audio callback, not by `StartLog(false)`. Fix: print from main loop only, throttled, using `FLT_FMT3` macros. Should be quick to re-enable.
 - **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
-- **Next** — Re-enable serial logging (quick fix), then: pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), preset system (Stage 5), wrap point persistence. Switch 3 is unused.
+- **Mode B spec** — DONE. Granular Glitch fully specced in `MODE_B_GRANULAR.md`.
+- **Preset system** — SPECCED. FS1-based navigation (edit buffer + 5 presets per mode), morse-code LED indication, save mode via long press. See Preset System section above.
+- **Next** — Re-enable serial logging (quick fix), then: pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), preset system implementation (Stage 5), wrap point persistence.
 
 ## Staged Development Timeline
 
@@ -144,7 +213,7 @@ K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=f
 Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. K1 sets wrap point for tracking. All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
 
 ### Stage 5 — Preset system
-FS2 short/long press logic, 3 slots for Mode A, flash storage via `PersistentStorage`.
+FS1 preset navigation (edit buffer + 5 slots per mode), save mode (FS1 long press + FS2 confirm), morse-code LED indication on LED 1, flash storage via `PersistentStorage`.
 
 ### Stage 6 — Multi-mode scaffold
 Toggle 3 dispatches to `ProcessDrone()`. Modes B and C are stubs (dry passthrough). Architecture ready for future mode specs.
@@ -154,7 +223,7 @@ Drill Hammond 125B to Hothouse template. Finish and label.
 
 ### Deferred
 - **Tuning mode** — USB serial workflow needs a fix (freezes on terminal connect). Will revisit after core effect is playable.
-- **Mode B** — Granular Glitch: spec + implement
+- **Mode B** — Granular Glitch: specced in `MODE_B_GRANULAR.md`, implementation deferred
 - **Mode C** — Frequency Shifter: spec + implement
 
 ---
@@ -197,6 +266,6 @@ Drill, paint, label.
 - `PROJECT.md` — this file. Top-level plan, hardware, staging, multi-mode architecture.
 - `TUNING.md` — tuning-mode spec. How to dial in constants without a display and commit them to source.
 - `MODE_A_DRONE.md` — Mode A full spec: oscillator model, envelope follower, ladder filter, controls, presets.
-- `MODE_B_GRANULAR.md` — *not yet written*
+- `MODE_B_GRANULAR.md` — Mode B full spec: granular glitch processor, signal chain, controls.
 - `MODE_C_FREQSHIFT.md` — *not yet written*
-- `CLAUDE.md` — Claude Code entry point. Routes agents to the right doc for the task.
+- `AGENTS.md` — AI agent entry point. Routes agents to the right doc for the task.

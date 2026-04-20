@@ -19,8 +19,14 @@ This is a DIY digital bass effects pedal project built on the Electro-Smith Dais
 **Working on pitch tracking:**
 - `docs/PITCH_TRACKING.md` — research, algorithm comparison (zero-crossing vs YIN vs MPM), signal conditioning, implementation plan.
 
-**Working on Mode B (Granular) or Mode C (Freq Shift):**
-- Specs not yet written. If the user asks to start on these, first help spec them — create `docs/MODE_B_GRANULAR.md` or `docs/MODE_C_FREQSHIFT.md` following the structure of `docs/MODE_A_DRONE.md`.
+**Working on Mode B (Granular Glitch):**
+- `docs/MODE_B_GRANULAR.md` — granular processor, signal chain, grain scheduler, gesture-reactive shaping, feedback bus, controls.
+
+**Working on Mode C (Freq Shift):**
+- Spec not yet written. If the user asks to start on this, first help spec it — create `docs/MODE_C_FREQSHIFT.md` following the structure of `docs/MODE_A_DRONE.md`.
+
+**Working on the preset system:**
+- `docs/PROJECT.md` § Preset System — edit buffer + 5 stored presets per mode, FS1 navigation, morse-code LED indication, save mode.
 
 ## Skills
 

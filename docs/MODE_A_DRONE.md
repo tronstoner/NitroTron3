@@ -204,12 +204,12 @@ Mix knob (K5 in normal mode), continuous 0.0–1.0.
 | K5 | Mix | Dry / oscillator blend, continuous |
 | K6 | Envelope sensitivity | Input gain before follower, continuous |
 | Toggle 1 | Waveform | Saw / Triangle / Square |
-| Toggle 2 | Preset | A / B / C (Mode A slots) |
+| Toggle 2 | Drone mode | Fixed pitch / Octave-locked tracking / Direct tracking |
 | Toggle 3 | Mode | Drone (active) / Granular / Freq Shift |
-| FS1 | Bypass | True bypass via Hothouse relay |
-| FS2 | Preset recall / save | Short press recall, long press save |
+| FS1 | Preset | Short press: cycle presets (Manual → 1–5), reload if edited. In save mode: cycle target slot |
+| FS2 | Bypass / Save | Short press: bypass. Long press: save mode (long press = confirm, short press = cancel). See `PROJECT.md` Preset System |
 
-**Knob behavior on preset recall:** values jump immediately to stored values — no pickup mode. User can override by moving the knob.
+**Knob behavior on preset load:** values jump immediately to stored values — no pickup mode. Moving a knob overrides that parameter in the edit buffer (the stored preset is not modified).
 
 See `TUNING.md` for tuning-mode knob remapping.
 
@@ -229,7 +229,7 @@ struct DronePreset {
 };
 ```
 
-9-byte payload (with padding). 3 slots × sizeof(DronePreset) stored in `PersistentStorage`.
+9-byte payload (with padding). 5 preset slots + 1 edit buffer per mode, stored in `PersistentStorage`. See `PROJECT.md` Preset System for full UX spec.
 
 ---
 
