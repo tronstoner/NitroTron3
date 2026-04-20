@@ -96,8 +96,8 @@ Inspired by the EHX Ring Thing UX, adapted for a two-LED, two-footswitch interfa
 
 ### Slots
 
-- **Edit buffer** — the live working state. One per mode, persisted to flash for power-cycle recall. On startup, knob positions are read into the edit buffer (panel mode).
-- **8 stored presets per mode** — 24 slots total across three modes. Independent per mode: switching modes loads that mode's own edit buffer and presets.
+- **Edit buffer** — the live working state. One per mode, persisted to flash for power-cycle recall. Each edit buffer includes the **active preset number** (0 = Manual, 1–8 = preset) and **dirty flag**, so the full mode state survives power cycles and mode switches.
+- **8 stored presets per mode** — 24 slots total across three modes. Independent per mode: switching modes loads that mode's own edit buffer, active preset, and dirty state.
 
 Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`. Per-mode preset data structures live in each mode's spec file.
 
@@ -105,9 +105,11 @@ Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`. Per-mode pre
 
 **FS1 short press** cycles through: Manual → Preset 1 → … → Preset 8 → Manual → …
 
+**FS1 long press** jumps directly to Manual mode from any preset, reading hardware knob positions into the edit buffer. This is a quick escape — no need to cycle through all presets to get back to manual.
+
 Loading a preset copies its stored values into the edit buffer. Knob values jump immediately — no pickup mode.
 
-**Manual mode** = the current edit buffer with no preset loaded. On startup the pedal always enters manual mode and reads the current knob positions into the edit buffer.
+**Manual mode** = the current edit buffer with no preset loaded. On first-ever boot (factory state), the pedal enters manual mode and reads the current knob positions into the edit buffer. On subsequent boots, the pedal restores the last active state (preset number + edit buffer) from flash.
 
 ### Dirty State (Preset Edited)
 
@@ -156,6 +158,22 @@ While in save mode:
 Save mode also times out after a few seconds of inactivity (returns to normal mode, no save).
 
 **Saving from manual mode:** FS2 long press enters save mode with target defaulting to Preset 1. Use FS1 to cycle to the desired slot, then FS2 long press to confirm. The current edit buffer is always what gets saved.
+
+### Mode Switching
+
+Switching modes via Switch 3 **preserves and restores the full state of each mode**:
+
+1. The current mode's edit buffer, active preset number, and dirty flag are saved.
+2. The new mode's edit buffer, active preset number, and dirty flag are restored.
+3. LEDs update to reflect the restored state (preset blink pattern, dirty indicator).
+
+This means if you're on Preset III (dirty) in Mode A, switch to Mode B, then back to Mode A — you return to Preset III (dirty) with the same knob values. Each mode remembers exactly where you left it.
+
+### Power Cycle Behavior
+
+On boot, the pedal restores the last active mode and each mode's full state (edit buffer + active preset + dirty flag) from flash. The pedal comes back exactly as it was when powered off — same mode, same preset, same parameters.
+
+**First boot (factory state):** all modes start in Manual with knobs read from panel positions.
 
 ### Knob Behavior
 
