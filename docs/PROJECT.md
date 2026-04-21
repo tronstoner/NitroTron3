@@ -110,7 +110,9 @@ Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`. Per-mode pre
 
 **FS1 long press** jumps directly to Manual mode from any preset, reading hardware knob positions into the edit buffer. This is a quick escape — no need to cycle through all presets to get back to manual.
 
-Loading a preset copies its stored values into the edit buffer. Knob values jump immediately — no pickup mode.
+Loading a saved preset copies its stored values into the edit buffer. Knob values jump immediately — no pickup mode.
+
+**Empty (unsaved) slots** act like manual mode: hardware knob positions are read into the edit buffer. No dirty tracking — knobs write through freely. LED 1 still shows the slot number. Saving to a slot marks it as saved; subsequent loads will use the stored values.
 
 **Manual mode** = the current edit buffer with no preset loaded. On first-ever boot (factory state), the pedal enters manual mode and reads the current knob positions into the edit buffer. On subsequent boots, the pedal restores the last active state (preset number + edit buffer) from flash.
 
