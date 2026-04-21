@@ -6,6 +6,9 @@
 #include "moog_ladder.h"
 #include "env_follower.h"
 #include "pitch_tracker.h"
+#include "usbd_def.h"
+
+extern USBD_HandleTypeDef hUsbDeviceFS;
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -67,9 +70,12 @@ static float MidiToFreq(float note) {
   return 440.f * powf(2.f, (note - 69.f) / 12.f);
 }
 
-// Remap pot range — physical pots don't reach true 0.0/1.0
+// Remap pot range — measured 0.000–0.968 at physical extremes
+constexpr float KNOB_MIN = 0.000f;
+constexpr float KNOB_MAX = 0.968f;
+
 static float RemapKnob(float raw) {
-  float v = (raw - 0.01f) / 0.96f;
+  float v = (raw - KNOB_MIN) / (KNOB_MAX - KNOB_MIN);
   if (v < 0.f) v = 0.f;
   if (v > 1.f) v = 1.f;
   return v;
@@ -263,9 +269,33 @@ int main() {
   hw.StartAdc();
   hw.StartAudio(AudioCallback);
 
+  hw.seed.StartLog(false);
+
+  uint32_t log_counter = 0;
+
   while (true) {
     hw.DelayMs(10);
     led_blink_counter++;
+
+    // --- Serial: print raw knob values every ~2 s (200 × 10 ms) ---
+    // Only print when USB CDC host is connected (prevents freeze on disconnect)
+    if (++log_counter >= 200) {
+      log_counter = 0;
+      if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
+        float k1 = hw.GetKnobValue(Hothouse::KNOB_1);
+        float k2 = hw.GetKnobValue(Hothouse::KNOB_2);
+        float k3 = hw.GetKnobValue(Hothouse::KNOB_3);
+        float k4 = hw.GetKnobValue(Hothouse::KNOB_4);
+        float k5 = hw.GetKnobValue(Hothouse::KNOB_5);
+        float k6 = hw.GetKnobValue(Hothouse::KNOB_6);
+        hw.seed.PrintLine("[KNOB] k1=" FLT_FMT3 " k2=" FLT_FMT3
+                          " k3=" FLT_FMT3 " k4=" FLT_FMT3
+                          " k5=" FLT_FMT3 " k6=" FLT_FMT3,
+                          FLT_VAR3(k1), FLT_VAR3(k2),
+                          FLT_VAR3(k3), FLT_VAR3(k4),
+                          FLT_VAR3(k5), FLT_VAR3(k6));
+      }
+    }
 
     // --- LED 2: bypass indicator (on = effect active) ---
     led_bypass.Set(bypass ? 0.f : 1.f);

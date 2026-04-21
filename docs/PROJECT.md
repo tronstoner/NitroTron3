@@ -208,7 +208,7 @@ On boot, the pedal restores the last active mode and each mode's full state (edi
 - **Pitch tracking** — DONE. YIN algorithm with 4x decimation, anti-alias LP at 400 Hz. Three drone sub-modes on Switch 2: fixed pitch, octave-locked tracking (pitch class in target octave), direct tracking. Wrap point set by K1 in fixed mode (default A). See `PITCH_TRACKING.md` for research and improvement plan.
 - **Wavefolding** — DONE. Triangle mode: K4 noon→CW applies wavefolding. Envelope subtly modulates fold amount and filter cutoff for dynamic response.
 - **Per-waveform gains** — DONE. Independent level trim for saw/tri/square in constants.h.
-- **Serial logging** — TODO. Earlier freeze was caused by printing from the audio callback, not by `StartLog(false)`. Fix: print from main loop only, throttled, using `FLT_FMT3` macros. Should be quick to re-enable.
+- **Serial logging** — DONE. `StartLog(false)` + raw knob values printed every ~2 s from main loop using `FLT_FMT3` macros. Safe: no printing from audio callback.
 - **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
 - **Mode B spec** — DONE. Granular Glitch fully specced in `MODE_B_GRANULAR.md`.
 - **Preset system** — SPECCED. FS1-based navigation (edit buffer + 5 presets per mode), morse-code LED indication, save mode via long press. See Preset System section above.
