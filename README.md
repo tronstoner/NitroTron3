@@ -107,6 +107,10 @@ Input ──┬─────────────────────�
 | LED 1 (left) | Preset indicator: 1–5 blinks in 1.5 s window = preset number. Manual mode: waveform indicator (solid = Saw, slow blink = Triangle, fast blink = Square) |
 | LED 2 (right) | Bypass on = effect active. Rapid flash = preset edited (dirty). Fast blink = save mode. Burst flash ~1 s = save confirmed |
 
+## Trademarks
+
+All product names, trademarks, and registered trademarks are property of their respective owners. References are for descriptive and educational purposes only — this project is not affiliated with or endorsed by any mentioned company.
+
 ## Updating dependencies
 
 ```sh
