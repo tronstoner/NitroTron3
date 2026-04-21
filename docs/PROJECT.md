@@ -19,8 +19,11 @@ Single sideband frequency shift via Hilbert transform. Moderate CPU load, comfor
 
 ### Core Module
 - **Electro-Smith Daisy Seed** — STM32-based DSP platform, 480 MHz, 32-bit float, 96 kHz audio
+- **Memory:** 128 KB internal flash, 8 MB QSPI flash, 512 KB SRAM
 - Programmable in C++/Arduino, PureData/PlugData, or Max/MSP Gen~
 - Source: **Thonk (UK)** — ships to Austria, ~£31
+
+**QSPI migration plan:** The firmware currently targets 128 KB internal flash (77% used after Stage 5). When adding Modes B and C pushes usage past ~90%, switch the linker script from `STM32H750IB_flash.lds` to `STM32H750IB_qspi.lds` (one-line Makefile change). This moves code to the 8 MB QSPI flash — effectively unlimited for this project. The Cortex-M7 instruction cache (16 KB) keeps audio-hot code at full speed; the tight DSP loops that run every sample will stay cached permanently. Requires the Daisy bootloader (already in use for DFU flashing).
 
 ### Pedal PCB / Kit
 - **Hothouse DSP Pedal Kit** (without enclosure) by Cleveland Music Co.

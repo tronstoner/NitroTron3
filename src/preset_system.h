@@ -26,6 +26,7 @@ struct ModePresetData {
 struct ModeState {
     ModePresetData edit_buffer;
     ModePresetData presets[NUM_PRESETS];
+    bool preset_saved[NUM_PRESETS];  // true if slot has been saved to
     uint8_t active_preset;  // 0 = manual, 1–8 = preset
     bool dirty;
 };
@@ -41,7 +42,7 @@ struct StorageData {
     }
 };
 
-static constexpr uint32_t STORAGE_VERSION = 1;
+static constexpr uint32_t STORAGE_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // LED blink pattern tables
@@ -263,6 +264,7 @@ private:
                     d.modes[m].presets[p].knobs[k] = 0.5f;
                 d.modes[m].presets[p].sw1 = 0;
                 d.modes[m].presets[p].sw2 = 0;
+                d.modes[m].preset_saved[p] = false;
             }
         }
         return d;
@@ -348,8 +350,8 @@ private:
             return;
         }
 
-        if (dirty_ && active_preset_ > 0) {
-            // Reload current preset (revert)
+        if (dirty_ && active_preset_ > 0 && IsPresetSaved(active_preset_)) {
+            // Reload current saved preset (revert)
             LoadPreset(active_preset_);
             dirty_ = false;
             mode_state_[current_mode_].dirty = false;
@@ -412,6 +414,7 @@ private:
             // Confirm save — write edit buffer to target slot
             mode_state_[current_mode_].presets[save_target_ - 1] =
                 mode_state_[current_mode_].edit_buffer;
+            mode_state_[current_mode_].preset_saved[save_target_ - 1] = true;
 
             // Now on this preset, clean
             active_preset_ = save_target_;
@@ -440,11 +443,21 @@ private:
 
     // ── Preset loading ──────────────────────────────────────────
 
+    bool IsPresetSaved(uint8_t preset_num) const {
+        if (preset_num < 1 || preset_num > NUM_PRESETS) return false;
+        return mode_state_[current_mode_].preset_saved[preset_num - 1];
+    }
+
     void LoadPreset(uint8_t preset_num) {
         if (preset_num < 1 || preset_num > NUM_PRESETS) return;
-        mode_state_[current_mode_].edit_buffer =
-            mode_state_[current_mode_].presets[preset_num - 1];
-        // Snapshot knobs so we detect future movement as dirty
+        if (IsPresetSaved(preset_num)) {
+            // Saved slot: load stored values
+            mode_state_[current_mode_].edit_buffer =
+                mode_state_[current_mode_].presets[preset_num - 1];
+        } else {
+            // Empty slot: act like manual — read hardware
+            ReadHardwareIntoEditBuffer();
+        }
         SnapshotHwKnobs();
     }
 
@@ -483,8 +496,9 @@ private:
         if (sw1 != eb.sw1) { eb.sw1 = sw1; any_changed = true; }
         if (sw2 != eb.sw2) { eb.sw2 = sw2; any_changed = true; }
 
-        // Mark dirty if a preset is loaded and something changed
-        if (any_changed && active_preset_ > 0 && !dirty_) {
+        // Mark dirty only for saved presets — empty slots act like manual
+        if (any_changed && active_preset_ > 0 && !dirty_ &&
+            IsPresetSaved(active_preset_)) {
             dirty_ = true;
             mode_state_[current_mode_].dirty = true;
             UpdateLed2Mode();
