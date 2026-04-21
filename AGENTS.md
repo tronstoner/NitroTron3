@@ -6,6 +6,7 @@ This is a DIY digital bass effects pedal project built on the Electro-Smith Dais
 
 ## Read first, always
 
+- `agents-instructions.md` — hard rules for agent behavior, git, documentation, decision-making. **Non-negotiable.**
 - `docs/PROJECT.md` — top-level plan, hardware, staging timeline, multi-mode architecture.
 
 ## Read for specific tasks
@@ -26,7 +27,7 @@ This is a DIY digital bass effects pedal project built on the Electro-Smith Dais
 - Spec not yet written. If the user asks to start on this, first help spec it — create `docs/MODE_C_FREQSHIFT.md` following the structure of `docs/MODE_A_DRONE.md`.
 
 **Working on the preset system:**
-- `docs/PROJECT.md` § Preset System — edit buffer + 5 stored presets per mode, FS1 navigation, morse-code LED indication, save mode.
+- `docs/PROJECT.md` § Preset System
 
 ## Skills
 
@@ -48,6 +49,7 @@ NitroTron3/
 ├── build/                      # compiled output (gitignored)
 ├── Makefile                    # build system (root)
 ├── README.md                   # user-facing docs + control tables
+├── agents-instructions.md      # hard rules for agent behavior
 ├── AGENTS.md                   # this file
 ├── CLAUDE.md                   # Claude Code config (references this file)
 └── LICENSE                     # GPL v3
@@ -55,21 +57,12 @@ NitroTron3/
 
 **Convention:** Source code lives in `src/`. Documentation and specs live in `docs/`. The Makefile stays at the project root.
 
-## Git rules
-
-- **Never commit without explicit user confirmation.** Prepare the message, show what will be committed, and wait for the user to say "commit" or equivalent.
-- **Never push.** Only the user pushes.
-
-## Project conventions
+## Build setup
 
 - All dependencies live under `lib/HothouseExamples/` — a single git submodule that contains libDaisy and DaisySP as nested submodules.
 - The Hothouse hardware proxy (`hothouse.h` / `hothouse.cpp`) is compiled from `lib/HothouseExamples/src/` — it is not copied into this repo.
 - The Makefile references all libraries via `lib/HothouseExamples/` relative paths. No sibling-directory dependencies.
-- After cloning, the libraries must be built once: `make -C lib/HothouseExamples/libDaisy && make -C lib/HothouseExamples/DaisySP`.
-- Compile-time constants for DSP parameters live in `src/constants.h` and are populated via the tuning-mode workflow described in `docs/TUNING.md`. Do not hand-edit values outside that workflow unless explicitly asked.
-- Stages are incremental. When working on Stage N, assume stages 0 through N-1 are complete and tested. If the current state is unclear, ask the user which stage they are on.
-- Tuning mode is part of the main binary, not a separate build. No `#ifdef DEV_MODE` guards around tuning code.
-- DaisySP is the preferred DSP library. The Huovilainen ladder and parabolic oscillator shaper are implemented directly because DaisySP does not ship them.
+- After cloning, build libraries once: `make -C lib/HothouseExamples/libDaisy && make -C lib/HothouseExamples/DaisySP`.
 
 ## Hardware reference
 
@@ -99,15 +92,8 @@ When documenting controls in the README, always use the full template listing ev
 | FOOTSWITCH 2 | Bypass | The bypassed signal is buffered |
 ```
 
-**After every code change that touches controls, knobs, switches, footswitches, or LEDs, update the README controls and LEDs tables before considering the task complete.** The README is the only user-facing reference for what the pedal does. Include separate tables for each mode if applicable.
+Include separate tables for each mode if applicable. See `agents-instructions.md` for update rules.
 
-## Staging (summary — detail in `docs/PROJECT.md`)
+## Staging
 
-0. Hardware bring-up + passthrough
-1. Oscillator + tuning mode scaffold
-2. Ladder filter
-3. Envelope follower + VCA + **full re-tune pass**
-4. Normal-mode UX wiring
-5. Preset system
-6. Multi-mode scaffold
-7. Enclosure
+See `docs/PROJECT.md` for the full staged development timeline and current status.

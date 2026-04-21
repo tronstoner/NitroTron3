@@ -211,8 +211,9 @@ On boot, the pedal restores the last active mode and each mode's full state (edi
 - **Serial logging** — DONE. `StartLog(false)` + raw knob values printed every ~2 s from main loop using `FLT_FMT3` macros. Safe: no printing from audio callback.
 - **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
 - **Mode B spec** — DONE. Granular Glitch fully specced in `MODE_B_GRANULAR.md`.
-- **Preset system** — SPECCED. FS1-based navigation (edit buffer + 5 presets per mode), morse-code LED indication, save mode via long press. See Preset System section above.
-- **Next** — Re-enable serial logging (quick fix), then: pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), preset system implementation (Stage 5), wrap point persistence.
+- **Knob remap** — DONE. Measured physical range 0.000–0.968, calibrated `RemapKnob()` with named constants.
+- **Preset system** — SPECCED. FS1-based navigation (edit buffer + 8 presets per mode), Roman numeral LED blink encoding (I/V patterns), save mode via long press. Interactive UX demo in `docs/ux-demo.html`. See Preset System section above.
+- **Next** — Pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), preset system implementation (Stage 5).
 
 ## Staged Development Timeline
 
@@ -234,7 +235,7 @@ K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=f
 Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. K1 sets wrap point for tracking. All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
 
 ### Stage 5 — Preset system
-FS1 preset navigation (edit buffer + 5 slots per mode), save mode (FS1 long press + FS2 confirm), morse-code LED indication on LED 1, flash storage via `PersistentStorage`.
+FS1 preset navigation (edit buffer + 8 slots per mode), save mode (FS2 long press + FS2 confirm), Roman numeral LED blink encoding on LED 1, flash storage via `PersistentStorage`.
 
 ### Stage 6 — Multi-mode scaffold
 Toggle 3 dispatches to `ProcessDrone()`. Modes B and C are stubs (dry passthrough). Architecture ready for future mode specs.

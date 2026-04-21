@@ -24,8 +24,10 @@ NitroTron3/
 ├── docs/                       # specs, plans, research
 │   ├── PROJECT.md              # top-level plan, staging, architecture
 │   ├── MODE_A_DRONE.md         # Mode A full spec
+│   ├── MODE_B_GRANULAR.md      # Mode B full spec
 │   ├── TUNING.md               # tuning-mode spec
-│   └── PITCH_TRACKING.md       # pitch tracking research + plan
+│   ├── PITCH_TRACKING.md       # pitch tracking research + plan
+│   └── ux-demo.html            # interactive preset UX demo
 ├── lib/
 │   └── HothouseExamples/       # submodule
 │       ├── libDaisy/            # nested submodule — hardware abstraction
@@ -36,7 +38,8 @@ NitroTron3/
 ├── .agents/skills/             # reusable agent task recipes
 ├── Makefile
 ├── README.md
-├── AGENTS.md                   # AI agent instructions
+├── agents-instructions.md      # AI agent behavioral rules
+├── AGENTS.md                   # AI agent entry point + routing
 ├── CLAUDE.md                   # Claude Code config
 └── LICENSE                     # GPL v3
 ```
@@ -95,17 +98,17 @@ Input ──┬─────────────────────�
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
 | SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** - Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval)<br/>**DOWN** - Direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
-| SWITCH 3 | Mode select | **UP** - Mode A (Drone)<br/>**MIDDLE** - Mode B (Granular Glitch, future)<br/>**DOWN** - Mode C (Freq Shift, future) |
-| FOOTSWITCH 1 | Preset | Short press: cycle Manual → Preset 1–5 (reload current if edited). In save mode: cycle target slot |
-| FOOTSWITCH 2 | Bypass / Save | Short press: bypass on/off. Long press: enter save mode (long press again = save, short press = cancel). Buffered bypass |
+| SWITCH 3 | Unused | Reserved for mode select (not yet implemented) |
+| FOOTSWITCH 1 | Unused | Reserved for preset system (not yet implemented) |
+| FOOTSWITCH 2 | Bypass | Buffered bypass on/off |
 | FS1 + FS2 held 2 s | Bootloader | Enter DFU bootloader for flashing |
 
 ### LEDs
 
 | LED | DESCRIPTION |
 |-|-|
-| LED 1 (left) | Preset indicator: 1–5 blinks in 1.5 s window = preset number. Manual mode: waveform indicator (solid = Saw, slow blink = Triangle, fast blink = Square) |
-| LED 2 (right) | Bypass on = effect active. Rapid flash = preset edited (dirty). Fast blink = save mode. Burst flash ~1 s = save confirmed |
+| LED 1 (left) | Waveform indicator: solid = Saw, slow blink = Triangle, fast blink = Square |
+| LED 2 (right) | Bypass indicator: on = effect active |
 
 ## Trademarks
 
