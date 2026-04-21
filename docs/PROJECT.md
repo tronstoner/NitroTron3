@@ -138,7 +138,21 @@ LED 1 indicates the active preset using a Roman-numeral-inspired encoding with t
 | Preset 7 | VII | long, short, short |
 | Preset 8 | VIII | long, short, short, short |
 
-Default timing: I = 150 ms, V = 950 ms, element gap = 200 ms, repeat gap = 600 ms. Selecting a preset always restarts the blink pattern from the beginning.
+Default timing (source of truth: `docs/ux-demo.html`):
+
+| Constant | Value | Description |
+|---|---|---|
+| I (short) on | 150 ms | Short blink duration |
+| V (long) on | 950 ms | Long blink duration |
+| Element gap | 200 ms | Gap between symbols |
+| Repeat gap | 600 ms | Gap before pattern repeats |
+| Dirty flash | 50/50 ms | On/off time for dirty indicator (LED 2) |
+| Save mode blink | 150/150 ms | On/off time for save mode (LED 2) |
+| Save confirm burst | 75/75 ms for 500 ms | Rapid flash after save confirmed (LED 2) |
+| Long press threshold | 700 ms | FS1/FS2 long press detection |
+| Bootloader hold | 2000 ms | FS1 held to enter DFU |
+
+Selecting a preset always restarts the blink pattern from the beginning.
 
 **Implementation note:** firmware should use a pre-computed lookup table of `{duration_ms, led_on}` step arrays per preset — no runtime pattern logic. The interactive demo (`docs/ux-demo.html`) can be used to tune timing constants before generating the table.
 
@@ -152,7 +166,7 @@ Default timing: I = 150 ms, V = 950 ms, element gap = 200 ms, repeat gap = 600 m
 
 While in save mode:
 - **FS1 short press** → **cycles through target slots** (1 → 2 → … → 8 → 1 → …). LED 1 updates to show the new target. Starts at the pre-selected slot, so one press moves to the next.
-- **FS2 long press** → **confirms save**. Edit buffer is written to the selected slot. LED 2 flashes rapidly for ~1 second to confirm success. Returns to normal mode (preset now clean).
+- **FS2 long press** → **confirms save**. Edit buffer is written to the selected slot. LED 2 flashes rapidly for ~500 ms to confirm success. Returns to normal mode (preset now clean).
 - **FS2 short press** → **cancels save**. Returns to normal mode, no write performed.
 
 Save mode also times out after a few seconds of inactivity (returns to normal mode, no save).
@@ -212,8 +226,8 @@ On boot, the pedal restores the last active mode and each mode's full state (edi
 - **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
 - **Mode B spec** — DONE. Granular Glitch fully specced in `MODE_B_GRANULAR.md`.
 - **Knob remap** — DONE. Measured physical range 0.000–0.968, calibrated `RemapKnob()` with named constants.
-- **Preset system** — SPECCED. FS1-based navigation (edit buffer + 8 presets per mode), Roman numeral LED blink encoding (I/V patterns), save mode via long press. Interactive UX demo in `docs/ux-demo.html`. See Preset System section above.
-- **Next** — Pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), preset system implementation (Stage 5).
+- **Preset system** — DONE. FS1 preset navigation (edit buffer + 8 presets per mode), Roman numeral LED blink encoding (I/V patterns), save mode via FS2 long press + confirm. Dirty tracking, flash persistence via `PersistentStorage`, mode switching saves/restores per-mode state. Auto-save every ~30 s. Bootloader via FS1 held 2 s (Phase 1; Phase 2 will add FS1+FS2 dual-hold). Implementation plan in `docs/PRESET_IMPL.md`.
+- **Next** — Pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), multi-mode scaffold (Stage 6), FS1+FS2 dual-hold bootloader (Phase 2 after flash test).
 
 ## Staged Development Timeline
 
@@ -234,8 +248,8 @@ K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=f
 ### Stage 4 — Envelope follower + VCA + mix + tracking + wavefold ✓
 Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. K1 sets wrap point for tracking. All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
 
-### Stage 5 — Preset system
-FS1 preset navigation (edit buffer + 8 slots per mode), save mode (FS2 long press + FS2 confirm), Roman numeral LED blink encoding on LED 1, flash storage via `PersistentStorage`.
+### Stage 5 — Preset system ✓
+FS1 preset navigation (edit buffer + 8 slots per mode), save mode (FS2 long press + FS2 confirm), Roman numeral LED blink encoding on LED 1, flash storage via `PersistentStorage`. Audio callback reads from edit buffer, not hardware. Dirty tracking with 2% knob threshold. Mode switching preserves/restores full per-mode state. Bootloader: FS1 held 2 s (Phase 1).
 
 ### Stage 6 — Multi-mode scaffold
 Toggle 3 dispatches to `ProcessDrone()`. Modes B and C are stubs (dry passthrough). Architecture ready for future mode specs.

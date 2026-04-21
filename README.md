@@ -20,13 +20,15 @@ NitroTron3/
 │   ├── moog_osc.h              # MoogOsc class — parabolic waveshaper + PolyBLEP
 │   ├── moog_ladder.h           # Huovilainen Moog ladder filter (24 dB/oct LP)
 │   ├── env_follower.h          # Moog envelope follower (rectifier → 4-pole LP)
-│   └── pitch_tracker.h         # YIN pitch tracker for bass (4x decimation)
+│   ├── pitch_tracker.h         # YIN pitch tracker for bass (4x decimation)
+│   └── preset_system.h         # preset navigation, flash storage, LED patterns
 ├── docs/                       # specs, plans, research
 │   ├── PROJECT.md              # top-level plan, staging, architecture
 │   ├── MODE_A_DRONE.md         # Mode A full spec
 │   ├── MODE_B_GRANULAR.md      # Mode B full spec
 │   ├── TUNING.md               # tuning-mode spec
 │   ├── PITCH_TRACKING.md       # pitch tracking research + plan
+│   ├── PRESET_IMPL.md          # preset system implementation plan
 │   └── ux-demo.html            # interactive preset UX demo
 ├── lib/
 │   └── HothouseExamples/       # submodule
@@ -68,9 +70,9 @@ make program    # flash via OpenOCD / ST-Link
 make program-dfu  # flash via DFU bootloader
 ```
 
-## Current state — Stage 4 (Full Drone Effect)
+## Current state — Stage 5 (Preset System)
 
-Complete Mode A drone effect: PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. The oscillator only sounds when you play — amplitude follows the bass input's dynamics. Envelope subtly modulates filter cutoff and wavefold amount for dynamic response.
+Complete Mode A drone effect with full preset system. PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. Edit buffer + 8 stored presets per mode, dirty tracking, flash persistence across power cycles. FS1 navigates presets, FS2 toggles bypass or enters save mode. LED 1 shows preset number via Roman numeral blink encoding, LED 2 indicates active/bypass/dirty/save state.
 
 ### Signal Chain
 
@@ -98,17 +100,17 @@ Input ──┬─────────────────────�
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
 | SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** - Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval)<br/>**DOWN** - Direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
-| SWITCH 3 | Unused | Reserved for mode select (not yet implemented) |
-| FOOTSWITCH 1 | Unused | Reserved for preset system (not yet implemented) |
-| FOOTSWITCH 2 | Bypass | Buffered bypass on/off |
-| FS1 + FS2 held 2 s | Bootloader | Enter DFU bootloader for flashing |
+| SWITCH 3 | Mode select | **UP** - Mode A (Drone)<br/>**MIDDLE** - Mode B (Granular, not yet implemented — dry passthrough)<br/>**DOWN** - Mode C (Freq Shift, not yet implemented — dry passthrough) |
+| FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
+| FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
+| FS1 held 2 s | Bootloader | Enter DFU bootloader for flashing |
 
 ### LEDs
 
 | LED | DESCRIPTION |
 |-|-|
-| LED 1 (left) | Waveform indicator: solid = Saw, slow blink = Triangle, fast blink = Square |
-| LED 2 (right) | Bypass indicator: on = effect active |
+| LED 1 (left) | Preset indicator: off = Manual, Roman numeral blink pattern for presets 1–8 (I=short, V=long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows target slot. |
+| LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
 ## Trademarks
 
