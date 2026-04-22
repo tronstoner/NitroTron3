@@ -170,11 +170,8 @@ public:
         UpdateLed1Pattern();
         UpdateLed2Mode();
 
-        // Snapshot hardware knobs for dirty detection
-        for (int i = 0; i < NUM_KNOBS; i++) {
-            last_hw_knobs_[i] = hw_->GetKnobValue(
-                static_cast<Hothouse::Knob>(i));
-        }
+        // Snapshot hardware for dirty detection
+        SnapshotHardware();
     }
 
     // Call from main loop every tick (10 ms)
@@ -237,8 +234,10 @@ private:
     uint32_t led2_timer_ = 0;
     uint32_t led2_confirm_remaining_ = 0;
 
-    // Knob tracking for dirty detection
+    // Hardware tracking for dirty detection (detect movement, not difference from stored)
     float last_hw_knobs_[NUM_KNOBS];
+    uint8_t last_hw_sw1_ = 0;
+    uint8_t last_hw_sw2_ = 0;
 
     // Auto-save timer
     uint32_t save_timer_ = 0;
@@ -368,7 +367,7 @@ private:
         if (active_preset_ == 0) {
             // Manual mode: read hardware
             ReadHardwareIntoEditBuffer();
-            SnapshotHwKnobs();
+            SnapshotHardware();
         } else {
             LoadPreset(active_preset_);
         }
@@ -387,7 +386,7 @@ private:
         mode_state_[current_mode_].dirty = false;
 
         ReadHardwareIntoEditBuffer();
-        SnapshotHwKnobs();
+        SnapshotHardware();
 
         UpdateLed1Pattern();
         UpdateLed2Mode();
@@ -399,6 +398,7 @@ private:
         if (pedal_state_ == PedalState::SAVE_MODE) {
             // Cancel save
             pedal_state_ = PedalState::NORMAL;
+            SnapshotHardware();
             UpdateLed1Pattern();
             UpdateLed2Mode();
             return;
@@ -421,6 +421,9 @@ private:
             mode_state_[current_mode_].active_preset = save_target_;
             dirty_ = false;
             mode_state_[current_mode_].dirty = false;
+
+            // Fresh knob baseline so dirty doesn't trigger immediately
+            SnapshotHardware();
 
             // Save to flash
             SaveToFlash();
@@ -458,14 +461,16 @@ private:
             // Empty slot: act like manual — read hardware
             ReadHardwareIntoEditBuffer();
         }
-        SnapshotHwKnobs();
+        SnapshotHardware();
     }
 
-    void SnapshotHwKnobs() {
+    void SnapshotHardware() {
         for (int i = 0; i < NUM_KNOBS; i++) {
             last_hw_knobs_[i] = hw_->GetKnobValue(
                 static_cast<Hothouse::Knob>(i));
         }
+        last_hw_sw1_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_1);
+        last_hw_sw2_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_2);
     }
 
     // ── Knob / switch processing (main loop) ───────────────────
@@ -490,11 +495,19 @@ private:
             }
         }
 
-        // Switches always override edit buffer immediately
+        // Switches: detect movement from snapshot, not difference from stored
         uint8_t sw1 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_1);
         uint8_t sw2 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_2);
-        if (sw1 != eb.sw1) { eb.sw1 = sw1; any_changed = true; }
-        if (sw2 != eb.sw2) { eb.sw2 = sw2; any_changed = true; }
+        if (sw1 != last_hw_sw1_) {
+            eb.sw1 = sw1;
+            last_hw_sw1_ = sw1;
+            any_changed = true;
+        }
+        if (sw2 != last_hw_sw2_) {
+            eb.sw2 = sw2;
+            last_hw_sw2_ = sw2;
+            any_changed = true;
+        }
 
         // Mark dirty only for saved presets — empty slots act like manual
         if (any_changed && active_preset_ > 0 && !dirty_ &&
@@ -526,7 +539,7 @@ private:
         dirty_         = mode_state_[current_mode_].dirty;
 
         // Snapshot knobs for dirty detection in new mode
-        SnapshotHwKnobs();
+        SnapshotHardware();
 
         UpdateLed1Pattern();
         UpdateLed2Mode();
@@ -674,6 +687,7 @@ private:
                     ? led2_confirm_remaining_ - elapsed_ms : 0;
                 if (led2_confirm_remaining_ == 0) {
                     pedal_state_ = PedalState::NORMAL;
+                    SnapshotHardware();
                     UpdateLed1Pattern();
                     UpdateLed2Mode();
                 }
