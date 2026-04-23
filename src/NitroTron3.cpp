@@ -43,6 +43,11 @@ float        grain_env = 0.f;        // envelope value for grain amplitude
 
 static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 
+// Texture shaper state
+float decim_hold = 0.f;       // decimator sample-and-hold value
+float decim_count = 0.f;      // decimator sample counter
+float ringmod_phase = 0.f;    // ringmod carrier oscillator phase
+
 // Wet HPF: 2-pole high-pass to keep wet out of bass sub range
 static constexpr float WET_HPF_FREQ = 150.f;
 float wet_hp_state[2] = {};
@@ -315,6 +320,20 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
 
+  // K4: texture amount (0 = clean, CW = full effect)
+  float k4 = RemapKnob(eb.knobs[3]);
+
+  // SW1: texture mode (0=decimator, 1=wavefolder, 2=ringmod)
+  int texture_mode = eb.sw1;
+
+  // Ringmod carrier: tracked bass × 3.5 (inharmonic, bell-like)
+  float ringmod_freq = MidiToFreq(tracker.GetMidiNote()) * 3.5f;
+  float ringmod_inc = ringmod_freq / 48000.f;
+
+  // Decimator rate: K4 controls how much sample rate is reduced
+  // At K4=0: full rate (no effect). At K4=1: ~1/32 rate (heavy crush)
+  float decim_rate = 1.f + k4 * 31.f;
+
   // K5: buffer range — CCW = tight (100 ms, recent audio only),
   //                     CW = deep (full 8 s, long trails)
   float k5 = RemapKnob(eb.knobs[4]);
@@ -384,6 +403,37 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float wet = 0.f;
     for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
       wet += grain_voices[v].Process(grain_ring);
+    }
+
+    // Texture shaper (K4 = 0 → clean, K4 > 0 → effect)
+    if (k4 > 0.01f) {
+      float shaped = wet;
+      switch (texture_mode) {
+      case 0: {
+        // Decimator: sample-and-hold at reduced rate
+        decim_count += 1.f;
+        if (decim_count >= decim_rate) {
+          decim_count -= decim_rate;
+          decim_hold = wet;
+        }
+        shaped = decim_hold;
+        break;
+      }
+      case 1:
+        // Wavefolder: reuse Mode A wavefold
+        shaped = Wavefold(wet, k4);
+        break;
+      case 2: {
+        // Ringmod: multiply by carrier oscillator
+        float carrier = sinf(2.f * 3.14159265f * ringmod_phase);
+        ringmod_phase += ringmod_inc;
+        if (ringmod_phase >= 1.f) ringmod_phase -= 1.f;
+        shaped = wet * carrier;
+        break;
+      }
+      }
+      // Crossfade clean → shaped by K4
+      wet = wet * (1.f - k4) + shaped * k4;
     }
 
     // Wet HPF: 2-pole (two cascaded one-pole HP)
