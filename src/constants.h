@@ -49,8 +49,11 @@ constexpr uint32_t FS_LONG_PRESS_MS    = 700;   // long press threshold
 // Knob dirty detection
 constexpr float KNOB_DIRTY_THRESHOLD   = 0.02f; // 2% travel to trigger dirty
 
+// Pitch tracking
+constexpr int TRACKING_WRAP_NOTE       = 9;     // octave-locked wrap point (9 = A)
+
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
-constexpr float OSC_GAIN         = 2.000f;   // final osc level into mix
+constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
 constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain (higher = more tanh warmth)
 constexpr float LADDER_CUTOFF_OFFSET = 0.000f; // tone knob trim
 constexpr float DRY_TRIM         = 1.000f;   // dry path level trim

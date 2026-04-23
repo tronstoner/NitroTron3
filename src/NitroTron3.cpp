@@ -7,6 +7,8 @@
 #include "env_follower.h"
 #include "pitch_tracker.h"
 #include "preset_system.h"
+#include "ring_buffer.h"
+#include "grain_voice.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -17,13 +19,38 @@ using daisy::System;
 Hothouse hw;
 
 // ---------------------------------------------------------------------------
-// DSP
+// DSP — Mode A (Drone)
 // ---------------------------------------------------------------------------
 MoogOsc      osc1;
 MoogOsc      osc2;
 MoogLadder   ladder;
 EnvFollower  env;
 PitchTracker tracker;
+
+// ---------------------------------------------------------------------------
+// DSP — Mode B (Granular Glitch)
+// ---------------------------------------------------------------------------
+static constexpr size_t GRAIN_BUF_SAMPLES = 48000 * 8;  // 8 s at 48 kHz
+float DSY_SDRAM_BSS grain_sdram_buf[GRAIN_BUF_SAMPLES];
+RingBuffer   grain_ring;
+
+static constexpr int NUM_GRAIN_VOICES = 8;
+GrainVoice   grain_voices[NUM_GRAIN_VOICES];
+int          grain_next_voice = 0;
+int          grain_timer = 0;        // samples until next event
+int          grain_burst_left = 0;   // grains remaining in current burst
+float        grain_env = 0.f;        // envelope value for grain amplitude
+
+static constexpr size_t GRAIN_BASE_DELAY = 24000;  // base read offset: 0.5 s
+
+// Simple xorshift32 RNG for grain scatter
+static uint32_t rng_state = 12345;
+static float RandFloat() {
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return static_cast<float>(rng_state) / 4294967295.f;
+}
 
 // ---------------------------------------------------------------------------
 // Preset system + flash storage
@@ -42,7 +69,6 @@ enum DroneMode { DRONE_FIXED, DRONE_TRACK, DRONE_TRACK_DIRECT };
 Led led_bypass;
 Led led_status;
 float last_env = 0.f;   // smoothed envelope for per-block modulation
-int wrap_note = 9;       // wrap point for tracking mode, set by mode 1 (default A)
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,8 +97,8 @@ static float MidiToFreq(float note) {
 }
 
 // Remap pot range — measured 0.000–0.968 at physical extremes
-constexpr float KNOB_MIN = 0.000f;
-constexpr float KNOB_MAX = 0.968f;
+constexpr float KNOB_MIN = 0.004f;
+constexpr float KNOB_MAX = 0.964f;
 
 static float RemapKnob(float raw) {
   float v = (raw - KNOB_MIN) / (KNOB_MAX - KNOB_MIN);
@@ -108,15 +134,51 @@ static float Wavefold(float x, float amount) {
 }
 
 // ---------------------------------------------------------------------------
-// Audio callback — reads from edit buffer, not hardware knobs
+// Mode B harmony logic
 // ---------------------------------------------------------------------------
-void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
-                   size_t size) {
-  hw.ProcessAllControls();
 
-  bool bypass = preset.IsBypassed();
+// Natural harmonic intervals (semitones) — octaves, fifths, fourths.
+// Spanning ±2 octaves for sympathetic resonance.
+static const int RESONANCES[] = {
+    -24, -19, -12, -7, -5, 0, 5, 7, 12, 19, 24
+};
+static constexpr int NUM_RES = 11;
 
-  // Read edit buffer (set by preset system in main loop)
+// Compute pitch ratio for one grain.
+// harmony == 0 (SW2 UP): fixed interval, K1 = exact semitones.
+// harmony != 0 (SW2 MID/DOWN): resonance, grains lock onto nearby harmonics.
+// Returns ratio with amplitude compensation (1/sqrt(ratio)) baked in as
+// a negative sign convention — caller extracts via fabsf and applies gain.
+static float GrainPitchRatio(int harmony, float k1) {
+  int k1_semi = MapDetuneKnob(k1, 24);  // ±24 semitones
+  float semi;
+
+  if (harmony == 0) {
+    semi = static_cast<float>(k1_semi);
+  } else {
+    // Resonance: find closest harmonic interval to K1, pick from ±1 neighbor
+    int closest = 0;
+    int min_dist = 100;
+    for (int i = 0; i < NUM_RES; i++) {
+      int d = RESONANCES[i] - k1_semi;
+      if (d < 0) d = -d;
+      if (d < min_dist) { min_dist = d; closest = i; }
+    }
+    int lo = (closest > 0) ? closest - 1 : 0;
+    int hi = (closest < NUM_RES - 1) ? closest + 1 : NUM_RES - 1;
+    int idx = lo + static_cast<int>(RandFloat() * static_cast<float>(hi - lo + 1));
+    if (idx > hi) idx = hi;
+    semi = static_cast<float>(RESONANCES[idx]);
+  }
+
+  return powf(2.f, semi / 12.f);
+}
+
+// ---------------------------------------------------------------------------
+// Mode A — Drone OSC
+// ---------------------------------------------------------------------------
+void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
+                  size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
 
   // Waveform select — from edit buffer SW1
@@ -146,18 +208,17 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   if (drone_mode == DRONE_FIXED) {
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
-    wrap_note = (9 + semi_offset % 12 + 12) % 12;
     int octave = Quantize(RemapKnob(eb.knobs[1]), 7);  // K2
     int base_note = 12 + octave * 12;
-    midi_note = static_cast<float>(base_note + 9 + semi_offset);
+    midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + semi_offset);
   } else if (drone_mode == DRONE_TRACK) {
     int tracked = static_cast<int>(tracker.GetMidiNote());
-    int pitch_class = ((tracked - wrap_note) % 12 + 12) % 12;
+    int pitch_class = ((tracked - TRACKING_WRAP_NOTE) % 12 + 12) % 12;
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
     int octave = Quantize(RemapKnob(eb.knobs[1]), 7);
     int base_note = 12 + octave * 12;
-    midi_note = static_cast<float>(base_note + wrap_note + pitch_class + semi_offset);
+    midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + pitch_class + semi_offset);
   } else {
     float tracked = tracker.GetMidiNote();
     float k1 = RemapKnob(eb.knobs[0]);
@@ -194,39 +255,165 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // K6: mix
   float mix = RemapKnob(eb.knobs[5]);
 
-  // Render audio
   for (size_t i = 0; i < size; i++) {
-    if (bypass) {
-      out[0][i] = out[1][i] = in[0][i];
-    } else {
-      float dry = in[0][i];
+    float dry = in[0][i];
 
-      float env_val = env.Process(dry);
+    float env_val = env.Process(dry);
 
-      if (drone_mode != DRONE_FIXED) tracker.Feed(dry, env_val);
+    if (drone_mode != DRONE_FIXED) tracker.Feed(dry, env_val);
 
-      float o1 = osc1.Process(freq1);
-      float o2 = osc2.Process(freq2);
-      if (wf == MoogOsc::TRI) {
-        float dyn_fold = fold_amount + env_val * ENV_FOLD_MOD * 5.f;
-        if (dyn_fold > 1.f) dyn_fold = 1.f;
-        o1 = Wavefold(o1, dyn_fold);
-        o2 = Wavefold(o2, dyn_fold);
-      }
-      o2 *= osc2_level;
-
-      last_env += 0.1f * (env_val - last_env);
-
-      float gain = 1.f / sqrtf(1.f + osc2_level * osc2_level);
-      float osc_mix = (o1 + o2) * gain;
-
-      float filtered = ladder.Process(osc_mix);
-      float wet = filtered * env_val * OSC_GAIN;
-
-      float dry_gain = sqrtf(1.f - mix);
-      float wet_gain = sqrtf(mix);
-      out[0][i] = out[1][i] = dry * DRY_TRIM * dry_gain + wet * wet_gain;
+    float o1 = osc1.Process(freq1);
+    float o2 = osc2.Process(freq2);
+    if (wf == MoogOsc::TRI) {
+      float dyn_fold = fold_amount + env_val * ENV_FOLD_MOD * 5.f;
+      if (dyn_fold > 1.f) dyn_fold = 1.f;
+      o1 = Wavefold(o1, dyn_fold);
+      o2 = Wavefold(o2, dyn_fold);
     }
+    o2 *= osc2_level;
+
+    last_env += 0.1f * (env_val - last_env);
+
+    float gain = 1.f / sqrtf(1.f + osc2_level * osc2_level);
+    float osc_mix = (o1 + o2) * gain;
+
+    float filtered = ladder.Process(osc_mix);
+    float wet = filtered * env_val * OSC_GAIN;
+
+    float dry_gain = sqrtf(1.f - mix);
+    float wet_gain = sqrtf(mix);
+    out[0][i] = out[1][i] = dry * DRY_TRIM * dry_gain + wet * wet_gain;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode B — Granular Glitch
+// ---------------------------------------------------------------------------
+void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
+                     size_t size) {
+  const ModePresetData& eb = preset.GetEditBuffer();
+
+  // K1: interval (±24 semi, centered with dead zone)
+  float k1 = RemapKnob(eb.knobs[0]);
+
+  // K2: grain character — CCW = soft/long (200 ms, single pass),
+  //                        CW = short/sharp (20 ms) with stutter loops
+  float k2 = RemapKnob(eb.knobs[1]);
+  size_t grain_len = static_cast<size_t>(9600.f - k2 * (9600.f - 960.f));
+  if (grain_len < 64) grain_len = 64;
+  // Stutter: short grains loop, long grains play once
+  int max_loops = 1 + static_cast<int>(k2 * 7.f);  // 1 to 8
+
+  // K3: texture → glitch continuum
+  // CCW = smooth texture (continuous overlapping stream)
+  // CW  = glitch (bursts with gaps, chaos, reverse)
+  float k3 = RemapKnob(eb.knobs[2]);
+
+  // Overlap count: 4 (texture) → 1 (glitch)
+  float overlap = 4.f - k3 * 3.f;
+  size_t base_interval = static_cast<size_t>(
+      static_cast<float>(grain_len) / overlap);
+  if (base_interval < 32) base_interval = 32;
+
+  // K6: dry/wet mix
+  float mix = RemapKnob(eb.knobs[5]);
+
+  // SW2: harmony mode
+  int harmony = eb.sw2;  // 0=fixed, 1/2=resonance
+
+  for (size_t i = 0; i < size; i++) {
+    float dry = in[0][i];
+
+    // Envelope follower (feeds pitch tracker gating)
+    grain_env = env.Process(dry);
+
+    // Feed pitch tracker
+    tracker.Feed(dry, grain_env);
+
+    // Write input into ring buffer
+    grain_ring.Write(dry);
+
+    // Scheduler: continuous stream, K3 adds chaos
+    grain_timer--;
+    if (grain_timer <= 0) {
+      // Position jitter: scales with K3, full buffer at max
+      size_t pos_jitter = static_cast<size_t>(
+          RandFloat() * k3 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_BASE_DELAY));
+      size_t delay = GRAIN_BASE_DELAY + pos_jitter;
+
+      bool reverse = (k3 > 0.1f) && (RandFloat() < k3 * 0.6f);
+
+      float pitch_ratio = GrainPitchRatio(harmony, k1);
+      float comp = 1.f / sqrtf(pitch_ratio);
+
+      // Stutter loops: random 1..max_loops, more for shorter grains
+      int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
+      if (loops > max_loops) loops = max_loops;
+
+      // Find an inactive voice — never steal mid-playback
+      int voice = -1;
+      for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+        int idx = (grain_next_voice + v) % NUM_GRAIN_VOICES;
+        if (!grain_voices[idx].IsActive()) {
+          voice = idx;
+          grain_next_voice = (idx + 1) % NUM_GRAIN_VOICES;
+          break;
+        }
+      }
+      if (voice >= 0) {
+        grain_voices[voice].Trigger(
+            grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
+      }
+
+      // Timing jitter scales with K3: steady at CCW, ±80% at CW
+      float jitter = (RandFloat() * 2.f - 1.f) * k3 * 0.8f;
+      grain_timer = static_cast<int>(
+          static_cast<float>(base_interval) * (1.f + jitter));
+      if (grain_timer < 32) grain_timer = 32;
+    }
+
+    // Sum all active voices
+    float wet = 0.f;
+    for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+      wet += grain_voices[v].Process(grain_ring);
+    }
+
+    float dry_gain = sqrtf(1.f - mix);
+    float wet_gain = sqrtf(mix);
+    out[0][i] = out[1][i] = dry * dry_gain + wet * wet_gain;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode C — Frequency Shifter (stub: dry passthrough)
+// ---------------------------------------------------------------------------
+void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
+                      size_t size) {
+  for (size_t i = 0; i < size; i++) {
+    out[0][i] = out[1][i] = in[0][i];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Audio callback — dispatches to active mode
+// ---------------------------------------------------------------------------
+enum Mode { MODE_DRONE = 0, MODE_GRANULAR = 1, MODE_FREQSHIFT = 2 };
+
+void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
+                   size_t size) {
+  hw.ProcessAllControls();
+
+  if (preset.IsBypassed()) {
+    for (size_t i = 0; i < size; i++)
+      out[0][i] = out[1][i] = in[0][i];
+    return;
+  }
+
+  switch (preset.GetCurrentMode()) {
+    case MODE_DRONE:     ProcessDrone(in, out, size);     break;
+    case MODE_GRANULAR:  ProcessGranular(in, out, size);  break;
+    case MODE_FREQSHIFT: ProcessFreqShift(in, out, size); break;
+    default:             ProcessDrone(in, out, size);     break;
   }
 }
 
@@ -245,6 +432,7 @@ int main() {
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
   tracker.Init(sr);
+  grain_ring.Init(grain_sdram_buf, GRAIN_BUF_SAMPLES);
 
   led_status.Init(hw.seed.GetPin(Hothouse::LED_1), false);
   led_bypass.Init(hw.seed.GetPin(Hothouse::LED_2), false);
@@ -261,8 +449,9 @@ int main() {
     // Preset system: footswitches, knobs, LEDs, mode switching, flash
     preset.Tick(10);
 
-    // Pitch tracker: run YIN in main loop
-    tracker.Update();
+    // Pitch tracker: run YIN in main loop (Mode A + Mode B)
+    if (preset.GetCurrentMode() != MODE_FREQSHIFT)
+      tracker.Update();
 
     // Bootloader: FS1 held 2 s (Phase 1 — proven safe)
     hw.CheckResetToBootloader();

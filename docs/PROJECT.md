@@ -232,7 +232,8 @@ On boot, the pedal restores the last active mode and each mode's full state (edi
 - **Mode B spec** — DONE. Granular Glitch fully specced in `MODE_B_GRANULAR.md`.
 - **Knob remap** — DONE. Measured physical range 0.000–0.968, calibrated `RemapKnob()` with named constants.
 - **Preset system** — DONE. FS1 preset navigation (edit buffer + 8 presets per mode), Roman numeral LED blink encoding (I/V patterns), save mode via FS2 long press + confirm. Dirty tracking, flash persistence via `PersistentStorage`, mode switching saves/restores per-mode state. Auto-save every ~30 s. Bootloader via FS1 held 2 s (Phase 1; Phase 2 will add FS1+FS2 dual-hold). Implementation plan in `docs/PRESET_IMPL.md`.
-- **Next** — Pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`), multi-mode scaffold (Stage 6), FS1+FS2 dual-hold bootloader (Phase 2 after flash test).
+- **Stage 6** — DONE. Multi-mode scaffold: Switch 3 dispatches `ProcessDrone()` / `ProcessGranular()` / `ProcessFreqShift()`. Modes B and C are dry passthrough stubs. Bypass handled once in `AudioCallback`, mode functions only run when active. Pitch tracker conditional on Mode A.
+- **Next** — Mode B (Granular Glitch) implementation per `MODE_B_GRANULAR.md`. FS1+FS2 dual-hold bootloader (Phase 2 after flash test). Pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`) deferred — current tracking is good enough for now.
 
 ## Staged Development Timeline
 
@@ -251,13 +252,13 @@ Ladder filter on oscillator output. K5 controls cutoff (80 Hz – 8 kHz, exponen
 K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=fine tune (±50 cents continuous). Oscillator plays selectable pitches through the ladder filter.
 
 ### Stage 4 — Envelope follower + VCA + mix + tracking + wavefold ✓
-Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. K1 sets wrap point for tracking. All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
+Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. Octave-locked wrap point fixed to A (compile-time constant `TRACKING_WRAP_NOTE`). All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
 
 ### Stage 5 — Preset system ✓
 FS1 preset navigation (edit buffer + 8 slots per mode), save mode (FS2 long press + FS2 confirm), Roman numeral LED blink encoding on LED 1, flash storage via `PersistentStorage`. Audio callback reads from edit buffer, not hardware. Dirty tracking with 2% knob threshold. Mode switching preserves/restores full per-mode state. Bootloader: FS1 held 2 s (Phase 1).
 
-### Stage 6 — Multi-mode scaffold
-Toggle 3 dispatches to `ProcessDrone()`. Modes B and C are stubs (dry passthrough). Architecture ready for future mode specs.
+### Stage 6 — Multi-mode scaffold ✓
+Switch 3 dispatches to `ProcessDrone()`, `ProcessGranular()`, `ProcessFreqShift()`. Modes B and C are dry passthrough stubs. Bypass handled once in `AudioCallback`. Pitch tracker runs only in Mode A. Architecture ready for mode implementation.
 
 ### Stage 7 — Enclosure
 Drill Hammond 125B to Hothouse template. Finish and label.
