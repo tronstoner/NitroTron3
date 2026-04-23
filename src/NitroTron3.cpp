@@ -42,7 +42,6 @@ int          grain_burst_left = 0;   // grains remaining in current burst
 float        grain_env = 0.f;        // envelope value for grain amplitude
 
 static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
-static constexpr size_t GRAIN_BASE_DELAY = 2400;   // base offset behind write head: 50 ms
 
 // Wet HPF: 2-pole high-pass to keep wet out of bass sub range
 static constexpr float WET_HPF_FREQ = 150.f;
@@ -321,6 +320,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float k5 = RemapKnob(eb.knobs[4]);
   size_t max_range = GRAIN_MIN_RANGE +
       static_cast<size_t>(k5 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_MIN_RANGE));
+  // Base delay scales with range, floored at grain length
+  size_t base_delay = max_range / 8;
+  if (base_delay < grain_len) base_delay = grain_len;
 
   // K6: dry/wet mix
   float mix = RemapKnob(eb.knobs[5]);
@@ -344,9 +346,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     grain_timer--;
     if (grain_timer <= 0) {
       // Delay: base offset + scatter within K5 range
-      size_t scatter_range = max_range - GRAIN_BASE_DELAY;
+      size_t scatter_range = max_range - base_delay;
       size_t pos_offset = static_cast<size_t>(RandFloat() * k3 * static_cast<float>(scatter_range));
-      size_t delay = GRAIN_BASE_DELAY + pos_offset;
+      size_t delay = base_delay + pos_offset;
       if (delay > max_range) delay = max_range;
 
       bool reverse = (k3 > 0.1f) && (RandFloat() < k3 * 0.6f);
