@@ -441,8 +441,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         wet = wet * (1.f - decim_amt) + decim_hold * decim_amt;
       }
       if (fold_amt > 0.01f) {
-        float driven = wet * (1.f + fold_amt * 5.f);
-        float folded = sinf(driven * 1.5707963f) * 0.15f;
+        float driven = wet * (1.f + fold_amt * 7.f);
+        float folded = sinf(driven * 1.5707963f) * 0.25f;
         wet = wet * (1.f - fold_amt) + folded * fold_amt;
       }
       break;
