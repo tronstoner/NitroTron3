@@ -439,12 +439,18 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       }
       break;
     }
-    case 1:
-      // Wavefolder: K4 = fold amount (0 = clean, CW = heavy)
+    case 1: {
+      // Wavefolder: K4 = fold drive (0 = clean, CW = heavy fold)
+      // Drive the signal then fold at ±1.0 boundaries
       if (k4 > 0.01f) {
-        wet = Wavefold(wet, k4);
+        float driven = wet * (1.f + k4 * 8.f);
+        float t = fmodf(driven + 1.f, 4.f);
+        if (t < 0.f) t += 4.f;
+        float folded = (t < 2.f) ? (t - 1.f) : (3.f - t);
+        wet = folded;
       }
       break;
+    }
     case 2: {
       // Ringmod: sine carrier, keytracked LPF
       float carrier = sinf(2.f * 3.14159265f * ringmod_phase);
