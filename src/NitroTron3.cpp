@@ -443,7 +443,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Wavefolder: sine fold — smooth, analog-style harmonic shaping
       // K4 = fold amount (0 = clean, CW = heavy fold, level-matched)
       if (k4 > 0.01f) {
-        float driven = wet * (1.f + k4 * 5.f);
+        float driven = wet * (1.f + k4 * 3.f);
         float folded = sinf(driven * 1.5707963f);  // sin(x * PI/2)
         wet = wet * (1.f - k4) + folded * k4;
       }
