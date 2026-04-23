@@ -41,7 +41,13 @@ int          grain_timer = 0;        // samples until next event
 int          grain_burst_left = 0;   // grains remaining in current burst
 float        grain_env = 0.f;        // envelope value for grain amplitude
 
-static constexpr size_t GRAIN_BASE_DELAY = 24000;  // base read offset: 0.5 s
+static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
+static constexpr size_t GRAIN_BASE_DELAY = 2400;   // base offset behind write head: 50 ms
+
+// Wet HPF: 2-pole high-pass to keep wet out of bass sub range
+static constexpr float WET_HPF_FREQ = 150.f;
+float wet_hp_state[2] = {};
+float wet_hp_coeff = 0.f;  // computed in Init
 
 // Simple xorshift32 RNG for grain scatter
 static uint32_t rng_state = 12345;
@@ -301,19 +307,20 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float k2 = RemapKnob(eb.knobs[1]);
   size_t grain_len = static_cast<size_t>(9600.f - k2 * (9600.f - 960.f));
   if (grain_len < 64) grain_len = 64;
-  // Stutter: short grains loop, long grains play once
   int max_loops = 1 + static_cast<int>(k2 * 7.f);  // 1 to 8
 
   // K3: texture → glitch continuum
-  // CCW = smooth texture (continuous overlapping stream)
-  // CW  = glitch (bursts with gaps, chaos, reverse)
   float k3 = RemapKnob(eb.knobs[2]);
-
-  // Overlap count: 4 (texture) → 1 (glitch)
   float overlap = 4.f - k3 * 3.f;
   size_t base_interval = static_cast<size_t>(
       static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
+
+  // K5: buffer range — CCW = tight (100 ms, recent audio only),
+  //                     CW = deep (full 8 s, long trails)
+  float k5 = RemapKnob(eb.knobs[4]);
+  size_t max_range = GRAIN_MIN_RANGE +
+      static_cast<size_t>(k5 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_MIN_RANGE));
 
   // K6: dry/wet mix
   float mix = RemapKnob(eb.knobs[5]);
@@ -330,23 +337,23 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // Feed pitch tracker
     tracker.Feed(dry, grain_env);
 
-    // Write input into ring buffer
+    // Write input into ring buffer (no feedback)
     grain_ring.Write(dry);
 
     // Scheduler: continuous stream, K3 adds chaos
     grain_timer--;
     if (grain_timer <= 0) {
-      // Position jitter: scales with K3, full buffer at max
-      size_t pos_jitter = static_cast<size_t>(
-          RandFloat() * k3 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_BASE_DELAY));
-      size_t delay = GRAIN_BASE_DELAY + pos_jitter;
+      // Delay: base offset + scatter within K5 range
+      size_t scatter_range = max_range - GRAIN_BASE_DELAY;
+      size_t pos_offset = static_cast<size_t>(RandFloat() * k3 * static_cast<float>(scatter_range));
+      size_t delay = GRAIN_BASE_DELAY + pos_offset;
+      if (delay > max_range) delay = max_range;
 
       bool reverse = (k3 > 0.1f) && (RandFloat() < k3 * 0.6f);
 
       float pitch_ratio = GrainPitchRatio(harmony, k1);
       float comp = 1.f / sqrtf(pitch_ratio);
 
-      // Stutter loops: random 1..max_loops, more for shorter grains
       int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
       if (loops > max_loops) loops = max_loops;
 
@@ -365,7 +372,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
       }
 
-      // Timing jitter scales with K3: steady at CCW, ±80% at CW
       float jitter = (RandFloat() * 2.f - 1.f) * k3 * 0.8f;
       grain_timer = static_cast<int>(
           static_cast<float>(base_interval) * (1.f + jitter));
@@ -377,6 +383,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
       wet += grain_voices[v].Process(grain_ring);
     }
+
+    // Wet HPF: 2-pole (two cascaded one-pole HP)
+    wet_hp_state[0] += (1.f - wet_hp_coeff) * (wet - wet_hp_state[0]);
+    float hp1 = wet - wet_hp_state[0];
+    wet_hp_state[1] += (1.f - wet_hp_coeff) * (hp1 - wet_hp_state[1]);
+    wet = hp1 - wet_hp_state[1];
 
     float dry_gain = sqrtf(1.f - mix);
     float wet_gain = sqrtf(mix);
@@ -433,6 +445,9 @@ int main() {
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
   tracker.Init(sr);
   grain_ring.Init(grain_sdram_buf, GRAIN_BUF_SAMPLES);
+
+  // Wet HPF coefficient
+  wet_hp_coeff = 1.f / (1.f + 2.f * 3.14159265f * WET_HPF_FREQ / sr);
 
   led_status.Init(hw.seed.GetPin(Hothouse::LED_1), false);
   led_bypass.Init(hw.seed.GetPin(Hothouse::LED_2), false);
