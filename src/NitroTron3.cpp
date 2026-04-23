@@ -334,8 +334,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float trem_freq = 1.f + (k4 / 0.5f) * 19.f;
     ringmod_inc = trem_freq / 48000.f;
   } else {
-    // Fixed harmonic ratios: 2, 3, 4, 5, 6, 7, 8
-    static const float RATIOS[] = {2.f, 3.f, 4.f, 5.f, 6.f, 7.f, 8.f};
+    // Bell/metallic partials — all inharmonic, warm to harsh
+    static const float RATIOS[] = {1.5f, 2.76f, 3.5f, 4.2f, 5.4f, 6.5f, 7.3f};
     int idx = static_cast<int>((k4 - 0.5f) / 0.5f * 7.f);
     if (idx > 6) idx = 6;
     float freq = MidiToFreq(tracker.GetMidiNote()) * RATIOS[idx];
