@@ -446,9 +446,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       }
       break;
     case 2: {
-      // Ringmod: triangle carrier, keytracked LPF
-      float carrier = 4.f * ringmod_phase - 1.f;
-      if (ringmod_phase > 0.5f) carrier = 3.f - 4.f * ringmod_phase;
+      // Ringmod: sine carrier, keytracked LPF
+      float carrier = sinf(2.f * 3.14159265f * ringmod_phase);
       ringmod_phase += ringmod_inc;
       if (ringmod_phase >= 1.f) ringmod_phase -= 1.f;
       float rm;
