@@ -47,6 +47,7 @@ static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 float decim_hold = 0.f;       // decimator sample-and-hold value
 float decim_count = 0.f;      // decimator sample counter
 float ringmod_phase = 0.f;    // ringmod carrier oscillator phase
+float ringmod_lp_state = 0.f; // one-pole LPF after ringmod
 
 // Wet HPF: 2-pole high-pass to keep wet out of bass sub range
 static constexpr float WET_HPF_FREQ = 150.f;
@@ -326,11 +327,13 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // SW1: texture mode (0=decimator, 1=wavefolder, 2=ringmod)
   int texture_mode = eb.sw1;
 
-  // Ringmod carrier: K4 below noon = tremolo (1–20 Hz LFO),
-  // K4 above noon = fixed harmonic ratios of tracked pitch
+  // Ringmod: triangle carrier, keytracked LPF, volume compensation
+  // K4 < 30% = tremolo (1–15 Hz), K4 >= 30% = bell partials (3.5× at noon)
   float ringmod_inc;
+  float ringmod_comp = 1.f;   // volume compensation
+  float ringmod_lp_g = 1.f;   // LPF coefficient (1 = no filter)
   if (k4 < 0.3f) {
-    // Tremolo: 1–15 Hz, not pitch-tracked
+    // Tremolo: 1–15 Hz, not pitch-tracked, no compensation needed
     float trem_freq = 1.f + (k4 / 0.3f) * 14.f;
     ringmod_inc = trem_freq / 48000.f;
   } else {
@@ -338,8 +341,16 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     static const float RATIOS[] = {1.5f, 2.76f, 3.5f, 4.2f, 5.4f, 6.5f, 7.3f};
     int idx = static_cast<int>((k4 - 0.3f) / 0.7f * 7.f);
     if (idx > 6) idx = 6;
-    float freq = MidiToFreq(tracker.GetMidiNote()) * RATIOS[idx];
-    ringmod_inc = freq / 48000.f;
+    float ratio = RATIOS[idx];
+    float carrier_freq = MidiToFreq(tracker.GetMidiNote()) * ratio;
+    ringmod_inc = carrier_freq / 48000.f;
+    // Volume compensation: 1/sqrt(ratio) — higher ratios get quieter
+    ringmod_comp = 1.f / sqrtf(ratio);
+    // Keytracked LPF: cutoff = carrier × 3 (lets fundamental + a few
+    // harmonics through, tames the rest). One-pole coefficient.
+    float lp_cutoff = carrier_freq * 3.f;
+    if (lp_cutoff > 20000.f) lp_cutoff = 20000.f;
+    ringmod_lp_g = 1.f - expf(-2.f * 3.14159265f * lp_cutoff / 48000.f);
   }
 
   // Decimator rate: K4 controls how much sample rate is reduced
@@ -438,11 +449,17 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       }
       break;
     case 2: {
-      // Ringmod: 50:50 clean/modulated — tremolo below noon, harmonics above
-      float carrier = sinf(2.f * 3.14159265f * ringmod_phase);
+      // Ringmod: triangle carrier, 50:50 mix, keytracked LPF
+      // Triangle: -1 to +1 from phase ramp
+      float carrier = 4.f * ringmod_phase - 1.f;
+      if (ringmod_phase > 0.5f) carrier = 3.f - 4.f * ringmod_phase;
       ringmod_phase += ringmod_inc;
       if (ringmod_phase >= 1.f) ringmod_phase -= 1.f;
-      wet *= (0.5f + 0.5f * carrier);
+      // 50:50 clean/modulated with volume compensation
+      float rm = wet * (0.5f + 0.5f * carrier) * ringmod_comp;
+      // Keytracked one-pole LPF to tame highs
+      ringmod_lp_state += ringmod_lp_g * (rm - ringmod_lp_state);
+      wet = ringmod_lp_state;
       break;
     }
     }
