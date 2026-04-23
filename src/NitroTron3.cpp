@@ -449,14 +449,19 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       }
       break;
     case 2: {
-      // Ringmod: triangle carrier, 50:50 mix, keytracked LPF
-      // Triangle: -1 to +1 from phase ramp
+      // Ringmod: triangle carrier, keytracked LPF
       float carrier = 4.f * ringmod_phase - 1.f;
       if (ringmod_phase > 0.5f) carrier = 3.f - 4.f * ringmod_phase;
       ringmod_phase += ringmod_inc;
       if (ringmod_phase >= 1.f) ringmod_phase -= 1.f;
-      // 50:50 clean/modulated with volume compensation
-      float rm = wet * (0.5f + 0.5f * carrier) * ringmod_comp;
+      float rm;
+      if (k4 < 0.3f) {
+        // Tremolo region: AM (50:50 clean/modulated)
+        rm = wet * (0.5f + 0.5f * carrier);
+      } else {
+        // Bell region: true ringmod with volume compensation
+        rm = wet * carrier * ringmod_comp;
+      }
       // Keytracked one-pole LPF to tame highs
       ringmod_lp_state += ringmod_lp_g * (rm - ringmod_lp_state);
       wet = ringmod_lp_state;
