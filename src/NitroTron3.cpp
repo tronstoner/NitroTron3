@@ -326,11 +326,21 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // SW1: texture mode (0=decimator, 1=wavefolder, 2=ringmod)
   int texture_mode = eb.sw1;
 
-  // Ringmod carrier: tracked bass × ratio. K4 sweeps ratio 1.0–8.0
-  // Low = unison (tremolo), mid = inharmonic bells, high = metallic
-  float ringmod_ratio = 1.f + k4 * 7.f;
-  float ringmod_freq = MidiToFreq(tracker.GetMidiNote()) * ringmod_ratio;
-  float ringmod_inc = ringmod_freq / 48000.f;
+  // Ringmod carrier: K4 below noon = tremolo (1–20 Hz LFO),
+  // K4 above noon = fixed harmonic ratios of tracked pitch
+  float ringmod_inc;
+  if (k4 < 0.5f) {
+    // Tremolo: 1–20 Hz, not pitch-tracked
+    float trem_freq = 1.f + (k4 / 0.5f) * 19.f;
+    ringmod_inc = trem_freq / 48000.f;
+  } else {
+    // Fixed harmonic ratios: 2, 3, 4, 5, 6, 7, 8
+    static const float RATIOS[] = {2.f, 3.f, 4.f, 5.f, 6.f, 7.f, 8.f};
+    int idx = static_cast<int>((k4 - 0.5f) / 0.5f * 7.f);
+    if (idx > 6) idx = 6;
+    float freq = MidiToFreq(tracker.GetMidiNote()) * RATIOS[idx];
+    ringmod_inc = freq / 48000.f;
+  }
 
   // Decimator rate: K4 controls how much sample rate is reduced
   // At K4=0: full rate (no effect). At K4=1: ~1/32 rate (heavy crush)
@@ -428,11 +438,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       }
       break;
     case 2: {
-      // Ringmod: K4 = carrier ratio (1–8×), always active
+      // Ringmod: 50:50 clean/modulated — tremolo below noon, harmonics above
       float carrier = sinf(2.f * 3.14159265f * ringmod_phase);
       ringmod_phase += ringmod_inc;
       if (ringmod_phase >= 1.f) ringmod_phase -= 1.f;
-      wet *= carrier;
+      wet *= (0.5f + 0.5f * carrier);
       break;
     }
     }
