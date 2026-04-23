@@ -440,11 +440,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       break;
     }
     case 1: {
-      // Wavefolder: sine fold — smooth, analog-style harmonic saturation
-      // K4 = fold drive (0 = clean, CW = multiple folds)
+      // Wavefolder: sine fold — smooth, analog-style harmonic shaping
+      // K4 = fold amount (0 = clean, CW = heavy fold, level-matched)
       if (k4 > 0.01f) {
-        float driven = wet * (1.f + k4 * 20.f);
-        wet = sinf(driven * 1.5707963f);  // sin(x * PI/2)
+        float driven = wet * (1.f + k4 * 5.f);
+        float folded = sinf(driven * 1.5707963f);  // sin(x * PI/2)
+        wet = wet * (1.f - k4) + folded * k4;
       }
       break;
     }
