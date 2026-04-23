@@ -329,14 +329,14 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // Ringmod carrier: K4 below noon = tremolo (1–20 Hz LFO),
   // K4 above noon = fixed harmonic ratios of tracked pitch
   float ringmod_inc;
-  if (k4 < 0.5f) {
-    // Tremolo: 1–20 Hz, not pitch-tracked
-    float trem_freq = 1.f + (k4 / 0.5f) * 19.f;
+  if (k4 < 0.3f) {
+    // Tremolo: 1–15 Hz, not pitch-tracked
+    float trem_freq = 1.f + (k4 / 0.3f) * 14.f;
     ringmod_inc = trem_freq / 48000.f;
   } else {
-    // Bell/metallic partials — all inharmonic, warm to harsh
+    // Bell/metallic partials — 3.5× lands at noon, inharmonic spread
     static const float RATIOS[] = {1.5f, 2.76f, 3.5f, 4.2f, 5.4f, 6.5f, 7.3f};
-    int idx = static_cast<int>((k4 - 0.5f) / 0.5f * 7.f);
+    int idx = static_cast<int>((k4 - 0.3f) / 0.7f * 7.f);
     if (idx > 6) idx = 6;
     float freq = MidiToFreq(tracker.GetMidiNote()) * RATIOS[idx];
     ringmod_inc = freq / 48000.f;
