@@ -330,7 +330,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // Ringmod: triangle carrier, keytracked LPF, volume compensation
   // K4 < 30% = tremolo (1–15 Hz), K4 >= 30% = bell partials (3.5× at noon)
   float ringmod_inc;
-  float ringmod_comp = 1.f;   // volume compensation
   float ringmod_lp_g = 1.f;   // LPF coefficient (1 = no filter)
   if (k4 < 0.3f) {
     // Tremolo: 1–15 Hz, not pitch-tracked, no compensation needed
@@ -344,11 +343,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float ratio = RATIOS[idx];
     float carrier_freq = MidiToFreq(tracker.GetMidiNote()) * ratio;
     ringmod_inc = carrier_freq / 48000.f;
-    // Volume compensation: 1/sqrt(ratio) — higher ratios get quieter
-    ringmod_comp = 1.f / sqrtf(ratio);
-    // Keytracked LPF: cutoff = carrier × 3 (lets fundamental + a few
-    // harmonics through, tames the rest). One-pole coefficient.
-    float lp_cutoff = carrier_freq * 3.f;
+    // Keytracked LPF: cutoff = carrier × 6 (gentle top-end rolloff,
+    // only tames the extreme highs at high ratios). One-pole coefficient.
+    float lp_cutoff = carrier_freq * 6.f;
     if (lp_cutoff > 20000.f) lp_cutoff = 20000.f;
     ringmod_lp_g = 1.f - expf(-2.f * 3.14159265f * lp_cutoff / 48000.f);
   }
@@ -459,8 +456,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         // Tremolo region: AM (50:50 clean/modulated)
         rm = wet * (0.5f + 0.5f * carrier);
       } else {
-        // Bell region: true ringmod with volume compensation
-        rm = wet * carrier * ringmod_comp;
+        // Bell region: true ringmod
+        rm = wet * carrier;
       }
       // Keytracked one-pole LPF to tame highs
       ringmod_lp_state += ringmod_lp_g * (rm - ringmod_lp_state);
