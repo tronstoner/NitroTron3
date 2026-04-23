@@ -324,13 +324,13 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // K4: texture amount (0 = clean, CW = full effect)
   float k4 = RemapKnob(eb.knobs[3]);
 
-  // SW1: texture mode (0=decimator, 1=wavefolder, 2=ringmod)
+  // SW1: texture mode (0=decimate/fold bipolar, 1=free, 2=ringmod)
   int texture_mode = eb.sw1;
 
-  // Ringmod: triangle carrier, keytracked LPF, volume compensation
+  // Ringmod: sine carrier, keytracked LPF
   // K4 < 30% = tremolo (1–15 Hz), K4 >= 30% = bell partials (3.5× at noon)
   float ringmod_inc;
-  float ringmod_lp_g = 1.f;   // LPF coefficient (1 = no filter)
+  float ringmod_lp_g = 1.f;
   if (k4 < 0.3f) {
     // Tremolo: 1–15 Hz, not pitch-tracked, no compensation needed
     float trem_freq = 1.f + (k4 / 0.3f) * 14.f;
@@ -350,9 +350,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     ringmod_lp_g = 1.f - expf(-2.f * 3.14159265f * lp_cutoff / 48000.f);
   }
 
-  // Decimator rate: K4 controls how much sample rate is reduced
-  // At K4=0: full rate (no effect). At K4=1: ~1/32 rate (heavy crush)
-  float decim_rate = 1.f + k4 * 31.f;
+  // Bipolar K4 helpers for case 0 (decimator/folder)
+  // CCW→noon (k4 0→0.5): decimator amount, inverted so CCW = max crush
+  // noon→CW (k4 0.5→1): fold amount
+  float decim_amt = (k4 < 0.5f) ? (1.f - k4 / 0.5f) : 0.f;   // 1 at CCW, 0 at noon
+  float fold_amt  = (k4 > 0.5f) ? ((k4 - 0.5f) / 0.5f) : 0.f; // 0 at noon, 1 at CW
+  float decim_rate = 1.f + decim_amt * 19.f;  // 1 (clean at noon) to 20 (max crush at CCW)
 
   // K5: buffer range — CCW = tight (100 ms, recent audio only),
   //                     CW = deep (full 8 s, long trails)
@@ -428,27 +431,25 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // Texture shaper — K4 meaning depends on SW1 mode
     switch (texture_mode) {
     case 0: {
-      // Decimator: K4 = crush amount (0 = clean, CW = heavy)
-      if (k4 > 0.01f) {
+      // Bipolar: CCW = decimator, noon = clean, CW = wavefolder
+      if (decim_amt > 0.01f) {
         decim_count += 1.f;
         if (decim_count >= decim_rate) {
           decim_count -= decim_rate;
           decim_hold = wet;
         }
-        wet = wet * (1.f - k4) + decim_hold * k4;
+        wet = wet * (1.f - decim_amt) + decim_hold * decim_amt;
+      }
+      if (fold_amt > 0.01f) {
+        float driven = wet * (1.f + fold_amt * 5.f);
+        float folded = sinf(driven * 1.5707963f) * 0.15f;
+        wet = wet * (1.f - fold_amt) + folded * fold_amt;
       }
       break;
     }
-    case 1: {
-      // Wavefolder: sine fold — smooth, analog-style harmonic shaping
-      // K4 = fold amount (0 = clean, CW = heavy fold, level-matched)
-      if (k4 > 0.01f) {
-        float driven = wet * (1.f + k4 * 5.f);
-        float folded = sinf(driven * 1.5707963f) * 0.15f;  // sin fold, level-matched
-        wet = wet * (1.f - k4) + folded * k4;
-      }
+    case 1:
+      // Free — clean passthrough
       break;
-    }
     case 2: {
       // Ringmod: sine carrier, keytracked LPF
       float carrier = sinf(2.f * 3.14159265f * ringmod_phase);
