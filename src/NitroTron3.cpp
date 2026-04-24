@@ -47,7 +47,7 @@ static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 float prev_wet = 0.f;         // previous sample's wet output for feedback injection
 
 // Direct-texture mode: stutter capture buffer
-static constexpr size_t STUTTER_BUF_SIZE = 19200;  // 400 ms at 48 kHz
+static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
 static constexpr size_t STUTTER_MIN_LOOP = 960;    // 20 ms min slice
 float stutter_buf[STUTTER_BUF_SIZE] = {};
 size_t stutter_write_pos = 0;
