@@ -492,8 +492,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
           && !stutter_engaged && !any_active) {
         grain_timer--;
         if (grain_timer <= 0) {
-          // Fixed params: 100 ms chunk, 3 reps, forward
-          stutter_snap_len = 4800;
+          // DEBUG step: random chunk length, fixed 3 reps, forward
+          float rand_scale = 0.6f + RandFloat() * 0.8f;  // ±40%
+          size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+          if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
+          if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
+          stutter_snap_len = chunk;
           stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
                                % STUTTER_BUF_SIZE;
           stutter_snap_rev = false;
