@@ -46,22 +46,52 @@ static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 // Feedback state
 float prev_wet = 0.f;         // previous sample's wet output for feedback injection
 
-// Direct-texture mode: stutter state
+// Direct-texture mode: stutter
 static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
-static constexpr int    STUTTER_FADE_LEN = 192;    // ~4 ms event in/out fade
-static constexpr int    STUTTER_SEAM_LEN = 32;     // ~0.67 ms loop seam fade
-static constexpr size_t STUTTER_MIN_LOOP = 2400;   // 50 ms — floor to avoid pitched artifacts
+static constexpr size_t STUTTER_MIN_LOOP = 2400;   // 50 ms min slice
 float stutter_buf[STUTTER_BUF_SIZE] = {};
 size_t stutter_write_pos = 0;
-size_t stutter_read_pos = 0;
-size_t stutter_read_start = 0;    // start offset in circular buffer
-bool   stuttering = false;
-bool   stutter_is_cutout = false; // true = silence, false = repeat
-bool   stutter_reverse = false;   // true = play chunk backwards
-int    stutter_remaining = 0;     // samples left in current event
-int    stutter_total = 0;         // total duration of current event
-size_t stutter_loop_len = 0;      // length of captured chunk to loop
-size_t stutter_buf_filled = 0;    // how many samples have been written total
+size_t stutter_buf_filled = 0;
+bool   stutter_writing = true;     // false = writes frozen during stutter
+
+// Stutter voice: Hann-windowed slice playback
+struct StutterVoice {
+    size_t start;      // start position in stutter_buf (circular)
+    size_t length;     // slice length in samples
+    size_t phase;      // current sample within slice
+    bool   reverse;    // playback direction (latched at start)
+    bool   active;     // currently playing
+
+    void Trigger(size_t s, size_t len, bool rev) {
+        start = s;
+        length = len;
+        phase = 0;
+        reverse = rev;
+        active = true;
+    }
+
+    float Process(const float* buf, size_t buf_size) {
+        if (!active) return 0.f;
+
+        // Hann window: both value AND slope are zero at endpoints
+        float t = static_cast<float>(phase) / static_cast<float>(length);
+        float window = 0.5f * (1.f - cosf(3.14159265f * 2.f * t));
+        // Note: Hann over full length means window=0 at phase=0 and phase=length.
+        // Peak at phase=length/2.
+
+        // Read from circular buffer
+        size_t offset = reverse ? (length - 1 - phase) : phase;
+        size_t idx = (start + offset) % buf_size;
+        float sample = buf[idx];
+
+        phase++;
+        if (phase >= length) active = false;
+
+        return sample * window;
+    }
+};
+
+StutterVoice stutter_voice;
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -428,87 +458,35 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float wet;
 
     if (direct_texture) {
-      // Direct-texture mode: bypass grains, apply stutter/cut-out
-      if (stuttering) {
-        // Event-level fade: ramp in at start, ramp out at end
-        int elapsed = stutter_total - stutter_remaining;
-        float event_fade = 1.f;
-        if (elapsed < STUTTER_FADE_LEN)
-          event_fade = static_cast<float>(elapsed) / static_cast<float>(STUTTER_FADE_LEN);
-        if (stutter_remaining < STUTTER_FADE_LEN)
-          event_fade = static_cast<float>(stutter_remaining) / static_cast<float>(STUTTER_FADE_LEN);
+      // STEP 1 DIAGNOSTIC: single Hann-windowed voice, fixed params.
+      // No randomness, no reverse, no cutout, no loop wrap.
+      // Full buffer (200 ms), 1 rep, forward only.
 
-        if (stutter_is_cutout) {
-          wet = dry * (1.f - event_fade);
-        } else {
-          // Read from seamless loop (crossfade baked in at trigger time)
-          size_t pos_in_loop = stutter_read_pos % stutter_loop_len;
-          size_t offset;
-          if (stutter_reverse)
-            offset = stutter_loop_len - 1 - pos_in_loop;
-          else
-            offset = pos_in_loop;
-          size_t idx = (stutter_read_start + offset) % STUTTER_BUF_SIZE;
-          float looped = stutter_buf[idx];
-          stutter_read_pos++;
-
-          wet = dry * (1.f - event_fade) + looped * event_fade;
-        }
-
-        stutter_remaining--;
-        if (stutter_remaining <= 0) stuttering = false;
-      } else {
-        // Write into capture buffer when not stuttering
+      // Write to capture buffer when no voice is active
+      if (!stutter_voice.active) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
         if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
         if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
-
-        wet = dry;
-        // Roll dice for new event
-        if (k3 > 0.01f && stutter_buf_filled >= STUTTER_MIN_LOOP
-            && RandFloat() < stutter_prob) {
-          stuttering = true;
-          stutter_is_cutout = (RandFloat() < cutout_chance);
-          stutter_reverse = (RandFloat() < reverse_chance);
-          if (stutter_is_cutout) {
-            // Cut-out: short tremolo-pulse length (10–50 ms)
-            stutter_total = 480 + static_cast<int>(RandFloat() * 1920.f);
-            stutter_remaining = stutter_total;
-          } else {
-            // Repeat: randomize chunk length ±40%
-            float rand_scale = 0.6f + RandFloat() * 0.8f;
-            size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
-            if (chunk > stutter_buf_filled) chunk = stutter_buf_filled;
-            if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
-            if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
-            stutter_loop_len = chunk;
-            // Read start = most recent audio
-            stutter_read_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_loop_len)
-                                 % STUTTER_BUF_SIZE;
-            stutter_read_pos = 0;
-
-            // Bake seamless loop: fade first and last SEAM_LEN samples
-            // to zero. Both sides of the wrap are near-zero → no click.
-            for (int f = 0; f < STUTTER_SEAM_LEN; f++) {
-              float t = static_cast<float>(f) / static_cast<float>(STUTTER_SEAM_LEN);
-              size_t head_idx = (stutter_read_start + f) % STUTTER_BUF_SIZE;
-              size_t tail_idx = (stutter_read_start + stutter_loop_len - STUTTER_SEAM_LEN + f)
-                                % STUTTER_BUF_SIZE;
-              stutter_buf[head_idx] *= t;          // fade in from zero
-              stutter_buf[tail_idx] *= (1.f - t);  // fade out to zero
-            }
-
-            // Randomize reps: 1 at low k3, 1–5 at full CW
-            int reps = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
-            stutter_total = static_cast<int>(stutter_loop_len) * reps + STUTTER_FADE_LEN * 2;
-            stutter_remaining = stutter_total;
-          }
-        }
+        stutter_writing = true;
+      } else {
+        stutter_writing = false;  // freeze writes during playback
       }
+
+      // DIAGNOSTIC: fixed-interval trigger, no randomness.
+      // Trigger immediately after previous voice finishes, if K3 > 0.
+      if (!stutter_voice.active && k3 > 0.01f
+          && stutter_buf_filled >= STUTTER_BUF_SIZE) {
+        size_t slen = STUTTER_BUF_SIZE;  // fixed: full 200 ms
+        size_t start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
+        stutter_voice.Trigger(start, slen, false);  // forward only
+      }
+
+      // DIAGNOSTIC: voice only, no dry — isolate the voice output
+      float voice_out = stutter_voice.Process(stutter_buf, STUTTER_BUF_SIZE);
+      wet = stutter_voice.active || voice_out != 0.f ? voice_out : dry;
+
     } else {
-      // Stop any lingering stutter when leaving direct-texture mode
-      stuttering = false;
 
       // Scheduler: continuous stream, K3 adds chaos
       grain_timer--;
