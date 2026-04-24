@@ -61,6 +61,7 @@ struct StutterVoice {
     size_t phase;      // current sample within slice
     bool   reverse;    // playback direction (latched at start)
     bool   active;     // currently playing
+    float  window;     // current Hann window value (exposed for dry ducking)
 
     void Trigger(size_t s, size_t len, bool rev) {
         start = s;
@@ -68,16 +69,15 @@ struct StutterVoice {
         phase = 0;
         reverse = rev;
         active = true;
+        window = 0.f;
     }
 
     float Process(const float* buf, size_t buf_size) {
-        if (!active) return 0.f;
+        if (!active) { window = 0.f; return 0.f; }
 
         // Hann window: both value AND slope are zero at endpoints
         float t = static_cast<float>(phase) / static_cast<float>(length);
-        float window = 0.5f * (1.f - cosf(3.14159265f * 2.f * t));
-        // Note: Hann over full length means window=0 at phase=0 and phase=length.
-        // Peak at phase=length/2.
+        window = 0.5f * (1.f - cosf(3.14159265f * 2.f * t));
 
         // Read from circular buffer
         size_t offset = reverse ? (length - 1 - phase) : phase;
@@ -85,7 +85,7 @@ struct StutterVoice {
         float sample = buf[idx];
 
         phase++;
-        if (phase >= length) active = false;
+        if (phase >= length) { active = false; window = 0.f; }
 
         return sample * window;
     }
@@ -93,7 +93,9 @@ struct StutterVoice {
 
 StutterVoice stutter_voices[2];
 int stutter_active_idx = 0;        // which voice was last triggered
-bool stutter_engaged = false;      // true when K3 > 0 and stutter is running
+bool stutter_engaged = false;      // true during an active stutter event
+size_t stutter_snap_start = 0;     // latched start position for current event
+int stutter_reps_left = 0;         // remaining voice triggers in current event
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -464,37 +466,53 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // so the sum is always ~1.0. No hard switch from/to dry.
       // Still fixed params, no randomness for diagnostic.
 
-      // Write to capture buffer when no voice is active
+      // Write to capture buffer when not engaged
       bool any_active = stutter_voices[0].active || stutter_voices[1].active;
-      if (!any_active) {
+      if (!stutter_engaged) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
         if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
         if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
       }
 
-      // Trigger logic: start next voice when current voice reaches midpoint
+      // Trigger logic
       StutterVoice& cur = stutter_voices[stutter_active_idx];
       int next_idx = 1 - stutter_active_idx;
       StutterVoice& nxt = stutter_voices[next_idx];
 
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE) {
-        if (!stutter_engaged) {
-          // First engagement: trigger voice A
-          size_t slen = STUTTER_BUF_SIZE;
-          size_t start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
-          cur.Trigger(start, slen, false);
+        if (!stutter_engaged && !any_active) {
+          // Start new event: latch chunk length, start position, reps
+          size_t slen = static_cast<size_t>(stutter_base_chunk);
+          if (slen > STUTTER_BUF_SIZE) slen = STUTTER_BUF_SIZE;
+          if (slen < STUTTER_MIN_LOOP) slen = STUTTER_MIN_LOOP;
+          stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
+          stutter_reps_left = 3;  // fixed 3 reps for testing
+          cur.Trigger(stutter_snap_start, slen, false);
+          stutter_reps_left--;
           stutter_engaged = true;
-        } else if (cur.active && cur.phase == cur.length / 2 && !nxt.active) {
-          // Current voice at midpoint (Hann peak, about to fade out):
-          // start next voice so they overlap
-          size_t slen = STUTTER_BUF_SIZE;
-          size_t start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
-          nxt.Trigger(start, slen, false);
-          stutter_active_idx = next_idx;
+        } else if (stutter_engaged && cur.active && cur.phase == cur.length / 2 && !nxt.active) {
+          if (stutter_reps_left > 0) {
+            // Midpoint: start next voice on SAME chunk
+            nxt.Trigger(stutter_snap_start, cur.length, false);
+            stutter_active_idx = next_idx;
+            stutter_reps_left--;
+          }
+          // else: no more reps, let current voice finish naturally
         }
-      } else {
+      }
+
+      // Event ends when all voices finish
+      if (stutter_engaged && !any_active) {
         stutter_engaged = false;
+        // Timer for next event: ~500 ms gap (24000 samples)
+        grain_timer = 24000;
+      }
+
+      // Periodic re-trigger when not engaged
+      if (!stutter_engaged && k3 > 0.01f) {
+        grain_timer--;
+        // grain_timer counts down to next event
       }
 
       // Sum both voices
@@ -502,10 +520,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       float v1 = stutter_voices[1].Process(stutter_buf, STUTTER_BUF_SIZE);
       float voice_sum = v0 + v1;
 
-      // When voices are active, output is the voice sum.
-      // When no voices active, output is dry.
-      // The Hann windows handle the transition (both start/end at zero with zero slope).
-      wet = any_active ? voice_sum : dry;
+      // During events: voice sum only. Between events: dry.
+      wet = (stutter_voices[0].active || stutter_voices[1].active)
+          ? voice_sum : dry;
 
     } else {
 
