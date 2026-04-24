@@ -414,9 +414,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   if (base_interval < 32) base_interval = 32;
 
   // Stutter params (only used when direct_texture)
-  // Base chunk: 400 ms at CCW → 20 ms at CW
+  // Base chunk: 200 ms at CCW → 20 ms at CW, squared curve so shorter
+  // chunks arrive earlier in the K3 range (nudge toward fast/glitchy)
+  float k3sq = k3 * k3;
   float stutter_base_chunk = static_cast<float>(STUTTER_BUF_SIZE) -
-      k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
+      k3sq * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
   // Event scheduling: exponential intervals (Poisson-like).
   // Base rate scales with K3. Exponential distribution gives natural
   // clustering — sometimes rapid-fire, sometimes long gaps.
@@ -496,8 +498,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Two-voice Tukey-windowed stutter with probability-based events.
       // Repeats use voice engine; cut-outs use dedicated cosine envelope.
 
-      // Write to capture buffer (freeze during repeat events, not cut-outs)
-      if (!stutter_engaged || stutter_is_cutout) {
+      // Write to capture buffer.  Freeze during:
+      //  - active repeat events (stutter_engaged)
+      //  - burst gaps (burst_left > 0, keeps buffer consistent across burst)
+      // Allow writes during cut-outs (they don't read from buffer).
+      if ((!stutter_engaged && stutter_burst_left <= 0) || stutter_is_cutout) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
         if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
