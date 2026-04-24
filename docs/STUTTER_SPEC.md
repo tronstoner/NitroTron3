@@ -115,3 +115,11 @@ the current step is click-free. One commit per step.
 - Verify full K3 range: gentle at CCW, chaotic at CW.
 - Tune any constants that don't match the original feel.
 - Slew-limit K3 if parameter sweeps click (~20 ms).
+
+### Future — Gesture-reactive stutter
+
+Make event density react to the input envelope: harder playing = more
+erratic stutter, quiet passages = sparser events. The envelope follower
+(`grain_env`) already exists. Scale event rate or probability by envelope
+level for dynamics-responsive behavior. This ties the stutter to the
+player's feel rather than just the knob position.

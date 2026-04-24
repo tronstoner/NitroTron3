@@ -121,7 +121,8 @@ bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
 size_t stutter_cutout_phase = 0;   // current sample within cut-out
 size_t stutter_cutout_len = 0;     // total cut-out duration in samples
 size_t stutter_fresh = 0;          // samples written since last event ended
-int    stutter_timer = 0;          // countdown to next event (uncertainty machine)
+int    stutter_timer = 0;          // countdown to next event
+int    stutter_burst_left = 0;     // remaining events in current burst (0 = normal)
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -416,10 +417,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // Base chunk: 400 ms at CCW → 20 ms at CW
   float stutter_base_chunk = static_cast<float>(STUTTER_BUF_SIZE) -
       k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
-  // Uncertainty machine: base interval + jitter, both scale with K3
-  // CCW: ~800 ms base, ±10% jitter.  CW: ~40 ms base, ±95% jitter.
-  float stutter_base_interval = 38400.f - k3 * 36480.f;  // 800 ms → 40 ms
-  float stutter_jitter = 0.1f + k3 * 0.85f;              // 10% → 95%
+  // Event scheduling: exponential intervals (Poisson-like).
+  // Base rate scales with K3. Exponential distribution gives natural
+  // clustering — sometimes rapid-fire, sometimes long gaps.
+  // Burst probability scales with K3: clusters of short glitchy events.
+  float stutter_mean_interval = 38400.f - k3 * 36480.f;  // 800 ms → 40 ms
+  float burst_chance = k3 * 0.4f;  // 0% at CCW, 40% at CW
   // Reverse probability: 0% at low k3, up to 80% at full CW
   float reverse_chance = k3 * 0.8f;
   // Cut-out probability: 0% at low k3, up to 40% at full CW
@@ -523,15 +526,20 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             stutter_cutout_phase = 0;
             stutter_engaged = true;
           } else {
-            // Repeat: chunk length with wide spread at high K3.
-            // Low K3: tight around base (±40%). High K3: anywhere from
-            // STUTTER_MIN_LOOP to base*2, creating erratic mix of
-            // short bursts and longer repeats.
             stutter_is_cutout = false;
-            float spread = 0.4f + k3 * 1.6f;  // 0.4 at CCW, 2.0 at CW
-            float rand_scale = (1.f - spread) + RandFloat() * spread * 2.f;
-            if (rand_scale < 0.1f) rand_scale = 0.1f;
-            size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+            size_t chunk;
+            if (stutter_burst_left > 0) {
+              // Burst: short chunks with varied lengths for glitchy cluster
+              chunk = STUTTER_MIN_LOOP +
+                  static_cast<size_t>(RandFloat() * static_cast<float>(STUTTER_MIN_LOOP * 3));
+              stutter_burst_left--;
+            } else {
+              // Normal: chunk spread scales with K3
+              float spread = 0.4f + k3 * 1.6f;
+              float rand_scale = (1.f - spread) + RandFloat() * spread * 2.f;
+              if (rand_scale < 0.1f) rand_scale = 0.1f;
+              chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+            }
             if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
             if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
             stutter_snap_len = chunk;
@@ -574,10 +582,15 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (stutter_cutout_phase >= stutter_cutout_len) {
           stutter_is_cutout = false;
           stutter_engaged = false;
-          // Schedule next event: base interval ± jitter
-          float j = (RandFloat() * 2.f - 1.f) * stutter_jitter;
-          stutter_timer = static_cast<int>(stutter_base_interval * (1.f + j));
+          // Exponential interval (Poisson): -ln(rand) * mean
+          float r = RandFloat();
+          if (r < 0.001f) r = 0.001f;  // avoid log(0)
+          stutter_timer = static_cast<int>(-logf(r) * stutter_mean_interval);
           if (stutter_timer < 32) stutter_timer = 32;
+          // Maybe start a burst
+          if (stutter_burst_left <= 0 && RandFloat() < burst_chance) {
+            stutter_burst_left = 2 + static_cast<int>(RandFloat() * 3.f);  // 2–4 events
+          }
         }
       } else {
         // --- Repeat path: two-voice Tukey crossfade ---
@@ -612,10 +625,20 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         // Event ends when all voices finish
         if (stutter_engaged && !stutter_voices[0].active && !stutter_voices[1].active) {
           stutter_engaged = false;
-          // Schedule next event: base interval ± jitter
-          float j = (RandFloat() * 2.f - 1.f) * stutter_jitter;
-          stutter_timer = static_cast<int>(stutter_base_interval * (1.f + j));
-          if (stutter_timer < 32) stutter_timer = 32;
+          if (stutter_burst_left > 0) {
+            // In burst: tiny gap between events (10–30 ms)
+            stutter_timer = 480 + static_cast<int>(RandFloat() * 960.f);
+          } else {
+            // Normal: exponential interval (Poisson)
+            float r = RandFloat();
+            if (r < 0.001f) r = 0.001f;
+            stutter_timer = static_cast<int>(-logf(r) * stutter_mean_interval);
+            if (stutter_timer < 32) stutter_timer = 32;
+            // Maybe start a burst
+            if (RandFloat() < burst_chance) {
+              stutter_burst_left = 2 + static_cast<int>(RandFloat() * 3.f);
+            }
+          }
         }
 
         // Complement crossfade
