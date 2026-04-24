@@ -121,6 +121,7 @@ bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
 size_t stutter_cutout_phase = 0;   // current sample within cut-out
 size_t stutter_cutout_len = 0;     // total cut-out duration in samples
 size_t stutter_fresh = 0;          // samples written since last event ended
+int    stutter_cooldown = 0;       // random post-event gap (samples)
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -504,10 +505,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // seam in the capture region when events fire in quick succession.
       size_t min_fresh = static_cast<size_t>(stutter_base_chunk * 1.4f);  // worst-case chunk
       if (min_fresh > STUTTER_BUF_SIZE) min_fresh = STUTTER_BUF_SIZE;
+      if (stutter_cooldown > 0) stutter_cooldown--;
       bool any_active = stutter_voices[0].active || stutter_voices[1].active;
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
           && !stutter_engaged && !any_active && !stutter_is_cutout
-          && stutter_fresh >= min_fresh
+          && stutter_fresh >= min_fresh && stutter_cooldown <= 0
           && RandFloat() < stutter_prob) {
 
           if (RandFloat() < cutout_chance) {
@@ -517,9 +519,14 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             stutter_cutout_phase = 0;
             stutter_engaged = true;
           } else {
-            // Repeat: randomize chunk length ±40%
+            // Repeat: chunk length with wide spread at high K3.
+            // Low K3: tight around base (±40%). High K3: anywhere from
+            // STUTTER_MIN_LOOP to base*2, creating erratic mix of
+            // short bursts and longer repeats.
             stutter_is_cutout = false;
-            float rand_scale = 0.6f + RandFloat() * 0.8f;
+            float spread = 0.4f + k3 * 1.6f;  // 0.4 at CCW, 2.0 at CW
+            float rand_scale = (1.f - spread) + RandFloat() * spread * 2.f;
+            if (rand_scale < 0.1f) rand_scale = 0.1f;
             size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
             if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
             if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
@@ -563,6 +570,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (stutter_cutout_phase >= stutter_cutout_len) {
           stutter_is_cutout = false;
           stutter_engaged = false;
+          // Random gap: 0–200 ms, shorter at high K3
+          stutter_cooldown = static_cast<int>(RandFloat() * 9600.f * (1.f - k3 * 0.8f));
         }
       } else {
         // --- Repeat path: two-voice Tukey crossfade ---
@@ -597,6 +606,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         // Event ends when all voices finish
         if (stutter_engaged && !stutter_voices[0].active && !stutter_voices[1].active) {
           stutter_engaged = false;
+          // Random gap: 0–200 ms, shorter at high K3
+          stutter_cooldown = static_cast<int>(RandFloat() * 9600.f * (1.f - k3 * 0.8f));
         }
 
         // Complement crossfade
