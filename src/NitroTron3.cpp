@@ -486,12 +486,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
       }
 
-      // --- Cyclic event trigger: fixed interval, no randomness ---
+      // --- Probability-based event trigger ---
       bool any_active = stutter_voices[0].active || stutter_voices[1].active;
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
-          && !stutter_engaged && !any_active) {
-        grain_timer--;
-        if (grain_timer <= 0) {
+          && !stutter_engaged && !any_active
+          && RandFloat() < stutter_prob) {
           // DEBUG step: random chunk length, fixed 3 reps, forward
           float rand_scale = 0.6f + RandFloat() * 0.8f;  // ±40%
           size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
@@ -508,8 +507,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
           stutter_reps_left--;
           stutter_next_armed = true;
           stutter_engaged = true;
-          grain_timer = 24000;  // ~500 ms until next event
-        }
       }
 
       // --- Overlap trigger: fire next voice during current voice's tail taper ---
