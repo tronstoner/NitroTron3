@@ -57,7 +57,7 @@ size_t stutter_buf_filled = 0;
 // cosine taper at edges (TAPER_LEN samples ≈ 5 ms).  Two voices ping-pong
 // with short overlap at the taper region for click-free crossfade.
 struct StutterVoice {
-    static constexpr size_t MIN_TAPER = 144;  // 3 ms at 48 kHz
+    static constexpr size_t MIN_TAPER = 48;   // 1 ms at 48 kHz (matches grain mode)
     static constexpr size_t MAX_TAPER = 240;  // 5 ms at 48 kHz
 
     size_t start;      // start position in stutter_buf (circular)
