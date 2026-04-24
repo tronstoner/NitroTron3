@@ -48,7 +48,7 @@ float prev_wet = 0.f;         // previous sample's wet output for feedback injec
 
 // Direct-texture mode: stutter capture buffer
 static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
-static constexpr size_t STUTTER_MIN_LOOP = 960;    // 20 ms min slice
+static constexpr size_t STUTTER_MIN_LOOP = 2400;   // 50 ms min slice
 float stutter_buf[STUTTER_BUF_SIZE] = {};
 size_t stutter_write_pos = 0;
 size_t stutter_buf_filled = 0;
@@ -57,13 +57,11 @@ size_t stutter_buf_filled = 0;
 // cosine taper at edges (TAPER_LEN samples ≈ 5 ms).  Two voices ping-pong
 // with short overlap at the taper region for click-free crossfade.
 struct StutterVoice {
-    static constexpr size_t MIN_TAPER = 96;   // 2 ms at 48 kHz
-    static constexpr size_t MAX_TAPER = 240;  // 5 ms at 48 kHz
+    static constexpr size_t TAPER_LEN = 240;  // 5 ms at 48 kHz
 
     size_t start;      // start position in stutter_buf (circular)
     size_t length;     // slice length in samples
     size_t phase;      // current sample within slice
-    size_t taper;      // computed at trigger: adaptive taper length
     bool   reverse;    // playback direction (latched at trigger)
     bool   active;
     float  window;     // current window value — exposed for complement crossfade
@@ -75,18 +73,14 @@ struct StutterVoice {
         reverse = rev;
         active = true;
         window = 0.f;
-        // Adaptive taper: 20% of half-length, clamped to 3–5 ms.
-        // Short chunks get short tapers → mostly flat, harsh but not clicking.
-        taper = static_cast<size_t>(static_cast<float>(len) * 0.1f);
-        if (taper < MIN_TAPER) taper = MIN_TAPER;
-        if (taper > MAX_TAPER) taper = MAX_TAPER;
-        if (taper > length / 2) taper = length / 2;
     }
 
     float Process(const float* buf, size_t buf_size) {
         if (!active) { window = 0.f; return 0.f; }
 
         // Tukey window: cosine taper at edges, flat (1.0) in the middle
+        size_t taper = TAPER_LEN;
+        if (taper > length / 2) taper = length / 2;
 
         if (phase < taper) {
             float t = static_cast<float>(phase) / static_cast<float>(taper);
@@ -121,8 +115,6 @@ bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
 size_t stutter_cutout_phase = 0;   // current sample within cut-out
 size_t stutter_cutout_len = 0;     // total cut-out duration in samples
 size_t stutter_fresh = 0;          // samples written since last event ended
-int    stutter_timer = 0;          // countdown to next event
-int    stutter_burst_left = 0;     // remaining events in current burst (0 = normal)
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -414,19 +406,13 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   if (base_interval < 32) base_interval = 32;
 
   // Stutter params (only used when direct_texture)
-  // Base chunk: 200 ms at CCW → 20 ms at CW, squared curve so shorter
-  // chunks arrive earlier in the K3 range (nudge toward fast/glitchy)
-  float k3sq = k3 * k3;
+  // Base chunk: 200 ms at CCW → 50 ms at CW (randomized ±40% per event)
   float stutter_base_chunk = static_cast<float>(STUTTER_BUF_SIZE) -
-      k3sq * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
-  // Event scheduling: exponential intervals (Poisson-like).
-  // Base rate scales with K3. Exponential distribution gives natural
-  // clustering — sometimes rapid-fire, sometimes long gaps.
-  // Burst probability scales with K3: clusters of short glitchy events.
-  float stutter_mean_interval = 38400.f - k3 * 36480.f;  // 800 ms → 40 ms
-  float burst_chance = k3 * 0.4f;  // 0% at CCW, 40% at CW
-  // Reverse probability: 0% at low k3, up to 80% at full CW
-  float reverse_chance = k3 * 0.8f;
+      k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
+  // Event probability per sample: quadratic, erratic at full CW (~every 30 ms)
+  float stutter_prob = k3 * k3 * (1.f / 1440.f);
+  // Reverse probability: 0% at low k3, up to 60% at full CW
+  float reverse_chance = k3 * 0.6f;
   // Cut-out probability: 0% at low k3, up to 40% at full CW
   float cutout_chance = k3 * 0.4f;
 
@@ -498,11 +484,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Two-voice Tukey-windowed stutter with probability-based events.
       // Repeats use voice engine; cut-outs use dedicated cosine envelope.
 
-      // Write to capture buffer.  Freeze during:
-      //  - active repeat events (stutter_engaged)
-      //  - burst gaps (burst_left > 0, keeps buffer consistent across burst)
-      // Allow writes during cut-outs (they don't read from buffer).
-      if ((!stutter_engaged && stutter_burst_left <= 0) || stutter_is_cutout) {
+      // Write to capture buffer (freeze during repeat events, not cut-outs)
+      if (!stutter_engaged || stutter_is_cutout) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
         if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
@@ -510,20 +493,16 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         stutter_fresh++;
       }
 
-      // --- Uncertainty machine event trigger ---
-      // Timer counts down. When it fires, schedule the next event with
-      // base interval ± jitter.  K3 controls both rate and chaos.
-      // Also require enough fresh audio to fill the worst-case chunk.
-      size_t min_fresh = static_cast<size_t>(stutter_base_chunk * 1.4f);
+      // --- Probability-based event trigger ---
+      // Require enough fresh audio to fill the chunk — prevents stale/fresh
+      // seam in the capture region when events fire in quick succession.
+      size_t min_fresh = static_cast<size_t>(stutter_base_chunk * 1.4f);  // worst-case chunk
       if (min_fresh > STUTTER_BUF_SIZE) min_fresh = STUTTER_BUF_SIZE;
       bool any_active = stutter_voices[0].active || stutter_voices[1].active;
-      if (!stutter_engaged && !any_active && !stutter_is_cutout) {
-        stutter_timer--;
-      }
-      bool fresh_ok = (stutter_fresh >= min_fresh) || (stutter_burst_left > 0);
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
           && !stutter_engaged && !any_active && !stutter_is_cutout
-          && fresh_ok && stutter_timer <= 0) {
+          && stutter_fresh >= min_fresh
+          && RandFloat() < stutter_prob) {
 
           if (RandFloat() < cutout_chance) {
             // Cut-out: dedicated cosine envelope, no voice triggered
@@ -532,20 +511,10 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             stutter_cutout_phase = 0;
             stutter_engaged = true;
           } else {
+            // Repeat: randomize chunk length ±40%
             stutter_is_cutout = false;
-            size_t chunk;
-            if (stutter_burst_left > 0) {
-              // Burst: short chunks with varied lengths for glitchy cluster
-              chunk = STUTTER_MIN_LOOP +
-                  static_cast<size_t>(RandFloat() * static_cast<float>(STUTTER_MIN_LOOP * 3));
-              stutter_burst_left--;
-            } else {
-              // Normal: chunk spread scales with K3
-              float spread = 0.4f + k3 * 1.6f;
-              float rand_scale = (1.f - spread) + RandFloat() * spread * 2.f;
-              if (rand_scale < 0.1f) rand_scale = 0.1f;
-              chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
-            }
+            float rand_scale = 0.6f + RandFloat() * 0.8f;
+            size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
             if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
             if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
             stutter_snap_len = chunk;
@@ -565,7 +534,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
       if (stutter_is_cutout && stutter_engaged) {
         // --- Cut-out: cosine envelope ducks dry, no voices involved ---
-        size_t taper = StutterVoice::MAX_TAPER;
+        size_t taper = StutterVoice::TAPER_LEN;
         if (taper > stutter_cutout_len / 2) taper = stutter_cutout_len / 2;
 
         float duck;
@@ -588,15 +557,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (stutter_cutout_phase >= stutter_cutout_len) {
           stutter_is_cutout = false;
           stutter_engaged = false;
-          // Exponential interval (Poisson): -ln(rand) * mean
-          float r = RandFloat();
-          if (r < 0.001f) r = 0.001f;  // avoid log(0)
-          stutter_timer = static_cast<int>(-logf(r) * stutter_mean_interval);
-          if (stutter_timer < 32) stutter_timer = 32;
-          // Maybe start a burst
-          if (stutter_burst_left <= 0 && RandFloat() < burst_chance) {
-            stutter_burst_left = 2 + static_cast<int>(RandFloat() * 3.f);  // 2–4 events
-          }
         }
       } else {
         // --- Repeat path: two-voice Tukey crossfade ---
@@ -608,7 +568,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
           StutterVoice& nxt = stutter_voices[next_idx];
 
           if (stutter_next_armed && cur.active
-              && cur.phase >= cur.length - cur.taper && !nxt.active) {
+              && cur.phase >= cur.length - StutterVoice::TAPER_LEN && !nxt.active) {
             if (stutter_reps_left > 0) {
               nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
               stutter_active_idx = next_idx;
@@ -631,20 +591,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         // Event ends when all voices finish
         if (stutter_engaged && !stutter_voices[0].active && !stutter_voices[1].active) {
           stutter_engaged = false;
-          if (stutter_burst_left > 0) {
-            // In burst: tiny gap between events (10–30 ms)
-            stutter_timer = 480 + static_cast<int>(RandFloat() * 960.f);
-          } else {
-            // Normal: exponential interval (Poisson)
-            float r = RandFloat();
-            if (r < 0.001f) r = 0.001f;
-            stutter_timer = static_cast<int>(-logf(r) * stutter_mean_interval);
-            if (stutter_timer < 32) stutter_timer = 32;
-            // Maybe start a burst
-            if (RandFloat() < burst_chance) {
-              stutter_burst_left = 2 + static_cast<int>(RandFloat() * 3.f);
-            }
-          }
         }
 
         // Complement crossfade
