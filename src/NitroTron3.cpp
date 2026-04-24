@@ -46,22 +46,23 @@ static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 // Feedback state
 float prev_wet = 0.f;         // previous sample's wet output for feedback injection
 
-// Direct-texture mode: stutter
+// Direct-texture mode: stutter capture buffer
 static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
 static constexpr size_t STUTTER_MIN_LOOP = 2400;   // 50 ms min slice
 float stutter_buf[STUTTER_BUF_SIZE] = {};
 size_t stutter_write_pos = 0;
 size_t stutter_buf_filled = 0;
-bool   stutter_writing = true;     // false = writes frozen during stutter
 
-// Stutter voice: Hann-windowed slice playback
+// Stutter voice: Hann-windowed single-play slice. Two voices ping-pong
+// for click-free crossfade.  Each voice plays the chunk once; the event
+// controller manages repetition by re-triggering voices.
 struct StutterVoice {
     size_t start;      // start position in stutter_buf (circular)
     size_t length;     // slice length in samples
     size_t phase;      // current sample within slice
-    bool   reverse;    // playback direction (latched at start)
-    bool   active;     // currently playing
-    float  window;     // current Hann window value (exposed for dry ducking)
+    bool   reverse;    // playback direction (latched at trigger)
+    bool   active;
+    float  window;     // current Hann value — exposed for complement crossfade
 
     void Trigger(size_t s, size_t len, bool rev) {
         start = s;
@@ -75,11 +76,9 @@ struct StutterVoice {
     float Process(const float* buf, size_t buf_size) {
         if (!active) { window = 0.f; return 0.f; }
 
-        // Hann window: both value AND slope are zero at endpoints
         float t = static_cast<float>(phase) / static_cast<float>(length);
         window = 0.5f * (1.f - cosf(3.14159265f * 2.f * t));
 
-        // Read from circular buffer
         size_t offset = reverse ? (length - 1 - phase) : phase;
         size_t idx = (start + offset) % buf_size;
         float sample = buf[idx];
@@ -92,10 +91,13 @@ struct StutterVoice {
 };
 
 StutterVoice stutter_voices[2];
-int stutter_active_idx = 0;        // which voice was last triggered
-bool stutter_engaged = false;      // true during an active stutter event
-size_t stutter_snap_start = 0;     // latched start position for current event
-int stutter_reps_left = 0;         // remaining voice triggers in current event
+int  stutter_active_idx = 0;       // which voice is "current"
+bool stutter_engaged = false;      // true while a stutter event is playing
+bool stutter_next_armed = false;   // false once midpoint trigger has fired
+int  stutter_reps_left = 0;        // remaining reps in current event
+size_t stutter_snap_start = 0;     // latched start position
+size_t stutter_snap_len = 0;       // latched chunk length
+bool   stutter_snap_rev = false;   // latched reverse flag
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -387,13 +389,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   if (base_interval < 32) base_interval = 32;
 
   // Stutter params (only used when direct_texture)
-  // Base chunk: 200 ms at CCW → 50 ms at CW (randomized ±40% per event at trigger time)
+  // Base chunk: 200 ms at CCW → 50 ms at CW (randomized ±40% per event)
   float stutter_base_chunk = static_cast<float>(STUTTER_BUF_SIZE) -
       k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
   // Event probability per sample: quadratic, erratic at full CW (~every 30 ms)
   float stutter_prob = k3 * k3 * (1.f / 1440.f);
-  // Cut-out probability: 0% at low k3, up to 40% at full CW
-  float cutout_chance = k3 * 0.4f;
   // Reverse probability: 0% at low k3, up to 60% at full CW
   float reverse_chance = k3 * 0.6f;
 
@@ -462,12 +462,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float wet;
 
     if (direct_texture) {
-      // Step 2: two-voice Hann crossfade. Voices overlap at the midpoint
-      // so the sum is always ~1.0. No hard switch from/to dry.
-      // Still fixed params, no randomness for diagnostic.
+      // Two-voice Hann crossfade stutter with random events, reverse.
+      // Voices ping-pong: voice B starts at voice A's midpoint for
+      // seamless overlap.  Parameters latched per-event.
 
-      // Write to capture buffer when not engaged
-      bool any_active = stutter_voices[0].active || stutter_voices[1].active;
+      // Write to capture buffer when not stuttering (freeze during event)
       if (!stutter_engaged) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
@@ -475,54 +474,65 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
       }
 
-      // Trigger logic
-      StutterVoice& cur = stutter_voices[stutter_active_idx];
-      int next_idx = 1 - stutter_active_idx;
-      StutterVoice& nxt = stutter_voices[next_idx];
+      // --- Event trigger (probability-based) ---
+      bool any_active = stutter_voices[0].active || stutter_voices[1].active;
+      if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
+          && !stutter_engaged && !any_active
+          && RandFloat() < stutter_prob) {
+        // Latch params for entire event
+        float rand_scale = 0.6f + RandFloat() * 0.8f;  // ±40%
+        size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+        if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
+        if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
+        stutter_snap_len = chunk;
+        stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - chunk)
+                             % STUTTER_BUF_SIZE;
+        stutter_snap_rev = (RandFloat() < reverse_chance);
+        stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
 
-      if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE) {
-        if (!stutter_engaged && !any_active) {
-          // Start new event: latch chunk length, start position, reps
-          size_t slen = static_cast<size_t>(stutter_base_chunk);
-          if (slen > STUTTER_BUF_SIZE) slen = STUTTER_BUF_SIZE;
-          if (slen < STUTTER_MIN_LOOP) slen = STUTTER_MIN_LOOP;
-          stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
-          stutter_reps_left = 3;  // fixed 3 reps for testing
-          cur.Trigger(stutter_snap_start, slen, false);
-          stutter_reps_left--;
-          stutter_engaged = true;
-        } else if (stutter_engaged && cur.active && cur.phase == cur.length / 2 && !nxt.active) {
+        // First voice
+        stutter_active_idx = 0;
+        stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
+        stutter_reps_left--;
+        stutter_next_armed = true;
+        stutter_engaged = true;
+      }
+
+      // --- Midpoint crossfade trigger ---
+      if (stutter_engaged) {
+        StutterVoice& cur = stutter_voices[stutter_active_idx];
+        int next_idx = 1 - stutter_active_idx;
+        StutterVoice& nxt = stutter_voices[next_idx];
+
+        if (stutter_next_armed && cur.active
+            && cur.phase >= cur.length / 2 && !nxt.active) {
           if (stutter_reps_left > 0) {
-            // Midpoint: start next voice on SAME chunk
-            nxt.Trigger(stutter_snap_start, cur.length, false);
+            nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
             stutter_active_idx = next_idx;
             stutter_reps_left--;
+            stutter_next_armed = true;  // arm for this new voice's midpoint
+          } else {
+            stutter_next_armed = false; // last rep, let it finish naturally
           }
-          // else: no more reps, let current voice finish naturally
         }
       }
 
-      // Event ends when all voices finish
-      if (stutter_engaged && !any_active) {
-        stutter_engaged = false;
-        // Timer for next event: ~500 ms gap (24000 samples)
-        grain_timer = 24000;
-      }
-
-      // Periodic re-trigger when not engaged
-      if (!stutter_engaged && k3 > 0.01f) {
-        grain_timer--;
-        // grain_timer counts down to next event
-      }
-
-      // Sum both voices
+      // Process both voices
       float v0 = stutter_voices[0].Process(stutter_buf, STUTTER_BUF_SIZE);
       float v1 = stutter_voices[1].Process(stutter_buf, STUTTER_BUF_SIZE);
       float voice_sum = v0 + v1;
 
-      // During events: voice sum only. Between events: dry.
-      wet = (stutter_voices[0].active || stutter_voices[1].active)
-          ? voice_sum : dry;
+      // Combined window for complement crossfade (clamped to 1.0)
+      float w = stutter_voices[0].window + stutter_voices[1].window;
+      if (w > 1.f) w = 1.f;
+
+      // Event ends when all voices finish
+      if (stutter_engaged && !stutter_voices[0].active && !stutter_voices[1].active) {
+        stutter_engaged = false;
+      }
+
+      // Complement crossfade: smooth in and out, never a hard switch
+      wet = dry * (1.f - w) + voice_sum;
 
     } else {
 
