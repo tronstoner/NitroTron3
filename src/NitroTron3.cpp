@@ -112,6 +112,8 @@ size_t stutter_snap_start = 0;     // latched start position
 size_t stutter_snap_len = 0;       // latched chunk length
 bool   stutter_snap_rev = false;   // latched reverse flag
 bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
+size_t stutter_cutout_phase = 0;   // current sample within cut-out
+size_t stutter_cutout_len = 0;     // total cut-out duration in samples
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -479,7 +481,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
     if (direct_texture) {
       // Two-voice Tukey-windowed stutter with probability-based events.
-      // Params latched per-event. 5 ms cosine taper, overlap at tail.
+      // Repeats use voice engine; cut-outs use dedicated cosine envelope.
 
       // Write to capture buffer (freeze during repeat events, not cut-outs)
       if (!stutter_engaged || stutter_is_cutout) {
@@ -492,18 +494,18 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // --- Probability-based event trigger ---
       bool any_active = stutter_voices[0].active || stutter_voices[1].active;
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
-          && !stutter_engaged && !any_active
+          && !stutter_engaged && !any_active && !stutter_is_cutout
           && RandFloat() < stutter_prob) {
-          stutter_is_cutout = (RandFloat() < cutout_chance);
 
-          if (stutter_is_cutout) {
-            // Cut-out: short silence, 10–50 ms, single rep
-            stutter_snap_len = 480 + static_cast<size_t>(RandFloat() * 1920.f);
-            stutter_snap_start = 0;  // doesn't matter, output is zeroed
-            stutter_snap_rev = false;
-            stutter_reps_left = 1;
+          if (RandFloat() < cutout_chance) {
+            // Cut-out: dedicated cosine envelope, no voice triggered
+            stutter_is_cutout = true;
+            stutter_cutout_len = 480 + static_cast<size_t>(RandFloat() * 1920.f);
+            stutter_cutout_phase = 0;
+            stutter_engaged = true;
           } else {
             // Repeat: randomize chunk length ±40%
+            stutter_is_cutout = false;
             float rand_scale = 0.6f + RandFloat() * 0.8f;
             size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
             if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
@@ -513,51 +515,79 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                                  % STUTTER_BUF_SIZE;
             stutter_snap_rev = (RandFloat() < reverse_chance);
             stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
-          }
 
-          stutter_active_idx = 0;
-          stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
-          stutter_reps_left--;
-          stutter_next_armed = true;
-          stutter_engaged = true;
-      }
-
-      // --- Overlap trigger: fire next voice during current voice's tail taper ---
-      if (stutter_engaged) {
-        StutterVoice& cur = stutter_voices[stutter_active_idx];
-        int next_idx = 1 - stutter_active_idx;
-        StutterVoice& nxt = stutter_voices[next_idx];
-
-        if (stutter_next_armed && cur.active
-            && cur.phase >= cur.length - StutterVoice::TAPER_LEN && !nxt.active) {
-          if (stutter_reps_left > 0) {
-            nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
-            stutter_active_idx = next_idx;
+            stutter_active_idx = 0;
+            stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
             stutter_reps_left--;
             stutter_next_armed = true;
-          } else {
-            stutter_next_armed = false;
+            stutter_engaged = true;
+          }
+      }
+
+      if (stutter_is_cutout && stutter_engaged) {
+        // --- Cut-out: cosine envelope ducks dry, no voices involved ---
+        size_t taper = StutterVoice::TAPER_LEN;
+        if (taper > stutter_cutout_len / 2) taper = stutter_cutout_len / 2;
+
+        float duck;
+        if (stutter_cutout_phase < taper) {
+          // Fade out dry
+          float t = static_cast<float>(stutter_cutout_phase) / static_cast<float>(taper);
+          duck = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else if (stutter_cutout_phase >= stutter_cutout_len - taper) {
+          // Fade in dry
+          float t = static_cast<float>(stutter_cutout_len - 1 - stutter_cutout_phase)
+                    / static_cast<float>(taper);
+          duck = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else {
+          duck = 1.f;  // full silence
+        }
+
+        wet = dry * (1.f - duck);
+
+        stutter_cutout_phase++;
+        if (stutter_cutout_phase >= stutter_cutout_len) {
+          stutter_is_cutout = false;
+          stutter_engaged = false;
+        }
+      } else {
+        // --- Repeat path: two-voice Tukey crossfade ---
+
+        // Overlap trigger: fire next voice during current voice's tail taper
+        if (stutter_engaged) {
+          StutterVoice& cur = stutter_voices[stutter_active_idx];
+          int next_idx = 1 - stutter_active_idx;
+          StutterVoice& nxt = stutter_voices[next_idx];
+
+          if (stutter_next_armed && cur.active
+              && cur.phase >= cur.length - StutterVoice::TAPER_LEN && !nxt.active) {
+            if (stutter_reps_left > 0) {
+              nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
+              stutter_active_idx = next_idx;
+              stutter_reps_left--;
+              stutter_next_armed = true;
+            } else {
+              stutter_next_armed = false;
+            }
           }
         }
+
+        // Process both voices
+        float v0 = stutter_voices[0].Process(stutter_buf, STUTTER_BUF_SIZE);
+        float v1 = stutter_voices[1].Process(stutter_buf, STUTTER_BUF_SIZE);
+
+        // Combined window for complement crossfade (clamped to 1.0)
+        float w = stutter_voices[0].window + stutter_voices[1].window;
+        if (w > 1.f) w = 1.f;
+
+        // Event ends when all voices finish
+        if (stutter_engaged && !stutter_voices[0].active && !stutter_voices[1].active) {
+          stutter_engaged = false;
+        }
+
+        // Complement crossfade
+        wet = dry * (1.f - w) + v0 + v1;
       }
-
-      // Process both voices
-      float v0 = stutter_voices[0].Process(stutter_buf, STUTTER_BUF_SIZE);
-      float v1 = stutter_voices[1].Process(stutter_buf, STUTTER_BUF_SIZE);
-
-      // Combined window for complement crossfade (clamped to 1.0)
-      float w = stutter_voices[0].window + stutter_voices[1].window;
-      if (w > 1.f) w = 1.f;
-
-      // Event ends when all voices finish
-      if (stutter_engaged && !stutter_voices[0].active && !stutter_voices[1].active) {
-        stutter_engaged = false;
-      }
-
-      // Complement crossfade: cut-outs duck dry to silence,
-      // repeats replace dry with stutter voice output.
-      float voice_sum = stutter_is_cutout ? 0.f : (v0 + v1);
-      wet = dry * (1.f - w) + voice_sum;
 
     } else {
 
