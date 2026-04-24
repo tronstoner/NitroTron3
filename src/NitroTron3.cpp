@@ -53,16 +53,18 @@ float stutter_buf[STUTTER_BUF_SIZE] = {};
 size_t stutter_write_pos = 0;
 size_t stutter_buf_filled = 0;
 
-// Stutter voice: Hann-windowed single-play slice. Two voices ping-pong
-// for click-free crossfade.  Each voice plays the chunk once; the event
-// controller manages repetition by re-triggering voices.
+// Stutter voice: Tukey-windowed single-play slice.  Flat in the middle,
+// cosine taper at edges (TAPER_LEN samples ≈ 5 ms).  Two voices ping-pong
+// with short overlap at the taper region for click-free crossfade.
 struct StutterVoice {
+    static constexpr size_t TAPER_LEN = 240;  // 5 ms at 48 kHz
+
     size_t start;      // start position in stutter_buf (circular)
     size_t length;     // slice length in samples
     size_t phase;      // current sample within slice
     bool   reverse;    // playback direction (latched at trigger)
     bool   active;
-    float  window;     // current Hann value — exposed for complement crossfade
+    float  window;     // current window value — exposed for complement crossfade
 
     void Trigger(size_t s, size_t len, bool rev) {
         start = s;
@@ -76,8 +78,19 @@ struct StutterVoice {
     float Process(const float* buf, size_t buf_size) {
         if (!active) { window = 0.f; return 0.f; }
 
-        float t = static_cast<float>(phase) / static_cast<float>(length);
-        window = 0.5f * (1.f - cosf(3.14159265f * 2.f * t));
+        // Tukey window: cosine taper at edges, flat (1.0) in the middle
+        size_t taper = TAPER_LEN;
+        if (taper > length / 2) taper = length / 2;
+
+        if (phase < taper) {
+            float t = static_cast<float>(phase) / static_cast<float>(taper);
+            window = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else if (phase >= length - taper) {
+            float t = static_cast<float>(length - 1 - phase) / static_cast<float>(taper);
+            window = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else {
+            window = 1.f;
+        }
 
         size_t offset = reverse ? (length - 1 - phase) : phase;
         size_t idx = (start + offset) % buf_size;
@@ -498,14 +511,14 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         stutter_engaged = true;
       }
 
-      // --- Midpoint crossfade trigger ---
+      // --- Overlap trigger: fire next voice during current voice's tail taper ---
       if (stutter_engaged) {
         StutterVoice& cur = stutter_voices[stutter_active_idx];
         int next_idx = 1 - stutter_active_idx;
         StutterVoice& nxt = stutter_voices[next_idx];
 
         if (stutter_next_armed && cur.active
-            && cur.phase >= cur.length / 2 && !nxt.active) {
+            && cur.phase >= cur.length - StutterVoice::TAPER_LEN && !nxt.active) {
           if (stutter_reps_left > 0) {
             nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
             stutter_active_idx = next_idx;
