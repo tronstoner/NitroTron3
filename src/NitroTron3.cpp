@@ -57,11 +57,13 @@ size_t stutter_buf_filled = 0;
 // cosine taper at edges (TAPER_LEN samples ≈ 5 ms).  Two voices ping-pong
 // with short overlap at the taper region for click-free crossfade.
 struct StutterVoice {
-    static constexpr size_t TAPER_LEN = 240;  // 5 ms at 48 kHz
+    static constexpr size_t MIN_TAPER = 144;  // 3 ms at 48 kHz
+    static constexpr size_t MAX_TAPER = 240;  // 5 ms at 48 kHz
 
     size_t start;      // start position in stutter_buf (circular)
     size_t length;     // slice length in samples
     size_t phase;      // current sample within slice
+    size_t taper;      // computed at trigger: adaptive taper length
     bool   reverse;    // playback direction (latched at trigger)
     bool   active;
     float  window;     // current window value — exposed for complement crossfade
@@ -73,14 +75,18 @@ struct StutterVoice {
         reverse = rev;
         active = true;
         window = 0.f;
+        // Adaptive taper: 20% of half-length, clamped to 3–5 ms.
+        // Short chunks get short tapers → mostly flat, harsh but not clicking.
+        taper = static_cast<size_t>(static_cast<float>(len) * 0.1f);
+        if (taper < MIN_TAPER) taper = MIN_TAPER;
+        if (taper > MAX_TAPER) taper = MAX_TAPER;
+        if (taper > length / 2) taper = length / 2;
     }
 
     float Process(const float* buf, size_t buf_size) {
         if (!active) { window = 0.f; return 0.f; }
 
         // Tukey window: cosine taper at edges, flat (1.0) in the middle
-        size_t taper = TAPER_LEN;
-        if (taper > length / 2) taper = length / 2;
 
         if (phase < taper) {
             float t = static_cast<float>(phase) / static_cast<float>(taper);
@@ -568,7 +574,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
           StutterVoice& nxt = stutter_voices[next_idx];
 
           if (stutter_next_armed && cur.active
-              && cur.phase >= cur.length - StutterVoice::TAPER_LEN && !nxt.active) {
+              && cur.phase >= cur.length - cur.taper && !nxt.active) {
             if (stutter_reps_left > 0) {
               nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
               stutter_active_idx = next_idx;
