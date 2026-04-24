@@ -233,7 +233,8 @@ On boot, the pedal restores the last active mode and each mode's full state (edi
 - **Knob remap** — DONE. Measured physical range 0.000–0.968, calibrated `RemapKnob()` with named constants.
 - **Preset system** — DONE. FS1 preset navigation (edit buffer + 8 presets per mode), Roman numeral LED blink encoding (I/V patterns), save mode via FS2 long press + confirm. Dirty tracking, flash persistence via `PersistentStorage`, mode switching saves/restores per-mode state. Auto-save every ~30 s. Bootloader via FS1 held 2 s (Phase 1; Phase 2 will add FS1+FS2 dual-hold). Implementation plan in `docs/PRESET_IMPL.md`.
 - **Stage 6** — DONE. Multi-mode scaffold: Switch 3 dispatches `ProcessDrone()` / `ProcessGranular()` / `ProcessFreqShift()`. Modes B and C are dry passthrough stubs. Bypass handled once in `AudioCallback`, mode functions only run when active. Pitch tracker conditional on Mode A.
-- **Next** — Mode B (Granular Glitch) implementation per `MODE_B_GRANULAR.md`. FS1+FS2 dual-hold bootloader (Phase 2 after flash test). Pitch tracking improvements (Phase 3–4 in `PITCH_TRACKING.md`) deferred — current tracking is good enough for now.
+- **Mode B** — IN PROGRESS. Granular engine working: ring buffer (8 s SDRAM), grain scheduler, 8 voices, Hann windowing, pitch-tracked harmony (fixed interval + resonance modes), texture shaper (decimator/wavefolder bipolar on SW1 UP, clean on MID, ringmod on DOWN), wet HPF 150 Hz, equal-power mix. Knob layout: K1=interval, K2=buffer range, K3=character/glitch (merged, splittable), K4=texture amount, K5=feedback (unipolar, 0.95 ceiling, wet→ring buffer injection), K6=mix.
+- **Next** — Mode B direct-texture mode (K2 fully CCW bypasses grain engine, routes input through texture shaper, K3 becomes micro-stutter). Feedback path constraints (filtering/coloring) by ear. FS1+FS2 dual-hold bootloader (Phase 2 after flash test). Pitch tracking improvements deferred.
 
 ## Staged Development Timeline
 
@@ -265,7 +266,7 @@ Drill Hammond 125B to Hothouse template. Finish and label.
 
 ### Deferred
 - **Tuning mode** — USB serial workflow needs a fix (freezes on terminal connect). Will revisit after core effect is playable.
-- **Mode B** — Granular Glitch: specced in `MODE_B_GRANULAR.md`, implementation deferred
+- **Mode B direct-texture mode** — K2 fully CCW bypasses grain engine, K3 becomes micro-stutter. Planned, not yet implemented.
 - **Mode C** — Frequency Shifter: spec + implement
 
 ---

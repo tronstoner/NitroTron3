@@ -43,6 +43,9 @@ float        grain_env = 0.f;        // envelope value for grain amplitude
 
 static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 
+// Feedback state
+float prev_wet = 0.f;         // previous sample's wet output for feedback injection
+
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
 float decim_count = 0.f;      // decimator sample counter
@@ -307,16 +310,24 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // K1: interval (±24 semi, centered with dead zone)
   float k1 = RemapKnob(eb.knobs[0]);
 
-  // K2: grain character — CCW = soft/long (200 ms, single pass),
-  //                        CW = short/sharp (20 ms) with stutter loops
+  // K2: buffer range — CCW = tight (100 ms, recent audio only),
+  //                     CW = deep (full 8 s, long trails)
   float k2 = RemapKnob(eb.knobs[1]);
-  size_t grain_len = static_cast<size_t>(9600.f - k2 * (9600.f - 960.f));
-  if (grain_len < 64) grain_len = 64;
-  int max_loops = 1 + static_cast<int>(k2 * 7.f);  // 1 to 8
+  size_t max_range = GRAIN_MIN_RANGE +
+      static_cast<size_t>(k2 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_MIN_RANGE));
 
-  // K3: texture → glitch continuum
+  // K3: grain character + glitch (merged)
+  // CCW = soft/long/tight, CW = short/sharp/chaotic
+  // Split into two derived values so this can become two knobs again later.
   float k3 = RemapKnob(eb.knobs[2]);
-  float overlap = 4.f - k3 * 3.f;
+  float grain_character = k3;   // 0 = long/soft, 1 = short/sharp
+  float glitch_amount   = k3;   // 0 = tight/repeatable, 1 = chaotic
+
+  size_t grain_len = static_cast<size_t>(9600.f - grain_character * (9600.f - 960.f));
+  if (grain_len < 64) grain_len = 64;
+  int max_loops = 1 + static_cast<int>(grain_character * 7.f);  // 1 to 8
+
+  float overlap = 4.f - glitch_amount * 3.f;
   size_t base_interval = static_cast<size_t>(
       static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
@@ -357,11 +368,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float fold_amt  = (k4 > 0.5f) ? ((k4 - 0.5f) / 0.5f) : 0.f; // 0 at noon, 1 at CW
   float decim_rate = 1.f + decim_amt * 19.f;  // 1 (clean at noon) to 20 (max crush at CCW)
 
-  // K5: buffer range — CCW = tight (100 ms, recent audio only),
-  //                     CW = deep (full 8 s, long trails)
-  float k5 = RemapKnob(eb.knobs[4]);
-  size_t max_range = GRAIN_MIN_RANGE +
-      static_cast<size_t>(k5 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_MIN_RANGE));
+  // K5: feedback — 0 = none, CW = max (0.95 ceiling)
+  float feedback_amt = RemapKnob(eb.knobs[4]) * 0.95f;
+
   // Base delay scales with range, floored at grain length
   size_t base_delay = max_range / 8;
   if (base_delay < grain_len) base_delay = grain_len;
@@ -381,19 +390,19 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // Feed pitch tracker
     tracker.Feed(dry, grain_env);
 
-    // Write input into ring buffer (no feedback)
-    grain_ring.Write(dry);
+    // Write input + feedback into ring buffer
+    grain_ring.Write(dry + prev_wet * feedback_amt);
 
     // Scheduler: continuous stream, K3 adds chaos
     grain_timer--;
     if (grain_timer <= 0) {
       // Delay: base offset + scatter within K5 range
       size_t scatter_range = max_range - base_delay;
-      size_t pos_offset = static_cast<size_t>(RandFloat() * k3 * static_cast<float>(scatter_range));
+      size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
       size_t delay = base_delay + pos_offset;
       if (delay > max_range) delay = max_range;
 
-      bool reverse = (k3 > 0.1f) && (RandFloat() < k3 * 0.6f);
+      bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
 
       float pitch_ratio = GrainPitchRatio(harmony, k1);
       float comp = 1.f / sqrtf(pitch_ratio);
@@ -416,7 +425,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
       }
 
-      float jitter = (RandFloat() * 2.f - 1.f) * k3 * 0.8f;
+      float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;
       grain_timer = static_cast<int>(
           static_cast<float>(base_interval) * (1.f + jitter));
       if (grain_timer < 32) grain_timer = 32;
@@ -475,6 +484,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float hp1 = wet - wet_hp_state[0];
     wet_hp_state[1] += (1.f - wet_hp_coeff) * (hp1 - wet_hp_state[1]);
     wet = hp1 - wet_hp_state[1];
+
+    // Store post-HPF wet for next sample's feedback injection
+    prev_wet = wet;
 
     float dry_gain = sqrtf(1.f - mix);
     float wet_gain = sqrtf(mix);

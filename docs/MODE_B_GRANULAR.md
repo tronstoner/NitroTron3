@@ -13,43 +13,28 @@ Inspired by the Chase Bliss Mood pedal's "micro-looper as collaborator" philosop
 ## Signal Chain
 
 ```
-Input ──┬──────────────────────────────────────────► [Mix] ──► Output
+Input ──┬──────────────────────────────────────────► [Mix K6] ──► Output
         │                                               ▲
-        ├──► [EnvFollower] ──► amp / attack / sustain   │
-        │         │                                     │
-        │         └──► [Gesture Bus] ─────┐             │
-        │                                 │             │
-        ├──► [PitchTracker] ──► continuous MIDI ──┐     │
-        │                                         │     │
-        └──► [Ring Buffer, SDRAM, 8s] ◀────┐      │     │
-                  │                        │      │     │
-                  ▼                        │      │     │
-           [Grain Scheduler] ◀─────────────┼──────┘     │
-                  │                        │            │
-                  ▼                        │            │
-           [Grain Voices × N]              │            │
-                  │                        │            │
-                  ▼                        │            │
-           [Shaper Bus] ◀──────────────────┘            │
-                  │    (SW1 selects mode,               │
-                  │     K4 intensity, gesture-driven)   │
-                  ▼                                     │
-             [Wet HPF]                                  │
-                  │                                     │
-                  ├─────────────────────────────────────┘
-                  │
-                  └──► [Feedback Bus] ──► feedback injection
-                         │                      ▲
-                         └─ [Delay] ─ [Ladder] ─┘
-                                       │
-                                    [Wavefold]
+        ├──► [EnvFollower] ──► grain amplitude           │
+        │                                                │
+        ├──► [PitchTracker] ──► harmony logic            │
+        │                                                │
+        └──► [Ring Buffer, SDRAM, 8s] ──► [Grain Scheduler]
+                    ▲                         │
+                    │                   [Grain Voices × 8]
+                    │                         │
+                    │                   [Texture Shaper (SW1/K4)]
+                    │                         │
+                    │                    [Wet HPF 150 Hz]
+                    │                         │
+                    └── [Feedback K5] ◄───────┴──────────┘
 ```
 
-The **Gesture Bus** carries three analysis signals (amp, attack sharpness, sustain) derived from the existing `EnvFollower` — no new analyzers. It feeds both the scheduler (density modulation) and the shaper bus (intensity modulation of the active texture mode).
+When K2 is fully CCW (**direct-texture mode**), the grain engine is bypassed: input routes directly to the texture shaper, and K3 becomes a micro-stutter control. See "Direct-Texture Mode" section below.
 
-The **Shaper Bus** is gesture-reactive tonal shaping. Switch 1 selects one of three modes (decimator / wavefolder / ringmod); K4 sets intensity; the gesture naturally suited to that mode modulates the final amount.
+The **Texture Shaper** applies tonal processing to the wet signal. Switch 1 selects one of three modes (decimator/wavefolder bipolar, clean, ringmod); K4 sets intensity.
 
-The **Feedback Bus** sends shaper-bus output through delay → ladder → wavefolder, then injects it back into the ring buffer's write path — so feedback becomes new grain material. The wavefolder in the feedback bus is always present, independent of Switch 1's texture selection, giving the loop its own consistent nonlinearity.
+**Feedback** is simple: post-HPF wet output scaled by K5 is added to the ring buffer write path. Feedback becomes new grain material.
 
 ---
 
@@ -106,18 +91,13 @@ The gesture modulation has a compile-time depth: at 0.0 the gesture is ignored a
 
 Only the selected mode's processor runs. The other two are bypassed entirely.
 
-### Feedback Bus
+### Feedback
 
-Send from shaper-bus output → delay → ladder filter → wavefolder → inject into ring-buffer write path.
+Simple feedback injection: post-HPF wet output scaled by K5 is added to the ring buffer write path. Feedback becomes new grain material the scheduler can re-scatter.
 
-- **Delay** — fractional delay, around 180 ms default
-- **Ladder** — reuses Mode A's `MoogLadder`, fixed cutoff around 1.2 kHz (darker than the wet)
-- **Wavefolder** — reuses Mode A's fold block, fixed drive
-- **Safety HPF around 100 Hz in the feedback path** — compile-time, non-user-adjustable, non-negotiable for a bass pedal. Without it, sub content accumulates in the loop and the output runs away
-
-**Feedback amount is on K5 (centered).** CCW of noon = negative feedback (phase-inverted injection — tight, de-correlated, no sustain buildup). Noon ±deadzone = off. CW of noon = positive feedback (can sustain into drone near full CW). Ceiling at 0.95 magnitude to keep self-oscillation controllable.
-
-Negative and positive feedback sound genuinely different at low magnitudes — negative feedback de-correlates the loop so each grain's echo partially cancels the next, giving a tighter character. Positive feedback accumulates and sustains. Having both on a single centered knob with a clear "off" detent is the most expressive layout.
+- **K5** — unipolar. CCW = none, CW = max. Ceiling at 0.95 to prevent runaway.
+- The wet HPF (150 Hz) runs before feedback injection, so sub content does not accumulate in the loop.
+- No delay/ladder/wavefolder in the feedback path — may be added later if needed for taming or coloring.
 
 ### Wet HPF
 
@@ -127,6 +107,18 @@ Negative and positive feedback sound genuinely different at low magnitudes — n
 
 Equal-power dry/wet crossfade controlled by K6.
 
+### Direct-Texture Mode (K2 fully CCW)
+
+When K2 is at minimum (below ~2% travel), the grain engine is bypassed entirely. The dry input routes straight through the texture shaper (SW1/K4) and wet HPF. This gives direct access to decimator, wavefolder, and ringmod as standalone effects without any granular delay character.
+
+In this mode:
+- **K1** (interval) is irrelevant — no grains to pitch-shift
+- **K3** becomes a **micro-stutter** control. A small capture buffer (~50 ms) continuously records the input. K3 controls the probability and duration of random stutter events — momentary freezes where the buffer loops a captured chunk. CCW = clean (no stutter), CW = frequent choppy stuttering. This is the "glitch" dimension applied directly to the input rather than to grain scheduling.
+- **K4** (texture amount) and **SW1** (texture mode) work exactly as in grain mode
+- **K5** (feedback) still injects the textured/stuttered signal into the ring buffer — useful because turning K2 back up reveals a buffer pre-loaded with processed material
+
+The transition between direct-texture and grain mode is instantaneous. K2 slightly above the threshold resumes normal grain behavior and K3 reverts to character/glitch.
+
 ---
 
 ## Controls — Normal Mode
@@ -134,10 +126,10 @@ Equal-power dry/wet crossfade controlled by K6.
 | CONTROL | DESCRIPTION | NOTES |
 |---|---|---|
 | KNOB 1 | Interval | **Centered.** Noon = unison. CCW → −24 semi, CW → +24 semi. Interpretation depends on Switch 2 (anchor for Fixed and Scale modes, cloud weighting for Cloud mode) |
-| KNOB 2 | Size / Density | **Centered.** Noon = medium (~100 ms, 10 Hz). CCW = long sparse. CW = short dense. Attack sharpness briefly bumps density at any setting |
-| KNOB 3 | Scatter | Unipolar. CCW = tight/repeatable, CW = chaotic (position jitter, timing jitter, reverse probability scale together) |
+| KNOB 2 | Buffer range | Unipolar. CCW = tight (100 ms, recent audio only). CW = deep (full 8 s, long trails) |
+| KNOB 3 | Character / Glitch | Unipolar. CCW = soft, long, tight grains (200 ms, single pass, high overlap). CW = short, sharp, chaotic (20 ms, stutter loops, scatter, reverse probability). Currently merged from two conceptual parameters (grain character + glitch amount) — may split back to two knobs later |
 | KNOB 4 | Texture amount | Unipolar. 0 = clean, 1 = full effect. Intensity of whichever texture mode Switch 1 selects. Gesture-modulated (attack / amp / sustain depending on mode) |
-| KNOB 5 | Feedback | **Centered.** CCW = negative feedback (tight, de-correlated). Noon ±deadzone = off. CW = positive feedback (can sustain into drone near full CW). Ceiling at ±0.95 |
+| KNOB 5 | Feedback | Unipolar. CCW = none. CW = max (0.95 ceiling). Post-HPF wet output re-injected into ring buffer write path — feedback becomes new grain material |
 | KNOB 6 | Mix | Unipolar. 0 = dry, 1 = wet. Equal-power curve |
 | SWITCH 1 | Texture mode | **UP** - Decimator (attack-driven)<br/>**MIDDLE** - Wavefolder (amp-driven)<br/>**DOWN** - Ringmod (sustain-driven) |
 | SWITCH 2 | Harmony | **UP** - Fixed interval<br/>**MIDDLE** - Scale-quantized random<br/>**DOWN** - Harmonic cloud |
@@ -166,23 +158,29 @@ Equal-power dry/wet crossfade controlled by K6.
 
 **Why each texture mode has its own gesture driver:** decimator is a percussive effect, so attack-driven fits. Ringmod develops character over time, so sustain-driven fits. Wavefolder saturation scales naturally with input level, so amplitude-driven fits. Letting the user choose both mode *and* driver would be a dial-twiddling UX with no clear musical default. One natural pairing per mode is better.
 
-**Why feedback has its own knob (and is centered):** feedback is the single most performative parameter — the difference between "processor that reacts" and "instrument that sings on its own." It needs to be a knob, not a switch. Centered because negative and positive feedback are genuinely different sounds at low magnitudes, and the center detent is a meaningful musical zero.
-
-**Why the wet HPF is baked in:** on bass, sub-frequency accumulation in the wet path muddies everything. This isn't a taste decision, it's a "the pedal sounds bad without it" decision. Keeping it fixed also saves a knob for something that's actually performance-useful.
-
-**Why the feedback bus is its own separate wavefolder:** when the user selects decimator or ringmod on Switch 1, the feedback loop still needs a nonlinearity to keep it musically interesting and to soft-limit runaway. Having the feedback wavefolder be independent of Switch 1 gives the loop a consistent tonal signature across all texture modes.
+**Why feedback is simple and unipolar:** the original spec called for centered bipolar feedback (negative/positive). In practice, negative feedback doesn't produce a useful sonic difference with the current grain architecture — the grains are too short and scattered for phase cancellation to create a distinct "tight" character. Simple unipolar (0 = off, CW = max) is clearer and saves complexity for constraints that might be needed later (filtering, wavefolder in the feedback path).
 
 **Why feedback injects into the ring buffer, not the wet output:** injecting into the buffer means the pedal hears itself and re-grains what it hears. At low feedback the effect is subtle (grains of grains). At high feedback the loop self-sustains as a drone. This is a more organic behavior than traditional "stack the delays" feedback — it matches the Mood's micro-looper character.
 
+**Why the wet HPF is baked in:** on bass, sub-frequency accumulation in the wet path muddies everything. This isn't a taste decision, it's a "the pedal sounds bad without it" decision. Keeping it fixed also saves a knob for something that's actually performance-useful. The HPF also runs before feedback injection, doubling as a safety filter for the feedback loop.
+
+**Why direct-texture mode exists (K2 fully CCW):** with K2 at minimum and K3 at zero, the grains were already near-passthrough — the grain engine was doing work for no audible purpose. Making this an explicit mode unlocks the texture effects as standalone processors. Micro-stutter on K3 keeps the glitch dimension alive without grains, and feedback pre-loads the grain buffer with textured material for when K2 is turned back up.
+
 ---
 
-## Open Questions for Implementation Session
+## Open Questions
 
 - Hann window as default — audition Tukey during tuning if grains feel too "bumpy"
-- Decimator implementation: sample-and-hold (cheap, digitally ugly, good character) vs proper anti-aliased downsample (cleaner, more expensive). Lean S&H
-- Ringmod carrier ratio (default 3.5, inharmonic). May want to try 2.0 (octave up, harmonic) or a user-selectable set during tuning
-- Max concurrent grain voices — start at 8, profile, push higher if comfortable
-- Whether the feedback-bus delay time should be fixed or tied to grain density for musical coherence — decide by ear during tuning
+- Whether to add constraints to the feedback path (filtering, wavefolder, delay) to tame or color the feedback loop — decide by ear
+- Direct-texture mode: micro-stutter capture buffer size and stutter duration range — tune by ear
+- Whether K2/K3 should eventually split back into separate grain character and glitch knobs
+
+### Resolved
+
+- Decimator: sample-and-hold (cheap, good character) — implemented
+- Ringmod carrier: stepped ratio table (1.5×–7.3×) with tremolo region below 30% — implemented
+- Max grain voices: 8 — implemented, works fine
+- Feedback: simple unipolar, no delay/ladder/wavefolder chain. Negative feedback dropped — not useful for short scattered grains
 
 ---
 
