@@ -141,8 +141,8 @@ Input ──┬─────────────────────�
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
 | KNOB 1 | Interval | ±24 semitones, centered with dead zone. Pitch offset applied to each grain relative to tracked bass note |
-| KNOB 2 | Buffer range | CCW = tight (100 ms, recent audio only). CW = deep (full 8 s, long trails) |
-| KNOB 3 | Character / Glitch | CCW = soft, long, tight grains (200 ms, single pass, high overlap). CW = short, sharp, chaotic (20 ms, stutter loops, scatter, reverse probability) |
+| KNOB 2 | Buffer range | CCW = tight (100 ms). CW = deep (full 8 s). **Fully CCW**: enters direct-texture mode — grain engine bypassed, input routes straight to texture shaper |
+| KNOB 3 | Character / Glitch | **Grain mode**: CCW = soft/long/tight, CW = short/sharp/chaotic. **Direct-texture mode** (K2 fully CCW): micro-stutter — CCW = clean, CW = frequent choppy repeats |
 | KNOB 4 | Texture amount | Depends on SW1 position. See Switch 1 notes |
 | KNOB 5 | Feedback | CCW = none. CW = max feedback (0.95 ceiling). Wet output re-injected into ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |

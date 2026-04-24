@@ -46,6 +46,23 @@ static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 // Feedback state
 float prev_wet = 0.f;         // previous sample's wet output for feedback injection
 
+// Direct-texture mode: stutter state
+static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
+static constexpr int    STUTTER_FADE_LEN = 192;    // ~4 ms event in/out fade
+static constexpr int    STUTTER_SEAM_LEN = 32;     // ~0.67 ms loop seam fade
+static constexpr size_t STUTTER_MIN_LOOP = 2400;   // 50 ms — floor to avoid pitched artifacts
+float stutter_buf[STUTTER_BUF_SIZE] = {};
+size_t stutter_write_pos = 0;
+size_t stutter_read_pos = 0;
+size_t stutter_read_start = 0;    // start offset in circular buffer
+bool   stuttering = false;
+bool   stutter_is_cutout = false; // true = silence, false = repeat
+bool   stutter_reverse = false;   // true = play chunk backwards
+int    stutter_remaining = 0;     // samples left in current event
+int    stutter_total = 0;         // total duration of current event
+size_t stutter_loop_len = 0;      // length of captured chunk to loop
+size_t stutter_buf_filled = 0;    // how many samples have been written total
+
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
 float decim_count = 0.f;      // decimator sample counter
@@ -312,16 +329,19 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
   // K2: buffer range — CCW = tight (100 ms, recent audio only),
   //                     CW = deep (full 8 s, long trails)
+  // Fully CCW (<2%) enters direct-texture mode: bypass grain engine
   float k2 = RemapKnob(eb.knobs[1]);
+  bool direct_texture = (k2 < 0.02f);
   size_t max_range = GRAIN_MIN_RANGE +
       static_cast<size_t>(k2 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_MIN_RANGE));
 
-  // K3: grain character + glitch (merged)
-  // CCW = soft/long/tight, CW = short/sharp/chaotic
-  // Split into two derived values so this can become two knobs again later.
+  // K3: in grain mode = character + glitch (merged)
+  //     in direct-texture mode = micro-stutter probability/duration
   float k3 = RemapKnob(eb.knobs[2]);
-  float grain_character = k3;   // 0 = long/soft, 1 = short/sharp
-  float glitch_amount   = k3;   // 0 = tight/repeatable, 1 = chaotic
+
+  // Grain params (only used when !direct_texture, but cheap to compute always)
+  float grain_character = k3;
+  float glitch_amount   = k3;
 
   size_t grain_len = static_cast<size_t>(9600.f - grain_character * (9600.f - 960.f));
   if (grain_len < 64) grain_len = 64;
@@ -331,6 +351,17 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   size_t base_interval = static_cast<size_t>(
       static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
+
+  // Stutter params (only used when direct_texture)
+  // Base chunk: 200 ms at CCW → 50 ms at CW (randomized ±40% per event at trigger time)
+  float stutter_base_chunk = static_cast<float>(STUTTER_BUF_SIZE) -
+      k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
+  // Event probability per sample: quadratic, erratic at full CW (~every 30 ms)
+  float stutter_prob = k3 * k3 * (1.f / 1440.f);
+  // Cut-out probability: 0% at low k3, up to 40% at full CW
+  float cutout_chance = k3 * 0.4f;
+  // Reverse probability: 0% at low k3, up to 60% at full CW
+  float reverse_chance = k3 * 0.6f;
 
   // K4: texture amount (0 = clean, CW = full effect)
   float k4 = RemapKnob(eb.knobs[3]);
@@ -390,51 +421,138 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // Feed pitch tracker
     tracker.Feed(dry, grain_env);
 
-    // Write input + feedback into ring buffer
+    // Write input + feedback into ring buffer (even in direct-texture mode,
+    // so turning K2 back up reveals a buffer with textured material)
     grain_ring.Write(dry + prev_wet * feedback_amt);
 
-    // Scheduler: continuous stream, K3 adds chaos
-    grain_timer--;
-    if (grain_timer <= 0) {
-      // Delay: base offset + scatter within K5 range
-      size_t scatter_range = max_range - base_delay;
-      size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
-      size_t delay = base_delay + pos_offset;
-      if (delay > max_range) delay = max_range;
+    float wet;
 
-      bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
+    if (direct_texture) {
+      // Direct-texture mode: bypass grains, apply stutter/cut-out
+      if (stuttering) {
+        // Event-level fade: ramp in at start, ramp out at end
+        int elapsed = stutter_total - stutter_remaining;
+        float event_fade = 1.f;
+        if (elapsed < STUTTER_FADE_LEN)
+          event_fade = static_cast<float>(elapsed) / static_cast<float>(STUTTER_FADE_LEN);
+        if (stutter_remaining < STUTTER_FADE_LEN)
+          event_fade = static_cast<float>(stutter_remaining) / static_cast<float>(STUTTER_FADE_LEN);
 
-      float pitch_ratio = GrainPitchRatio(harmony, k1);
-      float comp = 1.f / sqrtf(pitch_ratio);
+        if (stutter_is_cutout) {
+          wet = dry * (1.f - event_fade);
+        } else {
+          // Read from seamless loop (crossfade baked in at trigger time)
+          size_t pos_in_loop = stutter_read_pos % stutter_loop_len;
+          size_t offset;
+          if (stutter_reverse)
+            offset = stutter_loop_len - 1 - pos_in_loop;
+          else
+            offset = pos_in_loop;
+          size_t idx = (stutter_read_start + offset) % STUTTER_BUF_SIZE;
+          float looped = stutter_buf[idx];
+          stutter_read_pos++;
 
-      int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
-      if (loops > max_loops) loops = max_loops;
+          wet = dry * (1.f - event_fade) + looped * event_fade;
+        }
 
-      // Find an inactive voice — never steal mid-playback
-      int voice = -1;
-      for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
-        int idx = (grain_next_voice + v) % NUM_GRAIN_VOICES;
-        if (!grain_voices[idx].IsActive()) {
-          voice = idx;
-          grain_next_voice = (idx + 1) % NUM_GRAIN_VOICES;
-          break;
+        stutter_remaining--;
+        if (stutter_remaining <= 0) stuttering = false;
+      } else {
+        // Write into capture buffer when not stuttering
+        stutter_buf[stutter_write_pos] = dry;
+        stutter_write_pos++;
+        if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
+        if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
+
+        wet = dry;
+        // Roll dice for new event
+        if (k3 > 0.01f && stutter_buf_filled >= STUTTER_MIN_LOOP
+            && RandFloat() < stutter_prob) {
+          stuttering = true;
+          stutter_is_cutout = (RandFloat() < cutout_chance);
+          stutter_reverse = (RandFloat() < reverse_chance);
+          if (stutter_is_cutout) {
+            // Cut-out: short tremolo-pulse length (10–50 ms)
+            stutter_total = 480 + static_cast<int>(RandFloat() * 1920.f);
+            stutter_remaining = stutter_total;
+          } else {
+            // Repeat: randomize chunk length ±40%
+            float rand_scale = 0.6f + RandFloat() * 0.8f;
+            size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+            if (chunk > stutter_buf_filled) chunk = stutter_buf_filled;
+            if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
+            if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
+            stutter_loop_len = chunk;
+            // Read start = most recent audio
+            stutter_read_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_loop_len)
+                                 % STUTTER_BUF_SIZE;
+            stutter_read_pos = 0;
+
+            // Bake seamless loop: fade first and last SEAM_LEN samples
+            // to zero. Both sides of the wrap are near-zero → no click.
+            for (int f = 0; f < STUTTER_SEAM_LEN; f++) {
+              float t = static_cast<float>(f) / static_cast<float>(STUTTER_SEAM_LEN);
+              size_t head_idx = (stutter_read_start + f) % STUTTER_BUF_SIZE;
+              size_t tail_idx = (stutter_read_start + stutter_loop_len - STUTTER_SEAM_LEN + f)
+                                % STUTTER_BUF_SIZE;
+              stutter_buf[head_idx] *= t;          // fade in from zero
+              stutter_buf[tail_idx] *= (1.f - t);  // fade out to zero
+            }
+
+            // Randomize reps: 1 at low k3, 1–5 at full CW
+            int reps = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
+            stutter_total = static_cast<int>(stutter_loop_len) * reps + STUTTER_FADE_LEN * 2;
+            stutter_remaining = stutter_total;
+          }
         }
       }
-      if (voice >= 0) {
-        grain_voices[voice].Trigger(
-            grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
+    } else {
+      // Stop any lingering stutter when leaving direct-texture mode
+      stuttering = false;
+
+      // Scheduler: continuous stream, K3 adds chaos
+      grain_timer--;
+      if (grain_timer <= 0) {
+        // Delay: base offset + scatter within K5 range
+        size_t scatter_range = max_range - base_delay;
+        size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
+        size_t delay = base_delay + pos_offset;
+        if (delay > max_range) delay = max_range;
+
+        bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
+
+        float pitch_ratio = GrainPitchRatio(harmony, k1);
+        float comp = 1.f / sqrtf(pitch_ratio);
+
+        int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
+        if (loops > max_loops) loops = max_loops;
+
+        // Find an inactive voice — never steal mid-playback
+        int voice = -1;
+        for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+          int idx = (grain_next_voice + v) % NUM_GRAIN_VOICES;
+          if (!grain_voices[idx].IsActive()) {
+            voice = idx;
+            grain_next_voice = (idx + 1) % NUM_GRAIN_VOICES;
+            break;
+          }
+        }
+        if (voice >= 0) {
+          grain_voices[voice].Trigger(
+              grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
+        }
+
+        float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;
+        grain_timer = static_cast<int>(
+            static_cast<float>(base_interval) * (1.f + jitter));
+        if (grain_timer < 32) grain_timer = 32;
       }
 
-      float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;
-      grain_timer = static_cast<int>(
-          static_cast<float>(base_interval) * (1.f + jitter));
-      if (grain_timer < 32) grain_timer = 32;
-    }
-
-    // Sum all active voices
-    float wet = 0.f;
-    for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
-      wet += grain_voices[v].Process(grain_ring);
+      // Sum all active voices
+      wet = 0.f;
+      for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+        wet += grain_voices[v].Process(grain_ring);
+      }
     }
 
     // Texture shaper — K4 meaning depends on SW1 mode
