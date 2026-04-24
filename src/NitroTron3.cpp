@@ -540,7 +540,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
       if (stutter_is_cutout && stutter_engaged) {
         // --- Cut-out: cosine envelope ducks dry, no voices involved ---
-        size_t taper = StutterVoice::TAPER_LEN;
+        size_t taper = StutterVoice::MAX_TAPER;
         if (taper > stutter_cutout_len / 2) taper = stutter_cutout_len / 2;
 
         float duck;
