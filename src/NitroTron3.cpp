@@ -475,8 +475,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float wet;
 
     if (direct_texture) {
-      // DEBUG: all randomness killed. Fixed 100 ms chunk, 3 reps, forward,
-      // cyclic events every ~500 ms. Isolate voice engine vs latching bugs.
+      // Two-voice Tukey-windowed stutter with probability-based events.
+      // Params latched per-event. 5 ms cosine taper, overlap at tail.
 
       // Write to capture buffer when not stuttering (freeze during event)
       if (!stutter_engaged) {
