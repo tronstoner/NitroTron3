@@ -481,8 +481,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Two-voice Tukey-windowed stutter with probability-based events.
       // Params latched per-event. 5 ms cosine taper, overlap at tail.
 
-      // Write to capture buffer when not stuttering (freeze during event)
-      if (!stutter_engaged) {
+      // Write to capture buffer (freeze during repeat events, not cut-outs)
+      if (!stutter_engaged || stutter_is_cutout) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
         if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
