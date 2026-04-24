@@ -114,6 +114,7 @@ bool   stutter_snap_rev = false;   // latched reverse flag
 bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
 size_t stutter_cutout_phase = 0;   // current sample within cut-out
 size_t stutter_cutout_len = 0;     // total cut-out duration in samples
+size_t stutter_fresh = 0;          // samples written since last event ended
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -489,12 +490,18 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         stutter_write_pos++;
         if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
         if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
+        stutter_fresh++;
       }
 
       // --- Probability-based event trigger ---
+      // Require enough fresh audio to fill the chunk — prevents stale/fresh
+      // seam in the capture region when events fire in quick succession.
+      size_t min_fresh = static_cast<size_t>(stutter_base_chunk * 1.4f);  // worst-case chunk
+      if (min_fresh > STUTTER_BUF_SIZE) min_fresh = STUTTER_BUF_SIZE;
       bool any_active = stutter_voices[0].active || stutter_voices[1].active;
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
           && !stutter_engaged && !any_active && !stutter_is_cutout
+          && stutter_fresh >= min_fresh
           && RandFloat() < stutter_prob) {
 
           if (RandFloat() < cutout_chance) {
@@ -522,6 +529,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             stutter_next_armed = true;
             stutter_engaged = true;
           }
+          stutter_fresh = 0;  // reset fresh counter on any event start
       }
 
       if (stutter_is_cutout && stutter_engaged) {
