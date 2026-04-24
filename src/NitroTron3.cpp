@@ -91,7 +91,9 @@ struct StutterVoice {
     }
 };
 
-StutterVoice stutter_voice;
+StutterVoice stutter_voices[2];
+int stutter_active_idx = 0;        // which voice was last triggered
+bool stutter_engaged = false;      // true when K3 > 0 and stutter is running
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -458,33 +460,52 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float wet;
 
     if (direct_texture) {
-      // STEP 1 DIAGNOSTIC: single Hann-windowed voice, fixed params.
-      // No randomness, no reverse, no cutout, no loop wrap.
-      // Full buffer (200 ms), 1 rep, forward only.
+      // Step 2: two-voice Hann crossfade. Voices overlap at the midpoint
+      // so the sum is always ~1.0. No hard switch from/to dry.
+      // Still fixed params, no randomness for diagnostic.
 
       // Write to capture buffer when no voice is active
-      if (!stutter_voice.active) {
+      bool any_active = stutter_voices[0].active || stutter_voices[1].active;
+      if (!any_active) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
         if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
         if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
-        stutter_writing = true;
+      }
+
+      // Trigger logic: start next voice when current voice reaches midpoint
+      StutterVoice& cur = stutter_voices[stutter_active_idx];
+      int next_idx = 1 - stutter_active_idx;
+      StutterVoice& nxt = stutter_voices[next_idx];
+
+      if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE) {
+        if (!stutter_engaged) {
+          // First engagement: trigger voice A
+          size_t slen = STUTTER_BUF_SIZE;
+          size_t start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
+          cur.Trigger(start, slen, false);
+          stutter_engaged = true;
+        } else if (cur.active && cur.phase == cur.length / 2 && !nxt.active) {
+          // Current voice at midpoint (Hann peak, about to fade out):
+          // start next voice so they overlap
+          size_t slen = STUTTER_BUF_SIZE;
+          size_t start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
+          nxt.Trigger(start, slen, false);
+          stutter_active_idx = next_idx;
+        }
       } else {
-        stutter_writing = false;  // freeze writes during playback
+        stutter_engaged = false;
       }
 
-      // DIAGNOSTIC: fixed-interval trigger, no randomness.
-      // Trigger immediately after previous voice finishes, if K3 > 0.
-      if (!stutter_voice.active && k3 > 0.01f
-          && stutter_buf_filled >= STUTTER_BUF_SIZE) {
-        size_t slen = STUTTER_BUF_SIZE;  // fixed: full 200 ms
-        size_t start = (stutter_write_pos + STUTTER_BUF_SIZE - slen) % STUTTER_BUF_SIZE;
-        stutter_voice.Trigger(start, slen, false);  // forward only
-      }
+      // Sum both voices
+      float v0 = stutter_voices[0].Process(stutter_buf, STUTTER_BUF_SIZE);
+      float v1 = stutter_voices[1].Process(stutter_buf, STUTTER_BUF_SIZE);
+      float voice_sum = v0 + v1;
 
-      // DIAGNOSTIC: voice only, no dry — isolate the voice output
-      float voice_out = stutter_voice.Process(stutter_buf, STUTTER_BUF_SIZE);
-      wet = stutter_voice.active || voice_out != 0.f ? voice_out : dry;
+      // When voices are active, output is the voice sum.
+      // When no voices active, output is dry.
+      // The Hann windows handle the transition (both start/end at zero with zero slope).
+      wet = any_active ? voice_sum : dry;
 
     } else {
 
