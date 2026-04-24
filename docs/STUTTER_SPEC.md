@@ -67,17 +67,20 @@ the current step is click-free. One commit per step.
 ### Step 1 — Single voice, fixed params, no randomness
 
 - Separate `stutter_buf[]` with continuous write when idle.
-- Single voice with Hann window reads from `stutter_buf`.
+- Single voice with **Tukey window** (5 ms cosine taper at edges, flat middle).
 - Fixed chunk length (e.g. 100 ms), speed 1.0, forward, no cut-outs.
 - K3 > threshold triggers one event, waits for it to finish.
-- Complement crossfade: `dry * (1 - hann) + voice * hann`.
+- Complement crossfade: `dry * (1 - window) + voice`.
 - **Goal:** click-free single-voice playback with smooth dry transitions.
 
 ### Step 2 — Two-voice crossfade
 
-- Add second voice. Voice B triggers at voice A's midpoint.
+- Add second voice. Voice B triggers during voice A's **tail taper**
+  (`phase >= length - TAPER_LEN`), NOT at the midpoint.
 - Use `>=` with a "triggered next" flag, not exact `==` match.
 - Sum both voices; complement crossfade uses combined envelope.
+- **CRITICAL:** overlap is 5 ms at the tail, not half the chunk.
+  See `STUTTER_IMPLEMENTATION_NOTES.md` § "Window shape and overlap placement".
 - **Goal:** click-free multi-rep playback, smooth overlap.
 
 ### Step 3 — Multiple reps per event
