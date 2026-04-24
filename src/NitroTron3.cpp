@@ -48,7 +48,7 @@ float prev_wet = 0.f;         // previous sample's wet output for feedback injec
 
 // Direct-texture mode: stutter capture buffer
 static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
-static constexpr size_t STUTTER_MIN_LOOP = 2400;   // 50 ms min slice
+static constexpr size_t STUTTER_MIN_LOOP = 960;    // 20 ms min slice
 float stutter_buf[STUTTER_BUF_SIZE] = {};
 size_t stutter_write_pos = 0;
 size_t stutter_buf_filled = 0;
@@ -57,11 +57,13 @@ size_t stutter_buf_filled = 0;
 // cosine taper at edges (TAPER_LEN samples ≈ 5 ms).  Two voices ping-pong
 // with short overlap at the taper region for click-free crossfade.
 struct StutterVoice {
-    static constexpr size_t TAPER_LEN = 240;  // 5 ms at 48 kHz
+    static constexpr size_t MIN_TAPER = 96;   // 2 ms at 48 kHz
+    static constexpr size_t MAX_TAPER = 240;  // 5 ms at 48 kHz
 
     size_t start;      // start position in stutter_buf (circular)
     size_t length;     // slice length in samples
     size_t phase;      // current sample within slice
+    size_t taper;      // computed at trigger: adaptive taper length
     bool   reverse;    // playback direction (latched at trigger)
     bool   active;
     float  window;     // current window value — exposed for complement crossfade
@@ -73,14 +75,17 @@ struct StutterVoice {
         reverse = rev;
         active = true;
         window = 0.f;
+        // Adaptive taper: 10% of length, clamped 2–5 ms.
+        taper = static_cast<size_t>(static_cast<float>(len) * 0.1f);
+        if (taper < MIN_TAPER) taper = MIN_TAPER;
+        if (taper > MAX_TAPER) taper = MAX_TAPER;
+        if (taper > length / 2) taper = length / 2;
     }
 
     float Process(const float* buf, size_t buf_size) {
         if (!active) { window = 0.f; return 0.f; }
 
         // Tukey window: cosine taper at edges, flat (1.0) in the middle
-        size_t taper = TAPER_LEN;
-        if (taper > length / 2) taper = length / 2;
 
         if (phase < taper) {
             float t = static_cast<float>(phase) / static_cast<float>(taper);
@@ -411,8 +416,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
   // Event probability per sample: quadratic, erratic at full CW (~every 30 ms)
   float stutter_prob = k3 * k3 * (1.f / 1440.f);
-  // Reverse probability: 0% at low k3, up to 60% at full CW
-  float reverse_chance = k3 * 0.6f;
+  // Reverse probability: 0% at low k3, up to 80% at full CW
+  float reverse_chance = k3 * 0.8f;
   // Cut-out probability: 0% at low k3, up to 40% at full CW
   float cutout_chance = k3 * 0.4f;
 
@@ -534,7 +539,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
       if (stutter_is_cutout && stutter_engaged) {
         // --- Cut-out: cosine envelope ducks dry, no voices involved ---
-        size_t taper = StutterVoice::TAPER_LEN;
+        size_t taper = StutterVoice::MAX_TAPER;
         if (taper > stutter_cutout_len / 2) taper = stutter_cutout_len / 2;
 
         float duck;
@@ -568,7 +573,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
           StutterVoice& nxt = stutter_voices[next_idx];
 
           if (stutter_next_armed && cur.active
-              && cur.phase >= cur.length - StutterVoice::TAPER_LEN && !nxt.active) {
+              && cur.phase >= cur.length - cur.taper && !nxt.active) {
             if (stutter_reps_left > 0) {
               nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
               stutter_active_idx = next_idx;
