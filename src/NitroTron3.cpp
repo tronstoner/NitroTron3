@@ -475,9 +475,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float wet;
 
     if (direct_texture) {
-      // Two-voice Hann crossfade stutter with random events, reverse.
-      // Voices ping-pong: voice B starts at voice A's midpoint for
-      // seamless overlap.  Parameters latched per-event.
+      // DEBUG: all randomness killed. Fixed 100 ms chunk, 3 reps, forward,
+      // cyclic events every ~500 ms. Isolate voice engine vs latching bugs.
 
       // Write to capture buffer when not stuttering (freeze during event)
       if (!stutter_engaged) {
@@ -487,28 +486,26 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
       }
 
-      // --- Event trigger (probability-based) ---
+      // --- Cyclic event trigger: fixed interval, no randomness ---
       bool any_active = stutter_voices[0].active || stutter_voices[1].active;
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
-          && !stutter_engaged && !any_active
-          && RandFloat() < stutter_prob) {
-        // Latch params for entire event
-        float rand_scale = 0.6f + RandFloat() * 0.8f;  // ±40%
-        size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
-        if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
-        if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
-        stutter_snap_len = chunk;
-        stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - chunk)
-                             % STUTTER_BUF_SIZE;
-        stutter_snap_rev = (RandFloat() < reverse_chance);
-        stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
+          && !stutter_engaged && !any_active) {
+        grain_timer--;
+        if (grain_timer <= 0) {
+          // Fixed params: 100 ms chunk, 3 reps, forward
+          stutter_snap_len = 4800;
+          stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
+                               % STUTTER_BUF_SIZE;
+          stutter_snap_rev = false;
+          stutter_reps_left = 3;
 
-        // First voice
-        stutter_active_idx = 0;
-        stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
-        stutter_reps_left--;
-        stutter_next_armed = true;
-        stutter_engaged = true;
+          stutter_active_idx = 0;
+          stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, false);
+          stutter_reps_left--;
+          stutter_next_armed = true;
+          stutter_engaged = true;
+          grain_timer = 24000;  // ~500 ms until next event
+        }
       }
 
       // --- Overlap trigger: fire next voice during current voice's tail taper ---
@@ -523,9 +520,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
             stutter_active_idx = next_idx;
             stutter_reps_left--;
-            stutter_next_armed = true;  // arm for this new voice's midpoint
+            stutter_next_armed = true;
           } else {
-            stutter_next_armed = false; // last rep, let it finish naturally
+            stutter_next_armed = false;
           }
         }
       }
