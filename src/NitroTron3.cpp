@@ -515,9 +515,10 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       if (!stutter_engaged && !any_active && !stutter_is_cutout) {
         stutter_timer--;
       }
+      bool fresh_ok = (stutter_fresh >= min_fresh) || (stutter_burst_left > 0);
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
           && !stutter_engaged && !any_active && !stutter_is_cutout
-          && stutter_fresh >= min_fresh && stutter_timer <= 0) {
+          && fresh_ok && stutter_timer <= 0) {
 
           if (RandFloat() < cutout_chance) {
             // Cut-out: dedicated cosine envelope, no voice triggered
