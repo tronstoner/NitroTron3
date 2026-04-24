@@ -441,7 +441,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (stutter_is_cutout) {
           wet = dry * (1.f - event_fade);
         } else {
-          // Read from seamless loop (crossfade baked in at trigger time)
+          // Read from loop — buffer is never modified
           size_t pos_in_loop = stutter_read_pos % stutter_loop_len;
           size_t offset;
           if (stutter_reverse)
@@ -450,9 +450,21 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
             offset = pos_in_loop;
           size_t idx = (stutter_read_start + offset) % STUTTER_BUF_SIZE;
           float looped = stutter_buf[idx];
-          stutter_read_pos++;
 
-          wet = dry * (1.f - event_fade) + looped * event_fade;
+          // Seam envelope: fade looped↔dry at loop boundaries so the
+          // wrap point never has a discontinuity. Brief blend with dry
+          // is inaudible because the captured audio is recent/similar.
+          float seam = 1.f;
+          if (pos_in_loop < static_cast<size_t>(STUTTER_SEAM_LEN))
+            seam = static_cast<float>(pos_in_loop) / static_cast<float>(STUTTER_SEAM_LEN);
+          size_t dist_to_end = stutter_loop_len - 1 - pos_in_loop;
+          if (dist_to_end < static_cast<size_t>(STUTTER_SEAM_LEN))
+            seam = static_cast<float>(dist_to_end) / static_cast<float>(STUTTER_SEAM_LEN);
+
+          stutter_read_pos++;
+          // seam=1 mid-loop: full looped. seam=0 at wrap: full dry.
+          float sample = looped * seam + dry * (1.f - seam);
+          wet = dry * (1.f - event_fade) + sample * event_fade;
         }
 
         stutter_remaining--;
@@ -488,16 +500,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                                  % STUTTER_BUF_SIZE;
             stutter_read_pos = 0;
 
-            // Bake seamless loop: fade first and last SEAM_LEN samples
-            // to zero. Both sides of the wrap are near-zero → no click.
-            for (int f = 0; f < STUTTER_SEAM_LEN; f++) {
-              float t = static_cast<float>(f) / static_cast<float>(STUTTER_SEAM_LEN);
-              size_t head_idx = (stutter_read_start + f) % STUTTER_BUF_SIZE;
-              size_t tail_idx = (stutter_read_start + stutter_loop_len - STUTTER_SEAM_LEN + f)
-                                % STUTTER_BUF_SIZE;
-              stutter_buf[head_idx] *= t;          // fade in from zero
-              stutter_buf[tail_idx] *= (1.f - t);  // fade out to zero
-            }
+            // No buffer modification — seam handled at read time.
 
             // Randomize reps: 1 at low k3, 1–5 at full CW
             int reps = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
