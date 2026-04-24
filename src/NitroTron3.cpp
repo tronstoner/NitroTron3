@@ -111,6 +111,7 @@ int  stutter_reps_left = 0;        // remaining reps in current event
 size_t stutter_snap_start = 0;     // latched start position
 size_t stutter_snap_len = 0;       // latched chunk length
 bool   stutter_snap_rev = false;   // latched reverse flag
+bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -409,6 +410,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float stutter_prob = k3 * k3 * (1.f / 1440.f);
   // Reverse probability: 0% at low k3, up to 60% at full CW
   float reverse_chance = k3 * 0.6f;
+  // Cut-out probability: 0% at low k3, up to 40% at full CW
+  float cutout_chance = k3 * 0.4f;
 
   // K4: texture amount (0 = clean, CW = full effect)
   float k4 = RemapKnob(eb.knobs[3]);
@@ -491,19 +494,29 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
           && !stutter_engaged && !any_active
           && RandFloat() < stutter_prob) {
-          // DEBUG step: random chunk length, fixed 3 reps, forward
-          float rand_scale = 0.6f + RandFloat() * 0.8f;  // ±40%
-          size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
-          if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
-          if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
-          stutter_snap_len = chunk;
-          stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
-                               % STUTTER_BUF_SIZE;
-          stutter_snap_rev = (RandFloat() < reverse_chance);
-          stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
+          stutter_is_cutout = (RandFloat() < cutout_chance);
+
+          if (stutter_is_cutout) {
+            // Cut-out: short silence, 10–50 ms, single rep
+            stutter_snap_len = 480 + static_cast<size_t>(RandFloat() * 1920.f);
+            stutter_snap_start = 0;  // doesn't matter, output is zeroed
+            stutter_snap_rev = false;
+            stutter_reps_left = 1;
+          } else {
+            // Repeat: randomize chunk length ±40%
+            float rand_scale = 0.6f + RandFloat() * 0.8f;
+            size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+            if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
+            if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
+            stutter_snap_len = chunk;
+            stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
+                                 % STUTTER_BUF_SIZE;
+            stutter_snap_rev = (RandFloat() < reverse_chance);
+            stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
+          }
 
           stutter_active_idx = 0;
-          stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, false);
+          stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
           stutter_reps_left--;
           stutter_next_armed = true;
           stutter_engaged = true;
@@ -531,7 +544,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Process both voices
       float v0 = stutter_voices[0].Process(stutter_buf, STUTTER_BUF_SIZE);
       float v1 = stutter_voices[1].Process(stutter_buf, STUTTER_BUF_SIZE);
-      float voice_sum = v0 + v1;
 
       // Combined window for complement crossfade (clamped to 1.0)
       float w = stutter_voices[0].window + stutter_voices[1].window;
@@ -542,7 +554,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         stutter_engaged = false;
       }
 
-      // Complement crossfade: smooth in and out, never a hard switch
+      // Complement crossfade: cut-outs duck dry to silence,
+      // repeats replace dry with stutter voice output.
+      float voice_sum = stutter_is_cutout ? 0.f : (v0 + v1);
       wet = dry * (1.f - w) + voice_sum;
 
     } else {
