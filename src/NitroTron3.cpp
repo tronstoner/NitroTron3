@@ -47,8 +47,8 @@ static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 float prev_wet = 0.f;         // previous sample's wet output for feedback injection
 
 // Direct-texture mode: stutter capture buffer
-static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
-static constexpr size_t STUTTER_MIN_LOOP = 2400;   // 50 ms min slice
+static constexpr size_t STUTTER_BUF_SIZE = 19200;  // 400 ms at 48 kHz
+static constexpr size_t STUTTER_MIN_LOOP = 480;    // 10 ms min slice (near audio-rate)
 float stutter_buf[STUTTER_BUF_SIZE] = {};
 size_t stutter_write_pos = 0;
 size_t stutter_buf_filled = 0;
@@ -411,8 +411,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
   // Event probability per sample: quadratic, erratic at full CW (~every 30 ms)
   float stutter_prob = k3 * k3 * (1.f / 1440.f);
-  // Reverse probability: 0% at low k3, up to 60% at full CW
-  float reverse_chance = k3 * 0.6f;
+  // Reverse probability: 0% at low k3, up to 80% at full CW
+  float reverse_chance = k3 * 0.8f;
   // Cut-out probability: 0% at low k3, up to 40% at full CW
   float cutout_chance = k3 * 0.4f;
 
