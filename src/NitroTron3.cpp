@@ -501,7 +501,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
           stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
                                % STUTTER_BUF_SIZE;
           stutter_snap_rev = false;
-          stutter_reps_left = 3;
+          stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
 
           stutter_active_idx = 0;
           stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, false);
