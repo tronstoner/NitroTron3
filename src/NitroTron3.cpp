@@ -455,7 +455,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // noon→CW (k4 0.5→1): fold amount
   float decim_amt = (k4 < 0.5f) ? (1.f - k4 / 0.5f) : 0.f;   // 1 at CCW, 0 at noon
   float fold_amt  = (k4 > 0.5f) ? ((k4 - 0.5f) / 0.5f) : 0.f; // 0 at noon, 1 at CW
-  float decim_rate = 1.f + decim_amt * 19.f;  // 1 (clean at noon) to 20 (max crush at CCW)
+  float decim_rate = 1.f + decim_amt * 47.f;  // 1 (clean at noon) to 48 (max crush at CCW)
 
   // K5: feedback — 0 = none, CW = max (0.95 ceiling)
   float feedback_amt = RemapKnob(eb.knobs[4]) * 0.95f;
@@ -662,7 +662,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         wet = wet * (1.f - decim_amt) + decim_hold * decim_amt;
       }
       if (fold_amt > 0.01f) {
-        float driven = wet * (1.f + fold_amt * 7.f);
+        float driven = wet * (1.f + fold_amt * 15.f);
         float folded = sinf(driven * 1.5707963f) * 0.15f;
         wet = wet * (1.f - fold_amt) + folded * fold_amt;
       }
