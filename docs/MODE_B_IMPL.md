@@ -1,4 +1,4 @@
-# Mode B — Granular Glitch — Implementation Plan
+# Mode B — Sprawl — Implementation Plan
 
 Staged implementation of Mode B per `MODE_B_GRANULAR.md`. Each stage produces a flashable, testable build.
 

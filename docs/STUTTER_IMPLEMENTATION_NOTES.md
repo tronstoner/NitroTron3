@@ -42,7 +42,7 @@ The correct approach:
 full-Hann approach produces a completely different sonic character (shorter
 perceived reps, volume pumping) and causes event-boundary clicks.
 
-**Structurally this is the same as the Mode B grain scheduler.** A stutter slice is just a grain with coarser parameters and deterministic scheduling. **Reuse the Mode B grain engine rather than writing a parallel stutter subsystem.** Add a "slice mode" scheduler policy alongside the existing "cloud mode."
+**Structurally this is the same as the Mode B (Sprawl) grain scheduler.** A stutter slice is just a grain with coarser parameters and deterministic scheduling. **Reuse the Mode B grain engine rather than writing a parallel stutter subsystem.** Add a "slice mode" scheduler policy alongside the existing "cloud mode."
 
 ## Rules the Engine Must Follow
 

@@ -1,4 +1,4 @@
-# Mode A — Drone OSC — Implementation Spec
+# Mode A — Bordun — Implementation Spec
 
 Inspired by the Moog MoogerFooger FreqBox (MF-102). An internal oscillator, amplitude-controlled by an envelope follower tracking the bass input, filtered through a Moog-style ladder, mixed back with the dry signal.
 

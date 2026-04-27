@@ -1,4 +1,4 @@
-# Mode B — Granular Glitch — Concept Spec
+# Mode B — Sprawl — Concept Spec
 
 Inspired by the Chase Bliss Mood pedal's "micro-looper as collaborator" philosophy, tuned specifically for bass as input. A live rolling buffer of the bass signal is continuously scattered as grains, pitch-shifted in harmony with the detected bass note, and routed through a feedback loop that can sustain into drone territory.
 

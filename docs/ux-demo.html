@@ -534,7 +534,7 @@
             <div class="toggle-switch" data-switch="2" data-pos="0">
               <div class="toggle-handle"></div>
             </div>
-            <div class="switch-val" id="sv2">Drone</div>
+            <div class="switch-val" id="sv2">Bordun</div>
           </div>
         </div>
 
@@ -571,7 +571,7 @@
       <!-- State display -->
       <div class="state-display" id="stateDisplay">
         <div class="row"><span class="label">Pedal state:</span><span class="value" id="sdState">NORMAL</span></div>
-        <div class="row"><span class="label">Mode:</span><span class="value" id="sdMode">A (Drone)</span></div>
+        <div class="row"><span class="label">Mode:</span><span class="value" id="sdMode">A (Bordun)</span></div>
         <div class="row"><span class="label">Preset:</span><span class="value" id="sdPreset">Manual</span></div>
         <div class="row"><span class="label">Dirty:</span><span class="value" id="sdDirty">No</span></div>
         <div class="row"><span class="label">Bypass:</span><span class="value" id="sdBypass">Off (active)</span></div>
@@ -584,7 +584,7 @@
         <div class="row"><span class="label">EB Knobs:</span><span class="value" id="sdEbKnobs"
             style="font-size:10px;letter-spacing:0;color:#4488ff">0.50 0.50 0.50 0.50 0.50 0.50</span></div>
         <div class="row"><span class="label">HW Switches:</span><span class="value" id="sdHwSwitches"
-            style="font-size:10px">UP UP Drone</span></div>
+            style="font-size:10px">UP UP Bordun</span></div>
         <div class="row"><span class="label">EB Switches:</span><span class="value" id="sdEbSwitches"
             style="font-size:10px;color:#4488ff">UP UP —</span></div>
       </div>
@@ -715,8 +715,8 @@
     // ── State ───────────────────────────────────────────────────
     const NUM_MODES = 3;
     const NUM_PRESETS = 8;
-    const MODE_NAMES = ['A (Drone)', 'B (Granular)', 'C (FreqShift)'];
-    const SW3_LABELS = ['Drone', 'Granular', 'FreqShift'];
+    const MODE_NAMES = ['A (Bordun)', 'B (Sprawl)', 'C (Schism)'];
+    const SW3_LABELS = ['Bordun', 'Sprawl', 'Schism'];
     const SW_LABELS = [['UP', 'MID', 'DOWN'], ['UP', 'MID', 'DOWN'], SW3_LABELS];
 
     let state = {

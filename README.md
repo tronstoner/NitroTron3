@@ -70,11 +70,11 @@ make program    # flash via OpenOCD / ST-Link
 make program-dfu  # flash via DFU bootloader
 ```
 
-## Current state — Stage 5 (Preset System) + Mode B (Granular Glitch)
+## Current state — Stage 5 (Preset System) + Mode B (Sprawl)
 
-Complete Mode A drone effect with full preset system. PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. Mode B granular glitch effect with grain scheduler, pitch-tracked harmony, texture shaping, and scatter control. Edit buffer + 8 stored presets per mode, dirty tracking, flash persistence across power cycles. FS1 navigates presets, FS2 toggles bypass or enters save mode. LED 1 shows preset number via Roman numeral blink encoding, LED 2 indicates active/bypass/dirty/save state.
+Complete Mode A Bordun effect with full preset system. PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. Mode B Sprawl effect with grain scheduler, pitch-tracked harmony, texture shaping, and scatter control. Edit buffer + 8 stored presets per mode, dirty tracking, flash persistence across power cycles. FS1 navigates presets, FS2 toggles bypass or enters save mode. LED 1 shows preset number via Roman numeral blink encoding, LED 2 indicates active/bypass/dirty/save state.
 
-### Mode A — Drone
+### Mode A — Bordun
 
 #### Signal Chain
 
@@ -102,7 +102,7 @@ Input ──┬─────────────────────�
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
 | SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** - Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval)<br/>**DOWN** - Direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
-| SWITCH 3 | Mode select | **UP** - Mode A (Drone)<br/>**MIDDLE** - Mode B (Granular Glitch)<br/>**DOWN** - Mode C (Freq Shift, not yet implemented — dry passthrough) |
+| SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl)<br/>**DOWN** - Mode C (Schism, not yet implemented — dry passthrough) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
 | FS1 held 2 s | Bootloader | Enter DFU bootloader for flashing |
@@ -114,7 +114,7 @@ Input ──┬─────────────────────�
 | LED 1 (left) | Preset indicator: off = Manual, Roman numeral blink pattern for presets 1–8 (I=short, V=long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows target slot. |
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
-### Mode B — Granular Glitch
+### Mode B — Sprawl
 
 #### Signal Chain
 
@@ -148,7 +148,7 @@ Input ──┬─────────────────────�
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Texture mode | **UP** - Decimator/Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold)<br/>**MIDDLE** - Clean (no texture processing)<br/>**DOWN** - Ringmod (K4 CCW–30% = tremolo 1–15 Hz, 30%–CW = bell partials, pitch-tracked with keytracked LPF) |
 | SWITCH 2 | Harmony | **UP** - Fixed interval (K1 semitones above tracked note)<br/>**MIDDLE** - Resonance (grains lock onto nearby harmonics)<br/>**DOWN** - Resonance (grains lock onto nearby harmonics) |
-| SWITCH 3 | Mode select | **UP** - Mode A (Drone)<br/>**MIDDLE** - Mode B (Granular Glitch — this mode)<br/>**DOWN** - Mode C (Freq Shift, not yet implemented — dry passthrough) |
+| SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl — this mode)<br/>**DOWN** - Mode C (Schism, not yet implemented — dry passthrough) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
 | FS1 held 2 s | Bootloader | Enter DFU bootloader for flashing |

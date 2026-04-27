@@ -16,7 +16,7 @@ Do not jump into code or propose changes without first understanding the project
 
 ## Read for specific tasks
 
-**Working on DSP / Mode A code:**
+**Working on DSP / Mode A (Bordun) code:**
 - `docs/MODE_A_DRONE.md` — oscillator, envelope follower, ladder filter, controls, presets, compile-time constants.
 
 **Adjusting tuning mode, or helping the user dial in constants:**
@@ -25,11 +25,11 @@ Do not jump into code or propose changes without first understanding the project
 **Working on pitch tracking:**
 - `docs/PITCH_TRACKING.md` — research, algorithm comparison (zero-crossing vs YIN vs MPM), signal conditioning, implementation plan.
 
-**Working on Mode B (Granular Glitch):**
+**Working on Mode B (Sprawl):**
 - `docs/MODE_B_GRANULAR.md` — granular processor, signal chain, grain scheduler, gesture-reactive shaping, feedback bus, controls.
 
-**Working on Mode C (Freq Shift):**
-- Spec not yet written. If the user asks to start on this, first help spec it — create `docs/MODE_C_FREQSHIFT.md` following the structure of `docs/MODE_A_DRONE.md`.
+**Working on Mode C (Schism):**
+- Discovery doc: `docs/MODE_C_DISCOVERY.md`. When implementation begins, this will be replaced by `docs/MODE_C.md` following MODE_A_DRONE.md structure.
 
 **Working on the preset system:**
 - `docs/PROJECT.md` § Preset System

@@ -39,7 +39,7 @@ Tuning mode solves this by temporarily repurposing the hardware controls as tuni
 
 ---
 
-## Tuning Pages (Mode A)
+## Tuning Pages (Mode A — Bordun)
 
 ### Page 1 — Oscillator Character
 
@@ -190,7 +190,7 @@ void ApplyTuningKnobs(TuningPage page) {
 
 ## When Tuning Mode Gets Expanded
 
-As Modes B and C are specced, each gets its own set of tuning pages. Toggle 3 continues to select among them — either by growing to more pages (if controls allow) or by scoping to the active mode (tune Mode A's pages while Mode A is selected as current mode, etc.). Decision deferred until Mode B is specced.
+As Modes B (Sprawl) and C (Schism) are specced, each gets its own set of tuning pages. Toggle 3 continues to select among them — either by growing to more pages (if controls allow) or by scoping to the active mode (tune Mode A's pages while Mode A is selected as current mode, etc.). Decision deferred until Mode B is specced.
 
 ---
 

@@ -4,14 +4,14 @@
 
 A multi-mode digital effects pedal for bass guitar, built on the Electro-Smith Daisy Seed. Three independent effect modes are selectable via Switch 3, each with an edit buffer and 8 stored presets. Only the active mode runs at any time — inactive modes have zero CPU cost.
 
-**Mode A — Drone OSC** (fully specced in `MODE_A_DRONE.md`)
+**Mode A — Bordun** (fully specced in `MODE_A_DRONE.md`)
 Inspired by the Moog MoogerFooger FreqBox (MF-102). An internally generated oscillator, amplitude-controlled by an envelope follower tracking the bass input, mixed back with the dry signal. No oscillator sync, no FM modulation.
 
-**Mode B — Granular Glitch** (fully specced in `MODE_B_GRANULAR.md`)
+**Mode B — Sprawl** (fully specced in `MODE_B_GRANULAR.md`)
 Inspired by the Chase Bliss Mood's "micro-looper as collaborator" philosophy. Rolling buffer → grain scheduler → pitch-shifted voices → gesture-reactive tonal shaping → feedback loop. The wet output sits above the dry bass in frequency and rhythmically around it. Reuses EnvFollower, PitchTracker, MoogLadder, and wavefolder from Mode A.
 
-**Mode C — Frequency Shifter** (placeholder, to be specced later)
-Single sideband frequency shift via Hilbert transform. Moderate CPU load, comfortably within budget.
+**Mode C — Schism** (discovery doc in `MODE_C_DISCOVERY.md`)
+Two-stage distortion → filter chain. Switchable distortion (sine wavefolder, Plague nonlinear BP) and filter (Moog ladder, Grendel formant). Envelope follower modulates filter. Reuses EnvFollower, MoogLadder, and wavefolder from Mode A.
 
 ---
 
@@ -82,7 +82,7 @@ These are consistent across all modes:
 
 | Control | Function |
 |---|---|
-| Switch 3 | Mode select — Drone / Granular / Freq Shift |
+| Switch 3 | Mode select — Bordun / Sprawl / Schism |
 | Footswitch 1 | Preset navigation (see Preset System below) |
 | Footswitch 2 | Bypass (true bypass via Hothouse relay). Long press: save mode |
 | FS1 + FS2 held 2 s | Enter DFU bootloader for flashing |
@@ -229,11 +229,11 @@ On boot, the pedal restores the last active mode and each mode's full state (edi
 - **Per-waveform gains** — DONE. Independent level trim for saw/tri/square in constants.h.
 - **Serial logging** — DONE. `StartLog(false)` + raw knob values printed every ~2 s from main loop using `FLT_FMT3` macros. Safe: no printing from audio callback.
 - **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
-- **Mode B spec** — DONE. Granular Glitch fully specced in `MODE_B_GRANULAR.md`.
+- **Mode B spec** — DONE. Sprawl fully specced in `MODE_B_GRANULAR.md`.
 - **Knob remap** — DONE. Measured physical range 0.000–0.968, calibrated `RemapKnob()` with named constants.
 - **Preset system** — DONE. FS1 preset navigation (edit buffer + 8 presets per mode), Roman numeral LED blink encoding (I/V patterns), save mode via FS2 long press + confirm. Dirty tracking, flash persistence via `PersistentStorage`, mode switching saves/restores per-mode state. Auto-save every ~30 s. Bootloader via FS1 held 2 s (Phase 1; Phase 2 will add FS1+FS2 dual-hold). Implementation plan in `docs/PRESET_IMPL.md`.
 - **Stage 6** — DONE. Multi-mode scaffold: Switch 3 dispatches `ProcessDrone()` / `ProcessGranular()` / `ProcessFreqShift()`. Modes B and C are dry passthrough stubs. Bypass handled once in `AudioCallback`, mode functions only run when active. Pitch tracker conditional on Mode A.
-- **Mode B** — IN PROGRESS. Granular engine working: ring buffer (8 s SDRAM), grain scheduler, 8 voices, Hann windowing, pitch-tracked harmony (fixed interval + resonance modes), texture shaper (decimator/wavefolder bipolar on SW1 UP, clean on MID, ringmod on DOWN), wet HPF 150 Hz, equal-power mix. Knob layout: K1=interval, K2=buffer range, K3=character/glitch (merged, splittable), K4=texture amount, K5=feedback (unipolar, 0.95 ceiling, wet→ring buffer injection), K6=mix. Direct-texture mode (K2 fully CCW): grain engine bypassed, input→texture shaper, K3=micro-stutter.
+- **Mode B (Sprawl)** — IN PROGRESS. Granular engine working: ring buffer (8 s SDRAM), grain scheduler, 8 voices, Hann windowing, pitch-tracked harmony (fixed interval + resonance modes), texture shaper (decimator/wavefolder bipolar on SW1 UP, clean on MID, ringmod on DOWN), wet HPF 150 Hz, equal-power mix. Knob layout: K1=interval, K2=buffer range, K3=character/glitch (merged, splittable), K4=texture amount, K5=feedback (unipolar, 0.95 ceiling, wet→ring buffer injection), K6=mix. Direct-texture mode (K2 fully CCW): grain engine bypassed, input→texture shaper, K3=micro-stutter.
 - **Next** — Feedback path constraints (filtering/coloring) by ear. FS1+FS2 dual-hold bootloader (Phase 2 after flash test). Pitch tracking improvements deferred.
 
 ## Staged Development Timeline
@@ -267,7 +267,7 @@ Drill Hammond 125B to Hothouse template. Finish and label.
 ### Deferred
 - **Tuning mode** — USB serial workflow needs a fix (freezes on terminal connect). Will revisit after core effect is playable.
 - **Mode B direct-texture mode** — DONE. K2 fully CCW bypasses grain engine, K3 = micro-stutter.
-- **Mode C** — Frequency Shifter: spec + implement
+- **Mode C** — Schism: implement per `MODE_C_DISCOVERY.md`
 
 ---
 
@@ -308,7 +308,7 @@ Drill, paint, label.
 
 - `PROJECT.md` — this file. Top-level plan, hardware, staging, multi-mode architecture.
 - `TUNING.md` — tuning-mode spec. How to dial in constants without a display and commit them to source.
-- `MODE_A_DRONE.md` — Mode A full spec: oscillator model, envelope follower, ladder filter, controls, presets.
-- `MODE_B_GRANULAR.md` — Mode B full spec: granular glitch processor, signal chain, controls.
-- `MODE_C_FREQSHIFT.md` — *not yet written*
+- `MODE_A_DRONE.md` — Mode A (Bordun) full spec: oscillator model, envelope follower, ladder filter, controls, presets.
+- `MODE_B_GRANULAR.md` — Mode B (Sprawl) full spec: granular processor, signal chain, controls.
+- `MODE_C_DISCOVERY.md` — Mode C (Schism) discovery notes: distortion + filter chain, implementation stages.
 - `AGENTS.md` — AI agent entry point. Routes agents to the right doc for the task.
