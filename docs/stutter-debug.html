@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stutter Implementation Overview — NitroTron3 Mode B</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 2rem; line-height: 1.6; max-width: 1100px; margin: 0 auto; }
+  h1 { color: #e94560; margin-bottom: 0.5rem; font-size: 1.8rem; }
+  h2 { color: #e94560; margin: 2.5rem 0 1rem; font-size: 1.4rem; border-bottom: 1px solid #333; padding-bottom: 0.5rem; }
+  h3 { color: #0f3460; background: #e94560; display: inline-block; padding: 0.2rem 0.8rem; border-radius: 4px; margin: 1.5rem 0 0.8rem; font-size: 1rem; }
+  p { margin: 0.6rem 0; }
+  code { background: #16213e; padding: 0.15rem 0.4rem; border-radius: 3px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em; color: #7ec8e3; }
+  .note { background: #16213e; border-left: 3px solid #e94560; padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0; }
+  .note.green { border-left-color: #4ecca3; }
+  .note.yellow { border-left-color: #f0c040; }
+  .signal-flow { background: #16213e; border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  .signal-flow .box { display: inline-block; background: #0f3460; border: 1px solid #445; padding: 0.4rem 0.8rem; border-radius: 4px; margin: 0.2rem; font-size: 0.85rem; }
+  .signal-flow .box.active { border-color: #e94560; color: #e94560; }
+  .signal-flow .box.bypass { opacity: 0.4; text-decoration: line-through; }
+  .signal-flow .arrow { color: #555; margin: 0 0.3rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th { background: #0f3460; padding: 0.5rem 0.8rem; text-align: left; font-size: 0.85rem; }
+  td { padding: 0.5rem 0.8rem; border-bottom: 1px solid #222; font-size: 0.85rem; }
+  tr:hover td { background: #16213e; }
+
+  /* Waveform visualizations */
+  .viz { margin: 1.5rem 0; }
+  .viz canvas { background: #0d1117; border-radius: 6px; border: 1px solid #333; display: block; margin: 0.5rem 0; }
+  .viz-label { font-size: 0.8rem; color: #888; margin-bottom: 0.3rem; }
+  .viz-row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+  .viz-col { flex: 1; min-width: 300px; }
+
+  .timeline { position: relative; background: #0d1117; border-radius: 6px; border: 1px solid #333; padding: 1rem; margin: 1rem 0; min-height: 200px; }
+  .timeline .phase { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; text-align: center; padding: 0.3rem; border-right: 1px dashed #444; }
+  .timeline .phase:last-child { border-right: none; }
+  .phase-writing { background: rgba(78, 204, 163, 0.15); color: #4ecca3; }
+  .phase-fadein { background: rgba(233, 69, 96, 0.15); color: #e94560; }
+  .phase-body { background: rgba(126, 200, 227, 0.2); color: #7ec8e3; }
+  .phase-fadeout { background: rgba(233, 69, 96, 0.15); color: #e94560; }
+</style>
+</head>
+<body>
+
+<h1>Stutter Implementation Overview</h1>
+<p>NitroTron3 Mode B &mdash; Direct-Texture Mode (K2 fully CCW)</p>
+<p style="color:#888; font-size:0.85rem;">Diagnostic document for click debugging. Created 2026-04-24.</p>
+
+<h2>1. Signal Flow</h2>
+
+<p>When K2 is fully CCW (<code>k2 &lt; 0.02</code>), the grain engine is bypassed. The signal takes this path:</p>
+
+<div class="signal-flow">
+  <div class="box">dry (live input)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box">stutter decision</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box active">wet output</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box bypass">Texture Shaper (SW1=MID: bypass)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box active">Wet HPF 150 Hz</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box">Mix (K6)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box">output</div>
+</div>
+
+<div class="note yellow">
+  <strong>Key observation:</strong> With SW1 in MID, the texture shaper is a no-op. The only processing on <code>wet</code> is the HPF before it reaches the mix. The HPF has persistent state &mdash; if it's causing transients, it would affect every stutter event identically regardless of our envelope approach.
+</div>
+
+<h2>2. Two States: Writing vs Stuttering</h2>
+
+<p>The stutter alternates between two mutually exclusive states:</p>
+
+<table>
+  <tr><th>State</th><th>Buffer</th><th>Output (wet)</th><th>Trigger</th></tr>
+  <tr>
+    <td><strong>Not stuttering</strong></td>
+    <td>Writing <code>dry</code> into <code>stutter_buf</code> every sample</td>
+    <td><code>wet = dry</code> (clean passthrough)</td>
+    <td>Random dice roll per sample: <code>RandFloat() &lt; stutter_prob</code></td>
+  </tr>
+  <tr>
+    <td><strong>Stuttering</strong></td>
+    <td>NOT writing (buffer frozen to protect captured chunk)</td>
+    <td><code>wet = dry &times; (1&minus;fade) + looped &times; fade</code></td>
+    <td>Countdown: <code>stutter_remaining--</code> until 0</td>
+  </tr>
+</table>
+
+<h2>3. The Event Envelope</h2>
+
+<p>Each stutter event has a trapezoidal envelope called <code>event_fade</code>:</p>
+
+<div class="viz">
+  <div class="viz-label">event_fade over time (192-sample fade = 4 ms at 48 kHz)</div>
+  <canvas id="envelope" width="700" height="150"></canvas>
+</div>
+
+<p>The output formula during a stutter event:</p>
+<div class="note">
+  <code>wet = dry &times; (1 &minus; event_fade) + looped &times; event_fade</code><br><br>
+  At <code>event_fade = 0</code>: wet = dry (clean)<br>
+  At <code>event_fade = 1</code>: wet = looped (full stutter playback)<br>
+  In between: a <strong>crossfade</strong> between the two signals
+</div>
+
+<div class="note yellow">
+  <strong>THE CLICK PROBLEM:</strong> <code>dry</code> is the live bass signal. <code>looped</code> is audio captured 50&ndash;200 ms ago. These two signals are at completely different phases and possibly different amplitudes. Crossfading between them creates an audible artifact &mdash; even over 4 ms &mdash; because the blend produces waveform interference at the transition.
+</div>
+
+<h2>4. What the Crossfade Actually Looks Like</h2>
+
+<div class="viz">
+  <div class="viz-row">
+    <div class="viz-col">
+      <div class="viz-label">Event START: dry fades out, looped fades in</div>
+      <canvas id="xfade-start" width="500" height="200"></canvas>
+    </div>
+    <div class="viz-col">
+      <div class="viz-label">Event END: looped fades out, dry fades in</div>
+      <canvas id="xfade-end" width="500" height="200"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="note yellow">
+  <strong>Visual evidence:</strong> The red (dry) and blue (looped) signals are at different phases. During the crossfade region, the blended output (white) shows a bump/dip where the two signals interfere. This is the click.
+</div>
+
+<h2>5. Loop Wrap (Multi-Rep Events)</h2>
+
+<p>When an event has multiple repetitions (reps &gt; 1), the read position wraps back to the start of the captured chunk:</p>
+
+<div class="viz">
+  <div class="viz-label">Loop playback with 2 reps &mdash; raw discontinuity at wrap point</div>
+  <canvas id="loop-wrap" width="700" height="180"></canvas>
+</div>
+
+<p>At the wrap point, the last sample of the chunk jumps directly to the first sample. This is a second source of clicks, independent of the event crossfade.</p>
+
+<div class="note">
+  <strong>The baked seam crossfade</strong> (lines 478&ndash;487) attempts to fix this by fading the first/last 32 samples of the chunk to zero at trigger time. But this <strong>modifies the buffer</strong>, which corrupts it for future events if they trigger before the write head overwrites the modified region.
+</div>
+
+<h2>6. Cut-Out Events</h2>
+
+<p>When <code>stutter_is_cutout = true</code>, the event fades to silence instead of playing the buffer:</p>
+
+<div class="viz">
+  <div class="viz-label">Cut-out event (10&ndash;50 ms): dry signal fades to silence and back</div>
+  <canvas id="cutout" width="700" height="150"></canvas>
+</div>
+
+<p>Cut-outs use <code>wet = dry &times; (1 &minus; event_fade)</code>. This should be click-free because it's fading a single signal to/from zero &mdash; no crossfade between mismatched signals.</p>
+
+<h2>7. Complete Event Timeline</h2>
+
+<div class="viz">
+  <div class="viz-label">Full timeline: idle &rarr; stutter event (2 reps) &rarr; idle</div>
+  <canvas id="timeline" width="700" height="250"></canvas>
+</div>
+
+<h2>8. Stutter Parameters (controlled by K3)</h2>
+
+<table>
+  <tr><th>Parameter</th><th>Formula</th><th>K3=0 (CCW)</th><th>K3=0.5 (noon)</th><th>K3=1 (CW)</th></tr>
+  <tr><td>Event probability (per sample)</td><td><code>k3&sup2; &times; (1/1440)</code></td><td>0 (never)</td><td>~1/5760 (~every 120 ms)</td><td>~1/1440 (~every 30 ms)</td></tr>
+  <tr><td>Base chunk length</td><td><code>9600 &minus; k3 &times; 7200</code></td><td>9600 (200 ms)</td><td>6000 (125 ms)</td><td>2400 (50 ms)</td></tr>
+  <tr><td>Chunk randomization</td><td><code>&times; (0.6 &ndash; 1.4)</code></td><td colspan="3">Random &plusmn;40% per event</td></tr>
+  <tr><td>Reps per event</td><td><code>1 + rand(0 &ndash; 1+k3&times;4)</code></td><td>1</td><td>1&ndash;3</td><td>1&ndash;5</td></tr>
+  <tr><td>Cut-out chance</td><td><code>k3 &times; 0.4</code></td><td>0%</td><td>20%</td><td>40%</td></tr>
+  <tr><td>Reverse chance</td><td><code>k3 &times; 0.6</code></td><td>0%</td><td>30%</td><td>60%</td></tr>
+</table>
+
+<h2>9. Known Click Sources</h2>
+
+<table>
+  <tr><th>#</th><th>Source</th><th>When</th><th>Mechanism</th><th>Status</th></tr>
+  <tr>
+    <td>1</td>
+    <td><strong>Event crossfade</strong></td>
+    <td>Every event start &amp; end</td>
+    <td>Blending <code>dry</code> (live) with <code>looped</code> (captured 50&ndash;200 ms ago) &mdash; different phases cause interference</td>
+    <td style="color:#f0c040;">Suspected but unconfirmed &mdash; all fix attempts failed</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><strong>Loop seam</strong></td>
+    <td>Every loop wrap in multi-rep events</td>
+    <td>Last sample of chunk &ne; first sample &mdash; raw discontinuity</td>
+    <td style="color:#f0c040;">Partially addressed by baked seam fade (has side effects)</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><strong>Wet HPF transient</strong></td>
+    <td>Every event start &amp; end</td>
+    <td>HPF state tracks one signal, then input changes character &mdash; filter produces transient as it adjusts</td>
+    <td style="color:#4ecca3;">Ruled out &mdash; bypassing HPF made no difference (tested 2026-04-24)</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><strong>Buffer corruption</strong></td>
+    <td>High K3 (frequent events)</td>
+    <td>Baked seam fade modifies buffer; next event may capture modified (faded-to-zero) samples</td>
+    <td style="color:#f0c040;">Present in current code</td>
+  </tr>
+</table>
+
+<h2>10. What We Tried (All Failed)</h2>
+
+<table>
+  <tr><th>Attempt</th><th>Approach</th><th>Why it didn't work</th></tr>
+  <tr><td>1</td><td>Longer crossfade (4 ms)</td><td>Still blending mismatched signals</td></tr>
+  <tr><td>2</td><td>Symmetric fade to dry at loop seam</td><td>Dry pulses at every wrap; may not have been the issue</td></tr>
+  <tr><td>3</td><td>Baked crossfade (blend tail into head)</td><td>t/1-t was inverted; even when fixed, head[FADE-1] &ne; head[0]</td></tr>
+  <tr><td>4</td><td>Fade to zero at loop seam</td><td>Brief silence pulses; may not have been the issue</td></tr>
+  <tr><td>5</td><td>5-phase envelope (never blend dry with looped)</td><td>Still clicked &mdash; suggests crossfade was not the only/main issue</td></tr>
+  <tr><td>6</td><td>Read-time seam fade + 5-phase</td><td>Still clicked</td></tr>
+  <tr><td>7</td><td>Replace with grain engine voices</td><td>Click-free but introduced audible delay (defeats purpose)</td></tr>
+  <tr><td>8</td><td>Layer grains on top of dry</td><td>Changed character entirely (echo on top, not stutter)</td></tr>
+</table>
+
+<div class="note green">
+  <strong>Key insight from attempt 5:</strong> We eliminated ALL crossfading between different signals (dry and looped never blended, everything went through zero) and clicks STILL persisted. <strong>HPF was also ruled out</strong> (bypassing it made no difference). The click source remains unidentified.
+</div>
+
+<script>
+// Helper: draw a waveform on a canvas
+function drawWave(ctx, w, h, fn, color, lineWidth = 2) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    const y = h/2 - fn(t) * (h/2 - 10);
+    if (x === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function drawGrid(ctx, w, h) {
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, h/2); ctx.lineTo(w, h/2);
+  ctx.stroke();
+}
+
+function drawLabel(ctx, text, x, y, color = '#888') {
+  ctx.fillStyle = color;
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.fillText(text, x, y);
+}
+
+// 1. Event envelope
+(function() {
+  const c = document.getElementById('envelope');
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  drawGrid(ctx, w, h);
+
+  const fadeLen = 0.04; // 4% of width = 192/4800ish
+  function envelope(t) {
+    if (t < 0.05) return 0; // before event
+    if (t > 0.95) return 0; // after event
+    const et = (t - 0.05) / 0.9; // 0-1 within event
+    if (et < fadeLen) return et / fadeLen;
+    if (et > 1 - fadeLen) return (1 - et) / fadeLen;
+    return 1;
+  }
+
+  // Draw regions
+  ctx.fillStyle = 'rgba(78,204,163,0.1)';
+  ctx.fillRect(0, 0, w*0.05, h);
+  ctx.fillRect(w*0.95, 0, w*0.05, h);
+  ctx.fillStyle = 'rgba(233,69,96,0.1)';
+  ctx.fillRect(w*0.05, 0, w*0.036, h);
+  ctx.fillRect(w*0.914, 0, w*0.036, h);
+  ctx.fillStyle = 'rgba(126,200,227,0.08)';
+  ctx.fillRect(w*0.086, 0, w*0.828, h);
+
+  drawWave(ctx, w, h, t => envelope(t), '#e94560', 2.5);
+
+  drawLabel(ctx, 'idle', 5, 15, '#4ecca3');
+  drawLabel(ctx, 'fade in', w*0.05+3, 15, '#e94560');
+  drawLabel(ctx, 'body (event_fade = 1.0)', w*0.3, 15, '#7ec8e3');
+  drawLabel(ctx, 'fade out', w*0.915, 15, '#e94560');
+  drawLabel(ctx, 'idle', w*0.955, 15, '#4ecca3');
+  drawLabel(ctx, '0', 5, h-5);
+  drawLabel(ctx, '1', 5, 20);
+})();
+
+// 2. Crossfade start
+(function() {
+  const c = document.getElementById('xfade-start');
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  drawGrid(ctx, w, h);
+
+  const freq1 = 8, freq2 = 8;
+  const phase2 = 2.3; // different phase
+  const fadeStart = 0.3, fadeEnd = 0.7;
+
+  function dry(t) { return 0.6 * Math.sin(2*Math.PI*freq1*t); }
+  function looped(t) { return 0.5 * Math.sin(2*Math.PI*freq2*t + phase2); }
+  function fade(t) {
+    if (t < fadeStart) return 0;
+    if (t > fadeEnd) return 1;
+    return (t - fadeStart) / (fadeEnd - fadeStart);
+  }
+  function blended(t) {
+    const f = fade(t);
+    return dry(t) * (1-f) + looped(t) * f;
+  }
+
+  // Regions
+  ctx.fillStyle = 'rgba(78,204,163,0.1)';
+  ctx.fillRect(0, 0, w*fadeStart, h);
+  ctx.fillStyle = 'rgba(233,69,96,0.15)';
+  ctx.fillRect(w*fadeStart, 0, w*(fadeEnd-fadeStart), h);
+  ctx.fillStyle = 'rgba(126,200,227,0.1)';
+  ctx.fillRect(w*fadeEnd, 0, w*(1-fadeEnd), h);
+
+  drawWave(ctx, w, h, dry, 'rgba(233,69,96,0.4)', 1);
+  drawWave(ctx, w, h, looped, 'rgba(100,149,237,0.4)', 1);
+  drawWave(ctx, w, h, blended, '#fff', 2);
+
+  drawLabel(ctx, 'wet = dry', 5, 15, '#e94560');
+  drawLabel(ctx, 'CROSSFADE', w*fadeStart + 5, 15, '#fff');
+  drawLabel(ctx, 'wet = looped', w*fadeEnd + 5, 15, '#6495ed');
+  drawLabel(ctx, 'interference here!', w*fadeStart + 5, h-8, '#f0c040');
+})();
+
+// 3. Crossfade end
+(function() {
+  const c = document.getElementById('xfade-end');
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  drawGrid(ctx, w, h);
+
+  const freq1 = 8, freq2 = 8;
+  const phase1 = 1.1, phase2 = 3.7;
+  const fadeStart = 0.3, fadeEnd = 0.7;
+
+  function looped(t) { return 0.5 * Math.sin(2*Math.PI*freq2*t + phase2); }
+  function dry(t) { return 0.6 * Math.sin(2*Math.PI*freq1*t + phase1); }
+  function fade(t) {
+    if (t < fadeStart) return 1;
+    if (t > fadeEnd) return 0;
+    return 1 - (t - fadeStart) / (fadeEnd - fadeStart);
+  }
+  function blended(t) {
+    const f = fade(t);
+    return dry(t) * (1-f) + looped(t) * f;
+  }
+
+  ctx.fillStyle = 'rgba(126,200,227,0.1)';
+  ctx.fillRect(0, 0, w*fadeStart, h);
+  ctx.fillStyle = 'rgba(233,69,96,0.15)';
+  ctx.fillRect(w*fadeStart, 0, w*(fadeEnd-fadeStart), h);
+  ctx.fillStyle = 'rgba(78,204,163,0.1)';
+  ctx.fillRect(w*fadeEnd, 0, w*(1-fadeEnd), h);
+
+  drawWave(ctx, w, h, looped, 'rgba(100,149,237,0.4)', 1);
+  drawWave(ctx, w, h, dry, 'rgba(233,69,96,0.4)', 1);
+  drawWave(ctx, w, h, blended, '#fff', 2);
+
+  drawLabel(ctx, 'wet = looped', 5, 15, '#6495ed');
+  drawLabel(ctx, 'CROSSFADE', w*fadeStart + 5, 15, '#fff');
+  drawLabel(ctx, 'wet = dry', w*fadeEnd + 5, 15, '#e94560');
+  drawLabel(ctx, 'interference here!', w*fadeStart + 5, h-8, '#f0c040');
+})();
+
+// 4. Loop wrap
+(function() {
+  const c = document.getElementById('loop-wrap');
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  drawGrid(ctx, w, h);
+
+  const loopEnd1 = 0.45;
+  const loopEnd2 = 0.9;
+
+  function wave(t) {
+    // Simulate captured audio chunk playing twice
+    const chunkT = t < loopEnd1 ? t / loopEnd1 : (t - loopEnd1) / (loopEnd2 - loopEnd1);
+    return 0.5 * Math.sin(2*Math.PI*7*chunkT + 0.5) * (0.7 + 0.3*Math.sin(2*Math.PI*2*chunkT));
+  }
+
+  drawWave(ctx, w, h, wave, '#7ec8e3', 2);
+
+  // Mark the wrap point
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([4,4]);
+  ctx.beginPath();
+  ctx.moveTo(w*loopEnd1, 0);
+  ctx.lineTo(w*loopEnd1, h);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  drawLabel(ctx, 'Rep 1', w*0.15, 15, '#7ec8e3');
+  drawLabel(ctx, 'Rep 2', w*0.6, 15, '#7ec8e3');
+  drawLabel(ctx, 'DISCONTINUITY', w*loopEnd1 + 5, 20, '#e94560');
+  drawLabel(ctx, '(last sample != first sample)', w*loopEnd1 + 5, 35, '#e94560');
+})();
+
+// 5. Cut-out
+(function() {
+  const c = document.getElementById('cutout');
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  drawGrid(ctx, w, h);
+
+  const evStart = 0.3, evEnd = 0.7;
+  const fadeLen = 0.05;
+
+  function dry(t) { return 0.5 * Math.sin(2*Math.PI*6*t); }
+  function fade(t) {
+    if (t < evStart) return 0;
+    if (t < evStart + fadeLen) return (t - evStart) / fadeLen;
+    if (t > evEnd - fadeLen) return (evEnd - t) / fadeLen;
+    if (t > evEnd) return 0;
+    return 1;
+  }
+  function output(t) {
+    return dry(t) * (1 - fade(t));
+  }
+
+  ctx.fillStyle = 'rgba(78,204,163,0.1)';
+  ctx.fillRect(0, 0, w*evStart, h);
+  ctx.fillRect(w*evEnd, 0, w*(1-evEnd), h);
+  ctx.fillStyle = 'rgba(50,50,50,0.3)';
+  ctx.fillRect(w*(evStart+fadeLen), 0, w*(evEnd-evStart-fadeLen*2), h);
+
+  drawWave(ctx, w, h, dry, 'rgba(233,69,96,0.3)', 1);
+  drawWave(ctx, w, h, output, '#4ecca3', 2);
+
+  drawLabel(ctx, 'dry', 5, 15, '#e94560');
+  drawLabel(ctx, 'silence', w*0.45, 15, '#888');
+  drawLabel(ctx, 'dry', w*evEnd + 5, 15, '#e94560');
+  drawLabel(ctx, 'Single signal fading to/from zero = no interference = no click', 5, h-8, '#4ecca3');
+})();
+
+// 6. Full timeline
+(function() {
+  const c = document.getElementById('timeline');
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+
+  // Background
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, w, h);
+
+  // Define regions
+  const regions = [
+    { start: 0, end: 0.15, label: 'Idle\n(wet = dry)', color: 'rgba(78,204,163,0.15)', textColor: '#4ecca3' },
+    { start: 0.15, end: 0.18, label: 'Fade\nin', color: 'rgba(233,69,96,0.2)', textColor: '#e94560' },
+    { start: 0.18, end: 0.45, label: 'Rep 1\n(wet = looped)', color: 'rgba(126,200,227,0.15)', textColor: '#7ec8e3' },
+    { start: 0.45, end: 0.45, label: '', color: 'rgba(233,69,96,0.5)', textColor: '#e94560' }, // wrap line
+    { start: 0.45, end: 0.72, label: 'Rep 2\n(wet = looped)', color: 'rgba(126,200,227,0.15)', textColor: '#7ec8e3' },
+    { start: 0.72, end: 0.75, label: 'Fade\nout', color: 'rgba(233,69,96,0.2)', textColor: '#e94560' },
+    { start: 0.75, end: 1.0, label: 'Idle\n(wet = dry)', color: 'rgba(78,204,163,0.15)', textColor: '#4ecca3' },
+  ];
+
+  regions.forEach(r => {
+    if (r.start === r.end) return;
+    ctx.fillStyle = r.color;
+    ctx.fillRect(w*r.start, 0, w*(r.end - r.start), h*0.45);
+
+    ctx.fillStyle = r.textColor;
+    ctx.font = '11px -apple-system, sans-serif';
+    const lines = r.label.split('\n');
+    lines.forEach((line, i) => {
+      ctx.fillText(line, w*r.start + 5, 20 + i*14);
+    });
+  });
+
+  // Wrap line
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([3,3]);
+  ctx.beginPath();
+  ctx.moveTo(w*0.45, 0);
+  ctx.lineTo(w*0.45, h*0.45);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  drawLabel(ctx, 'loop wrap', w*0.45+3, h*0.43, '#e94560');
+
+  // Waveform
+  const waveY = h * 0.7;
+  const waveH = h * 0.4;
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, waveY); ctx.lineTo(w, waveY);
+  ctx.stroke();
+
+  function dryWave(t) { return 0.5 * Math.sin(2*Math.PI*5*t + 0.3); }
+  function loopedWave(t) {
+    const lt = (t < 0.45) ? (t - 0.15) / 0.3 : (t - 0.45) / 0.27;
+    return 0.4 * Math.sin(2*Math.PI*5*lt + 1.8);
+  }
+  function envelope(t) {
+    if (t < 0.15 || t > 0.75) return 0;
+    if (t < 0.18) return (t-0.15)/0.03;
+    if (t > 0.72) return (0.75-t)/0.03;
+    return 1;
+  }
+  function output(t) {
+    const f = envelope(t);
+    if (f === 0) return dryWave(t);
+    return dryWave(t) * (1-f) + loopedWave(t) * f;
+  }
+
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    const y = waveY - output(t) * waveH/2;
+    if (x === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'Output waveform', 5, waveY - waveH/2 - 5, '#888');
+
+  // Click markers
+  [0.165, 0.45, 0.735].forEach(t => {
+    ctx.fillStyle = 'rgba(240,192,64,0.8)';
+    ctx.beginPath();
+    ctx.moveTo(w*t, waveY - waveH/2 - 15);
+    ctx.lineTo(w*t - 4, waveY - waveH/2 - 25);
+    ctx.lineTo(w*t + 4, waveY - waveH/2 - 25);
+    ctx.fill();
+  });
+  drawLabel(ctx, 'potential click locations', w*0.17, waveY - waveH/2 - 28, '#f0c040');
+})();
+</script>
+
+</body>
+</html>
