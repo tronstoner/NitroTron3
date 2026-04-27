@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mode B Engines — NitroTron3</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 2rem; line-height: 1.7; max-width: 1100px; margin: 0 auto; }
+  h1 { color: #e94560; margin-bottom: 0.3rem; font-size: 2rem; letter-spacing: -0.02em; }
+  .subtitle { color: #888; font-size: 0.95rem; margin-bottom: 2rem; }
+  h2 { color: #e94560; margin: 3rem 0 1rem; font-size: 1.5rem; border-bottom: 1px solid #333; padding-bottom: 0.5rem; }
+  h3 { color: #0f3460; background: #e94560; display: inline-block; padding: 0.2rem 0.8rem; border-radius: 4px; margin: 1.8rem 0 0.8rem; font-size: 0.95rem; }
+  h4 { color: #7ec8e3; margin: 1.2rem 0 0.5rem; font-size: 1rem; }
+  p { margin: 0.6rem 0; }
+  code { background: #16213e; padding: 0.15rem 0.4rem; border-radius: 3px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em; color: #7ec8e3; }
+  .note { background: #16213e; border-left: 3px solid #e94560; padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0; }
+  .note.green { border-left-color: #4ecca3; }
+  .note.blue { border-left-color: #7ec8e3; }
+  .note.yellow { border-left-color: #f0c040; }
+  .signal-flow { background: #16213e; border-radius: 8px; padding: 1.5rem; margin: 1rem 0; overflow-x: auto; }
+  .signal-flow .box { display: inline-block; background: #0f3460; border: 1px solid #445; padding: 0.4rem 0.8rem; border-radius: 4px; margin: 0.2rem; font-size: 0.85rem; }
+  .signal-flow .box.stutter { border-color: #4ecca3; color: #4ecca3; }
+  .signal-flow .box.grain { border-color: #7ec8e3; color: #7ec8e3; }
+  .signal-flow .box.shared { border-color: #e94560; color: #e94560; }
+  .signal-flow .arrow { color: #555; margin: 0 0.3rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th { background: #0f3460; padding: 0.5rem 0.8rem; text-align: left; font-size: 0.85rem; }
+  td { padding: 0.5rem 0.8rem; border-bottom: 1px solid #222; font-size: 0.85rem; }
+  tr:hover td { background: #16213e; }
+
+  .viz { margin: 1.5rem 0; }
+  .viz canvas { background: #0d1117; border-radius: 6px; border: 1px solid #333; display: block; margin: 0.5rem 0; width: 100%; }
+  .viz-label { font-size: 0.8rem; color: #888; margin-bottom: 0.3rem; }
+  .viz-row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+  .viz-col { flex: 1; min-width: 300px; }
+
+  .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
+  .comparison > div { background: #16213e; border-radius: 8px; padding: 1.2rem; }
+  .comparison h4 { margin-top: 0; }
+  @media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+
+  .param-dial { display: inline-flex; align-items: center; gap: 0.4rem; background: #0f3460; padding: 0.3rem 0.7rem; border-radius: 20px; font-size: 0.8rem; margin: 0.2rem; }
+  .param-dial .knob { width: 12px; height: 12px; border-radius: 50%; border: 2px solid; }
+  .param-dial .knob.k2 { border-color: #4ecca3; }
+  .param-dial .knob.k3 { border-color: #e94560; }
+
+  .toc { background: #16213e; border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0; }
+  .toc a { color: #7ec8e3; text-decoration: none; display: block; padding: 0.2rem 0; font-size: 0.9rem; }
+  .toc a:hover { color: #e94560; }
+  .toc .indent { padding-left: 1.2rem; }
+
+  .interactive { background: #16213e; border-radius: 8px; padding: 1.2rem; margin: 1rem 0; }
+  .interactive label { font-size: 0.85rem; color: #888; margin-right: 0.5rem; }
+  .interactive input[type=range] { width: 200px; vertical-align: middle; accent-color: #e94560; }
+  .interactive .value { color: #7ec8e3; font-family: 'SF Mono', monospace; font-size: 0.85rem; min-width: 60px; display: inline-block; }
+</style>
+</head>
+<body>
+
+<h1>Mode B Audio Engines</h1>
+<p class="subtitle">NitroTron3 &mdash; Stutter Engine vs Grain Engine</p>
+
+<div class="toc">
+  <strong style="color:#e94560;">Contents</strong>
+  <a href="#overview">1. Overview</a>
+  <a href="#stutter" class="indent">2. Stutter Engine (Direct-Texture Mode)</a>
+  <a href="#grain" class="indent">3. Grain Engine (Normal Mode)</a>
+  <a href="#comparison">4. Side-by-Side Comparison</a>
+  <a href="#windows">5. Window Functions</a>
+  <a href="#examples">6. Visual Examples</a>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="overview">1. Overview</h2>
+
+<p>Mode B has two distinct audio engines, selected by the <strong>K2</strong> knob position:</p>
+
+<div class="comparison">
+  <div style="border: 1px solid #4ecca3;">
+    <h4 style="color: #4ecca3;">Stutter Engine</h4>
+    <p>Active when <strong>K2 is fully CCW</strong> (below 2% travel). A lightweight, probability-driven sample manipulator. Captures a small window of live input and randomly replays slices of it &mdash; creating micro-glitches, rhythmic chops, and momentary freezes.</p>
+    <p style="font-size:0.85rem; color:#888;">Buffer: 200 ms &bull; 2 voices &bull; No pitch shift &bull; No feedback</p>
+  </div>
+  <div style="border: 1px solid #7ec8e3;">
+    <h4 style="color: #7ec8e3;">Grain Engine</h4>
+    <p>Active when <strong>K2 is above 2%</strong>. A polyphonic granular synthesizer that scatters pitch-shifted fragments of the input across time. Creates shimmering textures, harmonic clouds, and evolving soundscapes above the dry bass.</p>
+    <p style="font-size:0.85rem; color:#888;">Buffer: 8 seconds &bull; 8 voices &bull; Pitch-shifted &bull; Feedback loop</p>
+  </div>
+</div>
+
+<p>The transition is instantaneous &mdash; turning K2 past the threshold switches engines with no crossfade or gap.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="stutter">2. Stutter Engine</h2>
+
+<h4>Signal Flow</h4>
+<div class="signal-flow">
+  <div class="box">Input (dry)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box stutter">Capture Buffer (200 ms)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box stutter">Event Decision</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box stutter">2-Voice Crossfade</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box shared">Mix (K6)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box">Output</div>
+</div>
+
+<h4>How It Works</h4>
+<p>A small circular buffer (9600 samples = 200 ms at 48 kHz) continuously captures the live input. Every sample, a random dice roll decides whether to trigger a stutter event. When triggered, the engine freezes a slice of the buffer and loops it back.</p>
+
+<p><strong>K3</strong> is the sole control &mdash; it simultaneously scales probability, chunk size, repetitions, reverse chance, and cut-out chance. Fully CCW = clean passthrough, fully CW = dense chaotic stuttering.</p>
+
+<div class="viz">
+  <div class="viz-label">Capture buffer: input is continuously written; events freeze and replay a slice</div>
+  <canvas id="capture-buf" width="700" height="160"></canvas>
+</div>
+
+<h4>Event Types</h4>
+
+<div class="comparison">
+  <div>
+    <h4 style="color:#7ec8e3;">Repeat Event</h4>
+    <p>Captures a chunk (20&ndash;200 ms) from the buffer and loops it 1&ndash;5 times. Each event randomizes the chunk length (&plusmn;40%), and may play in reverse (0&ndash;80% chance based on K3). Uses two alternating voices with Tukey-windowed crossfades for seamless looping.</p>
+  </div>
+  <div>
+    <h4 style="color:#f0c040;">Cut-Out Event</h4>
+    <p>A momentary silence &mdash; the signal ducks to zero over a cosine envelope (10&ndash;50 ms). Creates rhythmic gaps in the signal. Cut-out probability is 0&ndash;40% of all events based on K3. No buffer playback involved &mdash; just smooth volume ducking.</p>
+  </div>
+</div>
+
+<div class="viz">
+  <div class="viz-row">
+    <div class="viz-col">
+      <div class="viz-label">Repeat event: two-voice crossfade with Tukey windows</div>
+      <canvas id="stutter-repeat" width="500" height="180"></canvas>
+    </div>
+    <div class="viz-col">
+      <div class="viz-label">Cut-out event: cosine ducking envelope</div>
+      <canvas id="stutter-cutout" width="500" height="180"></canvas>
+    </div>
+  </div>
+</div>
+
+<h4>Two-Voice Crossfade</h4>
+<p>The stutter engine uses two alternating voices (ping-pong) to eliminate clicks at loop boundaries. When one voice reaches its tail taper, the other voice begins playing the next repetition with its own fade-in. The combined window sum is clamped to 1.0, ensuring a smooth handoff:</p>
+
+<div class="note blue">
+  <code>w = clamp(voice0.window + voice1.window, 0, 1)</code><br>
+  <code>wet = dry &times; (1 &minus; w) + voice0_sample + voice1_sample</code><br><br>
+  The dry signal fills any gap where neither voice is active. During the crossfade region, both voices overlap briefly, eliminating the discontinuity that would occur with a single-voice hard loop.
+</div>
+
+<div class="viz">
+  <div class="viz-label">Two-voice ping-pong: Voice A ends as Voice B begins, windows overlap at loop boundary</div>
+  <canvas id="pingpong" width="700" height="200"></canvas>
+</div>
+
+<h4>Stutter Parameters (K3 Controls Everything)</h4>
+<table>
+  <tr><th>Parameter</th><th>K3 = 0 (CCW)</th><th>K3 = 0.5 (noon)</th><th>K3 = 1 (CW)</th></tr>
+  <tr><td>Event probability</td><td>0 (never)</td><td>~every 120 ms</td><td>~every 30 ms</td></tr>
+  <tr><td>Chunk length</td><td>200 ms</td><td>110 ms</td><td>20 ms</td></tr>
+  <tr><td>Repetitions</td><td>1</td><td>1&ndash;3</td><td>1&ndash;5</td></tr>
+  <tr><td>Reverse chance</td><td>0%</td><td>40%</td><td>80%</td></tr>
+  <tr><td>Cut-out chance</td><td>0%</td><td>20%</td><td>40%</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="grain">3. Grain Engine</h2>
+
+<h4>Signal Flow</h4>
+<div class="signal-flow">
+  <div class="box">Input (dry)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box grain">Ring Buffer (8 s, SDRAM)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box grain">Scheduler</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box grain">8 Grain Voices</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box shared">Texture Shaper (SW1/K4)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box shared">Wet HPF 150 Hz</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box shared">Mix (K6)</div>
+  <span class="arrow">&rarr;</span>
+  <div class="box">Output</div>
+  <br><br>
+  <div class="box shared" style="opacity:0.7;">Feedback (K5)</div>
+  <span class="arrow" style="opacity:0.7;">&larr;</span>
+  <span style="color:#555; font-size:0.8rem;">(post-HPF wet feeds back into ring buffer write path)</span>
+</div>
+
+<h4>How It Works</h4>
+<p>An 8-second ring buffer in SDRAM continuously records the input (plus feedback). A scheduler fires grain events at regular intervals with jitter. Each grain reads a fragment from somewhere in the buffer, pitch-shifts it, envelopes it with a Tukey window, and plays it back. Up to 8 grains can overlap simultaneously.</p>
+
+<div class="viz">
+  <div class="viz-label">Ring buffer (8 s): grains read from different positions behind the write head</div>
+  <canvas id="ring-buffer" width="700" height="200"></canvas>
+</div>
+
+<h4>Grain Anatomy</h4>
+<p>Each grain is a self-contained voice with these properties, assigned at trigger time:</p>
+
+<table>
+  <tr><th>Property</th><th>Range</th><th>Controlled By</th></tr>
+  <tr><td>Duration</td><td>20&ndash;200 ms</td><td>K3 (character/glitch)</td></tr>
+  <tr><td>Read position</td><td>100 ms &ndash; 8 s behind write head</td><td>K2 (buffer range) + random scatter</td></tr>
+  <tr><td>Pitch ratio</td><td>&minus;24 to +24 semitones</td><td>K1 (interval) + SW2 (harmony mode)</td></tr>
+  <tr><td>Repetitions</td><td>1&ndash;8 loops</td><td>K3 (higher = more loops)</td></tr>
+  <tr><td>Reverse</td><td>yes/no</td><td>K3 (higher = more likely)</td></tr>
+  <tr><td>Window shape</td><td>Tukey &alpha; 0.2&ndash;1.0</td><td>Adaptive to grain length</td></tr>
+  <tr><td>Gain</td><td>Compensated for pitch</td><td><code>1 / &radic;(pitch_ratio)</code></td></tr>
+</table>
+
+<div class="viz">
+  <div class="viz-label">Grain voice: Tukey-windowed fragment, optionally pitch-shifted and looped</div>
+  <canvas id="grain-anatomy" width="700" height="180"></canvas>
+</div>
+
+<h4>Scheduling &amp; Overlap</h4>
+<p>The scheduler controls <em>how often</em> new grains fire and <em>how many</em> overlap. K3 drives both:</p>
+
+<div class="comparison">
+  <div>
+    <h4 style="color:#4ecca3;">K3 low (smooth)</h4>
+    <p>Long grains (200 ms), 4&times; overlap, minimal jitter, low reverse/loop chance. Produces a smooth, shimmering texture with gentle grain density. Grains overlap substantially, creating a continuous pad-like sound.</p>
+  </div>
+  <div>
+    <h4 style="color:#e94560;">K3 high (chaotic)</h4>
+    <p>Short grains (20 ms), 1&times; overlap, heavy jitter, high reverse/loop chance. Produces percussive, scattered fragments with rhythmic randomness. Grains barely overlap, creating a pointillist texture.</p>
+  </div>
+</div>
+
+<div class="viz">
+  <div class="viz-row">
+    <div class="viz-col">
+      <div class="viz-label">K3 low: long grains, high overlap, smooth texture</div>
+      <canvas id="grains-smooth" width="500" height="160"></canvas>
+    </div>
+    <div class="viz-col">
+      <div class="viz-label">K3 high: short grains, sparse, percussive</div>
+      <canvas id="grains-chaotic" width="500" height="160"></canvas>
+    </div>
+  </div>
+</div>
+
+<h4>Pitch &amp; Harmony</h4>
+<p>Each grain gets a pitch-shift ratio computed from the live-tracked bass note plus the harmony mode (SW2):</p>
+
+<table>
+  <tr><th>SW2 Position</th><th>Mode</th><th>Character</th></tr>
+  <tr><td>UP</td><td>Fixed interval</td><td>K1 sets semitones (&minus;24 to +24). Every grain at the same interval. Predictable parallel voice.</td></tr>
+  <tr><td>MIDDLE</td><td>Scale-quantized random</td><td>Each grain picks a random interval from a pentatonic scale, weighted toward K1. Melodic improvisation.</td></tr>
+  <tr><td>DOWN</td><td>Harmonic cloud</td><td>Each grain picks from the harmonic series. Creates chords and pads that follow the bass.</td></tr>
+</table>
+
+<h4>Feedback Loop</h4>
+<p>Post-HPF wet output, scaled by K5, is written back into the ring buffer. This means the grain engine <em>hears itself</em> &mdash; grains of grains of grains. At low K5, it adds subtle depth. At high K5, the loop self-sustains as a drone that evolves over the full 8-second buffer length.</p>
+
+<div class="note green">
+  <strong>Why feedback writes to the buffer, not the output:</strong> Traditional delay feedback stacks identical repeats. Writing to the buffer means each repetition gets re-scattered, re-pitched, and re-windowed by the grain engine &mdash; it evolves organically instead of decaying as an echo.
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="comparison">4. Side-by-Side Comparison</h2>
+
+<table>
+  <tr><th></th><th style="color:#4ecca3;">Stutter Engine</th><th style="color:#7ec8e3;">Grain Engine</th></tr>
+  <tr><td><strong>Purpose</strong></td><td>Micro-glitch, chop, freeze</td><td>Textural cloud, harmony, drone</td></tr>
+  <tr><td><strong>Buffer</strong></td><td>200 ms (RAM)</td><td>8 seconds (SDRAM)</td></tr>
+  <tr><td><strong>Voices</strong></td><td>2 (ping-pong)</td><td>8 (round-robin)</td></tr>
+  <tr><td><strong>Trigger</strong></td><td>Random probability per sample</td><td>Scheduled interval with jitter</td></tr>
+  <tr><td><strong>Pitch shift</strong></td><td>None (original pitch)</td><td>&minus;24 to +24 semitones, harmony-tracked</td></tr>
+  <tr><td><strong>Window</strong></td><td>Tukey (adaptive 2&ndash;5 ms taper)</td><td>Tukey (adaptive &alpha; 0.2&ndash;1.0)</td></tr>
+  <tr><td><strong>Looping</strong></td><td>1&ndash;5 reps, two-voice crossfade</td><td>1&ndash;8 reps, single-voice Tukey taper</td></tr>
+  <tr><td><strong>Reverse</strong></td><td>0&ndash;80% chance (K3)</td><td>Yes, via negative playback rate</td></tr>
+  <tr><td><strong>Cut-outs</strong></td><td>Yes (rhythmic silence gaps)</td><td>No</td></tr>
+  <tr><td><strong>Texture shaper</strong></td><td>Not applied</td><td>Decimator / Wavefold / Ringmod</td></tr>
+  <tr><td><strong>HPF</strong></td><td>Not applied</td><td>150 Hz high-pass on wet</td></tr>
+  <tr><td><strong>Feedback</strong></td><td>Disabled during repeats</td><td>K5 controls, writes to ring buffer</td></tr>
+  <tr><td><strong>Latency</strong></td><td>Zero (replays captured audio)</td><td>Minimum 100 ms read-behind</td></tr>
+  <tr><td><strong>Musical role</strong></td><td>Rhythmic disruption of the bass</td><td>Harmonic companion above the bass</td></tr>
+</table>
+
+<div class="viz">
+  <div class="viz-label">Timeline comparison: stutter event (top) vs grain cloud (bottom) over 500 ms</div>
+  <canvas id="comparison-timeline" width="700" height="280"></canvas>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="windows">5. Window Functions</h2>
+
+<p>Both engines use the <strong>Tukey window</strong> (cosine-tapered rectangle) to eliminate clicks at grain boundaries. The key parameter is <strong>&alpha;</strong> &mdash; the fraction of the window spent in the cosine taper:</p>
+
+<div class="viz">
+  <div class="viz-label">Tukey window shapes: &alpha; controls how much of the grain is tapered</div>
+  <canvas id="tukey-windows" width="700" height="200"></canvas>
+</div>
+
+<div class="comparison">
+  <div>
+    <h4 style="color:#4ecca3;">Stutter: Fixed Taper</h4>
+    <p>Taper length is computed as 10% of the slice length, clamped to <strong>96&ndash;240 samples</strong> (2&ndash;5 ms). This gives just enough fade to avoid clicks while keeping the stutter punchy. The flat middle region dominates.</p>
+  </div>
+  <div>
+    <h4 style="color:#7ec8e3;">Grain: Adaptive Alpha</h4>
+    <p>Alpha scales with grain length: short grains (20 ms) get <strong>&alpha; = 0.2</strong> (mostly flat, percussive), long grains (200 ms) get <strong>&alpha; = 1.0</strong> (full Hann, smooth). This means short grains punch through while long grains blend.</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="examples">6. Visual Examples</h2>
+
+<h4>Example 1: Single Stutter Event (3 reps, forward)</h4>
+<div class="viz">
+  <div class="viz-label">Input captured, then replayed 3 times with two-voice crossfade at each loop boundary</div>
+  <canvas id="ex-stutter-3rep" width="700" height="200"></canvas>
+</div>
+
+<h4>Example 2: Stutter with Reverse</h4>
+<div class="viz">
+  <div class="viz-label">Same chunk played forward, then reversed &mdash; creates a palindrome effect</div>
+  <canvas id="ex-stutter-reverse" width="700" height="200"></canvas>
+</div>
+
+<h4>Example 3: Cut-Out Sequence</h4>
+<div class="viz">
+  <div class="viz-label">Rhythmic gaps in the signal: cosine ducks smooth the entry/exit</div>
+  <canvas id="ex-cutout-seq" width="700" height="160"></canvas>
+</div>
+
+<h4>Example 4: Grain Cloud (Smooth)</h4>
+<div class="viz">
+  <div class="viz-label">Overlapping grains at different pitches create a shimmering texture</div>
+  <canvas id="ex-grain-cloud" width="700" height="220"></canvas>
+</div>
+
+<h4>Example 5: Grain Cloud (Chaotic)</h4>
+<div class="viz">
+  <div class="viz-label">Short, sparse grains with heavy scatter and reverse &mdash; pointillist texture</div>
+  <canvas id="ex-grain-chaotic" width="700" height="220"></canvas>
+</div>
+
+<p style="color:#555; font-size:0.8rem; margin-top:3rem; text-align:center;">NitroTron3 &mdash; Mode B Engine Documentation</p>
+
+<script>
+// ─── Drawing helpers ───────────────────────────────────────────────────
+function getCtx(id) {
+  const c = document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const rect = c.getBoundingClientRect();
+  c.width = rect.width * dpr;
+  c.height = rect.height * dpr;
+  const ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { ctx, w: rect.width, h: rect.height };
+}
+
+function drawWave(ctx, w, h, fn, color, lineWidth = 2, yCenter) {
+  if (yCenter === undefined) yCenter = h / 2;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    const y = yCenter - fn(t) * (h / 2 - 10);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function drawGrid(ctx, w, h, yCenter) {
+  if (yCenter === undefined) yCenter = h / 2;
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, yCenter); ctx.lineTo(w, yCenter);
+  ctx.stroke();
+}
+
+function drawLabel(ctx, text, x, y, color) {
+  ctx.fillStyle = color || '#888';
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.fillText(text, x, y);
+}
+
+function fillRegion(ctx, x1, x2, h, color, y0) {
+  y0 = y0 || 0;
+  ctx.fillStyle = color;
+  ctx.fillRect(x1, y0, x2 - x1, h);
+}
+
+function tukey(t, alpha) {
+  if (alpha <= 0) return 1;
+  if (t < alpha / 2) return 0.5 * (1 - Math.cos(2 * Math.PI * t / alpha));
+  if (t > 1 - alpha / 2) return 0.5 * (1 - Math.cos(2 * Math.PI * (1 - t) / alpha));
+  return 1;
+}
+
+// ─── 1. Capture Buffer ────────────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('capture-buf');
+  // Show the circular buffer concept
+  const writePos = 0.65;
+  const chunkStart = 0.35;
+  const chunkEnd = 0.55;
+
+  // Buffer background
+  fillRegion(ctx, 0, w, h, '#0d1117');
+
+  // Written region
+  fillRegion(ctx, 0, w * writePos, h * 0.6, 'rgba(78,204,163,0.12)');
+  fillRegion(ctx, w * writePos, w, h * 0.6, 'rgba(50,50,50,0.15)');
+
+  // Captured chunk highlight
+  fillRegion(ctx, w * chunkStart, w * chunkEnd, h * 0.6, 'rgba(126,200,227,0.2)');
+
+  // Draw waveform in buffer
+  const freq = 3.5;
+  ctx.strokeStyle = '#4ecca3';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w * writePos; x++) {
+    const t = x / w;
+    const y = h * 0.3 - Math.sin(2 * Math.PI * freq * t + 0.7) * 0.3 * (h * 0.25);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Highlight captured chunk waveform
+  ctx.strokeStyle = '#7ec8e3';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let x = w * chunkStart; x < w * chunkEnd; x++) {
+    const t = x / w;
+    const y = h * 0.3 - Math.sin(2 * Math.PI * freq * t + 0.7) * 0.3 * (h * 0.25);
+    if (x === w * chunkStart) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Write head marker
+  ctx.strokeStyle = '#4ecca3';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(w * writePos, 0);
+  ctx.lineTo(w * writePos, h * 0.6);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Playback arrows
+  const playY = h * 0.78;
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 1.5;
+  for (let rep = 0; rep < 3; rep++) {
+    const rx = w * 0.1 + rep * w * 0.25;
+    const rw = w * 0.2;
+    ctx.beginPath();
+    ctx.moveTo(rx, playY);
+    ctx.lineTo(rx + rw, playY);
+    ctx.lineTo(rx + rw - 6, playY - 4);
+    ctx.moveTo(rx + rw, playY);
+    ctx.lineTo(rx + rw - 6, playY + 4);
+    ctx.stroke();
+  }
+
+  drawLabel(ctx, 'write head', w * writePos + 4, 14, '#4ecca3');
+  drawLabel(ctx, 'captured chunk', w * chunkStart + 4, h * 0.6 + 14, '#7ec8e3');
+  drawLabel(ctx, 'replay (looped)', w * 0.25, playY - 10, '#e94560');
+  drawLabel(ctx, '200 ms circular buffer', w * 0.02, h - 5, '#555');
+})();
+
+// ─── 2. Stutter Repeat Event ──────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('stutter-repeat');
+  drawGrid(ctx, w, h);
+
+  const evStart = 0.1, evEnd = 0.9;
+  const repLen = (evEnd - evStart) / 2;
+  const taperFrac = 0.08;
+
+  // Region shading
+  fillRegion(ctx, 0, w * evStart, h, 'rgba(78,204,163,0.08)');
+  fillRegion(ctx, w * evStart, w * evEnd, h, 'rgba(126,200,227,0.08)');
+  fillRegion(ctx, w * evEnd, w, h, 'rgba(78,204,163,0.08)');
+
+  // Voice windows
+  function voiceA(t) {
+    if (t < evStart || t > evStart + repLen + taperFrac) return 0;
+    const lt = (t - evStart) / (repLen + taperFrac);
+    return tukey(lt, taperFrac * 2 / (repLen + taperFrac));
+  }
+  function voiceB(t) {
+    const s = evStart + repLen - taperFrac;
+    const dur = repLen + taperFrac * 2;
+    if (t < s || t > s + dur) return 0;
+    const lt = (t - s) / dur;
+    return tukey(lt, taperFrac * 2 / dur);
+  }
+
+  // Draw window envelopes
+  drawWave(ctx, w, h, t => voiceA(t) * 0.7, 'rgba(78,204,163,0.5)', 1.5);
+  drawWave(ctx, w, h, t => voiceB(t) * 0.7, 'rgba(233,69,96,0.5)', 1.5);
+
+  // Combined signal
+  const chunkFreq = 5;
+  function chunk(phase) { return Math.sin(2 * Math.PI * chunkFreq * phase + 1.2); }
+  function combined(t) {
+    const a = voiceA(t);
+    const b = voiceB(t);
+    const dry = 0.4 * Math.sin(2 * Math.PI * 3.7 * t + 0.3);
+    const ww = Math.min(a + b, 1);
+    const phaseA = (t - evStart) / repLen;
+    const phaseB = (t - (evStart + repLen - taperFrac)) / repLen;
+    const looped = a * chunk(phaseA) * 0.4 + b * chunk(phaseB) * 0.4;
+    return dry * (1 - ww) + looped;
+  }
+
+  drawWave(ctx, w, h, combined, '#fff', 1.5);
+
+  drawLabel(ctx, 'dry', 5, 15, '#4ecca3');
+  drawLabel(ctx, 'Voice A', w * 0.2, 15, '#4ecca3');
+  drawLabel(ctx, 'Voice B', w * 0.55, 15, '#e94560');
+  drawLabel(ctx, 'overlap', w * (evStart + repLen - taperFrac) + 2, h - 8, '#f0c040');
+  drawLabel(ctx, 'dry', w * 0.92, 15, '#4ecca3');
+})();
+
+// ─── 3. Stutter Cut-Out ──────────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('stutter-cutout');
+  drawGrid(ctx, w, h);
+
+  const evStart = 0.25, evEnd = 0.75;
+  const taper = 0.06;
+
+  fillRegion(ctx, 0, w * evStart, h, 'rgba(78,204,163,0.08)');
+  fillRegion(ctx, w * (evStart + taper), w * (evEnd - taper), h, 'rgba(50,50,50,0.15)');
+  fillRegion(ctx, w * evEnd, w, h, 'rgba(78,204,163,0.08)');
+
+  function duck(t) {
+    if (t < evStart) return 0;
+    if (t > evEnd) return 0;
+    if (t < evStart + taper) return 0.5 * (1 - Math.cos(Math.PI * (t - evStart) / taper));
+    if (t > evEnd - taper) return 0.5 * (1 - Math.cos(Math.PI * (evEnd - t) / taper));
+    return 1;
+  }
+
+  function dry(t) { return 0.5 * Math.sin(2 * Math.PI * 4.5 * t + 0.8); }
+  function output(t) { return dry(t) * (1 - duck(t)); }
+
+  drawWave(ctx, w, h, dry, 'rgba(78,204,163,0.3)', 1);
+  drawWave(ctx, w, h, output, '#f0c040', 2);
+
+  // Duck envelope (inverted, at top)
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    const y = 12 + duck(t) * 20;
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  drawLabel(ctx, 'signal', 5, 15, '#4ecca3');
+  drawLabel(ctx, 'silence', w * 0.45, h / 2 - 5, '#888');
+  drawLabel(ctx, 'cosine duck', w * 0.65, 28, 'rgba(255,255,255,0.4)');
+})();
+
+// ─── 4. Ping-Pong Detail ─────────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('pingpong');
+
+  // Show 4 reps with alternating voices
+  const numReps = 4;
+  const repW = 0.22;
+  const overlap = 0.03;
+  const startX = 0.04;
+
+  fillRegion(ctx, 0, w, h, '#0d1117');
+
+  const colors = ['#4ecca3', '#e94560'];
+
+  for (let i = 0; i < numReps; i++) {
+    const x0 = startX + i * (repW - overlap);
+    const color = colors[i % 2];
+    const alpha = 0.12;
+
+    fillRegion(ctx, w * x0, w * (x0 + repW), h * 0.45, color.replace(')', ',0.1)').replace('rgb', 'rgba'));
+
+    // Window envelope
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w;
+      const lt = (t - x0) / repW;
+      if (lt < 0 || lt > 1) continue;
+      const env = tukey(lt, 0.25) * 0.4;
+      const y = h * 0.25 - env * h * 0.4;
+      if (lt < 0.01) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    drawLabel(ctx, i % 2 === 0 ? 'Voice A' : 'Voice B', w * x0 + 5, 15, color);
+    drawLabel(ctx, 'Rep ' + (i + 1), w * (x0 + repW / 2) - 12, h * 0.43, '#888');
+  }
+
+  // Overlap markers
+  for (let i = 0; i < numReps - 1; i++) {
+    const ox = startX + (i + 1) * (repW - overlap) - overlap * 0.5;
+    ctx.fillStyle = 'rgba(240,192,64,0.2)';
+    ctx.fillRect(w * (ox - overlap * 0.5), 0, w * overlap * 2, h * 0.45);
+  }
+
+  // Combined output waveform
+  const yC = h * 0.72;
+  drawGrid(ctx, w, h, yC);
+  const chunkFreq = 6;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let sum = 0;
+    let wSum = 0;
+    for (let i = 0; i < numReps; i++) {
+      const x0 = startX + i * (repW - overlap);
+      const lt = (t - x0) / repW;
+      if (lt >= 0 && lt <= 1) {
+        const env = tukey(lt, 0.25);
+        sum += env * 0.35 * Math.sin(2 * Math.PI * chunkFreq * lt + 1.0);
+        wSum += env;
+      }
+    }
+    wSum = Math.min(wSum, 1);
+    const dry = 0.35 * Math.sin(2 * Math.PI * 3.2 * t + 0.5);
+    const out = dry * (1 - wSum) + sum;
+    const y = yC - out * (h * 0.22);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'combined output (no clicks at boundaries)', 5, yC - h * 0.2, '#888');
+  drawLabel(ctx, 'crossfade overlap', w * 0.3, h * 0.47, '#f0c040');
+})();
+
+// ─── 5. Ring Buffer ───────────────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('ring-buffer');
+  fillRegion(ctx, 0, w, h, '#0d1117');
+
+  // Draw the buffer as a horizontal strip
+  const bufY = h * 0.15, bufH = h * 0.35;
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0, bufY, w, bufH);
+
+  // Time labels
+  const writeX = w * 0.85;
+  for (let i = 0; i <= 8; i++) {
+    const x = writeX - (i / 8) * w * 0.8;
+    if (x < 0) continue;
+    ctx.strokeStyle = '#222';
+    ctx.beginPath();
+    ctx.moveTo(x, bufY);
+    ctx.lineTo(x, bufY + bufH);
+    ctx.stroke();
+    if (i > 0) drawLabel(ctx, '-' + i + 's', x + 2, bufY + bufH + 14, '#555');
+  }
+
+  // Write head
+  ctx.strokeStyle = '#4ecca3';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(writeX, bufY - 5);
+  ctx.lineTo(writeX, bufY + bufH + 5);
+  ctx.stroke();
+  drawLabel(ctx, 'write head', writeX + 4, bufY - 2, '#4ecca3');
+
+  // Waveform in buffer
+  ctx.strokeStyle = 'rgba(126,200,227,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 5; x < writeX; x++) {
+    const t = x / w;
+    const y = bufY + bufH / 2 - Math.sin(2 * Math.PI * 8 * t + Math.sin(t * 3) * 2) * bufH * 0.3;
+    if (x === 5) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Grain read positions (arrows pointing up from below buffer)
+  const grains = [
+    { pos: 0.2, len: 0.08, color: '#e94560', label: 'grain 1 (+5 semi)' },
+    { pos: 0.4, len: 0.12, color: '#f0c040', label: 'grain 2 (-7 semi)' },
+    { pos: 0.55, len: 0.05, color: '#7ec8e3', label: 'grain 3 (+12 semi)' },
+    { pos: 0.72, len: 0.06, color: '#4ecca3', label: 'grain 4 (reverse)' },
+  ];
+
+  const grainY = bufY + bufH + 30;
+  grains.forEach((g, i) => {
+    const gx = w * g.pos;
+    const gw = w * g.len;
+
+    // Highlight in buffer
+    ctx.fillStyle = g.color.replace(')', ',0.15)').replace('#', 'rgba(').replace(/([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i, (m, r, g2, b) =>
+      parseInt(r, 16) + ',' + parseInt(g2, 16) + ',' + parseInt(b, 16));
+    // Simpler approach
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = g.color;
+    ctx.fillRect(gx, bufY, gw, bufH);
+    ctx.globalAlpha = 1;
+
+    // Arrow down to grain info
+    ctx.strokeStyle = g.color;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(gx + gw / 2, bufY + bufH);
+    ctx.lineTo(gx + gw / 2, grainY + i * 18);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    drawLabel(ctx, g.label, gx + gw / 2 + 5, grainY + 5 + i * 18, g.color);
+  });
+
+  drawLabel(ctx, '8-second ring buffer (SDRAM)', 5, bufY + bufH + 14, '#555');
+})();
+
+// ─── 6. Grain Anatomy ────────────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('grain-anatomy');
+  drawGrid(ctx, w, h);
+
+  const gStart = 0.1, gEnd = 0.7;
+  const alpha = 0.6;
+  const pitchRatio = 1.5; // pitched up
+
+  // Window envelope
+  function win(t) {
+    if (t < gStart || t > gEnd) return 0;
+    const lt = (t - gStart) / (gEnd - gStart);
+    return tukey(lt, alpha);
+  }
+
+  // Audio content (pitch-shifted)
+  const baseFreq = 4;
+  function grainAudio(t) {
+    if (t < gStart || t > gEnd) return 0;
+    const lt = (t - gStart) / (gEnd - gStart);
+    return win(t) * 0.6 * Math.sin(2 * Math.PI * baseFreq * pitchRatio * lt);
+  }
+
+  // Original pitch for reference
+  function original(t) {
+    if (t < gStart || t > gEnd) return 0;
+    const lt = (t - gStart) / (gEnd - gStart);
+    return tukey(lt, alpha) * 0.4 * Math.sin(2 * Math.PI * baseFreq * lt);
+  }
+
+  // Taper regions
+  const taperW = (gEnd - gStart) * alpha / 2;
+  fillRegion(ctx, w * gStart, w * (gStart + taperW), h, 'rgba(233,69,96,0.1)');
+  fillRegion(ctx, w * (gStart + taperW), w * (gEnd - taperW), h, 'rgba(126,200,227,0.08)');
+  fillRegion(ctx, w * (gEnd - taperW), w * gEnd, h, 'rgba(233,69,96,0.1)');
+
+  // Draw envelope
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    const y = h / 2 - win(t) * (h / 2 - 10);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Draw original
+  drawWave(ctx, w, h, original, 'rgba(126,200,227,0.3)', 1);
+
+  // Draw pitched version
+  drawWave(ctx, w, h, grainAudio, '#7ec8e3', 2);
+
+  drawLabel(ctx, 'cosine taper', w * gStart + 3, 18, '#e94560');
+  drawLabel(ctx, 'flat body', w * (gStart + taperW) + 5, 18, '#7ec8e3');
+  drawLabel(ctx, 'cosine taper', w * (gEnd - taperW) + 3, 18, '#e94560');
+  drawLabel(ctx, 'Tukey window (alpha = ' + alpha + ')', w * 0.72, 18, 'rgba(255,255,255,0.3)');
+  drawLabel(ctx, 'pitched up 1.5x', w * 0.72, h / 2 + 5, '#7ec8e3');
+  drawLabel(ctx, 'original pitch', w * 0.72, h / 2 + 20, 'rgba(126,200,227,0.3)');
+})();
+
+// ─── 7. Grains Smooth vs Chaotic ──────────────────────────────────────
+function drawGrainCloud(canvasId, numGrains, grainLen, overlap, jitter, title) {
+  const { ctx, w, h } = getCtx(canvasId);
+  fillRegion(ctx, 0, w, h, '#0d1117');
+  drawGrid(ctx, w, h);
+
+  const colors = ['#e94560', '#7ec8e3', '#4ecca3', '#f0c040', '#c084fc', '#fb923c', '#67e8f9', '#fca5a5'];
+  const grains = [];
+  let t = 0.02;
+  for (let i = 0; i < numGrains; i++) {
+    const gLen = grainLen * (0.7 + Math.random() * 0.6);
+    const alpha = 0.2 + (gLen - 0.03) / (0.3 - 0.03) * 0.8;
+    const freq = 3 + Math.random() * 8;
+    const phase = Math.random() * Math.PI * 2;
+    const amp = 0.15 + Math.random() * 0.2;
+    grains.push({ start: t, len: gLen, alpha: Math.min(alpha, 1), freq, phase, amp, color: colors[i % colors.length] });
+    const interval = gLen / overlap;
+    t += interval * (1 + (Math.random() * 2 - 1) * jitter);
+    if (t > 0.95) break;
+  }
+
+  // Draw each grain envelope
+  grains.forEach(g => {
+    // Envelope line
+    ctx.strokeStyle = g.color;
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = Math.floor(w * g.start); x < Math.min(w, Math.ceil(w * (g.start + g.len))); x++) {
+      const t = x / w;
+      const lt = (t - g.start) / g.len;
+      if (lt < 0 || lt > 1) continue;
+      const env = tukey(lt, g.alpha) * g.amp;
+      const y = h / 2 - env * (h - 20);
+      if (x === Math.floor(w * g.start)) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+
+  // Combined output
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let sum = 0;
+    grains.forEach(g => {
+      const lt = (t - g.start) / g.len;
+      if (lt >= 0 && lt <= 1) {
+        sum += tukey(lt, g.alpha) * g.amp * Math.sin(2 * Math.PI * g.freq * lt + g.phase);
+      }
+    });
+    const y = h / 2 - sum * (h - 20);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, numGrains + ' grains, ' + Math.round(grainLen * 1000) + 'ms, ' + overlap + 'x overlap', 5, 14, '#888');
+}
+
+drawGrainCloud('grains-smooth', 12, 0.2, 4, 0.1);
+drawGrainCloud('grains-chaotic', 20, 0.05, 1.2, 0.7);
+
+// ─── 8. Tukey Windows ────────────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('tukey-windows');
+  fillRegion(ctx, 0, w, h, '#0d1117');
+  drawGrid(ctx, w, h, h * 0.85);
+
+  const alphas = [
+    { a: 0.2, color: '#e94560', label: 'alpha = 0.2 (short grain, 20 ms)' },
+    { a: 0.5, color: '#f0c040', label: 'alpha = 0.5 (medium grain)' },
+    { a: 1.0, color: '#7ec8e3', label: 'alpha = 1.0 (long grain, 200 ms = Hann)' },
+  ];
+
+  const margin = 0.05;
+
+  alphas.forEach((item, i) => {
+    ctx.strokeStyle = item.color;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w;
+      if (t < margin || t > 1 - margin) continue;
+      const lt = (t - margin) / (1 - 2 * margin);
+      const env = tukey(lt, item.a);
+      const y = h * 0.85 - env * h * 0.7;
+      if (t <= margin + 0.002) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    drawLabel(ctx, item.label, w * 0.6, 18 + i * 16, item.color);
+  });
+
+  drawLabel(ctx, '0', 5, h * 0.85 + 12, '#555');
+  drawLabel(ctx, '1', 5, h * 0.15 - 3, '#555');
+
+  // Taper annotation
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 4]);
+  const taperEnd = margin + (1 - 2 * margin) * 0.1;
+  ctx.beginPath();
+  ctx.moveTo(w * taperEnd, 0);
+  ctx.lineTo(w * taperEnd, h);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  drawLabel(ctx, 'taper region', w * margin + 3, h - 8, '#555');
+})();
+
+// ─── 9. Comparison Timeline ──────────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('comparison-timeline');
+  fillRegion(ctx, 0, w, h, '#0d1117');
+
+  const midY = h * 0.48;
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  ctx.lineTo(w, midY);
+  ctx.stroke();
+
+  // === TOP: Stutter events ===
+  const stutterH = midY - 10;
+  const stutterCenter = stutterH / 2;
+  drawGrid(ctx, w, stutterH, stutterCenter);
+
+  // Dry signal
+  function dry(t) { return 0.4 * Math.sin(2 * Math.PI * 4 * t + 0.5); }
+
+  // Stutter events
+  const stutterEvents = [
+    { start: 0.15, end: 0.35, type: 'repeat' },
+    { start: 0.5, end: 0.6, type: 'cutout' },
+    { start: 0.72, end: 0.92, type: 'repeat' },
+  ];
+
+  stutterEvents.forEach(ev => {
+    const color = ev.type === 'repeat' ? 'rgba(126,200,227,0.1)' : 'rgba(240,192,64,0.1)';
+    fillRegion(ctx, w * ev.start, w * ev.end, stutterH, color);
+  });
+
+  // Stutter output
+  ctx.strokeStyle = '#4ecca3';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let out = dry(t);
+    stutterEvents.forEach(ev => {
+      if (t >= ev.start && t <= ev.end) {
+        const lt = (t - ev.start) / (ev.end - ev.start);
+        const env = tukey(lt, 0.2);
+        if (ev.type === 'repeat') {
+          const looped = 0.35 * Math.sin(2 * Math.PI * 6 * lt + 2.1);
+          out = dry(t) * (1 - env) + looped * env;
+        } else {
+          out = dry(t) * (1 - env);
+        }
+      }
+    });
+    const y = stutterCenter - out * (stutterH * 0.35);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'STUTTER ENGINE', 5, 14, '#4ecca3');
+  drawLabel(ctx, 'repeat', w * 0.17, stutterH - 5, '#7ec8e3');
+  drawLabel(ctx, 'cut-out', w * 0.51, stutterH - 5, '#f0c040');
+  drawLabel(ctx, 'repeat', w * 0.74, stutterH - 5, '#7ec8e3');
+
+  // === BOTTOM: Grain cloud ===
+  const grainY0 = midY + 10;
+  const grainH = h - grainY0;
+  const grainCenter = grainY0 + grainH / 2;
+
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, grainCenter);
+  ctx.lineTo(w, grainCenter);
+  ctx.stroke();
+
+  // Generate grains
+  const gColors = ['#e94560', '#7ec8e3', '#f0c040', '#4ecca3', '#c084fc', '#fb923c'];
+  const gList = [];
+  let gt = 0.03;
+  for (let i = 0; i < 15; i++) {
+    const gLen = 0.08 + Math.random() * 0.12;
+    const freq = 4 + Math.random() * 10;
+    const phase = Math.random() * Math.PI * 2;
+    const amp = 0.1 + Math.random() * 0.15;
+    const alpha = 0.3 + Math.random() * 0.5;
+    gList.push({ start: gt, len: gLen, freq, phase, amp, alpha, color: gColors[i % gColors.length] });
+    gt += gLen / 3 * (0.5 + Math.random());
+    if (gt > 0.95) break;
+  }
+
+  // Draw individual grain envelopes (subtle)
+  gList.forEach(g => {
+    ctx.strokeStyle = g.color;
+    ctx.globalAlpha = 0.2;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = Math.floor(w * g.start); x <= Math.min(w - 1, Math.ceil(w * (g.start + g.len))); x++) {
+      const t = x / w;
+      const lt = (t - g.start) / g.len;
+      if (lt < 0 || lt > 1) continue;
+      const env = tukey(lt, g.alpha) * g.amp;
+      const y = grainCenter - env * grainH * 0.8;
+      if (x === Math.floor(w * g.start)) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+
+  // Combined grain output
+  ctx.strokeStyle = '#7ec8e3';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let sum = 0;
+    gList.forEach(g => {
+      const lt = (t - g.start) / g.len;
+      if (lt >= 0 && lt <= 1) {
+        sum += tukey(lt, g.alpha) * g.amp * Math.sin(2 * Math.PI * g.freq * lt + g.phase);
+      }
+    });
+    const y = grainCenter - sum * grainH * 0.8;
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'GRAIN ENGINE', 5, grainY0 + 14, '#7ec8e3');
+  drawLabel(ctx, '500 ms', w - 40, midY - 3, '#555');
+})();
+
+// ─── 10. Example: 3-rep stutter ──────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('ex-stutter-3rep');
+  drawGrid(ctx, w, h);
+
+  const repCount = 3;
+  const repW = 0.25;
+  const overlap = 0.03;
+  const startX = 0.08;
+  const colors = ['#4ecca3', '#e94560'];
+
+  for (let i = 0; i < repCount; i++) {
+    const x0 = startX + i * (repW - overlap);
+    const color = colors[i % 2];
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = color;
+    ctx.fillRect(w * x0, 0, w * repW, h);
+    ctx.globalAlpha = 1;
+  }
+
+  // Audio waveform
+  const chunkFreq = 5.5;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let sum = 0, wSum = 0;
+
+    // Before event: dry
+    if (t < startX) {
+      sum = 0.35 * Math.sin(2 * Math.PI * 3.5 * t);
+    }
+    // After event
+    else if (t > startX + repCount * (repW - overlap) + overlap) {
+      sum = 0.35 * Math.sin(2 * Math.PI * 3.5 * t + 1.0);
+    }
+    // During event
+    else {
+      const dry = 0.35 * Math.sin(2 * Math.PI * 3.5 * t);
+      for (let i = 0; i < repCount; i++) {
+        const x0 = startX + i * (repW - overlap);
+        const lt = (t - x0) / repW;
+        if (lt >= 0 && lt <= 1) {
+          const env = tukey(lt, 0.2);
+          sum += env * 0.35 * Math.sin(2 * Math.PI * chunkFreq * lt + 0.8);
+          wSum += env;
+        }
+      }
+      wSum = Math.min(wSum, 1);
+      sum = dry * (1 - wSum) + sum;
+    }
+
+    const y = h / 2 - sum * (h * 0.4);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'dry', 5, 14, '#888');
+  for (let i = 0; i < repCount; i++) {
+    const x0 = startX + i * (repW - overlap);
+    drawLabel(ctx, 'rep ' + (i + 1), w * (x0 + repW / 2) - 10, 14, colors[i % 2]);
+  }
+  drawLabel(ctx, 'dry resumes', w * (startX + repCount * (repW - overlap)) + 8, 14, '#888');
+})();
+
+// ─── 11. Example: Stutter reverse ────────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('ex-stutter-reverse');
+  drawGrid(ctx, w, h);
+
+  const repW = 0.3;
+  const overlap = 0.03;
+  const startX = 0.08;
+
+  // Forward rep
+  fillRegion(ctx, w * startX, w * (startX + repW), h, 'rgba(78,204,163,0.08)');
+  // Reverse rep
+  fillRegion(ctx, w * (startX + repW - overlap), w * (startX + 2 * repW - overlap), h, 'rgba(233,69,96,0.08)');
+
+  const chunkFreq = 4;
+  function chunkWave(phase) {
+    return 0.4 * Math.sin(2 * Math.PI * chunkFreq * phase + 0.5) * (0.6 + 0.4 * phase);
+  }
+
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let out = 0;
+
+    if (t < startX || t > startX + 2 * repW - overlap + 0.01) {
+      out = 0.3 * Math.sin(2 * Math.PI * 3 * t + 0.3);
+    } else {
+      let wSum = 0;
+      const dry = 0.3 * Math.sin(2 * Math.PI * 3 * t + 0.3);
+
+      // Forward
+      const lt1 = (t - startX) / repW;
+      if (lt1 >= 0 && lt1 <= 1) {
+        const env = tukey(lt1, 0.2);
+        out += env * chunkWave(lt1);
+        wSum += env;
+      }
+      // Reverse
+      const revStart = startX + repW - overlap;
+      const lt2 = (t - revStart) / repW;
+      if (lt2 >= 0 && lt2 <= 1) {
+        const env = tukey(lt2, 0.2);
+        out += env * chunkWave(1 - lt2); // reversed!
+        wSum += env;
+      }
+
+      wSum = Math.min(wSum, 1);
+      out = dry * (1 - wSum) + out;
+    }
+
+    const y = h / 2 - out * (h * 0.4);
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'forward', w * (startX + repW * 0.3), 14, '#4ecca3');
+  drawLabel(ctx, 'reversed', w * (startX + repW * 1.1), 14, '#e94560');
+
+  // Arrow indicating reverse
+  const arrowX = w * (startX + repW * 1.35);
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(arrowX + 30, h - 18);
+  ctx.lineTo(arrowX, h - 18);
+  ctx.lineTo(arrowX + 6, h - 22);
+  ctx.moveTo(arrowX, h - 18);
+  ctx.lineTo(arrowX + 6, h - 14);
+  ctx.stroke();
+  drawLabel(ctx, 'palindrome effect', arrowX + 35, h - 14, '#e94560');
+})();
+
+// ─── 12. Example: Cut-out sequence ───────────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('ex-cutout-seq');
+  drawGrid(ctx, w, h);
+
+  const cutouts = [
+    { start: 0.12, end: 0.22 },
+    { start: 0.38, end: 0.45 },
+    { start: 0.55, end: 0.72 },
+    { start: 0.85, end: 0.92 },
+  ];
+  const taper = 0.02;
+
+  cutouts.forEach(c => {
+    fillRegion(ctx, w * c.start, w * c.end, h, 'rgba(50,50,50,0.2)');
+  });
+
+  function dry(t) { return 0.45 * Math.sin(2 * Math.PI * 5 * t + 0.3) * (0.7 + 0.3 * Math.sin(2 * Math.PI * 0.8 * t)); }
+
+  function totalDuck(t) {
+    let d = 0;
+    cutouts.forEach(c => {
+      if (t >= c.start && t <= c.end) {
+        const dur = c.end - c.start;
+        const lt = (t - c.start) / dur;
+        if (lt < taper / dur) d = Math.max(d, 0.5 * (1 - Math.cos(Math.PI * lt / (taper / dur))));
+        else if (lt > 1 - taper / dur) d = Math.max(d, 0.5 * (1 - Math.cos(Math.PI * (1 - lt) / (taper / dur))));
+        else d = 1;
+      }
+    });
+    return d;
+  }
+
+  // Dry signal (ghost)
+  drawWave(ctx, w, h, dry, 'rgba(78,204,163,0.2)', 1);
+
+  // Output
+  drawWave(ctx, w, h, t => dry(t) * (1 - totalDuck(t)), '#f0c040', 2);
+
+  cutouts.forEach((c, i) => {
+    drawLabel(ctx, Math.round((c.end - c.start) * 1000) + ' ms', w * (c.start + (c.end - c.start) / 2) - 10, h - 8, '#888');
+  });
+  drawLabel(ctx, 'rhythmic gaps with smooth cosine transitions', 5, 14, '#f0c040');
+})();
+
+// ─── 13. Example: Grain cloud (smooth) ──────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('ex-grain-cloud');
+  fillRegion(ctx, 0, w, h, '#0d1117');
+
+  const topH = h * 0.3;
+  const waveCenter = h * 0.65;
+
+  // Individual grains as colored rectangles at top
+  const grains = [];
+  const gColors = ['#e94560', '#7ec8e3', '#4ecca3', '#f0c040', '#c084fc', '#fb923c', '#67e8f9', '#fca5a5'];
+  let gt = 0.02;
+  for (let i = 0; i < 10; i++) {
+    const gLen = 0.15 + Math.random() * 0.1;
+    const pitchLabel = ['+5', '+7', '+12', '-5', '+3', '+10', '-7', '+2'][i % 8];
+    grains.push({
+      start: gt, len: gLen,
+      freq: 4 + Math.random() * 6,
+      phase: Math.random() * Math.PI * 2,
+      amp: 0.08 + Math.random() * 0.1,
+      alpha: 0.6 + Math.random() * 0.4,
+      color: gColors[i % gColors.length],
+      pitch: pitchLabel,
+      row: i % 3,
+    });
+    gt += gLen / 4 * (0.8 + Math.random() * 0.4);
+    if (gt > 0.92) break;
+  }
+
+  // Draw grain bars
+  grains.forEach(g => {
+    const barY = 5 + g.row * 22;
+    ctx.fillStyle = g.color;
+    ctx.globalAlpha = 0.3;
+    ctx.fillRect(w * g.start, barY, w * g.len, 16);
+    ctx.globalAlpha = 1;
+
+    // Rounded ends (Tukey shape)
+    ctx.strokeStyle = g.color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = Math.floor(w * g.start); x <= Math.ceil(w * (g.start + g.len)); x++) {
+      const lt = (x / w - g.start) / g.len;
+      if (lt < 0 || lt > 1) continue;
+      const env = tukey(lt, g.alpha);
+      const y = barY + 16 - env * 14;
+      if (x === Math.floor(w * g.start)) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    drawLabel(ctx, g.pitch + ' st', w * g.start + 3, barY + 12, g.color);
+  });
+
+  // Combined waveform
+  drawGrid(ctx, w, h, waveCenter);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let sum = 0;
+    grains.forEach(g => {
+      const lt = (t - g.start) / g.len;
+      if (lt >= 0 && lt <= 1) {
+        sum += tukey(lt, g.alpha) * g.amp * Math.sin(2 * Math.PI * g.freq * lt + g.phase);
+      }
+    });
+    const y = waveCenter - sum * (h - topH) * 0.8;
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'grain bars show overlap and pitch (top), combined output (bottom)', 5, topH + 20, '#555');
+})();
+
+// ─── 14. Example: Grain cloud (chaotic) ─────────────────────────────
+(function() {
+  const { ctx, w, h } = getCtx('ex-grain-chaotic');
+  fillRegion(ctx, 0, w, h, '#0d1117');
+
+  const topH = h * 0.3;
+  const waveCenter = h * 0.65;
+
+  const grains = [];
+  const gColors = ['#e94560', '#7ec8e3', '#4ecca3', '#f0c040', '#c084fc', '#fb923c'];
+  let gt = 0.01;
+  for (let i = 0; i < 25; i++) {
+    const gLen = 0.02 + Math.random() * 0.04;
+    const reverse = Math.random() > 0.5;
+    grains.push({
+      start: gt, len: gLen,
+      freq: 3 + Math.random() * 12,
+      phase: Math.random() * Math.PI * 2,
+      amp: 0.08 + Math.random() * 0.15,
+      alpha: 0.2 + Math.random() * 0.2,
+      color: gColors[i % gColors.length],
+      reverse,
+      row: i % 4,
+    });
+    gt += gLen * (0.3 + Math.random() * 1.5);
+    if (gt > 0.97) break;
+  }
+
+  // Draw grain bars
+  grains.forEach(g => {
+    const barY = 3 + g.row * 17;
+    ctx.fillStyle = g.color;
+    ctx.globalAlpha = 0.35;
+    ctx.fillRect(w * g.start, barY, w * g.len, 12);
+    ctx.globalAlpha = 1;
+
+    if (g.reverse) {
+      // Small reverse arrow
+      const ax = w * g.start + 2;
+      ctx.strokeStyle = g.color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(ax + 8, barY + 6);
+      ctx.lineTo(ax, barY + 6);
+      ctx.lineTo(ax + 3, barY + 3);
+      ctx.stroke();
+    }
+  });
+
+  // Combined waveform
+  drawGrid(ctx, w, h, waveCenter);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let x = 0; x < w; x++) {
+    const t = x / w;
+    let sum = 0;
+    grains.forEach(g => {
+      const lt = (t - g.start) / g.len;
+      if (lt >= 0 && lt <= 1) {
+        const playT = g.reverse ? (1 - lt) : lt;
+        sum += tukey(lt, g.alpha) * g.amp * Math.sin(2 * Math.PI * g.freq * playT + g.phase);
+      }
+    });
+    const y = waveCenter - sum * (h - topH) * 0.8;
+    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawLabel(ctx, 'sparse, short grains with reverse (arrows) — pointillist texture', 5, topH + 20, '#555');
+})();
+</script>
+
+</body>
+</html>
