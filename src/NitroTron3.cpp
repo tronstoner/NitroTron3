@@ -10,6 +10,7 @@
 #include "ring_buffer.h"
 #include "grain_voice.h"
 #include "clouds/reverb.h"  // vendored, not yet instantiated
+#include "resampler.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -132,6 +133,16 @@ float ringmod_lp_state = 0.f; // one-pole LPF after ringmod
 static constexpr float WET_HPF_FREQ = 150.f;
 float wet_hp_state[2] = {};
 float wet_hp_coeff = 0.f;  // computed in Init
+
+// Reverb sample-rate conversion. Clouds reverb runs internally at 32 kHz.
+// 48->32 downsampler is mono (one shared input). 32->48 upsampler is per-
+// channel so the reverb's L/R decorrelation survives end-to-end.
+// Not wired into the audio path yet — see docs/MODE_B_REVERB_TASK.md.
+Resampler<2, 3, 16> rev_downsampler;
+Resampler<3, 2, 16> rev_upsampler_l;
+Resampler<3, 2, 16> rev_upsampler_r;
+static constexpr float RESAMPLER_CUTOFF_HZ = 15000.f;
+static constexpr float RESAMPLER_PROTO_FS_HZ = 96000.f;
 
 // Simple xorshift32 RNG for grain scatter
 static uint32_t rng_state = 12345;
@@ -763,6 +774,11 @@ int main() {
 
   // Wet HPF coefficient
   wet_hp_coeff = 1.f / (1.f + 2.f * 3.14159265f * WET_HPF_FREQ / sr);
+
+  // Reverb resamplers (not yet wired into the audio path)
+  rev_downsampler.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
+  rev_upsampler_l.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
+  rev_upsampler_r.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
 
   led_status.Init(hw.seed.GetPin(Hothouse::LED_1), false);
   led_bypass.Init(hw.seed.GetPin(Hothouse::LED_2), false);
