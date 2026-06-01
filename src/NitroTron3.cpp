@@ -137,12 +137,18 @@ float wet_hp_coeff = 0.f;  // computed in Init
 // Reverb sample-rate conversion. Clouds reverb runs internally at 32 kHz.
 // 48->32 downsampler is mono (one shared input). 32->48 upsampler is per-
 // channel so the reverb's L/R decorrelation survives end-to-end.
-// Not wired into the audio path yet — see docs/MODE_B_REVERB_TASK.md.
 Resampler<2, 3, 16> rev_downsampler;
 Resampler<3, 2, 16> rev_upsampler_l;
 Resampler<3, 2, 16> rev_upsampler_r;
 static constexpr float RESAMPLER_CUTOFF_HZ = 15000.f;
 static constexpr float RESAMPLER_PROTO_FS_HZ = 96000.f;
+
+// Clouds Reverb (Mode B wet path). 16384-sample uint16_t buffer in SDRAM.
+uint16_t DSY_SDRAM_BSS reverb_buf[16384];
+clouds::Reverb reverb_instance;
+
+// Smoothed K5 reverb amount — kills zipper noise across block boundaries.
+float reverb_amt_smooth = 0.f;
 
 // Simple xorshift32 RNG for grain scatter
 static uint32_t rng_state = 12345;
@@ -469,8 +475,22 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float fold_amt  = (k4 > 0.5f) ? ((k4 - 0.5f) / 0.5f) : 0.f; // 0 at noon, 1 at CW
   float decim_rate = 1.f + decim_amt * 47.f;  // 1 (clean at noon) to 48 (max crush at CCW)
 
-  // K5: feedback — 0 = none, CW = max (0.95 ceiling)
-  float feedback_amt = RemapKnob(eb.knobs[4]) * 0.95f;
+  // K5: bipolar — CCW = reverb dry/wet (0→1), center = off (deadzone),
+  //               CW = ring-buffer feedback (0→0.95, existing behavior).
+  float k5 = RemapKnob(eb.knobs[4]);
+  float reverb_amt;
+  float feedback_amt;
+  const float dead = K5_CENTER_DEADZONE;
+  if (k5 < 0.5f - dead) {
+    reverb_amt = (0.5f - dead - k5) / (0.5f - dead);  // 0 at edge of deadzone, 1 at full CCW
+    feedback_amt = 0.f;
+  } else if (k5 > 0.5f + dead) {
+    feedback_amt = ((k5 - 0.5f - dead) / (0.5f - dead)) * REVERB_MAX_FEEDBACK;
+    reverb_amt = 0.f;
+  } else {
+    reverb_amt = 0.f;
+    feedback_amt = 0.f;
+  }
 
   // Base delay scales with range, floored at grain length
   size_t base_delay = max_range / 8;
@@ -481,6 +501,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
   // SW2: harmony mode
   int harmony = eb.sw2;  // 0=fixed, 1/2=resonance
+
+  // Per-sample wet bus capture (used by block-based reverb pipeline below).
+  float wet_block[48];
 
   for (size_t i = 0; i < size; i++) {
     float dry = in[0][i];
@@ -713,12 +736,51 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       wet = hp1 - wet_hp_state[1];
     }
 
-    // Store post-HPF wet for next sample's feedback injection
+    // Store post-HPF wet for next sample's feedback injection (pre-reverb,
+    // so reverb does not feed the ring buffer — per spec).
     prev_wet = wet;
 
-    float dry_gain = sqrtf(1.f - mix);
-    float wet_gain = sqrtf(mix);
-    out[0][i] = out[1][i] = dry * dry_gain + wet * wet_gain;
+    // Capture mono wet for the block-based reverb pipeline.
+    wet_block[i] = wet;
+  }
+
+  // --- Reverb pipeline (block-based, runs at 32 kHz internally) ---
+  // Always run so the reverb tail doesn't snap off when K5 leaves CCW;
+  // contribution is gated by reverb_amt at the mix point.
+  float mid_block[32];
+  const size_t n_mid = rev_downsampler.Process(wet_block, size, mid_block);
+
+  clouds::FloatFrame rev_frames[32];
+  for (size_t i = 0; i < n_mid; ++i) {
+    rev_frames[i].l = mid_block[i];
+    rev_frames[i].r = mid_block[i];  // mono input, fed equally to L/R
+  }
+  reverb_instance.Process(rev_frames, n_mid);
+  // With amount=1, rev_frames[i].l/.r now hold pure reverb wet (decorrelated).
+
+  float mid_l[32], mid_r[32];
+  for (size_t i = 0; i < n_mid; ++i) {
+    mid_l[i] = rev_frames[i].l;
+    mid_r[i] = rev_frames[i].r;
+  }
+
+  float wet_l_block[48], wet_r_block[48];
+  rev_upsampler_l.Process(mid_l, n_mid, wet_l_block);
+  rev_upsampler_r.Process(mid_r, n_mid, wet_r_block);
+
+  // --- Final mix (single mono-collapse point, easy to remove for stereo) ---
+  const float dry_gain = sqrtf(1.f - mix);
+  const float wet_gain = sqrtf(mix);
+  for (size_t i = 0; i < size; i++) {
+    // Per-sample smoothing on reverb_amt to kill zipper across block boundaries.
+    reverb_amt_smooth += REVERB_AMT_SMOOTH_COEF * (reverb_amt - reverb_amt_smooth);
+    const float ra = reverb_amt_smooth;
+    const float inv_ra = 1.f - ra;
+    const float dry = in[0][i];
+    const float wet_l = wet_block[i] * inv_ra + wet_l_block[i] * ra;
+    const float wet_r = wet_block[i] * inv_ra + wet_r_block[i] * ra;
+    const float wet_mono = (wet_l + wet_r) * 0.5f;  // remove for stereo
+    out[0][i] = out[1][i] = dry * dry_gain + wet_mono * wet_gain;
   }
 }
 
@@ -775,10 +837,15 @@ int main() {
   // Wet HPF coefficient
   wet_hp_coeff = 1.f / (1.f + 2.f * 3.14159265f * WET_HPF_FREQ / sr);
 
-  // Reverb resamplers (not yet wired into the audio path)
+  // Reverb resamplers + reverb engine
   rev_downsampler.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
   rev_upsampler_l.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
   rev_upsampler_r.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
+  reverb_instance.Init(reverb_buf);
+  reverb_instance.set_amount(1.0f);  // pure wet; we crossfade externally via K5
+  reverb_instance.set_input_gain(REVERB_INPUT_GAIN);
+  reverb_instance.set_time(REVERB_TIME);
+  // diffusion (0.625) and lp (0.7) set by Reverb::Init() defaults
 
   led_status.Init(hw.seed.GetPin(Hothouse::LED_1), false);
   led_bypass.Init(hw.seed.GetPin(Hothouse::LED_2), false);

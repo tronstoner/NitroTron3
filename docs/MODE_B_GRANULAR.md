@@ -27,14 +27,17 @@ Input ──┬─────────────────────�
                     │                         │
                     │                    [Wet HPF 150 Hz]
                     │                         │
-                    └── [Feedback K5] ◄───────┴──────────┘
+                    │                         ├──► [Clouds Reverb @ 32 kHz]
+                    │                         │       (K5 CCW: dry/wet 0→1)
+                    │                         │
+                    └── [Feedback K5 CW] ◄────┴──────────┘
 ```
 
 When K2 is fully CCW (**direct-texture mode**), the grain engine is bypassed: input routes directly to the texture shaper, and K3 becomes a micro-stutter control. See "Direct-Texture Mode" section below.
 
 The **Texture Shaper** applies tonal processing to the wet signal. Switch 1 selects one of three modes (decimator/wavefolder bipolar, clean, ringmod); K4 sets intensity.
 
-**Feedback** is simple: post-HPF wet output scaled by K5 is added to the ring buffer write path. Feedback becomes new grain material.
+**K5 is bipolar.** CCW = Clouds reverb dry/wet (0→1). Center (±5%) = off. CW = ring-buffer feedback (0→0.95). Reverb is applied after the wet HPF, in parallel with — not into — the feedback path. The reverb tail does not feed the ring buffer.
 
 ---
 
@@ -91,13 +94,21 @@ The gesture modulation has a compile-time depth: at 0.0 the gesture is ignored a
 
 Only the selected mode's processor runs. The other two are bypassed entirely.
 
-### Feedback
+### K5: Reverb (CCW) / Feedback (CW)
 
-Simple feedback injection: post-HPF wet output scaled by K5 is added to the ring buffer write path. Feedback becomes new grain material the scheduler can re-scatter.
+K5 is bipolar with a ±5% deadzone around center.
 
-- **K5** — unipolar. CCW = none, CW = max. Ceiling at 0.95 to prevent runaway.
-- The wet HPF (150 Hz) runs before feedback injection, so sub content does not accumulate in the loop.
-- No delay/ladder/wavefolder in the feedback path — may be added later if needed for taming or coloring.
+**CCW — Clouds reverb** (0 at deadzone edge → 1 at full CCW).
+- Mutable Instruments Clouds wet-path reverb (Griesinger topology, 4-stage diffuser + dual modulated allpass loops), vendored verbatim from `eurorack/clouds/dsp/fx/{reverb,fx_engine}.h` (MIT).
+- Runs at its native 32 kHz internal sample rate. A polyphase 48→32 downsampler feeds it; per-channel 32→48 upsamplers carry stereo wet back to the mix. Mono input, stereo wet output internally; collapsed to mono at the final mix line (single removable line for a future stereo output).
+- Reverb amount is smoothed (~10 ms time constant) to kill zipper noise across audio blocks.
+- Position: after the wet HPF, **before** the mix. Reverb tail does **not** feed the ring buffer.
+
+**Center (±5% deadzone)** — neither reverb nor feedback active.
+
+**CW — ring-buffer feedback** (0 at deadzone edge → 0.95 at full CW). Original behavior preserved:
+- Post-HPF wet output (pre-reverb) scaled by feedback amount is added to the ring buffer write path. Feedback becomes new grain material the scheduler can re-scatter.
+- Ceiling at 0.95 to prevent runaway. The wet HPF (150 Hz) runs before feedback injection, so sub content does not accumulate in the loop.
 
 ### Wet HPF
 
@@ -129,7 +140,7 @@ The transition between direct-texture and grain mode is instantaneous. K2 slight
 | KNOB 2 | Buffer range | Unipolar. CCW = tight (100 ms, recent audio only). CW = deep (full 8 s, long trails) |
 | KNOB 3 | Character / Glitch | Unipolar. CCW = soft, long, tight grains (200 ms, single pass, high overlap). CW = short, sharp, chaotic (20 ms, stutter loops, scatter, reverse probability). Currently merged from two conceptual parameters (grain character + glitch amount) — may split back to two knobs later |
 | KNOB 4 | Texture amount | Unipolar. 0 = clean, 1 = full effect. Intensity of whichever texture mode Switch 1 selects. Gesture-modulated (attack / amp / sustain depending on mode) |
-| KNOB 5 | Feedback | Unipolar. CCW = none. CW = max (0.95 ceiling). Post-HPF wet output re-injected into ring buffer write path — feedback becomes new grain material |
+| KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb dry/wet (0→1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0→0.95). Reverb runs in parallel with feedback path; reverb tail does not enter the ring buffer |
 | KNOB 6 | Mix | Unipolar. 0 = dry, 1 = wet. Equal-power curve |
 | SWITCH 1 | Texture mode | **UP** - Decimator (attack-driven)<br/>**MIDDLE** - Wavefolder (amp-driven)<br/>**DOWN** - Ringmod (sustain-driven) |
 | SWITCH 2 | Harmony | **UP** - Fixed interval<br/>**MIDDLE** - Scale-quantized random<br/>**DOWN** - Harmonic cloud |

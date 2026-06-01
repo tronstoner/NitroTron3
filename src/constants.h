@@ -57,3 +57,10 @@ constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
 constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain (higher = more tanh warmth)
 constexpr float LADDER_CUTOFF_OFFSET = 0.000f; // tone knob trim
 constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
+
+// --- Mode B reverb + bipolar K5 ---
+constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
+constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
+constexpr float REVERB_TIME        = 0.70f;  // reverb decay (krt in Clouds)
+constexpr float REVERB_MAX_FEEDBACK = 0.95f; // CW side: existing ring-buffer feedback ceiling
+constexpr float REVERB_AMT_SMOOTH_COEF = 0.002f; // one-pole on K5 reverb amount, ~10 ms tc

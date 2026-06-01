@@ -132,8 +132,10 @@ Input ──┬─────────────────────�
                     │                   [Texture Shaper (SW1)]
                     │                         │
                     │                    [Wet HPF 150 Hz]
-                    │                         │
-                    └── [Feedback K5] ◄───────┴──────────┘
+                    │                         │           │
+                    │                         │   [Clouds Reverb @ 32 kHz]
+                    │                         │     (K5 CCW: reverb amt)
+                    └── [Feedback K5 CW] ◄────┴───────────┴──────────┘
 ```
 
 #### Controls
@@ -144,7 +146,7 @@ Input ──┬─────────────────────�
 | KNOB 2 | Buffer range | CCW = tight (100 ms). CW = deep (full 8 s). **Fully CCW**: enters direct-texture mode — grain engine bypassed, input routes straight to texture shaper |
 | KNOB 3 | Character / Glitch | **Grain mode**: CCW = soft/long/tight, CW = short/sharp/chaotic. **Direct-texture mode** (K2 fully CCW): micro-stutter — CCW = clean, CW = frequent choppy repeats |
 | KNOB 4 | Texture amount | Depends on SW1 position. See Switch 1 notes |
-| KNOB 5 | Feedback | CCW = none. CW = max feedback (0.95 ceiling). Wet output re-injected into ring buffer |
+| KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0→1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0→0.95). Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Texture mode | **UP** - Decimator/Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold)<br/>**MIDDLE** - Clean (no texture processing)<br/>**DOWN** - Ringmod (K4 CCW–30% = tremolo 1–15 Hz, 30%–CW = bell partials, pitch-tracked with keytracked LPF) |
 | SWITCH 2 | Harmony | **UP** - Fixed interval (K1 semitones above tracked note)<br/>**MIDDLE** - Resonance (grains lock onto nearby harmonics)<br/>**DOWN** - Resonance (grains lock onto nearby harmonics) |
