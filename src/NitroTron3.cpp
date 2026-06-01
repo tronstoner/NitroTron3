@@ -9,6 +9,7 @@
 #include "preset_system.h"
 #include "ring_buffer.h"
 #include "grain_voice.h"
+#include "clouds/reverb.h"  // vendored, not yet instantiated
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
