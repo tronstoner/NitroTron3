@@ -421,7 +421,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float grain_character = k3;
   float glitch_amount   = k3;
 
-  size_t grain_len = static_cast<size_t>(9600.f - grain_character * (9600.f - 960.f));
+  // K2 timescale factor: CCW = 0.5× (shorter/faster), CW = 2× (longer/slower)
+  float k2_scale = 0.5f + k2 * 1.5f;
+
+  size_t grain_len = static_cast<size_t>(
+      (9600.f - grain_character * (9600.f - 960.f)) * k2_scale);
   if (grain_len < 64) grain_len = 64;
   int max_loops = 1 + static_cast<int>(grain_character * 7.f);  // 1 to 8
 
