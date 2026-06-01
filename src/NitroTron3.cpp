@@ -48,6 +48,35 @@ int          harmony_cached_k1_semi = 999; // cached K1 target; force re-roll on
 
 static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 
+// --- Chorale formant filter (SW1 MIDDLE) ---
+// K4 unipolar morph through 4 vowel corners: male Ooo → male Aah → female Aah → female Eee.
+// 5-voice ensemble × 3 formants (F1/F2/F3) = 15 biquad BPFs.
+// Each voice has a static random pitch+vowel offset (Big Sky "Mod"-style singer spread).
+// Envelope follower applies a small global brightness when the player is playing.
+struct ChoraleBiquad {
+  float b0, b1, b2, a1, a2;
+  float x1, x2, y1, y2;
+};
+static constexpr int CHORALE_VOICES = 5;
+static constexpr int CHORALE_FORMANTS = 3;
+ChoraleBiquad chorale_bp[CHORALE_VOICES * CHORALE_FORMANTS];
+static constexpr float CHORALE_VOICE_SCALE[CHORALE_VOICES] = {0.85f, 0.92f, 1.00f, 1.08f, 1.15f};
+static constexpr float CHORALE_Q = 14.f;
+static constexpr float CHORALE_FORMANT_GAIN[CHORALE_FORMANTS] = {1.0f, 0.9f, 0.6f};
+static constexpr float CHORALE_ENV_DEPTH = 0.15f;   // env-driven brightness, ~15%
+
+// Per-voice static random offsets (populated once at startup).
+float chorale_rand_scale[CHORALE_VOICES] = {};  // ±2% scale jitter per singer
+float chorale_rand_vowel[CHORALE_VOICES] = {};  // ±0.08 vowel-position jitter per singer
+
+// 4 vowel corners (F1/F2/F3 in Hz). Hillenbrand-derived typicals.
+static constexpr float CHORALE_CORNERS[4][3] = {
+  {300.f,  870.f, 2240.f},  // 0: male Ooo
+  {730.f, 1090.f, 2440.f},  // 1: male Aah
+  {900.f, 1400.f, 2900.f},  // 2: female Aah (soprano)
+  {400.f, 3100.f, 3500.f},  // 3: female Eee (soprano singer formant)
+};
+
 // Feedback state
 float prev_wet = 0.f;         // previous sample's wet output for feedback injection
 
@@ -484,6 +513,43 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float fold_amt  = (k4 > 0.5f) ? ((k4 - 0.5f) / 0.5f) : 0.f; // 0 at noon, 1 at CW
   float decim_rate = 1.f + decim_amt * 47.f;  // 1 (clean at noon) to 48 (max crush at CCW)
 
+  // Chorale formant coefs (SW1 MIDDLE) — recompute once per block.
+  // K4 morphs through 4 corners: male Ooo → male Aah → female Aah → female Eee.
+  // Each voice sits at its own slightly random position in that morph (Big Sky
+  // Mod-style singer spread). Envelope adds a small global brightness.
+  {
+    float env_mod = 1.f + grain_env * CHORALE_ENV_DEPTH;
+    for (int v = 0; v < CHORALE_VOICES; v++) {
+      float k4_v = k4 + chorale_rand_vowel[v];
+      if (k4_v < 0.f) k4_v = 0.f;
+      if (k4_v > 1.f) k4_v = 1.f;
+      float k4_seg = k4_v * 3.f;
+      int seg = static_cast<int>(k4_seg);
+      if (seg > 2) seg = 2;
+      float t = k4_seg - static_cast<float>(seg);
+      float voice_factor = CHORALE_VOICE_SCALE[v]
+                         * (1.f + chorale_rand_scale[v])
+                         * env_mod;
+      for (int f = 0; f < CHORALE_FORMANTS; f++) {
+        float base_f = CHORALE_CORNERS[seg][f] * (1.f - t)
+                     + CHORALE_CORNERS[seg + 1][f] * t;
+        float f0 = base_f * voice_factor;
+        if (f0 > 18000.f) f0 = 18000.f;
+        float w0 = 2.f * 3.14159265f * f0 / 48000.f;
+        float cw = cosf(w0);
+        float sw = sinf(w0);
+        float alpha = sw / (2.f * CHORALE_Q);
+        float a0 = 1.f + alpha;
+        ChoraleBiquad& bp = chorale_bp[v * CHORALE_FORMANTS + f];
+        bp.b0 = alpha / a0;
+        bp.b1 = 0.f;
+        bp.b2 = -alpha / a0;
+        bp.a1 = -2.f * cw / a0;
+        bp.a2 = (1.f - alpha) / a0;
+      }
+    }
+  }
+
   // K5: bipolar — CCW = reverb dry/wet (0→1), center = off (deadzone),
   //               CW = ring-buffer feedback (0→0.95, existing behavior).
   float k5 = RemapKnob(eb.knobs[4]);
@@ -722,9 +788,26 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       }
       break;
     }
-    case 1:
-      // Free — clean passthrough
+    case 1: {
+      // Chorale formant filter: 3 detuned voices × 3 formants, tanh excitation
+      // Pre-shaper injects a rich harmonic series so F2/F3 have content to resonate.
+      // (Bass is harmonically sparse — without this the higher formants would be silent.)
+      float excite = tanhf(wet * 10.0f);
+      float chorale_sum = 0.f;
+      for (int v = 0; v < CHORALE_VOICES; v++) {
+        for (int f = 0; f < CHORALE_FORMANTS; f++) {
+          ChoraleBiquad& bp = chorale_bp[v * CHORALE_FORMANTS + f];
+          float y = bp.b0 * excite + bp.b1 * bp.x1 + bp.b2 * bp.x2
+                  - bp.a1 * bp.y1 - bp.a2 * bp.y2;
+          bp.x2 = bp.x1; bp.x1 = excite;
+          bp.y2 = bp.y1; bp.y1 = y;
+          chorale_sum += y * CHORALE_FORMANT_GAIN[f];
+        }
+      }
+      chorale_sum *= 1.0f;  // 5 voices stacking — drop boost vs 3-voice version
+      wet = chorale_sum;
       break;
+    }
     case 2: {
       // Ringmod: sine carrier, keytracked LPF
       float carrier = sinf(2.f * 3.14159265f * ringmod_phase);
@@ -855,6 +938,15 @@ int main() {
 
   // Wet HPF coefficient
   wet_hp_coeff = 1.f / (1.f + 2.f * 3.14159265f * WET_HPF_FREQ / sr);
+
+  // Chorale biquad state zeroing + per-voice static random offsets
+  for (int i = 0; i < CHORALE_VOICES * CHORALE_FORMANTS; i++) {
+    chorale_bp[i] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  }
+  for (int v = 0; v < CHORALE_VOICES; v++) {
+    chorale_rand_scale[v] = (RandFloat() * 2.f - 1.f) * 0.02f;   // ±2%
+    chorale_rand_vowel[v] = (RandFloat() * 2.f - 1.f) * 0.08f;   // ±0.08
+  }
 
   // Reverb resamplers + reverb engine
   rev_downsampler.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
