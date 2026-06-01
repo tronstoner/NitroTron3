@@ -42,6 +42,9 @@ int          grain_next_voice = 0;
 int          grain_timer = 0;        // samples until next event
 int          grain_burst_left = 0;   // grains remaining in current burst
 float        grain_env = 0.f;        // envelope value for grain amplitude
+int          harmony_hold_counter = 0;  // grains remaining before re-rolling pitch
+float        harmony_cached_ratio = 1.f; // cached pitch ratio for held harmony
+int          harmony_cached_k1_semi = 999; // cached K1 target; force re-roll on change
 
 static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 
@@ -656,7 +659,17 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
         bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
 
-        float pitch_ratio = GrainPitchRatio(harmony, k1, k3);
+        // Harmony hold: re-roll pitch every N grains, where N falls from ~6
+        // at K3=0 to 1 at K3=1. Also force re-roll if K1 target moved.
+        int k1_semi_now = MapDetuneKnob(k1, 24);
+        bool force_reroll = (k1_semi_now != harmony_cached_k1_semi);
+        if (harmony_hold_counter <= 0 || force_reroll) {
+          harmony_cached_ratio = GrainPitchRatio(harmony, k1, k3);
+          harmony_cached_k1_semi = k1_semi_now;
+          harmony_hold_counter = 1 + static_cast<int>((1.f - k3) * 5.f);
+        }
+        float pitch_ratio = harmony_cached_ratio;
+        harmony_hold_counter--;
         float comp = 1.f / sqrtf(pitch_ratio);
 
         int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
