@@ -254,16 +254,15 @@ static constexpr int NUM_RES = 11;
 // Compute pitch ratio for one grain.
 // harmony == 0 (SW2 UP): fixed interval, K1 = exact semitones.
 // harmony != 0 (SW2 MID/DOWN): resonance, grains lock onto nearby harmonics.
-// Returns ratio with amplitude compensation (1/sqrt(ratio)) baked in as
-// a negative sign convention — caller extracts via fabsf and applies gain.
-static float GrainPitchRatio(int harmony, float k1) {
+// variance (0..1) scales the random ±1 neighbor window: at 0 always pick the
+// closest harmonic (stable pitch), at 1 the full ±1 neighbor window is used.
+static float GrainPitchRatio(int harmony, float k1, float variance) {
   int k1_semi = MapDetuneKnob(k1, 24);  // ±24 semitones
   float semi;
 
   if (harmony == 0) {
     semi = static_cast<float>(k1_semi);
   } else {
-    // Resonance: find closest harmonic interval to K1, pick from ±1 neighbor
     int closest = 0;
     int min_dist = 100;
     for (int i = 0; i < NUM_RES; i++) {
@@ -271,10 +270,13 @@ static float GrainPitchRatio(int harmony, float k1) {
       if (d < 0) d = -d;
       if (d < min_dist) { min_dist = d; closest = i; }
     }
-    int lo = (closest > 0) ? closest - 1 : 0;
-    int hi = (closest < NUM_RES - 1) ? closest + 1 : NUM_RES - 1;
-    int idx = lo + static_cast<int>(RandFloat() * static_cast<float>(hi - lo + 1));
-    if (idx > hi) idx = hi;
+    int idx = closest;
+    if (RandFloat() < variance) {
+      int lo = (closest > 0) ? closest - 1 : 0;
+      int hi = (closest < NUM_RES - 1) ? closest + 1 : NUM_RES - 1;
+      idx = lo + static_cast<int>(RandFloat() * static_cast<float>(hi - lo + 1));
+      if (idx > hi) idx = hi;
+    }
     semi = static_cast<float>(RESONANCES[idx]);
   }
 
@@ -650,7 +652,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
         bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
 
-        float pitch_ratio = GrainPitchRatio(harmony, k1);
+        float pitch_ratio = GrainPitchRatio(harmony, k1, k3);
         float comp = 1.f / sqrtf(pitch_ratio);
 
         int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
