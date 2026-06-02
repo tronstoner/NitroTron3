@@ -887,12 +887,21 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 }
 
 // ---------------------------------------------------------------------------
-// Mode C — Frequency Shifter (stub: dry passthrough)
+// Mode C — Schism (C.1 scaffold: wet path = dry, K5 wet level, K6 mix)
 // ---------------------------------------------------------------------------
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
+  const ModePresetData& eb = preset.GetEditBuffer();
+
+  const float wet_level = RemapKnob(eb.knobs[4]);  // K5
+  const float mix       = RemapKnob(eb.knobs[5]);  // K6
+  const float dry_gain  = sqrtf(1.f - mix);
+  const float wet_gain  = sqrtf(mix);
+
   for (size_t i = 0; i < size; i++) {
-    out[0][i] = out[1][i] = in[0][i];
+    const float dry = in[0][i];
+    const float wet = dry;  // SW1/SW2 stages unwired in C.1
+    out[0][i] = out[1][i] = dry * dry_gain + wet * wet_level * wet_gain;
   }
 }
 
