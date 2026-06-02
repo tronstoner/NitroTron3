@@ -162,9 +162,9 @@ Input ──┬─────────────────────�
 | LED 1 (left) | Preset indicator: off = Manual, Roman numeral blink pattern for presets 1–8 (I=short, V=long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows target slot. |
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
-### Mode C — Schism (C.1 scaffold)
+### Mode C — Schism (C.2 in progress)
 
-Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1 wires only the wet/dry mix scaffold — the wet path is currently a unity copy of dry, so K6 at 100% sounds identical to K6 at 0%. SW1 (drive) and SW2 (filter) selectors will come online in C.2 onward.
+Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1/C.2 implement the wet/dry mix scaffold and the SW1=UP sine wavefolder; SW2 (filter) still passes audio unchanged.
 
 #### Controls
 
@@ -173,10 +173,10 @@ Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1 wires only the wet/dry m
 | KNOB 1 | Unused | Will become filter "where" (cutoff / vowel / input balance) per SW2 |
 | KNOB 2 | Unused | Will become filter "how much" (resonance / size / intensity) per SW2 |
 | KNOB 3 | Unused | Will become env→filter amount |
-| KNOB 4 | Unused | Will become drive character per SW1 |
+| KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold, internal loudness compensation). SW1=MID/DOWN: unused |
 | KNOB 5 | Wet level | Post-stage trim on the wet path (0 = silent wet, 1 = unity) |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Unused (drive) | **UP** - Sine wavefolder (TBD)<br/>**MIDDLE** - TBD<br/>**DOWN** - Passthrough (TBD) |
+| SWITCH 1 | Drive | **UP** - Sine wavefolder (K4 = fold amount)<br/>**MIDDLE** - TBD<br/>**DOWN** - Passthrough |
 | SWITCH 2 | Unused (filter) | **UP** - Moog ladder (TBD)<br/>**MIDDLE** - Grendel formant (TBD)<br/>**DOWN** - Plague (TBD) |
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl)<br/>**DOWN** - Mode C (Schism — this mode) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |

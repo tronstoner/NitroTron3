@@ -887,20 +887,31 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 }
 
 // ---------------------------------------------------------------------------
-// Mode C — Schism (C.1 scaffold: wet path = dry, K5 wet level, K6 mix)
+// Mode C — Schism (C.2: + sine wavefolder under SW1=UP, K4 fold amount)
 // ---------------------------------------------------------------------------
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
 
+  const uint8_t drive_mode = eb.sw1;               // 0=UP sinefold, 1=MID TBD, 2=DOWN passthru
+  const float fold_amt  = RemapKnob(eb.knobs[3]);  // K4
   const float wet_level = RemapKnob(eb.knobs[4]);  // K5
   const float mix       = RemapKnob(eb.knobs[5]);  // K6
   const float dry_gain  = sqrtf(1.f - mix);
   const float wet_gain  = sqrtf(mix);
 
+  // Sine wavefolder per-block constants (active only at SW1=UP).
+  const float fold_blend = (drive_mode == 0) ? fold_amt : 0.f;
+  const float fold_drive = 1.f + fold_blend * SINEFOLD_DRIVE_MAX;
+  const float fold_comp  = 1.f - fold_blend * (1.f - SINEFOLD_COMP_AT_MAX);
+
   for (size_t i = 0; i < size; i++) {
     const float dry = in[0][i];
-    const float wet = dry;  // SW1/SW2 stages unwired in C.1
+    float wet = dry;
+    if (fold_blend > 0.001f) {
+      const float folded = sinf(dry * fold_drive * 1.5707963f);
+      wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
+    }
     out[0][i] = out[1][i] = dry * dry_gain + wet * wet_level * wet_gain;
   }
 }

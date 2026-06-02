@@ -58,6 +58,11 @@ constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain (higher = more
 constexpr float LADDER_CUTOFF_OFFSET = 0.000f; // tone knob trim
 constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
 
+// --- Mode C — Schism ---
+// Sine wavefolder (SW1=UP, K4 = fold amount). Compensation curve ear-tuned in C.2.
+constexpr float SINEFOLD_DRIVE_MAX   = 8.0f;   // pre-sin drive at K4=1 (1× at K4=0)
+constexpr float SINEFOLD_COMP_AT_MAX = 0.7f;   // post-fold gain at K4=1 (1.0 at K4=0)
+
 // --- Mode B reverb + bipolar K5 ---
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
