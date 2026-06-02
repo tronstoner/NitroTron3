@@ -895,7 +895,9 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       // Mode A-style linear lift, passive-bass scaled. K3>=0 opens, K3<0 closes.
       const float lift = 1.f + env_val * env_lift_gain;
       const float mod_factor = (k3_signed >= 0.f) ? lift : (1.f / lift);
-      ladder_c.SetCutoff(base_cutoff * mod_factor);
+      float mod_cutoff = base_cutoff * mod_factor;
+      if (mod_cutoff > MODE_C_CUTOFF_MAX_HZ) mod_cutoff = MODE_C_CUTOFF_MAX_HZ;
+      ladder_c.SetCutoff(mod_cutoff);
       wet = ladder_c.Process(wet);
     } else if (grendel_on) {
       wet = grendel_c.Process(wet);
