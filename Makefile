@@ -15,3 +15,21 @@ DAISYSP_DIR = lib/HothouseExamples/DaisySP
 # Core location, and generic Makefile.
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
 include $(SYSTEM_FILES_DIR)/Makefile
+
+# ---------------------------------------------------------------------------
+# User manual (PDF)
+# ---------------------------------------------------------------------------
+# Requires: pandoc + weasyprint
+#   brew install pandoc weasyprint
+.PHONY: manual
+manual: docs/USER_MANUAL.pdf
+
+docs/USER_MANUAL.pdf: docs/USER_MANUAL.md docs/manual.css
+	pandoc $< \
+	  --from gfm \
+	  --pdf-engine=weasyprint \
+	  --css=docs/manual.css \
+	  --standalone \
+	  --metadata pagetitle="NitroTron3 — User Manual" \
+	  -o $@
+	@echo "Wrote $@"
