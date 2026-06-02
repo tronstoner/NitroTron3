@@ -132,13 +132,18 @@ constexpr float PLAGUE_FB_RANGE          = 0.5f;    // additional feedback drive
 constexpr float PLAGUE_BALANCE_ENV_SCALE = 0.5f;    // K3·env contribution to balance shift (±0.5 traverses full range)
 constexpr float PLAGUE_OUT_GAIN          = 1.0f;    // post-sum loudness comp — ear-tune in C.4
 
-// --- Mode B SW1 MIDDLE — Zoned Digital Glitch ---
-// Bipolar K4: noon = clean, CCW = XOR bit-flip, CW = bit-rotate right.
-// See docs/MODE_B_TEXTURE_IDEAS.md.
-constexpr float GLITCH_DEADZONE     = 0.05f; // ±5% around noon → clean
-constexpr int   GLITCH_XOR_MAX_BIT  = 10;    // highest bit flipped at full CCW
-constexpr int   GLITCH_ROT_MAX      = 14;    // max right-rotation at full CW
-constexpr float GLITCH_ENV_DEPTH    = 0.6f;  // env share of effective magnitude
+// --- Mode B SW1 MIDDLE — Event-Driven Digital Glitch ---
+// Bipolar K4: noon = clean. CCW = bit-flip events, CW = timing events
+// (freeze / stutter / reverse). Buchla SoU style: stochastic trigger
+// timing, randomised per-event parameters, env-gated mix (silence-in →
+// silence-out). See docs/MODE_B_TEXTURE_IDEAS.md.
+constexpr float GLITCH_DEADZONE             = 0.05f; // ±5% around noon → clean
+constexpr int   GLITCH_XOR_MAX_BIT          = 13;    // highest bit flipped at full CCW (±0.25 of full scale)
+constexpr float GLITCH_EVENT_RATE_HZ_MAX    = 25.0f; // events/sec at full effect_pos × full env
+constexpr int   GLITCH_EVENT_DUR_MIN_SAMPLES = 240;  // 5 ms at 48 kHz
+constexpr int   GLITCH_EVENT_DUR_MAX_SAMPLES = 2400; // 50 ms at 48 kHz
+constexpr int   GLITCH_BUFFER_SAMPLES       = 2400;  // 50 ms ring buffer for CW timing payload
+constexpr int   GLITCH_RAMP_SAMPLES         = 48;    // 1 ms click-free wet/dry ramp
 
 // --- Mode B reverb + bipolar K5 ---
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center

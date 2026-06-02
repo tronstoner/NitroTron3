@@ -162,6 +162,9 @@ clouds::Reverb reverb_instance;
 // Smoothed K5 reverb amount — kills zipper noise across block boundaries.
 float reverb_amt_smooth = 0.f;
 
+// Mode B SW1 MIDDLE: event-driven digital glitch processor (stateful)
+GlitchEvents glitch_events;
+
 // Simple xorshift32 RNG for grain scatter
 static uint32_t rng_state = 12345;
 static float RandFloat() {
@@ -493,11 +496,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float fold_amt  = (k4 > 0.5f) ? ((k4 - 0.5f) / 0.5f) : 0.f; // 0 at noon, 1 at CW
   float decim_rate = 1.f + decim_amt * 47.f;  // 1 (clean at noon) to 48 (max crush at CCW)
 
-  // Glitch zones (SW1 MIDDLE) — bipolar K4. See docs/MODE_B_TEXTURE_IDEAS.md.
+  // Glitch (SW1 MIDDLE) — bipolar K4, event-driven. CCW = bit-flip events,
+  // CW = timing events (freeze / stutter / reverse). Env-gated mix per
+  // sample inside the processor. See docs/MODE_B_TEXTURE_IDEAS.md.
   float k4_centered = k4 - 0.5f;
   float glitch_magnitude = fabsf(k4_centered) * 2.f;  // 0..1
-  glitch_magnitude *= (1.f - GLITCH_ENV_DEPTH + GLITCH_ENV_DEPTH * grain_env);
-  int   glitch_side = (k4_centered < 0.f) ? 0 : 1;    // 0=XOR, 1=ROT
+  int   glitch_side = (k4_centered < 0.f) ? 0 : 1;    // 0=CCW bit-flip, 1=CW timing
   float glitch_effect_pos = (glitch_magnitude > GLITCH_DEADZONE)
       ? (glitch_magnitude - GLITCH_DEADZONE) / (1.f - GLITCH_DEADZONE)
       : 0.f;
@@ -741,8 +745,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       break;
     }
     case 1: {
-      // Zoned digital glitch: bipolar K4, XOR CCW / bit-rotate CW, clean at noon.
-      wet = ProcessGlitch(wet, glitch_side, glitch_effect_pos);
+      // Event-driven digital glitch: stochastic triggers, K4 alone controls density.
+      wet = glitch_events.Process(wet, glitch_side, glitch_effect_pos);
       break;
     }
     case 2: {
@@ -985,6 +989,8 @@ int main() {
   reverb_instance.set_amount(1.0f);  // pure wet; we crossfade externally via K5
   reverb_instance.set_input_gain(REVERB_INPUT_GAIN);
   reverb_instance.set_time(REVERB_TIME);
+
+  glitch_events.Init();
   // diffusion (0.625) and lp (0.7) set by Reverb::Init() defaults
 
   led_status.Init(hw.seed.GetPin(Hothouse::LED_1), false);

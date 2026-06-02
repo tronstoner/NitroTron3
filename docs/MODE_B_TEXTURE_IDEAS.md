@@ -1,97 +1,119 @@
 # Mode B — Texture Ideas
 
-## Decided design for SW1 MIDDLE — Zoned Digital Glitch
+## Decided design for SW1 MIDDLE — Event-Driven Digital Glitch
 
-K4 is bipolar with noon = clean. Walking CCW progressively corrupts the
-signal by XOR'ing bit positions of increasing significance; walking CW
-progressively corrupts via right-rotation of an increasing number of
-bits. Matches Mode B's K1 noon-centered "more-effect-away-from-center"
-convention.
+K4 is bipolar with noon = clean. Glitching is **event-driven** rather
+than continuous: random triggers fire at a rate proportional to K4
+magnitude, and each event picks random payload parameters. K4 alone
+controls density and intensity — no envelope coupling. Buchla
+Source-of-Uncertainty model: timing randomness in *when* things happen,
+not white noise in *what* comes out.
 
-Replaces the previous chorale formant filter on SW1 MIDDLE, which was
-too uncontrolled / peaky / resonant to be musically useful on bass.
+Replaces the prior stateless per-sample XOR/rotate zone design, which
+was inaudible on the CCW (XOR) side and decoupled-from-input on the CW
+(rotate) side.
 
-### Zone layout
+### Constraints honoured
 
-| K4 | Zone | Mechanism | Character |
+1. **K4 alone controls the effect.** Density (event rate) and chain
+   probability (continuous vs sparse) both scale with K4 magnitude.
+   Envelope coupling was tried and dropped — it muffled the effect
+   during note release in a way that felt irritating rather than
+   musical.
+2. **Timing randomness.** All event timing (when triggers fire, event
+   duration, per-event payload parameters) is randomised — the same
+   knob position never produces the same glitch twice.
+3. **Continuous at the extreme.** At full K4, event chaining drives
+   the processor to fire back-to-back events so the dry signal is no
+   longer audible between glitches.
+
+### Per-side payload
+
+| Side | Knob travel | Payload | Behaviour |
 |---|---|---|---|
-| 0.00 – 0.25 | **Squelch** (CCW extreme) | XOR bits 4–10 | overt data corruption |
-| 0.25 – 0.45 | **Hash** | XOR bits 0–3 | subtle digital grain |
-| 0.45 – 0.55 | **Dead** (noon) | clean | ±5% center detent |
-| 0.55 – 0.75 | **Wobble** | bit-rotate right, 1–6 positions | amplitude-coupled |
-| 0.75 – 1.00 | **Broken** (CW extreme) | bit-rotate right, 6–14 positions | broken-data extreme |
+| **CCW** | 0.5 → 0.0 (away from noon) | **Bit-flip events** | Each event picks a random bit in `[0, effect_pos × GLITCH_XOR_MAX_BIT]`, XORs the wet signal with that bit for the event duration. Higher effect_pos → higher max bit → more violent flips. |
+| **CW** | 0.5 → 1.0 (away from noon) | **Timing events** | Each event randomly picks one of `{freeze, stutter loop, reverse}` and snapshots the ring buffer 1–20 ms behind the write head. Reads from that snapshot for the event duration. |
 
-The "zones" are descriptive labels for the perceptual character of
-adjacent knob ranges — the underlying mapping is monotonic in `|K4-0.5|`
-within each side (XOR or rotate), so the knob always feels like
-"more = more broken."
+The three CW timing payloads:
+- **Freeze** — hold a single sample. Glitchy silence-with-tone.
+- **Stutter** — loop a 1–4 ms window. Buzzes / micro-stutters.
+- **Reverse** — walk backward through the buffer. Brief retro-grade.
 
-### Effective-position calculation
+Selection is uniform-random per event.
+
+### Trigger generator
+
+Per-sample probability check:
+```
+rate_hz = effect_pos × GLITCH_EVENT_RATE_HZ_MAX
+p       = rate_hz / 48000
+fire    = rand() < p
+```
+
+When `state == IDLE` and a trigger fires, `StartEvent()` picks the
+payload and event duration. Event duration's lower bound also scales
+with `effect_pos` so each event is longer at the extreme.
+
+When an event ends, the processor chains into another event with
+probability `effect_pos²`. At full K4 this is ~1.0 so events fire
+back-to-back; near the deadzone it is near zero so each event is
+isolated.
+
+### Wet/dry mix
+
+```
+target = (state == ACTIVE) ? 1 : 0
+ramp_  → target over GLITCH_RAMP_SAMPLES   // 1 ms linear ramp
+out    = lerp(dry, glitched, ramp_)
+```
+
+Full wet during events. The 1 ms ramp kills clicks at event boundaries.
+
+### Effective-position calculation (unchanged)
 
 ```
 magnitude   = |K4 - 0.5| * 2                          // 0..1
-side        = (K4 < 0.5) ? XOR : ROTATE
+side        = (K4 < 0.5) ? CCW(bit-flip) : CW(timing)
 effect_pos  = max(0, (magnitude - deadzone) / (1 - deadzone))
 ```
 
-The deadzone (±5%) snaps to clean. Outside it, `effect_pos` drives the
-bit position (XOR side) or rotation count (rotate side) linearly from
-the deadzone edge to the knob extreme.
-
-### Per-sample crossfade
-
-To avoid clicks when the knob walks across integer bit-position or
-rotation-count thresholds, the output is a linear blend between the two
-adjacent integer values:
-
-```
-bit_f      = effect_pos * 10                          // walks 0..10
-bit_lo     = floor(bit_f)
-frac       = bit_f - bit_lo
-out        = lerp(XOR(in, 1 << bit_lo),
-                  XOR(in, 1 << (bit_lo + 1)),
-                  frac)
-```
-
-Same pattern for rotation (`rot_f` walks 1..14).
+The deadzone (±5%) still snaps to clean / no triggers.
 
 ### Mechanics
 
-- Float sample → q15 int16 → XOR or right-rotate raw 16-bit → int16 → float.
-- XOR mask never touches the sign bit (bit 15); max bit flipped is 10.
-- Rotation is full 16-bit; sign-bit movement at high rotation counts is
-  part of the "broken" character at the CW extreme.
-- Stateless. ~6 integer ops per sample plus two float↔int casts. No
-  per-block work other than computing `side`, `effect_pos`, and an
-  env-scaled magnitude.
-
-### Gesture coupling
-
-Amplitude-driven (per spec for SW1 MIDDLE — same gesture driver as the
-spec'd wavefolder). The env follower scales `magnitude` (not K4
-directly): soft notes pull toward clean, hard hits drive toward whichever
-extreme K4 is pointing at. Compile-time depth = 0.6 — at env = 0 the
-effective magnitude is 0.4× knob position, at env = 1 it reaches full
-knob position.
+- Stateful processor (`GlitchEvents` class in `src/glitch_zones.h`).
+  Owns a small ring buffer for the CW payload, event state, and an
+  xorshift32 RNG.
+- Memory: `GLITCH_BUFFER_SAMPLES × sizeof(float)` = ~9.6 KB in regular
+  RAM (50 ms ring buffer).
+- Always writes input to the ring buffer (regardless of side) so the
+  CW snapshot can read recent history without ramp-up.
 
 ### Constants (live in `src/constants.h`)
 
 ```
-GLITCH_DEADZONE     = 0.05f    // ±5% around noon → clean
-GLITCH_XOR_MAX_BIT  = 10       // highest bit flipped at full CCW
-GLITCH_ROT_MAX      = 14       // max right-rotation at full CW
-GLITCH_ENV_DEPTH    = 0.6f     // env share of effective magnitude
+GLITCH_DEADZONE              = 0.05f   // ±5% around noon → clean
+GLITCH_XOR_MAX_BIT           = 13      // bit-flip ceiling (±0.25 fs)
+GLITCH_EVENT_RATE_HZ_MAX     = 25.0f   // events/sec at full effect_pos
+GLITCH_EVENT_DUR_MIN_SAMPLES = 240     // 5 ms (effect_pos raises this floor)
+GLITCH_EVENT_DUR_MAX_SAMPLES = 2400    // 50 ms
+GLITCH_BUFFER_SAMPLES        = 2400    // 50 ms ring buffer (CW)
+GLITCH_RAMP_SAMPLES          = 48      // 1 ms wet/dry ramp
 ```
 
 ### Open questions for listening (when pedal is back)
 
-- Whether Hash and Squelch read as two distinct sub-zones or as one
-  smooth XOR ramp. Same question for Wobble vs Broken on the rotate side.
-- Whether `GLITCH_ENV_DEPTH = 0.6` makes the effect too sleepy at low
-  picking dynamics. Tune by ear.
-- Whether sign-bit rotation clicks read as "musical broken data" or as
-  unwanted artifact at the CW extreme. If unmusical, restrict rotation
-  to the bottom 15 bits.
+- Whether the per-event durations feel right or want to be punchier
+  (drop max to ~25 ms) or more sustained (push max to ~100 ms).
+- Whether `GLITCH_EVENT_RATE_HZ_MAX = 8` is too sparse — may want 12–16
+  for the CW extreme so timing payloads overlap more.
+- Whether `GLITCH_ENV_GAIN = 5` makes the wet mix reach full ceiling on
+  reasonable playing dynamics. Passive-bass calibrated; may need 8–10
+  if the env follower output runs lower than expected.
+- Whether the three CW types feel like one "messed up audio" character
+  or like three distinct modes — consider K4-position weighting if
+  they want zoning (e.g., freeze near the deadzone, reverse at the
+  extreme).
 
 ---
 

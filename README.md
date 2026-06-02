@@ -148,7 +148,7 @@ Input ──┬─────────────────────�
 | KNOB 4 | Texture amount | Depends on SW1 position. See Switch 1 notes |
 | KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0→1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0→0.95). Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Texture mode | **UP** - Decimator/Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold)<br/>**MIDDLE** - Digital glitch (bipolar K4: noon = clean, CCW = XOR bit-flip walking bits 0→10, CW = right bit-rotate 1→14; amplitude-driven, ±5% deadzone at noon)<br/>**DOWN** - Ringmod (K4 CCW–30% = tremolo 1–15 Hz, 30%–CW = bell partials, pitch-tracked with keytracked LPF) |
+| SWITCH 1 | Texture mode | **UP** - Decimator/Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold)<br/>**MIDDLE** - Event-driven digital glitch (bipolar K4: noon = clean, CCW = random bit-flip events, CW = random timing events {freeze / stutter / reverse}; sparse near deadzone → continuous at extremes via event chaining)<br/>**DOWN** - Ringmod (K4 CCW–30% = tremolo 1–15 Hz, 30%–CW = bell partials, pitch-tracked with keytracked LPF) |
 | SWITCH 2 | Harmony | **UP** - Fixed interval (K1 semitones above tracked note)<br/>**MIDDLE** - Resonance (grains lock onto nearby harmonics)<br/>**DOWN** - Resonance (grains lock onto nearby harmonics) |
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl — this mode)<br/>**DOWN** - Mode C (Schism) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
