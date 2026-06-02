@@ -70,9 +70,38 @@ constexpr float MODE_C_ENV_SCALE      = 10.0f; // passive-bass env normalization
 constexpr float MODE_C_CUTOFF_MAX_HZ  = 10000.f; // top clamp for env-modulated cutoff (keeps Huovilainen stable)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
 
-// Mode C filter drive (K5 — applies across all SW2 filter modes).
-constexpr float MODE_C_DRIVE_MIN      = 1.0f;  // K5=0 → unity (clean)
-constexpr float MODE_C_DRIVE_MAX      = 8.0f;  // K5=1 → very hot pre-filter saturation
+// Mode C filter drive (K5 — bipolar around noon, applies across all SW2 filter modes).
+// CCW → attenuate, NOON → unity (1.0), CW → boost. Piecewise linear in dB-ish space.
+constexpr float MODE_C_DRIVE_MIN      = 0.25f; // K5 full CCW → ~−12 dB attenuation
+constexpr float MODE_C_DRIVE_MAX      = 8.0f;  // K5 full CW  → very hot pre-filter saturation
+
+// Per-filter internal input pads — apply BEFORE the filter's own saturator.
+// Moog and Grendel are spectrum-shaping filters with sweet spots at line-level
+// (~0.2–0.3 amplitude). K5 noon (1.0) × pad puts them in their clean zone, while
+// K5 CW still drives them hard. Plague is intentionally not padded — it's a
+// feedback-saturating filter that needs hot input to engage its tanh fold.
+constexpr float MODE_C_MOOG_INPUT_PAD    = 0.3f;
+constexpr float MODE_C_GRENDEL_INPUT_PAD = 0.3f;
+
+// Amp-env VCA — final wet-path gate (same pattern as Mode A's drone gating).
+// Multiplies wet by env_val × MODE_C_VCA_GAIN so the wet path is silent when the
+// bass is silent (kills self-resonance ringing alone), and opens up as you play.
+// Passive bass env peaks ~0.06–0.1, so gain 12 puts the gate "fully open"
+// around typical playing dynamics with mild boost on hard plucks.
+constexpr float MODE_C_VCA_GAIN = 12.0f;
+
+// Post-filter peak limiter (Mode C only, all SW2 modes).
+// 2-band split: LF (≤ SPLIT_HZ) passes through untouched so bass fundamentals
+// don't duck when resonance peaks fire the limiter. HF is soft-knee limited.
+// "Warmth-when-working" — gain reduction modulates a touch of tanh saturation,
+// so peaks gain mild character without harmonics on quiet/clean signals.
+constexpr float MODE_C_LIMIT_SPLIT_HZ  = 160.f; // 2-band crossover (one-pole)
+constexpr float MODE_C_LIMIT_THR       = 0.6f;  // amplitude threshold (linear)
+constexpr float MODE_C_LIMIT_RATIO_INV = 0.5f;  // 1/ratio — 0.5 ≈ 2:1 soft slope
+constexpr float MODE_C_LIMIT_ATK_MS    = 2.0f;  // catches resonance transients
+constexpr float MODE_C_LIMIT_REL_MS    = 60.0f; // slow enough to avoid sideband mod
+constexpr float MODE_C_LIMIT_WARM_DRV  = 1.5f;  // tanh drive at full GR
+constexpr float MODE_C_LIMIT_WARM_MIX  = 0.35f; // tanh blend at full GR
 
 // Grendel formant filter (SW2=MID). K1 = vowel path, K2 = size, K3 = env on path.
 constexpr int   GRENDEL_NUM_FORMANTS = 4;

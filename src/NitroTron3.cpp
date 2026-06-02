@@ -4,6 +4,8 @@
 #include "constants.h"
 #include "moog_osc.h"
 #include "moog_ladder.h"
+#include "moog_ladder_v2.h"
+#include "peak_limiter.h"
 #include "env_follower.h"
 #include "pitch_tracker.h"
 #include "preset_system.h"
@@ -29,9 +31,10 @@ Hothouse hw;
 MoogOsc      osc1;
 MoogOsc      osc2;
 MoogLadder   ladder;     // Mode A
-MoogLadder   ladder_c;   // Mode C — separate instance so filter state can't leak across modes
-Plague       plague_c;   // Mode C — SW2=DOWN Plague filter
-Grendel      grendel_c;  // Mode C — SW2=MID Grendel formant filter
+MoogLadderV2 ladder_c_v2; // Mode C — SW2=UP, our tuned Moog (A/B winner)
+Plague       plague_c;    // Mode C — SW2=DOWN (still needs re-tuning round)
+Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
+PeakLimiter  limiter_c;   // Mode C — post-filter peak limiter (2-band, fundamentals preserved)
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -837,9 +840,12 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float k2        = RemapKnob(eb.knobs[1]);
   const float k3        = RemapKnob(eb.knobs[2]);
   const float fold_amt  = RemapKnob(eb.knobs[3]);  // K4
-  const float drive_knob = RemapKnob(eb.knobs[4]); // K5: filter drive (all SW2 modes)
+  const float drive_knob = RemapKnob(eb.knobs[4]); // K5: bipolar drive (CCW attenuate, noon unity, CW boost)
   const float mix       = RemapKnob(eb.knobs[5]);  // K6
-  const float drive_amt = MODE_C_DRIVE_MIN + drive_knob * (MODE_C_DRIVE_MAX - MODE_C_DRIVE_MIN);
+  // Piecewise linear: [0..0.5] → [MIN..1.0], [0.5..1.0] → [1.0..MAX].
+  const float drive_amt = (drive_knob < 0.5f)
+      ? MODE_C_DRIVE_MIN + (drive_knob * 2.f) * (1.f - MODE_C_DRIVE_MIN)
+      : 1.f + ((drive_knob - 0.5f) * 2.f) * (MODE_C_DRIVE_MAX - 1.f);
   const float dry_gain  = sqrtf(1.f - mix);
   const float wet_gain  = sqrtf(mix);
 
@@ -853,15 +859,14 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   if (k3_signed > -K3_DEADZONE && k3_signed < K3_DEADZONE) k3_signed = 0.f;
 
   // Moog ladder per-block constants (active only at SW2=UP).
-  const bool ladder_on = (filter_mode == 0);
+  const bool ladder_on    = (filter_mode == 0);
   const float base_cutoff = MapCutoff(k1);
   const float k3_abs = (k3_signed >= 0.f) ? k3_signed : -k3_signed;
   const float env_lift_gain = k3_abs * MODE_C_ENV_SCALE * MODE_C_ENV_MOD_RANGE;
   if (ladder_on) {
-    ladder_c.SetDrive(drive_amt);
-    // sqrt curve so resonance is audible across the full knob range
-    // (linear made the lower half nearly inaudible, then snapped).
-    ladder_c.SetResonance(sqrtf(k2) * MODE_C_LADDER_RES_MAX);
+    ladder_c_v2.SetDrive(drive_amt);
+    // sqrt curve so resonance is audible across the full knob range.
+    ladder_c_v2.SetResonance(sqrtf(k2) * MODE_C_LADDER_RES_MAX);
   }
 
   // Grendel per-block setup (active only at SW2=MID). Block-rate coef update.
@@ -875,7 +880,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     grendel_c.SetVowel(vowel_path, size_scale);
   }
 
-  // Plague per-block constants (active only at SW2=DOWN).
+  // Plague per-block constants (active only at SW2=DOWN). Still needs re-tuning.
   const bool plague_on = (filter_mode == 2);
   if (plague_on) plague_c.SetParams(k1, k2);
 
@@ -900,18 +905,25 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       const float mod_factor = (k3_signed >= 0.f) ? lift : (1.f / lift);
       float mod_cutoff = base_cutoff * mod_factor;
       if (mod_cutoff > MODE_C_CUTOFF_MAX_HZ) mod_cutoff = MODE_C_CUTOFF_MAX_HZ;
-      ladder_c.SetCutoff(mod_cutoff);
-      wet = ladder_c.Process(wet);
+      ladder_c_v2.SetCutoff(mod_cutoff);
+      // Spectrum-shaping filter: pad before drive so K5 noon sits in its sweet zone.
+      wet = ladder_c_v2.Process(wet * MODE_C_MOOG_INPUT_PAD);
     } else if (grendel_on) {
-      // K5 pre-filter drive — same saturator across all SW2 modes.
-      wet = tanhf(wet * drive_amt);
+      // Spectrum-shaping filter: pad before pre-tanh so K5 noon stays clean.
+      wet = tanhf(wet * drive_amt * MODE_C_GRENDEL_INPUT_PAD);
       wet = grendel_c.Process(wet);
     } else if (plague_on) {
-      // K5 pre-filter drive, on top of Plague's own K2-controlled internal drive.
+      // Feedback-saturating filter: no pad — needs hot input to fold.
       wet = tanhf(wet * drive_amt);
-      // env_contribution: signed (K3 polarity) × envelope magnitude.
       wet = plague_c.Process(wet, k3_signed * env_val);
     }
+
+    // Post-filter peak limiter (2-band split, fundamentals preserved).
+    wet = limiter_c.Process(wet);
+
+    // Amp-env VCA — gates wet path with input dynamics; silences self-resonance
+    // ringing when the bass isn't playing (same pattern as Mode A's drone gate).
+    wet *= env_val * MODE_C_VCA_GAIN;
 
     out[0][i] = out[1][i] = dry * dry_gain + wet * wet_gain;
   }
@@ -953,9 +965,10 @@ int main() {
   osc1.Init(sr);
   osc2.Init(sr);
   ladder.Init(sr);
-  ladder_c.Init(sr);
+  ladder_c_v2.Init(sr);
   plague_c.Init(sr);
   grendel_c.Init(sr);
+  limiter_c.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
   tracker.Init(sr);

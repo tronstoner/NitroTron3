@@ -164,7 +164,7 @@ Input ──┬─────────────────────�
 
 ### Mode C — Schism (C.5 in progress)
 
-Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1–C.5 implement the wet/dry mix scaffold, the SW1=UP sine wavefolder, the SW2=UP Moog ladder with env-to-cutoff, the SW2=DOWN Plague filter, and the SW2=MID Grendel formant filter (4 parallel BPFs along a curated ee → eh → ah → oh → oo vowel path). SW1=MID still passes audio unchanged.
+Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1–C.5 implement the wet/dry mix scaffold, the SW1=UP sine wavefolder, the SW2=UP Moog ladder (tuned `MoogLadderV2`: single input saturator, k-cutoff cross-comp, level comp, asymmetric bias) with env-to-cutoff, the SW2=DOWN Plague filter, and the SW2=MID Grendel formant filter (4 parallel BPFs along a curated ee → eh → ah → oh → oo vowel path). SW1=MID still passes audio unchanged. Post-filter chain: 2-band peak limiter (LF below ~160 Hz preserved so fundamentals don't duck) with "warmth-when-working" bloom, then an amp-env VCA that gates the wet path so self-resonance doesn't ring alone. Per-filter input pads put Moog and Grendel in their clean sweet zone at K5 noon; Plague is unpadded (needs hot input to fold).
 
 #### Controls
 
@@ -174,7 +174,7 @@ Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1–C.5 implement the wet/
 | KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: Plague intensity (tandem input drive + feedback drive) |
 | KNOB 3 | Env → filter amount | Bipolar with center deadzone (±5%). SW2=UP: opens/closes Moog cutoff (linear lift, passive-bass scaled). SW2=MID: shifts the vowel path. SW2=DOWN: shifts Plague input balance. Center = static |
 | KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold, internal loudness compensation). SW1=MID/DOWN: unused |
-| KNOB 5 | Filter drive | Pre-filter drive across all SW2 modes (1× clean → 8× hot). For Moog this sets the ladder's input drive; for Grendel/Plague it's a tanh saturator in front of the filter |
+| KNOB 5 | Filter drive (bipolar) | **CCW** = attenuate (~−12 dB at full CCW). **Noon** = unity. **CW** = boost up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and Plague. Moog/Grendel have a fixed ×0.3 internal pad so K5 noon lands in their clean zone; Plague is unpadded |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Drive | **UP** - Sine wavefolder (K4 = fold amount)<br/>**MIDDLE** - TBD<br/>**DOWN** - Passthrough |
 | SWITCH 2 | Filter | **UP** - Moog ladder (K1 cutoff, K2 resonance, K3 env)<br/>**MIDDLE** - Grendel formant (K1 vowel path, K2 size, K3 env on path)<br/>**DOWN** - Plague (K1 input balance, K2 intensity, K3 env on balance) |
