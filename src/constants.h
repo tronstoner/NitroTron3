@@ -98,6 +98,14 @@ constexpr float PLAGUE_FB_RANGE          = 0.45f;   // additional feedback drive
 constexpr float PLAGUE_BALANCE_ENV_SCALE = 0.5f;    // K3·env contribution to balance shift (±0.5 traverses full range)
 constexpr float PLAGUE_OUT_GAIN          = 1.0f;    // post-sum loudness comp — ear-tune in C.4
 
+// --- Mode B SW1 MIDDLE — Zoned Digital Glitch ---
+// Bipolar K4: noon = clean, CCW = XOR bit-flip, CW = bit-rotate right.
+// See docs/MODE_B_TEXTURE_IDEAS.md.
+constexpr float GLITCH_DEADZONE     = 0.05f; // ±5% around noon → clean
+constexpr int   GLITCH_XOR_MAX_BIT  = 10;    // highest bit flipped at full CCW
+constexpr int   GLITCH_ROT_MAX      = 14;    // max right-rotation at full CW
+constexpr float GLITCH_ENV_DEPTH    = 0.6f;  // env share of effective magnitude
+
 // --- Mode B reverb + bipolar K5 ---
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
