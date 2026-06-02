@@ -79,7 +79,7 @@ becoming a micro-stutter control.
 | KNOB 4 | Texture amount | Depends on SW1 position — see below |
 | KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0 → 1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0 → 0.95). Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Texture mode | **UP** — Decimator / Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Digital glitch (bipolar K4: noon = clean ±5%, CCW = XOR bit-flip bits 0 → 10, CW = right bit-rotate 1 → 14; amplitude-driven) • **DOWN** — Ringmod (K4 0 – 30% = tremolo 1 – 15 Hz, 30 – 100% = bell partials, pitch-tracked with keytracked LPF) |
+| SWITCH 1 | Texture mode | **UP** — Decimator / Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Event-driven digital glitch (bipolar K4: noon = clean ±5%, CCW = random bit-flip events, CW = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining) • **DOWN** — Ringmod (K4 0 – 30% = tremolo 1 – 15 Hz, 30 – 100% = bell partials, pitch-tracked with keytracked LPF) |
 | SWITCH 2 | Harmony | **UP** — Fixed interval (K1 semitones above tracked note) • **MIDDLE / DOWN** — Resonance (grains lock onto nearby harmonics) |
 
 ---
