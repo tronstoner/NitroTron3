@@ -87,8 +87,8 @@ becoming a micro-stutter control.
 # Mode C — Schism
 
 A drive + filter mode. K1–K3 drive the filter selected by SW2; K4 drives
-the wavefolder selected by SW1. K5 is a post-stage wet trim, K6 is the
-dry/wet mix.
+the wavefolder selected by SW1. K5 is a pre-filter drive (universal
+across all SW2 filter modes), K6 is the dry/wet mix.
 
 Three filter flavors: a resonant **Moog ladder**, a vowel-pathed
 **Grendel formant** filter, and the dual-band **Plague** filter (lo + hi
@@ -105,10 +105,10 @@ for a future drive flavor, currently passes audio unchanged.*
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
 | KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (80 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = ee, CW = oo). SW2=DOWN: Plague input balance (CCW = lo only, CW = hi only) |
-| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → 0.95). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: Plague intensity (tandem input + feedback drive) |
-| KNOB 3 | Env → filter amount | Bipolar with ±5% center deadzone. SW2=UP: ±4 octaves of cutoff. SW2=MID: ±0.5 of the vowel path. SW2=DOWN: shifts Plague balance. Center = static |
+| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: Plague intensity (tandem input + feedback drive) |
+| KNOB 3 | Env → filter amount | Bipolar with ±5% center deadzone. SW2=UP: opens/closes Moog cutoff (passive-bass scaled). SW2=MID: shifts the vowel path. SW2=DOWN: shifts Plague balance. Center = static |
 | KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold; internal loudness compensation). SW1=MID/DOWN: unused |
-| KNOB 5 | Wet level | Post-stage trim on the wet path (0 = silent wet, 1 = unity) |
+| KNOB 5 | Filter drive | Pre-filter drive across all SW2 modes (1× clean → 8× hot). Sets Moog ladder drive directly; pre-saturates the input into Grendel and Plague |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 = fold amount) • **MIDDLE** — TBD (currently passthru) • **DOWN** — Passthrough |
 | SWITCH 2 | Filter | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env) • **MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path) • **DOWN** — Plague (K1 input balance, K2 intensity, K3 env on balance) |

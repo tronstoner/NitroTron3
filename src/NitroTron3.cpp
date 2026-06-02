@@ -837,8 +837,9 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float k2        = RemapKnob(eb.knobs[1]);
   const float k3        = RemapKnob(eb.knobs[2]);
   const float fold_amt  = RemapKnob(eb.knobs[3]);  // K4
-  const float wet_level = RemapKnob(eb.knobs[4]);  // K5
+  const float drive_knob = RemapKnob(eb.knobs[4]); // K5: filter drive (all SW2 modes)
   const float mix       = RemapKnob(eb.knobs[5]);  // K6
+  const float drive_amt = MODE_C_DRIVE_MIN + drive_knob * (MODE_C_DRIVE_MAX - MODE_C_DRIVE_MIN);
   const float dry_gain  = sqrtf(1.f - mix);
   const float wet_gain  = sqrtf(mix);
 
@@ -857,8 +858,10 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float k3_abs = (k3_signed >= 0.f) ? k3_signed : -k3_signed;
   const float env_lift_gain = k3_abs * MODE_C_ENV_SCALE * MODE_C_ENV_MOD_RANGE;
   if (ladder_on) {
-    ladder_c.SetDrive(MODE_C_LADDER_DRIVE);
-    ladder_c.SetResonance(k2 * MODE_C_LADDER_RES_MAX);
+    ladder_c.SetDrive(drive_amt);
+    // sqrt curve so resonance is audible across the full knob range
+    // (linear made the lower half nearly inaudible, then snapped).
+    ladder_c.SetResonance(sqrtf(k2) * MODE_C_LADDER_RES_MAX);
   }
 
   // Grendel per-block setup (active only at SW2=MID). Block-rate coef update.
@@ -900,13 +903,17 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       ladder_c.SetCutoff(mod_cutoff);
       wet = ladder_c.Process(wet);
     } else if (grendel_on) {
+      // K5 pre-filter drive — same saturator across all SW2 modes.
+      wet = tanhf(wet * drive_amt);
       wet = grendel_c.Process(wet);
     } else if (plague_on) {
+      // K5 pre-filter drive, on top of Plague's own K2-controlled internal drive.
+      wet = tanhf(wet * drive_amt);
       // env_contribution: signed (K3 polarity) × envelope magnitude.
       wet = plague_c.Process(wet, k3_signed * env_val);
     }
 
-    out[0][i] = out[1][i] = dry * dry_gain + wet * wet_level * wet_gain;
+    out[0][i] = out[1][i] = dry * dry_gain + wet * wet_gain;
   }
   prev_block_env_c = env_val;
 }
