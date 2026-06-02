@@ -25,8 +25,9 @@ Hothouse hw;
 // ---------------------------------------------------------------------------
 MoogOsc      osc1;
 MoogOsc      osc2;
-MoogLadder   ladder;
-EnvFollower  env;
+MoogLadder   ladder;     // Mode A
+MoogLadder   ladder_c;   // Mode C — separate instance so filter state can't leak across modes
+EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
 // ---------------------------------------------------------------------------
@@ -887,13 +888,17 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 }
 
 // ---------------------------------------------------------------------------
-// Mode C — Schism (C.2: + sine wavefolder under SW1=UP, K4 fold amount)
+// Mode C — Schism (C.3: + Moog ladder under SW2=UP, K1/K2/K3 active)
 // ---------------------------------------------------------------------------
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
 
-  const uint8_t drive_mode = eb.sw1;               // 0=UP sinefold, 1=MID TBD, 2=DOWN passthru
+  const uint8_t drive_mode  = eb.sw1;              // 0=UP sinefold, 1=MID TBD, 2=DOWN passthru
+  const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel TBD, 2=DOWN Plague TBD
+  const float k1        = RemapKnob(eb.knobs[0]);
+  const float k2        = RemapKnob(eb.knobs[1]);
+  const float k3        = RemapKnob(eb.knobs[2]);
   const float fold_amt  = RemapKnob(eb.knobs[3]);  // K4
   const float wet_level = RemapKnob(eb.knobs[4]);  // K5
   const float mix       = RemapKnob(eb.knobs[5]);  // K6
@@ -905,13 +910,39 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float fold_drive = 1.f + fold_blend * SINEFOLD_DRIVE_MAX;
   const float fold_comp  = 1.f - fold_blend * (1.f - SINEFOLD_COMP_AT_MAX);
 
+  // Moog ladder per-block constants (active only at SW2=UP).
+  const bool ladder_on = (filter_mode == 0);
+  const float base_cutoff = MapCutoff(k1);  // 80 Hz – 8 kHz exponential
+  // K3 bipolar with center deadzone → signed env amount in [-1, +1].
+  float k3_signed = (k3 - 0.5f) * 2.f;
+  if (k3_signed > -K3_DEADZONE && k3_signed < K3_DEADZONE) k3_signed = 0.f;
+  const float env_mod = k3_signed * MODE_C_ENV_MOD_RANGE;
+  if (ladder_on) {
+    ladder_c.SetDrive(MODE_C_LADDER_DRIVE);
+    ladder_c.SetResonance(k2 * MODE_C_LADDER_RES_MAX);
+  }
+
   for (size_t i = 0; i < size; i++) {
     const float dry = in[0][i];
+
+    // Update shared envelope follower from raw bass each sample.
+    const float env_val = env.Process(dry);
+
+    // Drive stage (SW1).
     float wet = dry;
     if (fold_blend > 0.001f) {
       const float folded = sinf(dry * fold_drive * 1.5707963f);
       wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
     }
+
+    // Filter stage (SW2).
+    if (ladder_on) {
+      // Env-modulated cutoff: bipolar, exponential in octaves around base.
+      const float mod_cutoff = base_cutoff * expf(env_val * env_mod);
+      ladder_c.SetCutoff(mod_cutoff);
+      wet = ladder_c.Process(wet);
+    }
+
     out[0][i] = out[1][i] = dry * dry_gain + wet * wet_level * wet_gain;
   }
 }
@@ -951,6 +982,7 @@ int main() {
   osc1.Init(sr);
   osc2.Init(sr);
   ladder.Init(sr);
+  ladder_c.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
   tracker.Init(sr);

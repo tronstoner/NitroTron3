@@ -63,6 +63,12 @@ constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
 constexpr float SINEFOLD_DRIVE_MAX   = 8.0f;   // pre-sin drive at K4=1 (1× at K4=0)
 constexpr float SINEFOLD_COMP_AT_MAX = 0.7f;   // post-fold gain at K4=1 (1.0 at K4=0)
 
+// Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
+constexpr float MODE_C_LADDER_DRIVE   = 1.2f;  // input drive into ladder (Mode A uses 1.8 for osc)
+constexpr float MODE_C_LADDER_RES_MAX = 0.95f; // resonance ceiling — stays just below self-osc
+constexpr float MODE_C_ENV_MOD_RANGE  = 4.0f;  // env at K3=±1 multiplies cutoff by exp(±range)
+constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
+
 // --- Mode B reverb + bipolar K5 ---
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb

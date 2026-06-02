@@ -4,13 +4,13 @@
 
 // Huovilainen non-linear Moog ladder filter (DAFx 2004)
 // 4-pole (24 dB/oct) lowpass with per-stage tanh saturation.
-// No resonance feedback — used for tone shaping on a drone oscillator.
+// Resonance is opt-in (res_ defaults to 0).
 class MoogLadder {
  public:
   void Init(float sample_rate) {
     sr_ = sample_rate;
     for (int i = 0; i < 4; i++) stage_[i] = 0.f;
-    delay_[0] = delay_[1] = 0.f;
+    in_prev_ = 0.f;
   }
 
   // Set cutoff in Hz (clamped to Nyquist)
@@ -27,13 +27,21 @@ class MoogLadder {
   // Set input drive (gain before filter, adds tanh character)
   void SetDrive(float drive) { drive_ = drive; }
 
+  // Set resonance (0 = off, ~1.0 = self-oscillation threshold).
+  // Caller should clamp below the self-osc limit (~0.95 is a safe ceiling).
+  void SetResonance(float res) {
+    if (res < 0.f) res = 0.f;
+    res_ = res;
+  }
+
   float Process(float in) {
     // Apply drive
     in *= drive_;
 
-    // 4 cascaded one-pole sections with tanh nonlinearity
-    // Using the Huovilainen improved model with half-sample delay compensation
-    float x = in - 4.f * 0.f;  // No resonance feedback (res = 0)
+    // Resonance feedback with half-sample delay compensation (Huovilainen).
+    // (stage_[3] - 0.5*in_prev) approximates the output midway between samples.
+    float x = in - 4.f * res_ * (stage_[3] - 0.5f * in_prev_);
+    in_prev_ = in;
 
     // Stage 1
     stage_[0] += g_ * (Saturate(x) - Saturate(stage_[0]));
@@ -51,8 +59,9 @@ class MoogLadder {
   float sr_    = 48000.f;
   float g_     = 0.f;     // filter coefficient
   float drive_ = 1.f;
+  float res_   = 0.f;     // resonance feedback amount
   float stage_[4] = {};   // filter state per pole
-  float delay_[2] = {};   // reserved for future resonance feedback
+  float in_prev_  = 0.f;  // previous input for half-sample delay compensation
 
   // tanh approximation — Pade (3,3), accurate to ~0.1% for |x| < 4
   static float Saturate(float x) {
