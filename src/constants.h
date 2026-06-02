@@ -64,9 +64,9 @@ constexpr float SINEFOLD_DRIVE_MAX   = 35.0f;  // pre-sin drive at K4=1 (1× at 
 constexpr float SINEFOLD_COMP_AT_MAX = 0.55f;  // post-fold gain at K4=1 (1.0 at K4=0)
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
-constexpr float MODE_C_LADDER_DRIVE   = 1.2f;  // input drive into ladder (Mode A uses 1.8 for osc)
+constexpr float MODE_C_LADDER_DRIVE   = 2.5f;  // input drive into ladder (Mode A uses 1.8 for osc)
 constexpr float MODE_C_LADDER_RES_MAX = 0.95f; // resonance ceiling — stays just below self-osc
-constexpr float MODE_C_ENV_MOD_RANGE  = 4.0f;  // env at K3=±1 multiplies cutoff by exp(±range)
+constexpr float MODE_C_ENV_MOD_RANGE  = 8.0f;  // env at K3=±1 multiplies cutoff by exp(±range)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
 
 // Grendel formant filter (SW2=MID). K1 = vowel path, K2 = size, K3 = env on path.
@@ -87,14 +87,14 @@ constexpr float GRENDEL_FORMANT_GAIN[GRENDEL_NUM_FORMANTS] = {1.0f, 0.85f, 0.6f,
 
 constexpr float GRENDEL_SIZE_MIN       = 0.5f;  // K2=0 → centers × 0.5 (large mouth)
 constexpr float GRENDEL_SIZE_MAX       = 1.6f;  // K2=1 → centers × 1.6 (small mouth)
-constexpr float GRENDEL_ENV_PATH_RANGE = 0.5f;  // env at K3=±1 shifts path by ±0.5 (half the vowel space)
+constexpr float GRENDEL_ENV_PATH_RANGE = 1.0f;  // env at K3=±1 shifts path by ±1.0 (full vowel space)
 
 // Plague filter (SW2=DOWN). Initial values; ear-tune in C.4.
 constexpr float PLAGUE_LOW_HZ            = 220.0f;  // lo band SatSVF center
 constexpr float PLAGUE_HIGH_HZ           = 1800.0f; // hi band SatSVF center
-constexpr float PLAGUE_INPUT_RATIO       = 1.5f;    // pre-saturation drive at K2=1 (0 at K2=0)
+constexpr float PLAGUE_INPUT_RATIO       = 6.0f;    // pre-saturation drive at K2=1 (0 at K2=0)
 constexpr float PLAGUE_FB_BASE           = 0.5f;    // feedback drive at K2=0 (mild ring)
-constexpr float PLAGUE_FB_RANGE          = 0.45f;   // additional feedback drive at K2=1 (stays below self-osc with tanh in loop)
+constexpr float PLAGUE_FB_RANGE          = 0.5f;    // additional feedback drive at K2=1 (tanh in loop prevents runaway)
 constexpr float PLAGUE_BALANCE_ENV_SCALE = 0.5f;    // K3·env contribution to balance shift (±0.5 traverses full range)
 constexpr float PLAGUE_OUT_GAIN          = 1.0f;    // post-sum loudness comp — ear-tune in C.4
 
