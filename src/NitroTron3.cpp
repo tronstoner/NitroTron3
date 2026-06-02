@@ -12,6 +12,7 @@
 #include "clouds/reverb.h"  // vendored, not yet instantiated
 #include "resampler.h"
 #include "plague.h"
+#include "grendel.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -29,6 +30,7 @@ MoogOsc      osc2;
 MoogLadder   ladder;     // Mode A
 MoogLadder   ladder_c;   // Mode C — separate instance so filter state can't leak across modes
 Plague       plague_c;   // Mode C — SW2=DOWN Plague filter
+Grendel      grendel_c;  // Mode C — SW2=MID Grendel formant filter
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -890,14 +892,18 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 }
 
 // ---------------------------------------------------------------------------
-// Mode C — Schism (C.4: + Plague filter under SW2=DOWN)
+// Mode C — Schism (C.5: + Grendel formant filter under SW2=MID)
 // ---------------------------------------------------------------------------
+// Block-rate env value for Grendel coefficient updates (env LP is ~33 Hz, so
+// updating biquad coefs per-sample would waste a lot of cosf/sinf calls).
+float prev_block_env_c = 0.f;
+
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
 
   const uint8_t drive_mode  = eb.sw1;              // 0=UP sinefold, 1=MID TBD, 2=DOWN passthru
-  const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel TBD, 2=DOWN Plague
+  const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel, 2=DOWN Plague
   const float k1        = RemapKnob(eb.knobs[0]);
   const float k2        = RemapKnob(eb.knobs[1]);
   const float k3        = RemapKnob(eb.knobs[2]);
@@ -925,15 +931,27 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     ladder_c.SetResonance(k2 * MODE_C_LADDER_RES_MAX);
   }
 
+  // Grendel per-block setup (active only at SW2=MID). Block-rate coef update.
+  const bool grendel_on = (filter_mode == 1);
+  if (grendel_on) {
+    float vowel_path = k1 + k3_signed * prev_block_env_c * GRENDEL_ENV_PATH_RANGE;
+    if (vowel_path < 0.f) vowel_path = 0.f;
+    if (vowel_path > 1.f) vowel_path = 1.f;
+    const float size_scale = GRENDEL_SIZE_MIN +
+                             k2 * (GRENDEL_SIZE_MAX - GRENDEL_SIZE_MIN);
+    grendel_c.SetVowel(vowel_path, size_scale);
+  }
+
   // Plague per-block constants (active only at SW2=DOWN).
   const bool plague_on = (filter_mode == 2);
   if (plague_on) plague_c.SetParams(k1, k2);
 
+  float env_val = prev_block_env_c;
   for (size_t i = 0; i < size; i++) {
     const float dry = in[0][i];
 
     // Update shared envelope follower from raw bass each sample.
-    const float env_val = env.Process(dry);
+    env_val = env.Process(dry);
 
     // Drive stage (SW1).
     float wet = dry;
@@ -947,6 +965,8 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       const float mod_cutoff = base_cutoff * expf(env_val * env_mod_ladder);
       ladder_c.SetCutoff(mod_cutoff);
       wet = ladder_c.Process(wet);
+    } else if (grendel_on) {
+      wet = grendel_c.Process(wet);
     } else if (plague_on) {
       // env_contribution: signed (K3 polarity) × envelope magnitude.
       wet = plague_c.Process(wet, k3_signed * env_val);
@@ -954,6 +974,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
 
     out[0][i] = out[1][i] = dry * dry_gain + wet * wet_level * wet_gain;
   }
+  prev_block_env_c = env_val;
 }
 
 // ---------------------------------------------------------------------------
@@ -993,6 +1014,7 @@ int main() {
   ladder.Init(sr);
   ladder_c.Init(sr);
   plague_c.Init(sr);
+  grendel_c.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
   tracker.Init(sr);

@@ -69,6 +69,26 @@ constexpr float MODE_C_LADDER_RES_MAX = 0.95f; // resonance ceiling — stays ju
 constexpr float MODE_C_ENV_MOD_RANGE  = 4.0f;  // env at K3=±1 multiplies cutoff by exp(±range)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
 
+// Grendel formant filter (SW2=MID). K1 = vowel path, K2 = size, K3 = env on path.
+constexpr int   GRENDEL_NUM_FORMANTS = 4;
+constexpr int   GRENDEL_NUM_VOWELS   = 5;
+constexpr float GRENDEL_FORMANT_Q    = 12.0f;  // mid-high Q for vowel-like ringing
+constexpr float GRENDEL_OUT_GAIN     = 4.0f;   // BPFs attenuate heavily; ear-tune in C.5
+
+// Vowel path: ee → eh → ah → oh → oo (F1..F4 in Hz, adult-male typicals).
+constexpr float GRENDEL_VOWELS[GRENDEL_NUM_VOWELS][GRENDEL_NUM_FORMANTS] = {
+  {270.f, 2290.f, 3010.f, 3500.f},  // 0: ee /i/
+  {530.f, 1840.f, 2480.f, 3500.f},  // 1: eh /ɛ/
+  {730.f, 1090.f, 2440.f, 3400.f},  // 2: ah /ɑ/
+  {570.f,  840.f, 2410.f, 3300.f},  // 3: oh /o/
+  {300.f,  870.f, 2240.f, 3200.f},  // 4: oo /u/
+};
+constexpr float GRENDEL_FORMANT_GAIN[GRENDEL_NUM_FORMANTS] = {1.0f, 0.85f, 0.6f, 0.35f};
+
+constexpr float GRENDEL_SIZE_MIN       = 0.5f;  // K2=0 → centers × 0.5 (large mouth)
+constexpr float GRENDEL_SIZE_MAX       = 1.6f;  // K2=1 → centers × 1.6 (small mouth)
+constexpr float GRENDEL_ENV_PATH_RANGE = 0.5f;  // env at K3=±1 shifts path by ±0.5 (half the vowel space)
+
 // Plague filter (SW2=DOWN). Initial values; ear-tune in C.4.
 constexpr float PLAGUE_LOW_HZ            = 220.0f;  // lo band SatSVF center
 constexpr float PLAGUE_HIGH_HZ           = 1800.0f; // hi band SatSVF center
