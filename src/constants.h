@@ -60,7 +60,7 @@ constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
 
 // --- Mode C — Schism ---
 // Sine wavefolder (SW1=UP, K4 = fold amount). Compensation curve ear-tuned in C.2.
-constexpr float SINEFOLD_DRIVE_MAX   = 8.0f;   // pre-sin drive at K4=1 (1× at K4=0)
+constexpr float SINEFOLD_DRIVE_MAX   = 15.0f;  // pre-sin drive at K4=1 (1× at K4=0)
 constexpr float SINEFOLD_COMP_AT_MAX = 0.7f;   // post-fold gain at K4=1 (1.0 at K4=0)
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
