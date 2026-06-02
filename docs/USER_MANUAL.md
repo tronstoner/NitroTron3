@@ -37,6 +37,8 @@ triangle, or square) tracks the input, gated by an envelope follower so
 the drone only sounds while you play. A Moog ladder filter shapes the
 tone; in triangle mode the same knob crosses over into wavefolding.
 
+![Mode A pedal layout](pedal-mode-a.svg){.pedal-layout}
+
 ## Controls
 
 | CONTROL | DESCRIPTION | NOTES |
@@ -64,6 +66,8 @@ for self-sustaining drones.
 When K2 is fully CCW, the grain engine bypasses and the input routes
 directly through the texture shaper — "direct-texture" mode — with K3
 becoming a micro-stutter control.
+
+![Mode B pedal layout](pedal-mode-b.svg){.pedal-layout}
 
 ## Controls
 
@@ -93,6 +97,8 @@ envelope-to-filter modulator with a center deadzone.
 
 *Note: Mode C is still in active development — SW1 = MIDDLE is reserved
 for a future drive flavor, currently passes audio unchanged.*
+
+![Mode C pedal layout](pedal-mode-c.svg){.pedal-layout}
 
 ## Controls
 

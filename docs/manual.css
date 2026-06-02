@@ -129,3 +129,29 @@ code {
   padding: 0 3pt;
   border-radius: 2pt;
 }
+
+/* Pedal-layout SVG: large reference diagram, centered above each mode's
+   controls table. Constrained so it never crowds out a page. */
+img.pedal-layout,
+figure img.pedal-layout,
+p img.pedal-layout {
+  display: block;
+  margin: 0.6em auto 1em auto;
+  width: 110mm;
+  height: auto;
+  page-break-inside: avoid;
+}
+
+/* Pandoc wraps a standalone image-with-attributes in a <figure>. Style
+   that wrapper too so spacing stays tight. */
+figure {
+  margin: 0.6em auto 1em auto;
+  text-align: center;
+  page-break-inside: avoid;
+}
+
+figure figcaption {
+  font-size: 9pt;
+  color: #666;
+  margin-top: 0.2em;
+}

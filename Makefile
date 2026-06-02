@@ -24,11 +24,13 @@ include $(SYSTEM_FILES_DIR)/Makefile
 .PHONY: manual
 manual: docs/USER_MANUAL.pdf
 
-docs/USER_MANUAL.pdf: docs/USER_MANUAL.md docs/manual.css
+docs/USER_MANUAL.pdf: docs/USER_MANUAL.md docs/manual.css \
+                     docs/pedal-mode-a.svg docs/pedal-mode-b.svg docs/pedal-mode-c.svg
 	pandoc $< \
-	  --from gfm \
+	  --from gfm+attributes \
 	  --pdf-engine=weasyprint \
 	  --css=docs/manual.css \
+	  --resource-path=docs \
 	  --standalone \
 	  --metadata pagetitle="NitroTron3 — User Manual" \
 	  -o $@

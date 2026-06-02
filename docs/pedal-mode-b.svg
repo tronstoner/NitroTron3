@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 1000" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <rect x="14" y="14" width="572" height="972" rx="40" fill="#f6f6f6" stroke="#444" stroke-width="2.5"/>
+  <text x="300" y="64" text-anchor="middle" font-size="30" font-weight="700" fill="#111">Mode B — Sprawl</text>
+  <text x="300" y="92" text-anchor="middle" font-size="16" fill="#666">NitroTron3 · Hothouse pedal layout</text>
+
+  <g transform="translate(130,170)">
+    <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
+    <circle r="51" fill="none" stroke="#3a3a3a" stroke-width="1"/>
+    <line x1="0.0" y1="-14.0" x2="0.0" y2="-50.0"
+          stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="130" y="254" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">K1</text>
+  <text x="130" y="277" text-anchor="middle"
+        font-size="19" fill="#333">Interval (±24 st)</text>
+
+  <g transform="translate(300,170)">
+    <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
+    <circle r="51" fill="none" stroke="#3a3a3a" stroke-width="1"/>
+    <line x1="14.0" y1="-0.0" x2="50.0" y2="-0.0"
+          stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="300" y="254" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">K2</text>
+  <text x="300" y="277" text-anchor="middle"
+        font-size="19" fill="#333">Buffer range</text>
+
+  <g transform="translate(470,170)">
+    <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
+    <circle r="51" fill="none" stroke="#3a3a3a" stroke-width="1"/>
+    <line x1="-12.1" y1="-7.0" x2="-43.3" y2="-25.0"
+          stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="470" y="254" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">K3</text>
+  <text x="470" y="277" text-anchor="middle"
+        font-size="19" fill="#333">Character / Glitch</text>
+
+  <g transform="translate(130,360)">
+    <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
+    <circle r="51" fill="none" stroke="#3a3a3a" stroke-width="1"/>
+    <line x1="7.0" y1="-12.1" x2="25.0" y2="-43.3"
+          stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="130" y="444" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">K4</text>
+  <text x="130" y="467" text-anchor="middle"
+        font-size="19" fill="#333">Texture amount</text>
+
+  <g transform="translate(300,360)">
+    <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
+    <circle r="51" fill="none" stroke="#3a3a3a" stroke-width="1"/>
+    <line x1="0.0" y1="-14.0" x2="0.0" y2="-50.0"
+          stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="300" y="444" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">K5</text>
+  <text x="300" y="467" text-anchor="middle"
+        font-size="19" fill="#333">Reverb ◀ ▶ Feedback</text>
+
+  <g transform="translate(470,360)">
+    <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
+    <circle r="51" fill="none" stroke="#3a3a3a" stroke-width="1"/>
+    <line x1="14.0" y1="-0.0" x2="50.0" y2="-0.0"
+          stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="470" y="444" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">K6</text>
+  <text x="470" y="467" text-anchor="middle"
+        font-size="19" fill="#333">Mix</text>
+
+  <g transform="translate(130,540)">
+    <rect x="-16" y="-26" width="32" height="52" rx="4"
+          fill="#9aa0a4" stroke="#333" stroke-width="1.5"/>
+    <rect x="-6" y="-34" width="12" height="22" rx="2"
+          fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>
+    <circle cx="0" cy="-36" r="5" fill="#888" stroke="#222" stroke-width="1"/>
+  </g>
+  <text x="130" y="610" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">SW1</text>
+  <text x="130" y="633" text-anchor="middle"
+        font-size="17" fill="#444">Texture mode</text>
+  <text x="130" y="658" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">▲ UP</tspan>
+    <tspan dx="6" fill="#444">Crush / Fold</tspan>
+  </text>
+  <text x="130" y="685" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">● MID</tspan>
+    <tspan dx="6" fill="#444">Digital glitch</tspan>
+  </text>
+  <text x="130" y="712" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">▼ DOWN</tspan>
+    <tspan dx="6" fill="#444">Ringmod</tspan>
+  </text>
+
+  <g transform="translate(300,540)">
+    <rect x="-16" y="-26" width="32" height="52" rx="4"
+          fill="#9aa0a4" stroke="#333" stroke-width="1.5"/>
+    <rect x="-6" y="-34" width="12" height="22" rx="2"
+          fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>
+    <circle cx="0" cy="-36" r="5" fill="#888" stroke="#222" stroke-width="1"/>
+  </g>
+  <text x="300" y="610" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">SW2</text>
+  <text x="300" y="633" text-anchor="middle"
+        font-size="17" fill="#444">Harmony</text>
+  <text x="300" y="658" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">▲ UP</tspan>
+    <tspan dx="6" fill="#444">Fixed interval</tspan>
+  </text>
+  <text x="300" y="685" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">● MID</tspan>
+    <tspan dx="6" fill="#444">Resonance</tspan>
+  </text>
+  <text x="300" y="712" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">▼ DOWN</tspan>
+    <tspan dx="6" fill="#444">Resonance</tspan>
+  </text>
+
+  <g transform="translate(470,540)">
+    <rect x="-16" y="-26" width="32" height="52" rx="4"
+          fill="#9aa0a4" stroke="#333" stroke-width="1.5"/>
+    <rect x="-6" y="-34" width="12" height="22" rx="2"
+          fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>
+    <circle cx="0" cy="-36" r="5" fill="#888" stroke="#222" stroke-width="1"/>
+  </g>
+  <text x="470" y="610" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">SW3</text>
+  <text x="470" y="633" text-anchor="middle"
+        font-size="17" fill="#444">Mode select</text>
+  <text x="470" y="658" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">▲ UP</tspan>
+    <tspan dx="6" fill="#444">Bordun</tspan>
+  </text>
+  <text x="470" y="685" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">● MID</tspan>
+    <tspan dx="6" fill="#444">Sprawl ◀</tspan>
+  </text>
+  <text x="470" y="712" text-anchor="middle" font-size="15" fill="#222">
+    <tspan font-weight="700">▼ DOWN</tspan>
+    <tspan dx="6" fill="#444">Schism</tspan>
+  </text>
+
+  <circle cx="195" cy="770" r="9" fill="#c83232" stroke="#5c1414" stroke-width="1"/>
+  <text x="213" y="775" font-size="16" fill="#333">Preset</text>
+
+  <circle cx="395" cy="770" r="9" fill="#c83232" stroke="#5c1414" stroke-width="1"/>
+  <text x="413" y="775" font-size="16" fill="#333">State</text>
+
+  <g transform="translate(170,870)">
+    <circle r="52" fill="#3a3a3a" stroke="#111" stroke-width="1.8"/>
+    <circle r="40" fill="#d8d8d8" stroke="#111" stroke-width="1.4"/>
+    <circle r="7" fill="#666"/>
+  </g>
+  <text x="170" y="944" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">FS1</text>
+  <text x="170" y="967" text-anchor="middle"
+        font-size="19" fill="#333">Preset</text>
+
+  <g transform="translate(430,870)">
+    <circle r="52" fill="#3a3a3a" stroke="#111" stroke-width="1.8"/>
+    <circle r="40" fill="#d8d8d8" stroke="#111" stroke-width="1.4"/>
+    <circle r="7" fill="#666"/>
+  </g>
+  <text x="430" y="944" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">FS2</text>
+  <text x="430" y="967" text-anchor="middle"
+        font-size="19" fill="#333">Bypass</text>
+</svg>
