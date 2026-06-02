@@ -11,6 +11,7 @@
 #include "grain_voice.h"
 #include "clouds/reverb.h"  // vendored, not yet instantiated
 #include "resampler.h"
+#include "plague.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -27,6 +28,7 @@ MoogOsc      osc1;
 MoogOsc      osc2;
 MoogLadder   ladder;     // Mode A
 MoogLadder   ladder_c;   // Mode C — separate instance so filter state can't leak across modes
+Plague       plague_c;   // Mode C — SW2=DOWN Plague filter
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -888,14 +890,14 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 }
 
 // ---------------------------------------------------------------------------
-// Mode C — Schism (C.3: + Moog ladder under SW2=UP, K1/K2/K3 active)
+// Mode C — Schism (C.4: + Plague filter under SW2=DOWN)
 // ---------------------------------------------------------------------------
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
 
   const uint8_t drive_mode  = eb.sw1;              // 0=UP sinefold, 1=MID TBD, 2=DOWN passthru
-  const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel TBD, 2=DOWN Plague TBD
+  const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel TBD, 2=DOWN Plague
   const float k1        = RemapKnob(eb.knobs[0]);
   const float k2        = RemapKnob(eb.knobs[1]);
   const float k3        = RemapKnob(eb.knobs[2]);
@@ -910,17 +912,22 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float fold_drive = 1.f + fold_blend * SINEFOLD_DRIVE_MAX;
   const float fold_comp  = 1.f - fold_blend * (1.f - SINEFOLD_COMP_AT_MAX);
 
-  // Moog ladder per-block constants (active only at SW2=UP).
-  const bool ladder_on = (filter_mode == 0);
-  const float base_cutoff = MapCutoff(k1);  // 80 Hz – 8 kHz exponential
   // K3 bipolar with center deadzone → signed env amount in [-1, +1].
   float k3_signed = (k3 - 0.5f) * 2.f;
   if (k3_signed > -K3_DEADZONE && k3_signed < K3_DEADZONE) k3_signed = 0.f;
-  const float env_mod = k3_signed * MODE_C_ENV_MOD_RANGE;
+
+  // Moog ladder per-block constants (active only at SW2=UP).
+  const bool ladder_on = (filter_mode == 0);
+  const float base_cutoff = MapCutoff(k1);
+  const float env_mod_ladder = k3_signed * MODE_C_ENV_MOD_RANGE;
   if (ladder_on) {
     ladder_c.SetDrive(MODE_C_LADDER_DRIVE);
     ladder_c.SetResonance(k2 * MODE_C_LADDER_RES_MAX);
   }
+
+  // Plague per-block constants (active only at SW2=DOWN).
+  const bool plague_on = (filter_mode == 2);
+  if (plague_on) plague_c.SetParams(k1, k2);
 
   for (size_t i = 0; i < size; i++) {
     const float dry = in[0][i];
@@ -937,10 +944,12 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
 
     // Filter stage (SW2).
     if (ladder_on) {
-      // Env-modulated cutoff: bipolar, exponential in octaves around base.
-      const float mod_cutoff = base_cutoff * expf(env_val * env_mod);
+      const float mod_cutoff = base_cutoff * expf(env_val * env_mod_ladder);
       ladder_c.SetCutoff(mod_cutoff);
       wet = ladder_c.Process(wet);
+    } else if (plague_on) {
+      // env_contribution: signed (K3 polarity) × envelope magnitude.
+      wet = plague_c.Process(wet, k3_signed * env_val);
     }
 
     out[0][i] = out[1][i] = dry * dry_gain + wet * wet_level * wet_gain;
@@ -983,6 +992,7 @@ int main() {
   osc2.Init(sr);
   ladder.Init(sr);
   ladder_c.Init(sr);
+  plague_c.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
   tracker.Init(sr);

@@ -162,22 +162,22 @@ Input ──┬─────────────────────�
 | LED 1 (left) | Preset indicator: off = Manual, Roman numeral blink pattern for presets 1–8 (I=short, V=long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows target slot. |
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
-### Mode C — Schism (C.3 in progress)
+### Mode C — Schism (C.4 in progress)
 
-Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1/C.2/C.3 implement the wet/dry mix scaffold, the SW1=UP sine wavefolder, and the SW2=UP Moog ladder with env-to-cutoff. SW2=MID/DOWN still pass audio unchanged.
+Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1–C.4 implement the wet/dry mix scaffold, the SW1=UP sine wavefolder, the SW2=UP Moog ladder with env-to-cutoff, and the SW2=DOWN Plague filter (two saturating SVFs at fixed corners, constant-sum K1 balance, tandem K2 intensity, bipolar K3 env on balance). SW2=MID still passes audio unchanged.
 
 #### Controls
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (80 Hz – 8 kHz, exponential). SW2=MID/DOWN: unused |
-| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → 0.95, capped below self-osc). SW2=MID/DOWN: unused |
-| KNOB 3 | Env → filter amount | Bipolar with center deadzone (±5%). CCW = filter closes on attack (swell). CW = filter opens on attack (auto-wah). Center = static. Full travel = ±4 octaves of cutoff modulation |
+| KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (80 Hz – 8 kHz, exponential). SW2=DOWN: Plague input balance (CCW = lo band only, noon = both, CW = hi band only). SW2=MID: unused |
+| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → 0.95). SW2=DOWN: Plague intensity (tandem input drive + feedback drive). SW2=MID: unused |
+| KNOB 3 | Env → filter amount | Bipolar with center deadzone (±5%). SW2=UP: ±4 octaves of cutoff modulation. SW2=DOWN: shifts Plague input balance with playing dynamics. Center = static |
 | KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold, internal loudness compensation). SW1=MID/DOWN: unused |
 | KNOB 5 | Wet level | Post-stage trim on the wet path (0 = silent wet, 1 = unity) |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Drive | **UP** - Sine wavefolder (K4 = fold amount)<br/>**MIDDLE** - TBD<br/>**DOWN** - Passthrough |
-| SWITCH 2 | Filter | **UP** - Moog ladder (K1 cutoff, K2 resonance, K3 env)<br/>**MIDDLE** - Grendel formant (TBD)<br/>**DOWN** - Plague (TBD) |
+| SWITCH 2 | Filter | **UP** - Moog ladder (K1 cutoff, K2 resonance, K3 env)<br/>**MIDDLE** - Grendel formant (TBD)<br/>**DOWN** - Plague (K1 input balance, K2 intensity, K3 env on balance) |
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl)<br/>**DOWN** - Mode C (Schism — this mode) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |

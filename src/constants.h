@@ -69,6 +69,15 @@ constexpr float MODE_C_LADDER_RES_MAX = 0.95f; // resonance ceiling — stays ju
 constexpr float MODE_C_ENV_MOD_RANGE  = 4.0f;  // env at K3=±1 multiplies cutoff by exp(±range)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
 
+// Plague filter (SW2=DOWN). Initial values; ear-tune in C.4.
+constexpr float PLAGUE_LOW_HZ            = 220.0f;  // lo band SatSVF center
+constexpr float PLAGUE_HIGH_HZ           = 1800.0f; // hi band SatSVF center
+constexpr float PLAGUE_INPUT_RATIO       = 1.5f;    // pre-saturation drive at K2=1 (0 at K2=0)
+constexpr float PLAGUE_FB_BASE           = 0.5f;    // feedback drive at K2=0 (mild ring)
+constexpr float PLAGUE_FB_RANGE          = 0.45f;   // additional feedback drive at K2=1 (stays below self-osc with tanh in loop)
+constexpr float PLAGUE_BALANCE_ENV_SCALE = 0.5f;    // K3·env contribution to balance shift (±0.5 traverses full range)
+constexpr float PLAGUE_OUT_GAIN          = 1.0f;    // post-sum loudness comp — ear-tune in C.4
+
 // --- Mode B reverb + bipolar K5 ---
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
