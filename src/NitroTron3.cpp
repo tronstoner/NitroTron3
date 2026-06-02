@@ -854,7 +854,8 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   // Moog ladder per-block constants (active only at SW2=UP).
   const bool ladder_on = (filter_mode == 0);
   const float base_cutoff = MapCutoff(k1);
-  const float env_mod_ladder = k3_signed * MODE_C_ENV_MOD_RANGE;
+  const float k3_abs = (k3_signed >= 0.f) ? k3_signed : -k3_signed;
+  const float env_lift_gain = k3_abs * MODE_C_ENV_SCALE * MODE_C_ENV_MOD_RANGE;
   if (ladder_on) {
     ladder_c.SetDrive(MODE_C_LADDER_DRIVE);
     ladder_c.SetResonance(k2 * MODE_C_LADDER_RES_MAX);
@@ -863,7 +864,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   // Grendel per-block setup (active only at SW2=MID). Block-rate coef update.
   const bool grendel_on = (filter_mode == 1);
   if (grendel_on) {
-    float vowel_path = k1 + k3_signed * prev_block_env_c * GRENDEL_ENV_PATH_RANGE;
+    float vowel_path = k1 + k3_signed * prev_block_env_c * MODE_C_ENV_SCALE * GRENDEL_ENV_PATH_RANGE;
     if (vowel_path < 0.f) vowel_path = 0.f;
     if (vowel_path > 1.f) vowel_path = 1.f;
     const float size_scale = GRENDEL_SIZE_MIN +
@@ -891,8 +892,10 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
 
     // Filter stage (SW2).
     if (ladder_on) {
-      const float mod_cutoff = base_cutoff * expf(env_val * env_mod_ladder);
-      ladder_c.SetCutoff(mod_cutoff);
+      // Mode A-style linear lift, passive-bass scaled. K3>=0 opens, K3<0 closes.
+      const float lift = 1.f + env_val * env_lift_gain;
+      const float mod_factor = (k3_signed >= 0.f) ? lift : (1.f / lift);
+      ladder_c.SetCutoff(base_cutoff * mod_factor);
       wet = ladder_c.Process(wet);
     } else if (grendel_on) {
       wet = grendel_c.Process(wet);

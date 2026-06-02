@@ -65,8 +65,9 @@ constexpr float SINEFOLD_COMP_AT_MAX = 0.55f;  // post-fold gain at K4=1 (1.0 at
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
 constexpr float MODE_C_LADDER_DRIVE   = 2.5f;  // input drive into ladder (Mode A uses 1.8 for osc)
-constexpr float MODE_C_LADDER_RES_MAX = 0.95f; // resonance ceiling — stays just below self-osc
-constexpr float MODE_C_ENV_MOD_RANGE  = 8.0f;  // env at K3=±1 multiplies cutoff by exp(±range)
+constexpr float MODE_C_LADDER_RES_MAX = 1.2f;  // pushed past ~1.0 self-osc threshold; in-loop tanh bounds it
+constexpr float MODE_C_ENV_MOD_RANGE  = 3.0f;  // depth on normalized env; lift = 1 + env_scaled * |k3| * range
+constexpr float MODE_C_ENV_SCALE      = 10.0f; // passive-bass env normalization (matches Mode A's effective ×10)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
 
 // Grendel formant filter (SW2=MID). K1 = vowel path, K2 = size, K3 = env on path.
