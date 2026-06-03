@@ -17,9 +17,11 @@ was inaudible on the CCW (XOR) side and decoupled-from-input on the CW
 
 1. **K4 alone controls the effect.** Density (event rate) and chain
    probability (continuous vs sparse) both scale with K4 magnitude.
-   Envelope coupling was tried and dropped — it muffled the effect
-   during note release in a way that felt irritating rather than
-   musical.
+   Wet-mix envelope coupling was tried and dropped — it muffled the
+   effect during note release in a way that felt irritating rather
+   than musical. The envelope follower is now used only as a hard
+   noise gate on event arming (see "Noise gate" below), not as a
+   continuous wet-level modulator.
 2. **Timing randomness.** All event timing (when triggers fire, event
    duration, per-event payload parameters) is randomised — the same
    knob position never produces the same glitch twice.
@@ -31,7 +33,7 @@ was inaudible on the CCW (XOR) side and decoupled-from-input on the CW
 
 | Side | Knob travel | Payload | Behaviour |
 |---|---|---|---|
-| **CCW** | 0.5 → 0.0 (away from noon) | **Bit-flip events** | Each event picks a random bit in `[0, effect_pos × GLITCH_XOR_MAX_BIT]`, XORs the wet signal with that bit for the event duration. Higher effect_pos → higher max bit → more violent flips. |
+| **CCW** | 0.5 → 0.0 (away from noon) | **Bit-flip events** | Each event picks a random bit in `[MAX_BIT_FLOOR, MAX_BIT_FLOOR + effect_pos × (GLITCH_XOR_MAX_BIT − MAX_BIT_FLOOR)]`, XORs the wet signal with that bit for the event duration. Floor = 8 so the first click past the deadzone is already audible; linear interp up to bit 13 at full CCW. Pick is biased toward the high end of the range. |
 | **CW** | 0.5 → 1.0 (away from noon) | **Timing events** | Each event randomly picks one of `{freeze, stutter loop, reverse}` and snapshots the ring buffer 1–20 ms behind the write head. Reads from that snapshot for the event duration. |
 
 The three CW timing payloads:
@@ -43,21 +45,33 @@ Selection is uniform-random per event.
 
 ### Trigger generator
 
-Per-sample probability check:
+Per-sample probability check, side-specific max rate (CW timing
+events feel faster than CCW bit-flips at the same knob position):
 ```
-rate_hz = effect_pos × GLITCH_EVENT_RATE_HZ_MAX
-p       = rate_hz / 48000
-fire    = rand() < p
+rate_max = (side == CW) ? GLITCH_EVENT_RATE_HZ_MAX_CW : GLITCH_EVENT_RATE_HZ_MAX
+rate_hz  = effect_pos × rate_max
+p        = rate_hz / 48000
+fire     = (env > GLITCH_ENV_GATE) && rand() < p
 ```
 
-When `state == IDLE` and a trigger fires, `StartEvent()` picks the
-payload and event duration. Event duration's lower bound also scales
-with `effect_pos` so each event is longer at the extreme.
+When `state == IDLE`, the gate is open, and a trigger fires,
+`StartEvent()` picks the payload and event duration. Event duration's
+lower bound also scales with `effect_pos` so each event is longer at
+the extreme.
 
 When an event ends, the processor chains into another event with
-probability `effect_pos²`. At full K4 this is ~1.0 so events fire
-back-to-back; near the deadzone it is near zero so each event is
-isolated.
+probability `effect_pos²` — also gated by env, so silence ends the
+run cleanly. At full K4 this is ~1.0 so events fire back-to-back;
+near the deadzone it is near zero so each event is isolated.
+
+### Noise gate
+
+The envelope follower acts as a hard gate on event *arming* only. In-flight
+events always play to completion so the gate-close edge cannot click. While
+`env ≤ GLITCH_ENV_GATE` no new events start and no chains continue, so a
+silent input → silent output. Passive-bass `env_val` sits around 0.02–0.1
+while played, so the default threshold of 0.01 opens immediately on the
+first note and closes cleanly into silence.
 
 ### Wet/dry mix
 
@@ -94,22 +108,24 @@ The deadzone (±5%) still snaps to clean / no triggers.
 ```
 GLITCH_DEADZONE              = 0.05f   // ±5% around noon → clean
 GLITCH_XOR_MAX_BIT           = 13      // bit-flip ceiling (±0.25 fs)
-GLITCH_EVENT_RATE_HZ_MAX     = 25.0f   // events/sec at full effect_pos
+GLITCH_EVENT_RATE_HZ_MAX     = 25.0f   // CCW: events/sec at full effect_pos
+GLITCH_EVENT_RATE_HZ_MAX_CW  = 50.0f   // CW: 2× CCW at full deflection
 GLITCH_EVENT_DUR_MIN_SAMPLES = 240     // 5 ms (effect_pos raises this floor)
 GLITCH_EVENT_DUR_MAX_SAMPLES = 2400    // 50 ms
 GLITCH_BUFFER_SAMPLES        = 2400    // 50 ms ring buffer (CW)
 GLITCH_RAMP_SAMPLES          = 48      // 1 ms wet/dry ramp
+GLITCH_ENV_GATE              = 0.01f   // raw env_val — no new events below
+```
+
+Bit-floor (inside `glitch_zones.h`):
+```
+MAX_BIT_FLOOR = 8     // CCW lower bound — first click past deadzone is audible
 ```
 
 ### Open questions for listening (when pedal is back)
 
 - Whether the per-event durations feel right or want to be punchier
   (drop max to ~25 ms) or more sustained (push max to ~100 ms).
-- Whether `GLITCH_EVENT_RATE_HZ_MAX = 8` is too sparse — may want 12–16
-  for the CW extreme so timing payloads overlap more.
-- Whether `GLITCH_ENV_GAIN = 5` makes the wet mix reach full ceiling on
-  reasonable playing dynamics. Passive-bass calibrated; may need 8–10
-  if the env follower output runs lower than expected.
 - Whether the three CW types feel like one "messed up audio" character
   or like three distinct modes — consider K4-position weighting if
   they want zoning (e.g., freeze near the deadzone, reverse at the
