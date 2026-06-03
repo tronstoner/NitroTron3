@@ -139,11 +139,13 @@ constexpr float PLAGUE_OUT_GAIN          = 1.0f;    // post-sum loudness comp �
 // silence-out). See docs/MODE_B_TEXTURE_IDEAS.md.
 constexpr float GLITCH_DEADZONE             = 0.05f; // ±5% around noon → clean
 constexpr int   GLITCH_XOR_MAX_BIT          = 13;    // highest bit flipped at full CCW (±0.25 of full scale)
-constexpr float GLITCH_EVENT_RATE_HZ_MAX    = 25.0f; // events/sec at full effect_pos × full env
+constexpr float GLITCH_EVENT_RATE_HZ_MAX    = 25.0f; // CCW: events/sec at full effect_pos × full env
+constexpr float GLITCH_EVENT_RATE_HZ_MAX_CW = 50.0f; // CW: 2× CCW rate at full deflection — timing events feel faster
 constexpr int   GLITCH_EVENT_DUR_MIN_SAMPLES = 240;  // 5 ms at 48 kHz
 constexpr int   GLITCH_EVENT_DUR_MAX_SAMPLES = 2400; // 50 ms at 48 kHz
 constexpr int   GLITCH_BUFFER_SAMPLES       = 2400;  // 50 ms ring buffer for CW timing payload
 constexpr int   GLITCH_RAMP_SAMPLES         = 48;    // 1 ms click-free wet/dry ramp
+constexpr float GLITCH_ENV_GATE             = 0.01f; // raw env_val noise gate — below this, no new events arm (passive bass ≈0.02–0.1 while played)
 
 // --- Mode B reverb + bipolar K5 ---
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center

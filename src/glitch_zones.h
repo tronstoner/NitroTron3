@@ -38,16 +38,23 @@ class GlitchEvents {
   }
 
   // Per-sample process. effect_pos = 0..1 (already deadzone-mapped),
-  // side = 0 (CCW/XOR) or 1 (CW/timing).
-  float Process(float in, int side, float effect_pos) {
+  // side = 0 (CCW/XOR) or 1 (CW/timing), env = current envelope follower value.
+  float Process(float in, int side, float effect_pos, float env) {
     // Always write input to the ring buffer (CW payload needs history)
     const int w = write_pos_;
     buffer_[w] = in;
     write_pos_ = (w + 1) % GLITCH_BUFFER_SAMPLES;
 
+    // Noise gate: no new events arm while input sits below the gate threshold.
+    // In-flight events still play out to avoid gate-close clicks.
+    const bool gate_open = env > GLITCH_ENV_GATE;
+
     // Trigger probability: events/sec scaled by effect_pos, converted to per-sample.
-    if (state_ == State::IDLE && effect_pos > 0.f) {
-      const float rate_hz = effect_pos * GLITCH_EVENT_RATE_HZ_MAX;
+    // CW (timing events) runs at 2× CCW rate at full deflection.
+    if (state_ == State::IDLE && effect_pos > 0.f && gate_open) {
+      const float rate_max = (side == 1) ? GLITCH_EVENT_RATE_HZ_MAX_CW
+                                         : GLITCH_EVENT_RATE_HZ_MAX;
+      const float rate_hz = effect_pos * rate_max;
       const float p = rate_hz * (1.f / 48000.f);
       if (NextRand() < p) {
         StartEvent(side, effect_pos, w);
@@ -62,9 +69,10 @@ class GlitchEvents {
       if (event_remaining_ <= 0) {
         // Chain into next event with probability effect_pos². At the
         // extreme this approaches 1, so glitches become continuous and
-        // the dry signal is no longer audible between events.
+        // the dry signal is no longer audible between events. Chain is
+        // also gated by env so silence ends the run.
         const float chain_p = effect_pos * effect_pos;
-        if (NextRand() < chain_p) {
+        if (gate_open && NextRand() < chain_p) {
           StartEvent(active_side_, effect_pos, write_pos_);
         } else {
           state_ = State::IDLE;
@@ -128,8 +136,13 @@ class GlitchEvents {
       // max_bit). Picks live in roughly the top 4 bits of the range, with
       // strong weight on max_bit itself — uniform random would average
       // around bit max_bit/2 and produce inaudibly small XOR masks.
-      int max_bit = static_cast<int>(effect_pos * static_cast<float>(GLITCH_XOR_MAX_BIT));
-      if (max_bit < 1) max_bit = 1;
+      // Lift the floor so even the first click past the deadzone is audibly
+      // present — events below bit 8 (XOR step ±0.008) are sub-audible on a
+      // typical bass signal. Linear interp keeps the upper scaling feel.
+      constexpr int MAX_BIT_FLOOR = 8;
+      int max_bit = MAX_BIT_FLOOR +
+          static_cast<int>(effect_pos *
+              static_cast<float>(GLITCH_XOR_MAX_BIT - MAX_BIT_FLOOR));
       if (max_bit > GLITCH_XOR_MAX_BIT) max_bit = GLITCH_XOR_MAX_BIT;
       const float r = NextRand() * NextRand();   // biased toward 0
       int drop = static_cast<int>(r * 4.f);      // 0..3, biased to 0

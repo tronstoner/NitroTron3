@@ -746,7 +746,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     }
     case 1: {
       // Event-driven digital glitch: stochastic triggers, K4 alone controls density.
-      wet = glitch_events.Process(wet, glitch_side, glitch_effect_pos);
+      wet = glitch_events.Process(wet, glitch_side, glitch_effect_pos, grain_env);
       break;
     }
     case 2: {
