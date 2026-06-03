@@ -13,7 +13,7 @@
   <text x="130" y="254" text-anchor="middle"
         font-size="22" font-weight="700" fill="#111">K1</text>
   <text x="130" y="277" text-anchor="middle"
-        font-size="19" fill="#333">Interval (±24 st)</text>
+        font-size="19" fill="#333">Pitch (±24 st)</text>
 
   <g transform="translate(300,170)">
     <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
@@ -24,7 +24,7 @@
   <text x="300" y="254" text-anchor="middle"
         font-size="22" font-weight="700" fill="#111">K2</text>
   <text x="300" y="277" text-anchor="middle"
-        font-size="19" fill="#333">Buffer range</text>
+        font-size="19" fill="#333">Buffer size</text>
 
   <g transform="translate(470,170)">
     <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
@@ -35,7 +35,7 @@
   <text x="470" y="254" text-anchor="middle"
         font-size="22" font-weight="700" fill="#111">K3</text>
   <text x="470" y="277" text-anchor="middle"
-        font-size="19" fill="#333">Character / Glitch</text>
+        font-size="19" fill="#333">Grains</text>
 
   <g transform="translate(130,360)">
     <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
@@ -46,7 +46,7 @@
   <text x="130" y="444" text-anchor="middle"
         font-size="22" font-weight="700" fill="#111">K4</text>
   <text x="130" y="467" text-anchor="middle"
-        font-size="19" fill="#333">Texture amount</text>
+        font-size="19" fill="#333">Texture</text>
 
   <g transform="translate(300,360)">
     <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
@@ -57,7 +57,7 @@
   <text x="300" y="444" text-anchor="middle"
         font-size="22" font-weight="700" fill="#111">K5</text>
   <text x="300" y="467" text-anchor="middle"
-        font-size="19" fill="#333">Reverb ◀ ▶ Feedback</text>
+        font-size="19" fill="#333">Reverb / Feedback</text>
 
   <g transform="translate(470,360)">
     <circle r="58" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
@@ -111,11 +111,11 @@
   </text>
   <text x="300" y="685" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">● MID</tspan>
-    <tspan dx="6" fill="#444">Resonance</tspan>
+    <tspan dx="6" fill="#444">Harmonic</tspan>
   </text>
   <text x="300" y="712" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">▼ DOWN</tspan>
-    <tspan dx="6" fill="#444">Resonance</tspan>
+    <tspan dx="6" fill="#444">Harmonic</tspan>
   </text>
 
   <g transform="translate(470,540)">

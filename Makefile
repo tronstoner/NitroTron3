@@ -24,6 +24,9 @@ include $(SYSTEM_FILES_DIR)/Makefile
 .PHONY: manual
 manual: docs/USER_MANUAL.pdf
 
+docs/pedal-mode-a.svg docs/pedal-mode-b.svg docs/pedal-mode-c.svg &: docs/gen_layout_svg.py
+	python3 docs/gen_layout_svg.py
+
 docs/USER_MANUAL.pdf: docs/USER_MANUAL.md docs/manual.css \
                      docs/pedal-mode-a.svg docs/pedal-mode-b.svg docs/pedal-mode-c.svg
 	pandoc $< \
