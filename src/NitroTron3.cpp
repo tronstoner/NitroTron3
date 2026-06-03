@@ -17,6 +17,7 @@
 #include "grendel.h"
 #include "glitch_zones.h"
 #include "bitcrush.h"
+#include "synth_osc_c.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -37,6 +38,7 @@ Plague       plague_c;    // Mode C — SW2=DOWN (still needs re-tuning round)
 Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
 PeakLimiter  limiter_c;   // Mode C — post-filter peak limiter (2-band, fundamentals preserved)
 BitCrush     bitcrush_c;  // Mode C — SW1=MID drive flavor (gated bit crusher)
+ModeCSynth   synth_c;     // Mode C — SW1=DOWN pitch-tracked synth oscillator
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -862,7 +864,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
                       size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
 
-  const uint8_t drive_mode  = eb.sw1;              // 0=UP sinefold, 1=MID TBD, 2=DOWN passthru
+  const uint8_t drive_mode  = eb.sw1;              // 0=UP sinefold, 1=MID bitcrush, 2=DOWN pitch-tracked synth
   const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel, 2=DOWN Plague
   const float k1        = RemapKnob(eb.knobs[0]);
   const float k2        = RemapKnob(eb.knobs[1]);
@@ -929,6 +931,10 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     // Update shared envelope follower from raw bass each sample.
     env_val = env.Process(dry);
 
+    // Feed pitch tracker every sample so its filters stay warm regardless of
+    // SW1 position; consumed only when drive_mode == 2 (SW1=DOWN synth osc).
+    tracker.Feed(dry, env_val);
+
     // Filter env (ladder) — shape switches with K3 sign:
     //   CW  → peak follower (instant attack, one-pole release) → snappy auto-wah
     //   CCW → slow-rise env (one-pole attack, instant snap-back) → swell
@@ -948,13 +954,20 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       env_c_grendel += env_c_grendel_atk_coef * (env_val - env_c_grendel);
     else env_c_grendel = env_val;
 
-    // Drive stage (SW1). 0=UP sinefold, 1=MID bitcrush (gated), 2=DOWN passthru.
+    // Drive stage (SW1).
+    //   0=UP sinefold, 1=MID bitcrush (gated), 2=DOWN pitch-tracked synth osc.
     float wet = dry;
     if (drive_mode == 0 && fold_blend > 0.001f) {
       const float folded = sinf(dry * fold_drive * 1.5707963f);
       wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
     } else if (drive_mode == 1) {
       wet = bitcrush_c.Process(dry, fold_amt, env_val);
+    } else if (drive_mode == 2) {
+      // Pitch-tracked synth osc → raw-env VCA (Mode A style) → SW2 filter.
+      // K4 (fold_amt) is the timbre morph; YIN pitch quantized to semitones.
+      const float f0 = MidiToFreq(tracker.GetMidiNote());
+      const float osc_out = synth_c.Process(f0, fold_amt);
+      wet = osc_out * env_val * MODE_C_SYNTH_VCA_GAIN;
     }
 
     // Filter stage (SW2). Filter modulation reads env_c_filter (smoothed).
@@ -1033,6 +1046,7 @@ int main() {
   grendel_c.Init(sr);
   limiter_c.Init(sr);
   bitcrush_c.Init();
+  synth_c.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
 
@@ -1076,9 +1090,8 @@ int main() {
     // Preset system: footswitches, knobs, LEDs, mode switching, flash
     preset.Tick(10);
 
-    // Pitch tracker: run YIN in main loop (Mode A + Mode B)
-    if (preset.GetCurrentMode() != MODE_FREQSHIFT)
-      tracker.Update();
+    // Pitch tracker: run YIN in main loop (Mode A, Mode B, Mode C SW1=DOWN).
+    tracker.Update();
 
     // Bootloader: FS1 held 2 s (Phase 1 — proven safe)
     hw.CheckResetToBootloader();

@@ -90,6 +90,30 @@ constexpr float MODE_C_GRENDEL_INPUT_PAD = 0.3f;
 // around typical playing dynamics with mild boost on hard plucks.
 constexpr float MODE_C_VCA_GAIN = 12.0f;
 
+// Mode C SW1=DOWN — pitch-tracked synth oscillator engine.
+// K4 morphs through five zones (hypersaw → saw plateau → saw/sq crossfade →
+// square plateau → square+PWM). VCA is the raw shared env follower, applied
+// before the SW2 filter (Mode A style direct multiply).
+// K4 layout: discrete noon split. CCW half = saw, CW half = rect.
+//   K4 = 0.00   : max hypersaw (all voices at full detune)
+//   K4 → 0.50   : hypersaw modulation fades out toward single saw
+//   K4 = 0.50   : pure single saw at noon edge, pure single rect just past
+//   K4 → 1.00   : PWM modulation fades in (depth first, then rate)
+//   K4 = 1.00   : max PWM (sweet-spot depth, fastest rate)
+// Within each half, side-voice gain / PWM depth ramps in fast (first
+// _GAIN_FRAC / _DEPTH_FRAC of travel) so the modulated timbre is "fully on"
+// early; the remaining travel only widens detune / speeds the LFO.
+constexpr int   MODE_C_SYNTH_UNISON_VOICES    = 7;     // hypersaw voice count
+constexpr float MODE_C_SYNTH_DETUNE_CENTS_MIN = 10.f;  // outer-voice detune just past noon (already incoherent so RMS norm is accurate from the first sample)
+constexpr float MODE_C_SYNTH_DETUNE_CENTS_MAX = 50.f;  // outer-voice detune at K4=0 (full hypersaw)
+constexpr float MODE_C_SYNTH_HYPER_GAIN_FRAC  = 0.4f;  // fraction of saw half (past the plateau) over which side-voice gain reaches max; remaining CCW travel only widens detune
+constexpr float MODE_C_SYNTH_SAW_PLATEAU      = 0.04f; // single-saw sweet-spot plateau width just below noon (K4 ∈ [0.46, 0.50] holds pure saw)
+constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MIN   = 0.2f;  // PWM rate just past noon (very slow start)
+constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MAX   = 2.f;   // PWM rate at K4=1
+constexpr float MODE_C_SYNTH_PWM_DEPTH_MAX    = 0.3f;  // max ± duty deviation — sweet-spot detuned-rect feel; deeper values briefly drive the fundamental too far down (sin(π·duty) crash at duty extremes)
+constexpr float MODE_C_SYNTH_PWM_DEPTH_FRAC   = 0.4f;  // fraction of rect half over which depth reaches max; remaining CW travel only speeds the LFO up
+constexpr float MODE_C_SYNTH_VCA_GAIN         = 12.f;  // passive-bass env normalization, matches MODE_C_VCA_GAIN convention
+
 // Filter-env smoother — Mode C only. Shape switches with K3 direction:
 //
 // K3 CW  → peak follower: instant attack, one-pole release (RELEASE_MS).

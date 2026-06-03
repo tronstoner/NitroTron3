@@ -42,11 +42,11 @@ K5 (wet level) is a post-filter, pre-mix trim on the wet path. Always active, re
 
 | Switch | Function | Positions |
 |---|---|---|
-| **SW1** | Drive | UP: Sine wavefolder · MID: Gated bit crusher (C.6 explorative) · DOWN: Passthrough |
+| **SW1** | Drive | UP: Sine wavefolder · MID: Gated bit crusher (C.6 explorative) · DOWN: Pitch-tracked synth oscillator (K4 = saw↔rect timbre morph) |
 | **SW2** | Filter | UP: Moog ladder · MID: Grendel formant · DOWN: Plague |
 | **SW3** | Mode select | UP: Mode A · MID: Mode B · DOWN: Mode C |
 
-To audition the filter alone: SW1=DOWN. To audition the drive alone: SW2=UP with K1 (cutoff) fully open and K2 (resonance) at zero — functionally a filter bypass.
+To audition the drive alone: SW2=UP with K1 (cutoff) fully open and K2 (resonance) at zero — functionally a filter bypass. (Note: the former SW1=DOWN passthrough is now a pitch-tracked synth oscillator, so "filter-only on dry bass" is no longer available; SW1=UP with K4 at zero is the closest equivalent.)
 
 ---
 
@@ -59,10 +59,10 @@ Top row (K1–K3) = filter section, reinterpreting per SW2. K4 = drive character
 | KNOB 1 | Filter "where" | Ladder: cutoff Hz (exp). Grendel: vowel position along curated path (linear). Plague: hi/lo input balance (CCW: input → lo band only, noon: both bands equal, CW: input → hi band only) |
 | KNOB 2 | Filter "how much" | Ladder: resonance. Grendel: Size (mouth scale). Plague: intensity (input gain + feedback drive in tandem — see Plague section) |
 | KNOB 3 | Env → filter amount | Modulates K1 per the active SW2 mode. Polarity TBD per SW2 — see [Env follower behavior](#env-follower-behavior) |
-| KNOB 4 | Drive character | Per SW1 stage: sine fold = fold amount. Adds harmonic content, not loudness — internal compensation keeps wet path roughly level. SW1=DOWN: unused |
+| KNOB 4 | Drive character | Per SW1 stage. SW1=UP (sine fold): fold amount, internal loudness compensation. SW1=MID (bit crush): bit depth 16 → 4. SW1=DOWN (synth osc): timbre morph — CCW half = saw (max hypersaw → single saw, small single-saw sweet-spot plateau just below noon), CW half = rect (single rect → PWM with depth-then-rate ramp) |
 | KNOB 5 | Wet level | Post-filter, pre-mix wet-path trim. Always active. May turn out redundant against K6 after listening — evaluated post-C.5 |
 | KNOB 6 | Mix | Dry/wet. Fully CCW = dry, fully CW = wet only. Always active |
-| SWITCH 1 | Drive | **UP** - Sine wavefolder<br/>**MIDDLE** - TBD<br/>**DOWN** - Passthrough |
+| SWITCH 1 | Drive | **UP** - Sine wavefolder<br/>**MIDDLE** - Gated bit crusher<br/>**DOWN** - Pitch-tracked synth oscillator (K4 morphs saw ↔ rect) |
 | SWITCH 2 | Filter | **UP** - Moog ladder<br/>**MIDDLE** - Grendel formant<br/>**DOWN** - Plague |
 | SWITCH 3 | Mode select | **UP** - Mode A<br/>**MIDDLE** - Mode B<br/>**DOWN** - Mode C |
 | FOOTSWITCH 1 | Preset | Per `PROJECT.md` Preset System |
@@ -86,9 +86,42 @@ Linear-PCM quantizer with an input-envelope noise gate. K4 sweeps bit depth from
 
 First-pass distortion variant being evaluated alongside the sine wavefolder. May be replaced or refined during C.6 listening (candidates: SR reduction added on top, asymmetric/chebyshev wavefold, tape-style saturation, transistor fuzz).
 
-### DOWN — Passthrough
+### DOWN — Pitch-tracked synth oscillator
 
-Audio passes unchanged. K4 and K5 unused (no drive stage active). This is the canonical setup for "filter only" sounds, especially SW1=DOWN + SW2=DOWN (Plague), which feeds the bass directly into Plague.
+A pitch-tracked synth voice replaces the dry-bass passthrough. The bass note is tracked by the existing YIN tracker (semitone-quantized, recycled from Mode A direct mode), feeding an oscillator engine whose timbre is morphed by K4. The engine output is amplitude-controlled by the **raw** shared envelope follower (Mode A-style direct multiply, no smoother) and routed into the SW2 filter — so the VCA sits **before** the filter, and the filter's modulation curves stay separate.
+
+K4 splits at noon — saw on the left, rect on the right, with a small single-saw sweet-spot plateau just below noon so the user can land on a clean unison-free saw:
+
+- `K4 = 0.00`: max hypersaw — 7 unison voices, ±50-cent detune
+- `K4 ∈ [0.00, ~0.28]`: all voices at full gain, detune widens to 50 cents
+- `K4 ∈ [~0.28, 0.46]`: side voices fade in fast, detune ~10 cents (already incoherent so the RMS normalization tracks loudness across the ramp)
+- `K4 ∈ [0.46, 0.50]`: pure single saw plateau (`MODE_C_SYNTH_SAW_PLATEAU` = 0.04)
+- `K4 = 0.50`: discrete swap to rect
+- `K4 ∈ [0.50, ~0.70]`: PWM depth ramps in fast (LFO held at 0.2 Hz)
+- `K4 ∈ [~0.70, 1.00]`: depth at max (±0.3 duty deviation — sweet-spot detuned-rect feel; deeper drives the fundamental too far down at duty extremes via `sin(π·duty)`), LFO speeds up to 2 Hz
+
+Voices are initialized with irrational-stagger phases (√2 − 1 fractional, per voice index) so the hypersaw is fully decorrelated from the first sample — no slow boot-time flange. Detune within the hypersaw zone is split from gain: gain ramps in across the first `HYPER_GAIN_FRAC` (0.4) of travel past the plateau so the supersaw is "fully on" early; remaining CCW travel only widens detune. PWM mirrors this — depth across the first `PWM_DEPTH_FRAC` (0.4) of CW travel, then rate.
+
+The rect is phase-locked to the center saw (driven from `MoogOsc::GetPhase()`) and its polarity is inverted — a naive saw and naive rect are anti-phase at the fundamental, so without inversion they would partially cancel. The new layout doesn't mix saw and rect (discrete swap at noon) but the phase-lock + inversion stays in place at zero cost in case future revisions reintroduce a mix.
+
+K5 (wet level) and K6 (mix) behave as before; K4 in SW1=DOWN is fully consumed by the timbre morph. The canonical "filter only on dry bass" trick (former SW1=DOWN passthrough) is no longer available — closest equivalent is SW1=UP with K4 at zero (transparent wavefolder).
+
+#### Synth-osc constants
+
+```cpp
+constexpr int   MODE_C_SYNTH_UNISON_VOICES    = 7;
+constexpr float MODE_C_SYNTH_DETUNE_CENTS_MIN = 10.f;
+constexpr float MODE_C_SYNTH_DETUNE_CENTS_MAX = 50.f;
+constexpr float MODE_C_SYNTH_HYPER_GAIN_FRAC  = 0.4f;
+constexpr float MODE_C_SYNTH_SAW_PLATEAU      = 0.04f;
+constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MIN   = 0.2f;
+constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MAX   = 2.f;
+constexpr float MODE_C_SYNTH_PWM_DEPTH_MAX    = 0.3f;
+constexpr float MODE_C_SYNTH_PWM_DEPTH_FRAC   = 0.4f;
+constexpr float MODE_C_SYNTH_VCA_GAIN         = 12.f;
+```
+
+Open: synth output octave (currently follows the tracked bass note 1:1, ear-tune in C.6 — may add a fixed octave offset or a sub-osc layer once auditioned).
 
 ---
 
@@ -205,10 +238,12 @@ src/
 ├── plague.h          # Twin-T-style nonlinear BP wavefolder
 ├── grendel.h         # 4-BPF parallel formant filter + vowel-path interpolator
 ├── svf_nonlinear.h   # Saturating SVF (per-integrator tanh) — used by plague.h
+├── bitcrush.h        # SW1=MID gated bit crusher
+├── synth_osc_c.h     # SW1=DOWN pitch-tracked synth osc (hypersaw + PWM rect)
 └── constants.h       # PLAGUE_*, GRENDEL_VOWEL_TABLE, MODE_C_*  (additions)
 ```
 
-Mode C dispatch reuses the existing `ProcessFreqShift()` function in `NitroTron3.cpp`. Reused components: `EnvFollower`, `MoogLadder`, sine wavefolder.
+Mode C dispatch reuses the existing `ProcessFreqShift()` function in `NitroTron3.cpp`. Reused components: `EnvFollower`, `MoogLadder`, sine wavefolder, `PitchTracker` (YIN, shared with Mode A direct mode), `MoogOsc` (saw voices in the synth engine).
 
 ### Preset data
 
@@ -221,7 +256,7 @@ knobs[2] = env amount
 knobs[3] = drive character
 knobs[4] = wet level
 knobs[5] = mix (dry/wet)
-sw1 = drive flavor   (0=sinefold, 1=TBD,     2=passthru)
+sw1 = drive flavor   (0=sinefold, 1=bitcrush, 2=synth-osc)
 sw2 = filter flavor  (0=ladder,   1=grendel, 2=plague)
 ```
 
@@ -255,8 +290,8 @@ Decision point at end of C.4: K5 evaluation deferred to C.6 (need Grendel in pla
 ### C.5 — Grendel
 Implement `Grendel`. Curated vowel formant table in `constants.h`. SW2=MIDDLE active. K1 = vowel path, K2 = Size. Audition all SW1 × SW2 combinations; adjust vowel set/order if needed.
 
-### C.6 — K3 polarity, K5 disposition, SW1=MID slot
-K3 polarity DONE: bipolar for all three SW2 modes. Moog uses K3 sign to swap env *shape* (snap vs swell, direction always opens upward). Grendel uses K3 sign to swap env *direction* (CCW = open path + tighten size; CW = close path + open size), always slow-swell. Plague is bipolar by design (balance morph). Decide K5's fate: does the always-on wet-level trim earn its place across all six SW1 × SW2 combinations, or is it redundant against K6 mix? Decide and implement the SW1=MID drive flavor (current: gated bit crusher, explorative).
+### C.6 — K3 polarity, K5 disposition, SW1=MID and SW1=DOWN slots
+K3 polarity DONE: bipolar for all three SW2 modes. Moog uses K3 sign to swap env *shape* (snap vs swell, direction always opens upward). Grendel uses K3 sign to swap env *direction* (CCW = open path + tighten size; CW = close path + open size), always slow-swell. Plague is bipolar by design (balance morph). SW1=MID DONE: gated bit crusher (explorative, kept). SW1=DOWN DONE: pitch-tracked synth oscillator (YIN-tracked, K4 = saw↔rect timbre morph, raw-env VCA pre-filter — see § Drive stage / DOWN). Open: K5 disposition (always-on wet-level trim vs redundant against K6 mix) — decide post-listening; synth-osc octave (currently 1:1 with tracked bass, ear-tune for fixed offset or sub-osc layer).
 
 ### C.7 — Documentation
 Replace this discovery doc with `docs/MODE_C.md` following the `MODE_A_DRONE.md` structure. Update README controls table.
@@ -282,4 +317,6 @@ Replace this discovery doc with `docs/MODE_C.md` following the `MODE_A_DRONE.md`
 
 - `EnvFollower`, `MoogLadder` — Mode A.
 - Sine wavefolder — Mode A (triangle mode), Mode B (shaper bus).
+- `PitchTracker` (YIN, semitone-quantized) — Mode A direct mode, Mode B harmony tracking. Powers the SW1=DOWN synth osc.
+- `MoogOsc` — Mode A oscillator class, reused as the unison saw voices in `synth_osc_c.h` (extended with `SetPhase()` / `GetPhase()` for boot decorrelation and saw↔rect phase-lock).
 - `ModePresetData` storage pattern — `PRESET_IMPL.md`.

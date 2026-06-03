@@ -87,7 +87,8 @@ becoming a micro-stutter control.
 # Mode C — Schism
 
 A drive + filter mode. K1–K3 drive the filter selected by SW2; K4 drives
-the wavefolder selected by SW1. K5 is a bipolar pre-filter drive
+the source flavor selected by SW1 (wavefolder, bit crusher, or
+pitch-tracked synth oscillator). K5 is a bipolar pre-filter drive
 (attenuate / unity / boost, universal across all SW2 filter modes), K6
 is the dry/wet mix.
 
@@ -97,13 +98,22 @@ formant** filter, and the dual-band **Plague** filter (lo + hi SVF
 bands cross-fed with tanh saturation). K3 is a bipolar
 envelope-to-filter modulator with a center deadzone.
 
+Three drive flavors. **SW1=UP** is the sine wavefolder. **SW1=MIDDLE**
+is a gated bit crusher (K4 sweeps bit depth from 16 → 4, input-envelope
+gated). **SW1=DOWN** is a pitch-tracked synth oscillator: the bass note
+is tracked (YIN, semitone-quantized) and an oscillator engine replaces
+the dry path, amplitude-gated by the env follower before it hits the
+filter. K4 morphs the timbre — saw on the left half (max hypersaw at
+full CCW, single saw just below noon), rect on the right half (single
+rect just past noon, pulse-width modulated at full CW).
+
 The wet path runs through a 2-band post-filter peak limiter (low end
 preserved so bass fundamentals don't duck under resonance peaks) and is
 gated by an amplitude-env VCA — when you stop playing, the wet path goes
 silent so self-resonance never rings alone.
 
-*Note: Mode C is still in active development — SW1 = MIDDLE is reserved
-for a future drive flavor, currently passes audio unchanged.*
+*Note: Mode C is still in active development — controls and timbres may
+shift between releases.*
 
 ![Mode C pedal layout](pedal-mode-c.svg){.pedal-layout}
 
@@ -114,10 +124,10 @@ for a future drive flavor, currently passes audio unchanged.*
 | KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (80 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = ee, CW = oo). SW2=DOWN: Plague input balance (CCW = lo only, CW = hi only) |
 | KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: Plague intensity (tandem input + feedback drive) |
 | KNOB 3 | Env → filter amount | Bipolar with ±5% center deadzone. SW2=UP: opens/closes Moog cutoff (passive-bass scaled). SW2=MID: shifts the vowel path. SW2=DOWN: shifts Plague balance. Center = static |
-| KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold; internal loudness compensation). SW1=MID/DOWN: unused |
+| KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold; internal loudness compensation). SW1=MID: bit-crush amount (CCW = 16-bit clean, CW = 4-bit gnarly, env-gated). SW1=DOWN: synth-osc timbre — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
 | KNOB 5 | Filter drive (bipolar) | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and Plague. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone; Plague is unpadded (needs hot input to fold) |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 = fold amount) • **MIDDLE** — TBD (currently passthru) • **DOWN** — Passthrough |
+| SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 = fold amount) • **MIDDLE** — Gated bit crusher (K4 = bit depth 16 → 4) • **DOWN** — Pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
 | SWITCH 2 | Filter | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env) • **MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path) • **DOWN** — Plague (K1 input balance, K2 intensity, K3 env on balance) |
 
 ---

@@ -17,6 +17,9 @@ class MoogOsc {
     phase_ = 0.f;
   }
 
+  void SetPhase(float p) { phase_ = p; }
+  float GetPhase() const { return phase_; }
+
   float Process(float freq) {
     float inc = freq / sr_;
     phase_ += inc;
