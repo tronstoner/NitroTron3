@@ -16,6 +16,7 @@
 #include "plague.h"
 #include "grendel.h"
 #include "glitch_zones.h"
+#include "bitcrush.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -35,6 +36,7 @@ MoogLadderV2 ladder_c_v2; // Mode C — SW2=UP, our tuned Moog (A/B winner)
 Plague       plague_c;    // Mode C — SW2=DOWN (still needs re-tuning round)
 Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
 PeakLimiter  limiter_c;   // Mode C — post-filter peak limiter (2-band, fundamentals preserved)
+BitCrush     bitcrush_c;  // Mode C — SW1=MID drive flavor (gated bit crusher)
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -199,11 +201,18 @@ static float Mapf(float in, float min, float max) {
   return min + in * (max - min);
 }
 
-// Exponential mapping for filter cutoff (80 Hz – 8 kHz)
+// Exponential mapping for filter cutoff (80 Hz – 8 kHz). Mode A (signed off).
 static float MapCutoff(float knob) {
   constexpr float MIN_HZ = 80.f;
   constexpr float MAX_HZ = 8000.f;
   return MIN_HZ * powf(MAX_HZ / MIN_HZ, knob);
+}
+
+// Mode C cutoff mapping — extended low end (30 Hz) for a deeper "shut" position.
+// Top end matches Mode A so env-mod headroom toward MODE_C_CUTOFF_MAX_HZ behaves the same.
+static float MapCutoffModeC(float knob) {
+  return MODE_C_CUTOFF_MIN_HZ *
+         powf(MODE_C_CUTOFF_K1_MAX_HZ / MODE_C_CUTOFF_MIN_HZ, knob);
 }
 
 // Quantize knob (0–1) into N equal steps, returning 0..N-1
@@ -834,6 +843,21 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 // updating biquad coefs per-sample would waste a lot of cosf/sinf calls).
 float prev_block_env_c = 0.f;
 
+// Mode C filter-env smoother. Shape switches with K3 sign each sample:
+//   CW  → peak follower (instant attack, one-pole release).
+//   CCW → slow-rise env (one-pole attack, instant snap-back).
+// Atk/rel coefs computed in main() from MODE_C_FILTER_ENV_*_MS constants.
+float env_c_filter         = 0.f;
+float env_c_filter_atk_coef = 0.f;
+float env_c_filter_rel_coef = 0.f;
+
+// Grendel env smoother — always swell shape (slow attack, instant snap-back),
+// regardless of K3 sign. Snap-style envelopes are reserved for the Moog
+// ladder filter. vowel_path is derived directly from this smoothed env in
+// the block setup; no separate vowel_path slewing.
+float env_c_grendel          = 0.f;
+float env_c_grendel_atk_coef = 0.f;
+
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
@@ -864,7 +888,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
 
   // Moog ladder per-block constants (active only at SW2=UP).
   const bool ladder_on    = (filter_mode == 0);
-  const float base_cutoff = MapCutoff(k1);
+  const float base_cutoff = MapCutoffModeC(k1);
   const float k3_abs = (k3_signed >= 0.f) ? k3_signed : -k3_signed;
   const float env_lift_gain = k3_abs * MODE_C_ENV_SCALE * MODE_C_ENV_MOD_RANGE;
   if (ladder_on) {
@@ -873,15 +897,25 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     ladder_c_v2.SetResonance(sqrtf(k2) * MODE_C_LADDER_RES_MAX);
   }
 
-  // Grendel per-block setup (active only at SW2=MID). Block-rate coef update.
+  // Grendel per-block setup (active only at SW2=MID).
+  // Direct deterministic mapping from the smoothed env:
+  //   vowel_path = K1 − K3_signed × env_c_grendel × GRENDEL_TARGET_GAIN
+  // K3 CCW (negative) → env pushes path toward ee (low→hi, opens brighter).
+  // K3 CW  (positive) → env pushes path toward oo (hi→low, closes darker).
+  // env_c_grendel is always a slow-swell smoother (400 ms attack, instant
+  // snap-back). vowel_path is unclamped so hard plucks push into post-table
+  // "virtual vowels".
   const bool grendel_on = (filter_mode == 1);
   if (grendel_on) {
-    float vowel_path = k1 + k3_signed * prev_block_env_c * MODE_C_ENV_SCALE * GRENDEL_ENV_PATH_RANGE;
-    if (vowel_path < 0.f) vowel_path = 0.f;
-    if (vowel_path > 1.f) vowel_path = 1.f;
-    const float size_scale = GRENDEL_SIZE_MIN +
-                             k2 * (GRENDEL_SIZE_MAX - GRENDEL_SIZE_MIN);
-    grendel_c.SetVowel(vowel_path, size_scale);
+    const float vowel_path =
+        k1 - k3_signed * env_c_grendel * MODE_C_GRENDEL_TARGET_GAIN;
+    const float size_base = GRENDEL_SIZE_MIN +
+                            k2 * (GRENDEL_SIZE_MAX - GRENDEL_SIZE_MIN);
+    // Coupled with K3 (same sign as vowel_path): CCW → size up on attack
+    // (mouth tightens), CW → size down (mouth opens).
+    const float size_mod = 1.f -
+        k3_signed * env_c_grendel * MODE_C_GRENDEL_SIZE_MOD_AMT;
+    grendel_c.SetVowel(vowel_path, size_base * size_mod);
   }
 
   // Plague per-block constants (active only at SW2=DOWN). Still needs re-tuning.
@@ -895,19 +929,40 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     // Update shared envelope follower from raw bass each sample.
     env_val = env.Process(dry);
 
-    // Drive stage (SW1).
-    float wet = dry;
-    if (fold_blend > 0.001f) {
-      const float folded = sinf(dry * fold_drive * 1.5707963f);
-      wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
+    // Filter env (ladder) — shape switches with K3 sign:
+    //   CW  → peak follower (instant attack, one-pole release) → snappy auto-wah
+    //   CCW → slow-rise env (one-pole attack, instant snap-back) → swell
+    if (k3_signed >= 0.f) {
+      if (env_val > env_c_filter) env_c_filter = env_val;
+      else env_c_filter += env_c_filter_rel_coef * (env_val - env_c_filter);
+    } else {
+      if (env_val > env_c_filter)
+        env_c_filter += env_c_filter_atk_coef * (env_val - env_c_filter);
+      else env_c_filter = env_val;
     }
 
-    // Filter stage (SW2).
+    // Grendel env smoother — always slow-swell shape (slow attack, instant
+    // snap-back), regardless of K3 sign. Snap-style envelopes are reserved
+    // for the Moog ladder filter above.
+    if (env_val > env_c_grendel)
+      env_c_grendel += env_c_grendel_atk_coef * (env_val - env_c_grendel);
+    else env_c_grendel = env_val;
+
+    // Drive stage (SW1). 0=UP sinefold, 1=MID bitcrush (gated), 2=DOWN passthru.
+    float wet = dry;
+    if (drive_mode == 0 && fold_blend > 0.001f) {
+      const float folded = sinf(dry * fold_drive * 1.5707963f);
+      wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
+    } else if (drive_mode == 1) {
+      wet = bitcrush_c.Process(dry, fold_amt, env_val);
+    }
+
+    // Filter stage (SW2). Filter modulation reads env_c_filter (smoothed).
     if (ladder_on) {
-      // Mode A-style linear lift, passive-bass scaled. K3>=0 opens, K3<0 closes.
-      const float lift = 1.f + env_val * env_lift_gain;
-      const float mod_factor = (k3_signed >= 0.f) ? lift : (1.f / lift);
-      float mod_cutoff = base_cutoff * mod_factor;
+      // CW and CCW both open the filter from K1 upward as env grows; only the
+      // env shape (smoother above) differs. CW = snappy auto-wah, CCW = swell.
+      const float lift = 1.f + env_c_filter * env_lift_gain;
+      float mod_cutoff = base_cutoff * lift;
       if (mod_cutoff > MODE_C_CUTOFF_MAX_HZ) mod_cutoff = MODE_C_CUTOFF_MAX_HZ;
       ladder_c_v2.SetCutoff(mod_cutoff);
       // Spectrum-shaping filter: pad before drive so K5 noon sits in its sweet zone.
@@ -919,15 +974,19 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     } else if (plague_on) {
       // Feedback-saturating filter: no pad — needs hot input to fold.
       wet = tanhf(wet * drive_amt);
-      wet = plague_c.Process(wet, k3_signed * env_val);
+      wet = plague_c.Process(wet, k3_signed * env_c_filter);
     }
+
+    // Slight post-filter lift so the limiter has something to grab on quieter
+    // notes without driving the VCA stage. Applied pre-limiter on purpose.
+    wet *= MODE_C_POST_FILTER_GAIN;
 
     // Post-filter peak limiter (2-band split, fundamentals preserved).
     wet = limiter_c.Process(wet);
 
-    // Amp-env VCA — gates wet path with input dynamics; silences self-resonance
-    // ringing when the bass isn't playing (same pattern as Mode A's drone gate).
-    wet *= env_val * MODE_C_VCA_GAIN;
+    // Amp-env VCA — TEMPORARILY DISABLED to audition the wet path without
+    // env-driven amplitude shaping. Reinstate by uncommenting the line below.
+    // wet *= env_val * MODE_C_VCA_GAIN;
 
     out[0][i] = out[1][i] = dry * dry_gain + wet * wet_gain;
   }
@@ -973,8 +1032,17 @@ int main() {
   plague_c.Init(sr);
   grendel_c.Init(sr);
   limiter_c.Init(sr);
+  bitcrush_c.Init();
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
+
+  // Mode C filter-env smoother: precompute atk/rel coefs. coef = 1 - exp(-1 / (tau * sr))
+  env_c_filter_atk_coef = 1.f - expf(-1.f /
+      (MODE_C_FILTER_ENV_ATTACK_MS  * 0.001f * sr));
+  env_c_filter_rel_coef = 1.f - expf(-1.f /
+      (MODE_C_FILTER_ENV_RELEASE_MS * 0.001f * sr));
+  env_c_grendel_atk_coef = 1.f - expf(-1.f /
+      (MODE_C_GRENDEL_ENV_ATTACK_MS  * 0.001f * sr));
   tracker.Init(sr);
   grain_ring.Init(grain_sdram_buf, GRAIN_BUF_SAMPLES);
 

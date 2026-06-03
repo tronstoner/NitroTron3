@@ -4,9 +4,9 @@
 #include "constants.h"
 
 // Grendel formant filter — 4 parallel RBJ bandpass biquads at vowel formants.
-// K1 sweeps a 1D path through a curated vowel set (ee → eh → ah → oh → oo
-// by default); K2 scales all formant centers ("mouth size"); K3 modulates
-// the path position via env follower.
+// K1 sweeps a 1D path through a curated vowel set (oo → oh → ah → eh → ee
+// by default, CCW dark/closed → CW bright/open); K2 scales all formant
+// centers ("mouth size"); K3 modulates the path position via env follower.
 //
 // Coefficients are recomputed per block (not per sample): the env follower's
 // 33 Hz LP smooths much more slowly than block rate, so per-sample cosf/sinf
@@ -22,12 +22,14 @@ class Grendel {
     }
   }
 
-  // Per-block. vowel_path in [0, 1]; size_scale multiplies formant centers.
+  // Per-block. vowel_path may sit outside [0, 1]: values past 1.0 extrapolate
+  // along the eh→ee trajectory (brighter, more closed-front); values below 0
+  // extrapolate along the oh→oo trajectory (darker, more closed-back).
+  // SetBpf's freq clamps catch runaway formants at the extremes. size_scale
+  // multiplies formant centers.
   void SetVowel(float vowel_path, float size_scale) {
-    if (vowel_path < 0.f) vowel_path = 0.f;
-    if (vowel_path > 1.f) vowel_path = 1.f;
     const float idx_f  = vowel_path * static_cast<float>(GRENDEL_NUM_VOWELS - 1);
-    int idx_lo = static_cast<int>(idx_f);
+    int idx_lo = static_cast<int>(floorf(idx_f));
     if (idx_lo > GRENDEL_NUM_VOWELS - 2) idx_lo = GRENDEL_NUM_VOWELS - 2;
     if (idx_lo < 0) idx_lo = 0;
     const int   idx_hi = idx_lo + 1;

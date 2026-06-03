@@ -65,7 +65,7 @@ constexpr float SINEFOLD_COMP_AT_MAX = 0.55f;  // post-fold gain at K4=1 (1.0 at
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
 constexpr float MODE_C_LADDER_RES_MAX = 1.2f;  // pushed past ~1.0 self-osc threshold; in-loop tanh bounds it
-constexpr float MODE_C_ENV_MOD_RANGE  = 30.0f; // depth on normalized env; lift = 1 + env_scaled * |k3| * range
+constexpr float MODE_C_ENV_MOD_RANGE  = 120.0f; // depth on normalized env; lift = 1 + env_scaled * |k3| * range
 constexpr float MODE_C_ENV_SCALE      = 10.0f; // passive-bass env normalization (matches Mode A's effective ×10)
 constexpr float MODE_C_CUTOFF_MAX_HZ  = 10000.f; // top clamp for env-modulated cutoff (keeps Huovilainen stable)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
@@ -90,6 +90,53 @@ constexpr float MODE_C_GRENDEL_INPUT_PAD = 0.3f;
 // around typical playing dynamics with mild boost on hard plucks.
 constexpr float MODE_C_VCA_GAIN = 12.0f;
 
+// Filter-env smoother — Mode C only. Shape switches with K3 direction:
+//
+// K3 CW  → peak follower: instant attack, one-pole release (RELEASE_MS).
+//          Snappy filter opening on transients, decaying tail.
+// K3 CCW → slow-rise env: one-pole attack (ATTACK_MS), instant snap-back when
+//          env drops. Gradual filter opening (swell), clean return to K1.
+constexpr float MODE_C_FILTER_ENV_ATTACK_MS  = 600.0f;  // CCW slow-rise time constant (ladder)
+constexpr float MODE_C_FILTER_ENV_RELEASE_MS = 150.0f;  // CW release time constant (ladder)
+
+// Grendel env smoother — same shape pattern as the ladder (asymmetric per
+// K3 sign), at symmetric 400 ms values so CW release and CCW attack feel
+// identical, only the direction of the vowel offset differs.
+//   CW  → peak follower: instant attack, slow release (uses RELEASE_MS)
+//   CCW → slow-rise: slow attack (uses ATTACK_MS), instant snap-back
+constexpr float MODE_C_GRENDEL_ENV_ATTACK_MS  = 400.0f;  // always slow rise (both K3 directions)
+
+// Direct env→offset gain. At hard pluck (env≈0.1) and K3 max, offset = ±2.0
+// → vowel_path reaches just past the natural table edge; lighter plucks stay
+// inside or partway. Tuned against passive-bass env range.
+constexpr float MODE_C_GRENDEL_TARGET_GAIN = 10.0f;
+
+// Env modulation depth on K2 size_scale. Coupled to K3 (same sign convention
+// as vowel_path): CCW K3 → size nudges up on attack (mouth tightens), CW K3
+// → size nudges down (mouth opens). At full K3 and hard pluck (env≈0.1),
+// size_scale is multiplied by 1 ± 0.2 → ±20% swing. Pre-scaled to compensate
+// for passive-bass env range (~0.02–0.1), same convention as TARGET_GAIN.
+constexpr float MODE_C_GRENDEL_SIZE_MOD_AMT = 2.0f;
+
+// Mode C ladder K1 cutoff range — extended below Mode A's MapCutoff (80 Hz)
+// so K1 fully CCW can really shut. Top matches Mode A and the env-mod clamp.
+constexpr float MODE_C_CUTOFF_MIN_HZ = 30.0f;
+constexpr float MODE_C_CUTOFF_K1_MAX_HZ = 8000.0f;
+
+// Post-filter linear gain, applied before the limiter. Slight lift so the
+// limiter has something to grab on quieter notes without driving the VCA
+// stage. Keep close to unity to avoid clobbering Plague's hot output.
+constexpr float MODE_C_POST_FILTER_GAIN = 1.3f;
+
+// Bit-flipper (SW1=MIDDLE drive flavor). Deterministic XOR of a chosen Q15 bit
+// on every sample — same mechanism as Mode B SW1 MIDDLE CCW, without the
+// random event timing. K4 sweeps the XOR bit position from 0 (LSB, inaudible)
+// to MAX_BIT (= 13, ±0.25 fs swings, maximum fuzz). Gate keys the wet/dry off
+// envelope so silent input stays silent (passive bass env ≈0.02–0.1).
+constexpr int   MODE_C_BITCRUSH_MAX_BIT      = 13;      // K4=1 → flip bit 13 (±0.25 of full scale)
+constexpr float MODE_C_BITCRUSH_ENV_GATE     = 0.01f;   // raw env_val gate threshold
+constexpr int   MODE_C_BITCRUSH_RAMP_SAMPLES = 48;      // 1 ms click-free gate edge
+
 // Post-filter peak limiter (Mode C only, all SW2 modes).
 // 2-band split: LF (≤ SPLIT_HZ) passes through untouched so bass fundamentals
 // don't duck when resonance peaks fire the limiter. HF is soft-knee limited.
@@ -109,19 +156,22 @@ constexpr int   GRENDEL_NUM_VOWELS   = 5;
 constexpr float GRENDEL_FORMANT_Q    = 12.0f;  // mid-high Q for vowel-like ringing
 constexpr float GRENDEL_OUT_GAIN     = 4.0f;   // BPFs attenuate heavily; ear-tune in C.5
 
-// Vowel path: ee → eh → ah → oh → oo (F1..F4 in Hz, adult-male typicals).
+// Vowel path: oo → oh → ah → eh → ee, K1 CCW (=oo, dark/closed) → CW
+// (=ee, bright/open). K3 CCW → env pushes path toward ee (low→hi, auto-wah
+// opens brighter on attack). K3 CW → env pushes path toward oo (hi→low,
+// "anti-wah" closes darker on attack). (F1..F4 in Hz, adult-male typicals.)
 constexpr float GRENDEL_VOWELS[GRENDEL_NUM_VOWELS][GRENDEL_NUM_FORMANTS] = {
-  {270.f, 2290.f, 3010.f, 3500.f},  // 0: ee /i/
-  {530.f, 1840.f, 2480.f, 3500.f},  // 1: eh /ɛ/
+  {300.f,  870.f, 2240.f, 3200.f},  // 0: oo /u/
+  {570.f,  840.f, 2410.f, 3300.f},  // 1: oh /o/
   {730.f, 1090.f, 2440.f, 3400.f},  // 2: ah /ɑ/
-  {570.f,  840.f, 2410.f, 3300.f},  // 3: oh /o/
-  {300.f,  870.f, 2240.f, 3200.f},  // 4: oo /u/
+  {530.f, 1840.f, 2480.f, 3500.f},  // 3: eh /ɛ/
+  {270.f, 2290.f, 3010.f, 3500.f},  // 4: ee /i/
 };
 constexpr float GRENDEL_FORMANT_GAIN[GRENDEL_NUM_FORMANTS] = {1.0f, 0.85f, 0.6f, 0.35f};
 
 constexpr float GRENDEL_SIZE_MIN       = 0.5f;  // K2=0 → centers × 0.5 (large mouth)
 constexpr float GRENDEL_SIZE_MAX       = 1.6f;  // K2=1 → centers × 1.6 (small mouth)
-constexpr float GRENDEL_ENV_PATH_RANGE = 1.0f;  // env at K3=±1 shifts path by ±1.0 (full vowel space)
+constexpr float GRENDEL_ENV_PATH_RANGE = 1.2f;  // overshoot factor — env can push 20% past the available-travel boundary (clamp absorbs)
 
 // Plague filter (SW2=DOWN). Initial values; ear-tune in C.4.
 constexpr float PLAGUE_LOW_HZ            = 220.0f;  // lo band SatSVF center

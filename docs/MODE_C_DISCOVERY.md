@@ -42,7 +42,7 @@ K5 (wet level) is a post-filter, pre-mix trim on the wet path. Always active, re
 
 | Switch | Function | Positions |
 |---|---|---|
-| **SW1** | Drive | UP: Sine wavefolder · MID: TBD (decided during C.6 listening) · DOWN: Passthrough |
+| **SW1** | Drive | UP: Sine wavefolder · MID: Gated bit crusher (C.6 explorative) · DOWN: Passthrough |
 | **SW2** | Filter | UP: Moog ladder · MID: Grendel formant · DOWN: Plague |
 | **SW3** | Mode select | UP: Mode A · MID: Mode B · DOWN: Mode C |
 
@@ -80,9 +80,11 @@ Symmetric harmonic saturation. Reuses the wavefolder used in Mode A (triangle mo
 
 No gesture modulation — the env follower drives the filter, not the drive stage.
 
-### MID — TBD
+### MID — Gated bit crusher (explorative)
 
-Reserved slot. Candidates to evaluate during C.6 listening: second wavefolder flavor (asymmetric / chebyshev), tape-style saturation, transistor fuzz, or another passthrough alias.
+Linear-PCM quantizer with an input-envelope noise gate. K4 sweeps bit depth from `MODE_C_BITCRUSH_BITS_MAX` (16 = effectively transparent) down to `MODE_C_BITCRUSH_BITS_MIN` (4 = classic gnarl). The gate (`MODE_C_BITCRUSH_ENV_GATE`) keys the wet/dry mix off the shared envelope follower with a 1 ms click-free ramp so silent input → silent output and no zipper noise sits on the wet path when the bass is quiet.
+
+First-pass distortion variant being evaluated alongside the sine wavefolder. May be replaced or refined during C.6 listening (candidates: SR reduction added on top, asymmetric/chebyshev wavefold, tape-style saturation, transistor fuzz).
 
 ### DOWN — Passthrough
 
@@ -102,9 +104,9 @@ Reuses `MoogLadder` from Mode A. 24 dB/oct LP with per-stage `tanh` saturation. 
 
 A vowel is a 2D point on the IPA vowel chart, defined by four formant `{center frequency, amplitude}` pairs. K1 sweeps along a curated 1D path through the 2D vowel space — both X and Y vary together as K1 moves between vowel anchors.
 
-K2 = Size (mouth scale, moves all 4 BPF centers in parallel). K3 modulates K1's vowel index via env follower.
+K2 = Size (mouth scale, ×0.5 → ×1.6, moves all 4 BPF centers in parallel). K3 modulates K1's vowel index *and* K2's size in tandem via env follower.
 
-Compile-time vowel formant table in `constants.h`. Initial vowel set: `ee → eh → ah → oh → oo`. Set, order, and path shape (linear interpolation between anchors vs curved through vowel space) settled by ear in C.5.
+Compile-time vowel formant table in `constants.h`. Vowel set: `oo → oh → ah → eh → ee` (CCW dark/closed → CW bright/open). K3 sign drives both axes coherently: **CCW K3** pushes path toward ee and tightens size (≈ +20% at full K3, "open vowel + tense mouth"); **CW K3** pushes toward oo and opens size (≈ −20%, "closed vowel + relaxed mouth"). Both modulations share a single 400 ms slow-swell env smoother (slow attack, instant snap-back) regardless of K3 sign — formant motion always breathes, never snaps. Snap-style env shapes are reserved for the Moog ladder.
 
 ### DOWN — Plague
 
@@ -190,22 +192,9 @@ Single instance, shared with Mode A. K3 sets the modulation amount applied to K1
 
 **Polarity per SW2 mode:**
 
-- **SW2=DOWN (Plague): bipolar with center deadzone** — natural fit. The two voicings (lo-band vs hi-band) live on either side of noon, and bipolar K3 morphs which band the input is routed to as you play, sweeping folding character with dynamics. No alternative being considered.
-- **SW2=UP (Moog) and SW2=MID (Grendel): polarity TBD.** Two candidates to evaluate during C.3/C.5 listening:
-
-  1. **Bipolar with center deadzone**:
-     - CCW of noon: env subtracts from K1 (ladder closes on attack, vowel moves down) — useful for *swells*, where filter closes when you dig in.
-     - Noon ±deadzone: filter static, env scaling bypassed.
-     - CW of noon: env adds to K1 (auto-wah, vowel-up sweep on attack).
-     - Cost: half of the knob travel each way, deadzone at noon. Less resolution per direction.
-
-  2. **Unipolar CW-only (auto-wah)**:
-     - K3 = 0: filter static.
-     - K3 > 0: env adds to K1, scaling with K3.
-     - Full knob travel = full env amount. Higher resolution.
-     - Cost: no swell-style negative modulation. To approximate a swell, the user inverts the playing dynamic (e.g., pre-attack volume swell on the bass).
-
-  Default to (1) bipolar for C.3's first build (matches Plague's behavior — consistent across SW2). Switch to (2) unipolar for Moog/Grendel if the deadzone proves fiddly or swells aren't musically used.
+- **SW2=DOWN (Plague): bipolar with center deadzone** — natural fit. The two voicings (lo-band vs hi-band) live on either side of noon, and bipolar K3 morphs which band the input is routed to as you play, sweeping folding character with dynamics.
+- **SW2=UP (Moog): bipolar with center deadzone, K3 sign switches env *shape* not direction** — both CW and CCW open cutoff upward from K1 as env grows (always brightens on attack). CW uses a peak follower (instant attack, slow release → snappy auto-wah); CCW uses a slow-rise smoother (slow attack, instant snap-back → swell). Shape only, direction shared.
+- **SW2=MID (Grendel): bipolar with center deadzone, K3 sign switches env *direction*** — K3 sign drives both vowel path and size in tandem. CCW K3 opens path toward ee and tightens size (mouth closes/tense, classic "auto-wah opens up brighter"). CW K3 closes path toward oo and opens size (mouth widens/yawn, "anti-wah / ducking filter"). Both directions use the same slow-swell env smoother (400 ms attack, instant snap-back); the snap shape stays Moog-only.
 
 ---
 
@@ -267,7 +256,7 @@ Decision point at end of C.4: K5 evaluation deferred to C.6 (need Grendel in pla
 Implement `Grendel`. Curated vowel formant table in `constants.h`. SW2=MIDDLE active. K1 = vowel path, K2 = Size. Audition all SW1 × SW2 combinations; adjust vowel set/order if needed.
 
 ### C.6 — K3 polarity, K5 disposition, SW1=MID slot
-Lock in K3 polarity for SW2=UP/MID (bipolar vs unipolar) based on C.3/C.5 listening. (SW2=DOWN Plague stays bipolar by design.) Decide K5's fate: does the always-on wet-level trim earn its place across all six SW1 × SW2 combinations, or is it redundant against K6 mix? Decide and implement the SW1=MID drive flavor.
+K3 polarity DONE: bipolar for all three SW2 modes. Moog uses K3 sign to swap env *shape* (snap vs swell, direction always opens upward). Grendel uses K3 sign to swap env *direction* (CCW = open path + tighten size; CW = close path + open size), always slow-swell. Plague is bipolar by design (balance morph). Decide K5's fate: does the always-on wet-level trim earn its place across all six SW1 × SW2 combinations, or is it redundant against K6 mix? Decide and implement the SW1=MID drive flavor (current: gated bit crusher, explorative).
 
 ### C.7 — Documentation
 Replace this discovery doc with `docs/MODE_C.md` following the `MODE_A_DRONE.md` structure. Update README controls table.
@@ -276,7 +265,7 @@ Replace this discovery doc with `docs/MODE_C.md` following the `MODE_A_DRONE.md`
 
 ## Open questions
 
-1. **K3 polarity for SW2=UP and SW2=MID** — bipolar with center deadzone vs unipolar CW-only. Decided in C.3/C.5 listening. (SW2=DOWN Plague stays bipolar by design.)
+1. ~~**K3 polarity for SW2=UP and SW2=MID**~~ — RESOLVED. Both bipolar with center deadzone. Moog: sign swaps env shape (snap CW / swell CCW), direction always opens upward. Grendel: sign swaps env direction (CCW opens path + tightens size, CW closes path + opens size), always slow-swell.
 2. **K5 disposition** — does the always-on wet-level trim earn its place across all SW1 × SW2 combinations, or is it redundant against K6 mix? Decided in C.6 once Grendel is in place.
 3. **K6 mix law** — equal-power (constant perceived loudness at noon) vs linear vs sqrt. Settled in C.1.
 4. **SW1=MID drive flavor** — second wavefolder variant, tape saturation, fuzz, or other. Decided in C.6.
