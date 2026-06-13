@@ -13,7 +13,7 @@
 #include "grain_voice.h"
 #include "clouds/reverb.h"  // vendored, not yet instantiated
 #include "resampler.h"
-#include "plague.h"
+#include "phaser.h"
 #include "grendel.h"
 #include "glitch_zones.h"
 #include "bitcrush.h"
@@ -34,7 +34,7 @@ MoogOsc      osc1;
 MoogOsc      osc2;
 MoogLadder   ladder;     // Mode A
 MoogLadderV2 ladder_c_v2; // Mode C — SW2=UP, our tuned Moog (A/B winner)
-Plague       plague_c;    // Mode C — SW2=DOWN (still needs re-tuning round)
+Phaser       phaser_c;    // Mode C — SW2=DOWN (3-band parallel BPF, internal LFO)
 Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
 PeakLimiter  limiter_c;   // Mode C — post-filter peak limiter (2-band, fundamentals preserved)
 BitCrush     bitcrush_c;  // Mode C — SW1=MID drive flavor (gated bit crusher)
@@ -865,7 +865,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const ModePresetData& eb = preset.GetEditBuffer();
 
   const uint8_t drive_mode  = eb.sw1;              // 0=UP sinefold, 1=MID bitcrush, 2=DOWN pitch-tracked synth
-  const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel, 2=DOWN Plague
+  const uint8_t filter_mode = eb.sw2;              // 0=UP Moog, 1=MID Grendel, 2=DOWN Phaser
   const float k1        = RemapKnob(eb.knobs[0]);
   const float k2        = RemapKnob(eb.knobs[1]);
   const float k3        = RemapKnob(eb.knobs[2]);
@@ -920,9 +920,12 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     grendel_c.SetVowel(vowel_path, size_base * size_mod);
   }
 
-  // Plague per-block constants (active only at SW2=DOWN). Still needs re-tuning.
-  const bool plague_on = (filter_mode == 2);
-  if (plague_on) plague_c.SetParams(k1, k2);
+  // Phaser per-block constants (active only at SW2=DOWN). K3 here is LFO
+  // speed + shape, NOT env amount — the phaser has no env routing.
+  // k3_signed sign: negative → triangle LFO; positive → sample-and-hold.
+  // Magnitude (with deadzone snap above) sets LFO rate; 0 → static.
+  const bool phaser_on = (filter_mode == 2);
+  if (phaser_on) phaser_c.SetParams(k1, k2, k3_signed);
 
   float env_val = prev_block_env_c;
   for (size_t i = 0; i < size; i++) {
@@ -984,10 +987,11 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       // Spectrum-shaping filter: pad before pre-tanh so K5 noon stays clean.
       wet = tanhf(wet * drive_amt * MODE_C_GRENDEL_INPUT_PAD);
       wet = grendel_c.Process(wet);
-    } else if (plague_on) {
-      // Feedback-saturating filter: no pad — needs hot input to fold.
-      wet = tanhf(wet * drive_amt);
-      wet = plague_c.Process(wet, k3_signed * env_c_filter);
+    } else if (phaser_on) {
+      // Clean parallel-BPF filter; pad keeps K5 noon in the linear zone,
+      // K5 CW still drives via the soft pre-tanh.
+      wet = tanhf(wet * drive_amt * MODE_C_PHASER_INPUT_PAD);
+      wet = phaser_c.Process(wet);
     }
 
     // Slight post-filter lift so the limiter has something to grab on quieter
@@ -1042,7 +1046,7 @@ int main() {
   osc2.Init(sr);
   ladder.Init(sr);
   ladder_c_v2.Init(sr);
-  plague_c.Init(sr);
+  phaser_c.Init(sr);
   grendel_c.Init(sr);
   limiter_c.Init(sr);
   bitcrush_c.Init();
