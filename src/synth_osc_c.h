@@ -114,11 +114,20 @@ class ModeCSynth {
     if (rect_amp > 0.f) {
       const float lfo_hz = MODE_C_SYNTH_PWM_LFO_HZ_MIN +
           pwm_rate_amt * (MODE_C_SYNTH_PWM_LFO_HZ_MAX - MODE_C_SYNTH_PWM_LFO_HZ_MIN);
-      lfo_phase_ += 6.2831853f * lfo_hz / sr_;
-      if (lfo_phase_ >= 6.2831853f) lfo_phase_ -= 6.2831853f;
-      float duty = 0.5f + pwm_depth_amt * MODE_C_SYNTH_PWM_DEPTH_MAX * sinf(lfo_phase_);
-      if (duty < 0.05f) duty = 0.05f;
-      if (duty > 0.95f) duty = 0.95f;
+      lfo_phase_ += lfo_hz / sr_;
+      if (lfo_phase_ >= 1.f) lfo_phase_ -= 1.f;
+      // Triangle LFO in [-1, +1] — constant slope, equal time at every duty
+      // value. Sine LFO lingered at extremes and was perceived as pausing
+      // briefly at duty=0.5 between cycles; triangle keeps duty motion uniform.
+      float tri;
+      if      (lfo_phase_ < 0.25f) tri = lfo_phase_ * 4.f;
+      else if (lfo_phase_ < 0.75f) tri = 2.f - lfo_phase_ * 4.f;
+      else                         tri = lfo_phase_ * 4.f - 4.f;
+      const float duty = 0.5f + pwm_depth_amt * MODE_C_SYNTH_PWM_DEPTH_MAX * tri;
+      // No clamps on duty: at the depth ceiling the wave thins toward
+      // silence at the triangle peaks (sin(π · duty) → 0) and recovers as
+      // the LFO sweeps back. Set PWM_DEPTH_MAX = 0.5 if you want full
+      // gating-style "silent at peak" behavior.
       const float phase = saws_[center].GetPhase();
       const float inc   = f0 / sr_;
       rect_out = -PulsePwm(phase, inc, duty);

@@ -129,7 +129,7 @@ constexpr float MODE_C_SYNTH_VOICE_SPREAD[MODE_C_SYNTH_UNISON_VOICES] = {
 constexpr float MODE_C_SYNTH_SAW_PLATEAU      = 0.04f; // single-saw sweet-spot plateau width just below noon (K4 ∈ [0.46, 0.50] holds pure saw)
 constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MIN   = 0.2f;  // PWM rate just past noon (very slow start)
 constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MAX   = 2.f;   // PWM rate at K4=1
-constexpr float MODE_C_SYNTH_PWM_DEPTH_MAX    = 0.3f;  // max ± duty deviation — sweet-spot detuned-rect feel; deeper values briefly drive the fundamental too far down (sin(π·duty) crash at duty extremes)
+constexpr float MODE_C_SYNTH_PWM_DEPTH_MAX    = 0.40f; // max ± duty deviation — duty reaches 0.10/0.90 at triangle peaks (fundamental ≈ 31% of max). 0.5 = full silent-at-peak gating
 constexpr float MODE_C_SYNTH_PWM_DEPTH_FRAC   = 0.4f;  // fraction of rect half over which depth reaches max; remaining CW travel only speeds the LFO up
 constexpr float MODE_C_SYNTH_VCA_GAIN         = 12.f;  // passive-bass env normalization, matches MODE_C_VCA_GAIN convention
 
