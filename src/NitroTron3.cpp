@@ -146,7 +146,7 @@ float ringmod_phase = 0.f;    // ringmod carrier oscillator phase
 float ringmod_lp_state = 0.f; // one-pole LPF after ringmod
 
 // Wet HPF: 2-pole high-pass to keep wet out of bass sub range
-static constexpr float WET_HPF_FREQ = 150.f;
+static constexpr float WET_HPF_FREQ = 60.f;
 float wet_hp_state[2] = {};
 float wet_hp_coeff = 0.f;  // computed in Init
 
@@ -840,16 +840,15 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     }
     }
 
-    // Wet HPF disabled for evaluation — pending unification of grain/stutter
-    // paths; re-enable (or rescale with K2) after that change lands.
-#if 0
+    // Wet HPF: 2-pole at 60 Hz to block DC/sub accumulation in the feedback
+    // loop without touching bass fundamentals. Skipped in direct-texture
+    // mode since the wet there is essentially a passthrough of the dry.
     if (!direct_texture) {
       wet_hp_state[0] += (1.f - wet_hp_coeff) * (wet - wet_hp_state[0]);
       float hp1 = wet - wet_hp_state[0];
       wet_hp_state[1] += (1.f - wet_hp_coeff) * (hp1 - wet_hp_state[1]);
       wet = hp1 - wet_hp_state[1];
     }
-#endif
 
     // Store post-HPF wet for next sample's feedback injection (pre-reverb,
     // so reverb does not feed the ring buffer — per spec).
