@@ -892,7 +892,15 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const bool ladder_on    = (filter_mode == 0);
   const float base_cutoff = MapCutoffModeC(k1);
   const float k3_abs = (k3_signed >= 0.f) ? k3_signed : -k3_signed;
-  const float env_lift_gain = k3_abs * MODE_C_ENV_SCALE * MODE_C_ENV_MOD_RANGE;
+  // k3_abs is 0 inside the deadzone (k3_signed got snapped); outside it
+  // ranges [K3_DEADZONE, 1]. Subtract the deadzone width so env contribution
+  // ramps from 0 right at the deadzone edge -- otherwise k3_abs jumps from
+  // 0 (inside) to K3_DEADZONE (just outside), which with the current
+  // ENV_SCALE x ENV_MOD_RANGE gain produces a multi-x cutoff step during play.
+  const float k3_norm = (k3_abs > 0.f)
+      ? (k3_abs - K3_DEADZONE) / (1.f - K3_DEADZONE)
+      : 0.f;
+  const float env_lift_gain = k3_norm * MODE_C_ENV_SCALE * MODE_C_ENV_MOD_RANGE;
   if (ladder_on) {
     ladder_c_v2.SetDrive(drive_amt);
     // sqrt curve so resonance is audible across the full knob range.
