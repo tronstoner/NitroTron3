@@ -98,7 +98,7 @@ class ModeCSynth {
     float saw_sum = 0.f;
     for (int v = 0; v < N; v++) {
       const int   dist       = (v < center) ? (center - v) : (v - center);
-      const float spread     = static_cast<float>(v - center) / static_cast<float>(center);
+      const float spread     = MODE_C_SYNTH_VOICE_SPREAD[v];
       const float voice_freq = f0 * powf(2.f, spread * detune / 1200.f);
       const float s          = saws_[v].Process(voice_freq);
       const float w          = (dist == 0) ? 1.f : pair_amt[dist - 1];

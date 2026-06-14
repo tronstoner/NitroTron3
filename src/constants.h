@@ -115,6 +115,17 @@ constexpr float MODE_C_SYNTH_DETUNE_CENTS_MAX = 35.f;  // outer-voice detune at 
 constexpr float MODE_C_SYNTH_HYPER_V3_END     = 0.30f; // innermost pair (v=2,4) fully in — center + 1 pair = "dual detuned"
 constexpr float MODE_C_SYNTH_HYPER_V5_END     = 0.60f; // middle pair (v=1,5) fully in — 5-voice
 constexpr float MODE_C_SYNTH_HYPER_V7_END     = 0.85f; // outermost pair (v=0,6) fully in — full 7-voice ensemble; remaining travel widens detune
+
+// Per-voice detune-spread coefficients, applied as
+//   voice_freq = f0 * 2^(spread * detune_cents / 1200)
+// Non-uniform JP-8000-style ratios (0.234 / 0.500 / 1.000): with linear
+// spreads (1/3, 2/3, 1) all pair-to-pair beat frequencies coincided,
+// summing into one audible intermodulation tone. Breaking the multiplicative
+// relationships between pairs scatters those beats and restores the dense,
+// uncorrelated ensemble wash.
+constexpr float MODE_C_SYNTH_VOICE_SPREAD[MODE_C_SYNTH_UNISON_VOICES] = {
+    -1.000f, -0.500f, -0.234f, 0.000f, 0.234f, 0.500f, 1.000f,
+};
 constexpr float MODE_C_SYNTH_SAW_PLATEAU      = 0.04f; // single-saw sweet-spot plateau width just below noon (K4 ∈ [0.46, 0.50] holds pure saw)
 constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MIN   = 0.2f;  // PWM rate just past noon (very slow start)
 constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MAX   = 2.f;   // PWM rate at K4=1
