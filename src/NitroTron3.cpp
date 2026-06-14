@@ -287,10 +287,12 @@ static const int RESONANCES[] = {
 };
 static constexpr int NUM_RES = 12;
 
-// K1 → semitones, asymmetric range [-12, +36], noon = unison.
-static int K1ToSemi(float k1) {
+// K1 → semitones. Lower half always covers -12..0; upper half spans
+// 0..max_up. UP mode uses max_up=12 (symmetric ±12); MID/DOWN uses
+// max_up=36 so the resonance table can reach upper partials.
+static int K1ToSemi(float k1, int max_up) {
   if (k1 < 0.5f) return static_cast<int>(roundf((k1 - 0.5f) * 24.f));
-  return static_cast<int>(roundf((k1 - 0.5f) * 72.f));
+  return static_cast<int>(roundf((k1 - 0.5f) * 2.f * static_cast<float>(max_up)));
 }
 
 // Per-semitone feedback scale (SW2 UP / fixed-interval only).
@@ -311,16 +313,16 @@ static float FixedIntervalFeedbackScale(int k1_semi) {
 }
 
 // Compute pitch ratio for one grain.
-// harmony == 0 (SW2 UP): fixed interval, K1 = exact semitones in [-12, +36].
+// harmony == 0 (SW2 UP): fixed interval, K1 = exact semitones in [-12, +12].
 // harmony != 0 (SW2 MID/DOWN): grain picks uniformly from a ±1 entry window
-// around K1's closest RESONANCES entry. No external variance — fixed cloud.
+// around K1's closest RESONANCES entry. K1 spans -12..+36 for the table scan.
 static float GrainPitchRatio(int harmony, float k1) {
   float semi;
 
   if (harmony == 0) {
-    semi = static_cast<float>(K1ToSemi(k1));
+    semi = static_cast<float>(K1ToSemi(k1, 12));
   } else {
-    int k1_semi = K1ToSemi(k1);
+    int k1_semi = K1ToSemi(k1, 36);
     int closest = 0;
     int min_dist = 100;
     for (int i = 0; i < NUM_RES; i++) {
@@ -575,9 +577,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // SW2 MID: scale by the closest resonance interval (same scan as GrainPitchRatio).
   // SW2 DOWN: untouched.
   if (eb.sw2 == 0) {
-    feedback_amt *= FixedIntervalFeedbackScale(K1ToSemi(k1));
+    feedback_amt *= FixedIntervalFeedbackScale(K1ToSemi(k1, 12));
   } else if (eb.sw2 == 1) {
-    int k1_semi = K1ToSemi(k1);
+    int k1_semi = K1ToSemi(k1, 36);
     int closest_semi = 0;
     int min_dist = 100;
     for (int i = 0; i < NUM_RES; i++) {
@@ -743,8 +745,10 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
 
         // Pitch: UP holds a stable interval until K1 moves; MID re-rolls every
-        // grain within its ±1 RESONANCES window.
-        int k1_semi_now = K1ToSemi(k1);
+        // grain within its ±1 RESONANCES window. Change detection uses the
+        // mode's effective K1 range so spurious re-rolls don't fire when K1
+        // moves above +12 in UP mode (where the value clamps).
+        int k1_semi_now = (harmony == 0) ? K1ToSemi(k1, 12) : K1ToSemi(k1, 36);
         bool force_reroll = (k1_semi_now != harmony_cached_k1_semi);
         if (harmony == 0) {
           if (force_reroll || harmony_hold_counter <= 0) {
