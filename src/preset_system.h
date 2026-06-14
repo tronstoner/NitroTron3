@@ -236,6 +236,11 @@ private:
 
     // Hardware tracking for dirty detection (detect movement, not difference from stored)
     float last_hw_knobs_[NUM_KNOBS];
+    // Per-knob "live" flag. False after preset load / snapshot: edit buffer
+    // holds the loaded value, ignoring hw position until the user moves the
+    // knob past KNOB_DIRTY_THRESHOLD (knob takeover). True after takeover:
+    // edit buffer tracks hw at full ADC resolution every tick.
+    bool knob_live_[NUM_KNOBS] = {false};
     uint8_t last_hw_sw1_ = 0;
     uint8_t last_hw_sw2_ = 0;
 
@@ -468,6 +473,10 @@ private:
         for (int i = 0; i < NUM_KNOBS; i++) {
             last_hw_knobs_[i] = hw_->GetKnobValue(
                 static_cast<Hothouse::Knob>(i));
+            // Freeze knobs — edit buffer ignores hw until next movement
+            // past threshold. Preserves loaded preset values; in manual
+            // mode the edit buffer already matches hw, so no visible change.
+            knob_live_[i] = false;
         }
         last_hw_sw1_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_1);
         last_hw_sw2_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_2);
@@ -485,13 +494,25 @@ private:
         for (int i = 0; i < NUM_KNOBS; i++) {
             float hw_val = hw_->GetKnobValue(
                 static_cast<Hothouse::Knob>(i));
-            float delta = hw_val - last_hw_knobs_[i];
-            if (delta < 0) delta = -delta;
 
-            if (delta > KNOB_DIRTY_THRESHOLD) {
+            if (knob_live_[i]) {
+                // Already taken over — pass every ADC sample through so
+                // smooth knob motion reaches audio at full resolution.
                 eb.knobs[i] = hw_val;
                 last_hw_knobs_[i] = hw_val;
-                any_changed = true;
+            } else {
+                // Frozen since last snapshot (preset load, mode switch,
+                // bypass etc.). Hold edit buffer at its loaded value until
+                // the user moves the knob past the threshold — then flip
+                // live and start tracking hw.
+                float delta = hw_val - last_hw_knobs_[i];
+                if (delta < 0) delta = -delta;
+                if (delta > KNOB_DIRTY_THRESHOLD) {
+                    knob_live_[i]      = true;
+                    eb.knobs[i]        = hw_val;
+                    last_hw_knobs_[i]  = hw_val;
+                    any_changed        = true;
+                }
             }
         }
 
