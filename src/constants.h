@@ -104,10 +104,17 @@ constexpr float MODE_C_VCA_GAIN = 12.0f;
 // Within each half, side-voice gain / PWM depth ramps in fast (first
 // _GAIN_FRAC / _DEPTH_FRAC of travel) so the modulated timbre is "fully on"
 // early; the remaining travel only widens detune / speeds the LFO.
-constexpr int   MODE_C_SYNTH_UNISON_VOICES    = 7;     // hypersaw voice count
-constexpr float MODE_C_SYNTH_DETUNE_CENTS_MIN = 10.f;  // outer-voice detune just past noon (already incoherent so RMS norm is accurate from the first sample)
-constexpr float MODE_C_SYNTH_DETUNE_CENTS_MAX = 50.f;  // outer-voice detune at K4=0 (full hypersaw)
-constexpr float MODE_C_SYNTH_HYPER_GAIN_FRAC  = 0.4f;  // fraction of saw half (past the plateau) over which side-voice gain reaches max; remaining CCW travel only widens detune
+constexpr int   MODE_C_SYNTH_UNISON_VOICES    = 7;     // hypersaw voice count (1 center + 3 symmetric pairs)
+constexpr float MODE_C_SYNTH_DETUNE_CENTS_MIN = 10.f;  // outer-voice detune just past plateau (already incoherent so RMS norm is accurate from the first sample)
+constexpr float MODE_C_SYNTH_DETUNE_CENTS_MAX = 35.f;  // outer-voice detune at K4=0 — toned down at the extreme so the ensemble stays musical
+// Hypersaw voice staging — three pairs fade in sequentially along CCW travel
+// (single saw → dual detuned → 5-voice → full 7-voice ensemble), then the
+// final tail past V7_END only widens detune. Values are positions along
+// the normalized hypersaw axis t = (plateau_lo − k4) / plateau_lo, where
+// t = 0 at the plateau edge and t = 1 at K4 = 0.
+constexpr float MODE_C_SYNTH_HYPER_V3_END     = 0.30f; // innermost pair (v=2,4) fully in — center + 1 pair = "dual detuned"
+constexpr float MODE_C_SYNTH_HYPER_V5_END     = 0.60f; // middle pair (v=1,5) fully in — 5-voice
+constexpr float MODE_C_SYNTH_HYPER_V7_END     = 0.85f; // outermost pair (v=0,6) fully in — full 7-voice ensemble; remaining travel widens detune
 constexpr float MODE_C_SYNTH_SAW_PLATEAU      = 0.04f; // single-saw sweet-spot plateau width just below noon (K4 ∈ [0.46, 0.50] holds pure saw)
 constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MIN   = 0.2f;  // PWM rate just past noon (very slow start)
 constexpr float MODE_C_SYNTH_PWM_LFO_HZ_MAX   = 2.f;   // PWM rate at K4=1
