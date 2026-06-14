@@ -397,11 +397,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   size_t max_range = GRAIN_MIN_RANGE +
       static_cast<size_t>(k2 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_MIN_RANGE));
 
-  // Sparsity: 1 at K2=0 (sparse stutter character), 0 at K2 ≥ 0.2 (dense wash).
-  // Drives gap inflation, dry/grain crossfade weighting, and the K3 dead-zone
-  // gate that silences emissions at the K2-low + K3-low corner.
-  float sparsity = (k2 < 0.2f) ? (1.f - k2 * 5.f) : 0.f;
-
   float k3 = RemapKnob(eb.knobs[2]);
   float grain_character = k3;
   float glitch_amount   = k3;
@@ -420,11 +415,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   int max_loops = 1 + static_cast<int>(gc_sqrt * 7.f);  // 1 to 8
 
   float overlap = 4.f - glitch_amount * 3.f;
-  // Sparse-gap inflation at low K2: at sparsity=1 + K3=0 the gap is huge,
-  // and the K3 dead-zone gate below kills the emission entirely.
-  float sparse_gap = 1.f + sparsity * (80.f - 60.f * gc_sqrt);
   size_t base_interval = static_cast<size_t>(
-      static_cast<float>(grain_len) / overlap * sparse_gap);
+      static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
 
   // Reverse probability: sqrt curve so reverses appear early — 18% at K3=0.05,
