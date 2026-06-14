@@ -840,15 +840,16 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     }
     }
 
-    // Wet HPF: 2-pole (two cascaded one-pole HP)
-    // Skip in direct-texture mode — wet IS the dry signal during passthrough,
-    // and the 150 Hz HPF would strip the bass fundamental.
+    // Wet HPF disabled for evaluation — pending unification of grain/stutter
+    // paths; re-enable (or rescale with K2) after that change lands.
+#if 0
     if (!direct_texture) {
       wet_hp_state[0] += (1.f - wet_hp_coeff) * (wet - wet_hp_state[0]);
       float hp1 = wet - wet_hp_state[0];
       wet_hp_state[1] += (1.f - wet_hp_coeff) * (hp1 - wet_hp_state[1]);
       wet = hp1 - wet_hp_state[1];
     }
+#endif
 
     // Store post-HPF wet for next sample's feedback injection (pre-reverb,
     // so reverb does not feed the ring buffer — per spec).
