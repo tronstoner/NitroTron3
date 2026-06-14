@@ -64,8 +64,80 @@ static constexpr size_t GRAIN_MIN_RANGE  = 4800;   // min read range: 100 ms
 // Feedback state
 float prev_wet = 0.f;         // previous sample's wet output for feedback injection
 
-// (Stutter engine removed — grain scheduler handles the K2-low sparse case
-// via complement crossfade against the dry bus.)
+// Direct-texture mode: stutter capture buffer
+static constexpr size_t STUTTER_BUF_SIZE = 9600;   // 200 ms at 48 kHz
+static constexpr size_t STUTTER_MIN_LOOP = 960;    // 20 ms min slice
+float stutter_buf[STUTTER_BUF_SIZE] = {};
+size_t stutter_write_pos = 0;
+size_t stutter_buf_filled = 0;
+
+// Stutter voice: Tukey-windowed single-play slice.  Flat in the middle,
+// cosine taper at edges (TAPER_LEN samples ≈ 5 ms).  Two voices ping-pong
+// with short overlap at the taper region for click-free crossfade.
+struct StutterVoice {
+    static constexpr size_t MIN_TAPER = 96;   // 2 ms at 48 kHz
+    static constexpr size_t MAX_TAPER = 240;  // 5 ms at 48 kHz
+
+    size_t start;      // start position in stutter_buf (circular)
+    size_t length;     // slice length in samples
+    size_t phase;      // current sample within slice
+    size_t taper;      // computed at trigger: adaptive taper length
+    bool   reverse;    // playback direction (latched at trigger)
+    bool   active;
+    float  window;     // current window value — exposed for complement crossfade
+
+    void Trigger(size_t s, size_t len, bool rev) {
+        start = s;
+        length = len;
+        phase = 0;
+        reverse = rev;
+        active = true;
+        window = 0.f;
+        // Adaptive taper: 10% of length, clamped 2–5 ms.
+        taper = static_cast<size_t>(static_cast<float>(len) * 0.1f);
+        if (taper < MIN_TAPER) taper = MIN_TAPER;
+        if (taper > MAX_TAPER) taper = MAX_TAPER;
+        if (taper > length / 2) taper = length / 2;
+    }
+
+    float Process(const float* buf, size_t buf_size) {
+        if (!active) { window = 0.f; return 0.f; }
+
+        // Tukey window: cosine taper at edges, flat (1.0) in the middle
+
+        if (phase < taper) {
+            float t = static_cast<float>(phase) / static_cast<float>(taper);
+            window = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else if (phase >= length - taper) {
+            float t = static_cast<float>(length - 1 - phase) / static_cast<float>(taper);
+            window = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else {
+            window = 1.f;
+        }
+
+        size_t offset = reverse ? (length - 1 - phase) : phase;
+        size_t idx = (start + offset) % buf_size;
+        float sample = buf[idx];
+
+        phase++;
+        if (phase >= length) { active = false; window = 0.f; }
+
+        return sample * window;
+    }
+};
+
+StutterVoice stutter_voices[2];
+int  stutter_active_idx = 0;       // which voice is "current"
+bool stutter_engaged = false;      // true while a stutter event is playing
+bool stutter_next_armed = false;   // false once midpoint trigger has fired
+int  stutter_reps_left = 0;        // remaining reps in current event
+size_t stutter_snap_start = 0;     // latched start position
+size_t stutter_snap_len = 0;       // latched chunk length
+bool   stutter_snap_rev = false;   // latched reverse flag
+bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
+size_t stutter_cutout_phase = 0;   // current sample within cut-out
+size_t stutter_cutout_len = 0;     // total cut-out duration in samples
+size_t stutter_fresh = 0;          // samples written since last event ended
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -393,16 +465,15 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   //                     CW = deep (full 8 s, long trails)
   // Fully CCW (<2%) enters direct-texture mode: bypass grain engine
   float k2 = RemapKnob(eb.knobs[1]);
+  bool direct_texture = (k2 < 0.02f);
   size_t max_range = GRAIN_MIN_RANGE +
       static_cast<size_t>(k2 * static_cast<float>(GRAIN_BUF_SAMPLES - GRAIN_MIN_RANGE));
 
-  // Sparsity: 1 at K2=0 (sparse stutter character), 0 at K2≥0.2 (dense wash).
-  // Drives emission gap inflation and dry-vs-grain crossfade weighting.
-  float sparsity = (k2 < 0.2f) ? (1.f - k2 * 5.f) : 0.f;
-
-  // K3: character + glitch (merged)
+  // K3: in grain mode = character + glitch (merged)
+  //     in direct-texture mode = micro-stutter probability/duration
   float k3 = RemapKnob(eb.knobs[2]);
 
+  // Grain params (only used when !direct_texture, but cheap to compute always)
   float grain_character = k3;
   float glitch_amount   = k3;
 
@@ -420,17 +491,21 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   int max_loops = 1 + static_cast<int>(gc_sqrt * 7.f);  // 1 to 8
 
   float overlap = 4.f - glitch_amount * 3.f;
-  // Gap inflation at low K2: at sparsity=1 + K3=0 the interval blows up to
-  // ~80× → very rare events (≈1 emission/sec at min K2/K3). At sparsity=0
-  // (K2 ≥ 0.2) returns to overlap-derived spacing.
-  float sparse_gap = 1.f + sparsity * (80.f - 60.f * gc_sqrt);
   size_t base_interval = static_cast<size_t>(
-      static_cast<float>(grain_len) / overlap * sparse_gap);
+      static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
 
+  // Stutter params (only used when direct_texture)
+  // Base chunk: 200 ms at CCW → 50 ms at CW (randomized ±40% per event)
+  float stutter_base_chunk = static_cast<float>(STUTTER_BUF_SIZE) -
+      k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
+  // Event probability per sample: quadratic, erratic at full CW (~every 30 ms)
+  float stutter_prob = k3 * k3 * (1.f / 1440.f);
   // Reverse probability: sqrt curve so reverses appear early — 18% at K3=0.05,
   // 25% at K3=0.10, up to 80% at full CW.
   float reverse_chance = sqrtf(k3) * 0.8f;
+  // Cut-out probability: 0% at low k3, up to 40% at full CW
+  float cutout_chance = k3 * 0.4f;
 
   // K4: texture amount (0 = clean, CW = full effect)
   float k4 = RemapKnob(eb.knobs[3]);
@@ -535,78 +610,191 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // Feed pitch tracker
     tracker.Feed(dry, grain_env);
 
-    // Write input + feedback into ring buffer. tanh on the feedback return
-    // tames runaway peaks at high K5 by turning overshoot into soft saturation
-    // while preserving the additive character.
+    // Write input + feedback into ring buffer (even in direct-texture mode,
+    // so turning K2 back up reveals a buffer with textured material).
+    // tanh on the feedback return tames runaway peaks at high K5 by turning
+    // overshoot into soft saturation while preserving the additive character.
     grain_ring.Write(dry + tanhf(prev_wet * feedback_amt));
 
     float wet;
 
-    // Unified scheduler: timer-driven emission with K2-dependent gap inflation.
-    grain_timer--;
-    if (grain_timer <= 0) {
-      // Delay: base offset + scatter within K3 range
-      size_t scatter_range = max_range - base_delay;
-      size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
-      size_t delay = base_delay + pos_offset;
-      if (delay > max_range) delay = max_range;
+    if (direct_texture) {
+      // Two-voice Tukey-windowed stutter with probability-based events.
+      // Repeats use voice engine; cut-outs use dedicated cosine envelope.
 
-      bool reverse = (glitch_amount > 0.1f) && (RandFloat() < reverse_chance);
+      // Write to capture buffer (freeze during repeat events, not cut-outs)
+      if (!stutter_engaged || stutter_is_cutout) {
+        stutter_buf[stutter_write_pos] = dry;
+        stutter_write_pos++;
+        if (stutter_write_pos >= STUTTER_BUF_SIZE) stutter_write_pos = 0;
+        if (stutter_buf_filled < STUTTER_BUF_SIZE) stutter_buf_filled++;
+        stutter_fresh++;
+      }
 
-      // Pitch: UP holds a stable interval until K1 moves; MID re-rolls every
-      // grain within its ±1 RESONANCES window.
-      int k1_semi_now = K1ToSemi(k1);
-      bool force_reroll = (k1_semi_now != harmony_cached_k1_semi);
-      if (harmony == 0) {
-        if (force_reroll || harmony_hold_counter <= 0) {
-          harmony_cached_ratio = GrainPitchRatio(harmony, k1);
-          harmony_cached_k1_semi = k1_semi_now;
-          harmony_hold_counter = 1;
+      // --- Probability-based event trigger ---
+      // Require enough fresh audio to fill the chunk — prevents stale/fresh
+      // seam in the capture region when events fire in quick succession.
+      size_t min_fresh = static_cast<size_t>(stutter_base_chunk * 1.4f);  // worst-case chunk
+      if (min_fresh > STUTTER_BUF_SIZE) min_fresh = STUTTER_BUF_SIZE;
+      bool any_active = stutter_voices[0].active || stutter_voices[1].active;
+      if (k3 > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
+          && !stutter_engaged && !any_active && !stutter_is_cutout
+          && stutter_fresh >= min_fresh
+          && RandFloat() < stutter_prob) {
+
+          if (RandFloat() < cutout_chance) {
+            // Cut-out: dedicated cosine envelope, no voice triggered
+            stutter_is_cutout = true;
+            stutter_cutout_len = 480 + static_cast<size_t>(RandFloat() * 1920.f);
+            stutter_cutout_phase = 0;
+            stutter_engaged = true;
+          } else {
+            // Repeat: randomize chunk length ±40%
+            stutter_is_cutout = false;
+            float rand_scale = 0.6f + RandFloat() * 0.8f;
+            size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+            if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
+            if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
+            stutter_snap_len = chunk;
+            stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
+                                 % STUTTER_BUF_SIZE;
+            stutter_snap_rev = (RandFloat() < reverse_chance);
+            stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3 * 4.f));
+
+            stutter_active_idx = 0;
+            stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
+            stutter_reps_left--;
+            stutter_next_armed = true;
+            stutter_engaged = true;
+          }
+          stutter_fresh = 0;  // reset fresh counter on any event start
+      }
+
+      if (stutter_is_cutout && stutter_engaged) {
+        // --- Cut-out: cosine envelope ducks dry, no voices involved ---
+        size_t taper = StutterVoice::MAX_TAPER;
+        if (taper > stutter_cutout_len / 2) taper = stutter_cutout_len / 2;
+
+        float duck;
+        if (stutter_cutout_phase < taper) {
+          // Fade out dry
+          float t = static_cast<float>(stutter_cutout_phase) / static_cast<float>(taper);
+          duck = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else if (stutter_cutout_phase >= stutter_cutout_len - taper) {
+          // Fade in dry
+          float t = static_cast<float>(stutter_cutout_len - 1 - stutter_cutout_phase)
+                    / static_cast<float>(taper);
+          duck = 0.5f * (1.f - cosf(3.14159265f * t));
+        } else {
+          duck = 1.f;  // full silence
+        }
+
+        wet = dry * (1.f - duck);
+
+        stutter_cutout_phase++;
+        if (stutter_cutout_phase >= stutter_cutout_len) {
+          stutter_is_cutout = false;
+          stutter_engaged = false;
         }
       } else {
-        harmony_cached_ratio = GrainPitchRatio(harmony, k1);
-        harmony_cached_k1_semi = k1_semi_now;
-      }
-      float pitch_ratio = harmony_cached_ratio;
-      float comp = 1.f / sqrtf(pitch_ratio);
+        // --- Repeat path: two-voice Tukey crossfade ---
 
-      int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
-      if (loops > max_loops) loops = max_loops;
+        // Overlap trigger: fire next voice during current voice's tail taper
+        if (stutter_engaged) {
+          StutterVoice& cur = stutter_voices[stutter_active_idx];
+          int next_idx = 1 - stutter_active_idx;
+          StutterVoice& nxt = stutter_voices[next_idx];
 
-      // Find an inactive voice — never steal mid-playback
-      int voice = -1;
-      for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
-        int idx = (grain_next_voice + v) % NUM_GRAIN_VOICES;
-        if (!grain_voices[idx].IsActive()) {
-          voice = idx;
-          grain_next_voice = (idx + 1) % NUM_GRAIN_VOICES;
-          break;
+          if (stutter_next_armed && cur.active
+              && cur.phase >= cur.length - cur.taper && !nxt.active) {
+            if (stutter_reps_left > 0) {
+              nxt.Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rev);
+              stutter_active_idx = next_idx;
+              stutter_reps_left--;
+              stutter_next_armed = true;
+            } else {
+              stutter_next_armed = false;
+            }
+          }
         }
+
+        // Process both voices
+        float v0 = stutter_voices[0].Process(stutter_buf, STUTTER_BUF_SIZE);
+        float v1 = stutter_voices[1].Process(stutter_buf, STUTTER_BUF_SIZE);
+
+        // Combined window for complement crossfade (clamped to 1.0)
+        float w = stutter_voices[0].window + stutter_voices[1].window;
+        if (w > 1.f) w = 1.f;
+
+        // Event ends when all voices finish
+        if (stutter_engaged && !stutter_voices[0].active && !stutter_voices[1].active) {
+          stutter_engaged = false;
+        }
+
+        // Complement crossfade
+        wet = dry * (1.f - w) + v0 + v1;
       }
-      if (voice >= 0) {
-        grain_voices[voice].Trigger(
-            grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
+
+    } else {
+
+      // Scheduler: continuous stream, K3 adds chaos
+      grain_timer--;
+      if (grain_timer <= 0) {
+        // Delay: base offset + scatter within K5 range
+        size_t scatter_range = max_range - base_delay;
+        size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
+        size_t delay = base_delay + pos_offset;
+        if (delay > max_range) delay = max_range;
+
+        bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
+
+        // Pitch: UP holds a stable interval until K1 moves; MID re-rolls every
+        // grain within its ±1 RESONANCES window.
+        int k1_semi_now = K1ToSemi(k1);
+        bool force_reroll = (k1_semi_now != harmony_cached_k1_semi);
+        if (harmony == 0) {
+          if (force_reroll || harmony_hold_counter <= 0) {
+            harmony_cached_ratio = GrainPitchRatio(harmony, k1);
+            harmony_cached_k1_semi = k1_semi_now;
+            harmony_hold_counter = 1;
+          }
+        } else {
+          harmony_cached_ratio = GrainPitchRatio(harmony, k1);
+          harmony_cached_k1_semi = k1_semi_now;
+        }
+        float pitch_ratio = harmony_cached_ratio;
+        float comp = 1.f / sqrtf(pitch_ratio);
+
+        int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
+        if (loops > max_loops) loops = max_loops;
+
+        // Find an inactive voice — never steal mid-playback
+        int voice = -1;
+        for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+          int idx = (grain_next_voice + v) % NUM_GRAIN_VOICES;
+          if (!grain_voices[idx].IsActive()) {
+            voice = idx;
+            grain_next_voice = (idx + 1) % NUM_GRAIN_VOICES;
+            break;
+          }
+        }
+        if (voice >= 0) {
+          grain_voices[voice].Trigger(
+              grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
+        }
+
+        float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;
+        grain_timer = static_cast<int>(
+            static_cast<float>(base_interval) * (1.f + jitter));
+        if (grain_timer < 32) grain_timer = 32;
       }
 
-      float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;
-      grain_timer = static_cast<int>(
-          static_cast<float>(base_interval) * (1.f + jitter));
-      if (grain_timer < 32) grain_timer = 32;
+      // Sum all active voices
+      wet = 0.f;
+      for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+        wet += grain_voices[v].Process(grain_ring);
+      }
     }
-
-    // Sum active voices and the aggregate window (for low-K2 crossfade).
-    float grain_sum = 0.f;
-    float window_sum = 0.f;
-    for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
-      grain_sum += grain_voices[v].Process(grain_ring);
-      window_sum += grain_voices[v].CurrentWindow();
-    }
-    if (window_sum > 1.f) window_sum = 1.f;
-
-    // Dry duck scales with sparsity: at K2=0 grains replace dry (complement
-    // crossfade); at K2 ≥ 0.2 dry stays full-on (additive wash).
-    float duck = sparsity * window_sum;
-    wet = dry * (1.f - duck) + grain_sum;
 
     // Texture shaper — K4 meaning depends on SW1 mode
     switch (texture_mode) {
@@ -652,13 +840,15 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     }
     }
 
-    // Wet HPF disabled for evaluation. Once re-enabled, scale by (1-sparsity)
-    // so it phases in as K2 leaves the stutter zone.
+    // Wet HPF disabled for evaluation — pending unification of grain/stutter
+    // paths; re-enable (or rescale with K2) after that change lands.
 #if 0
-    wet_hp_state[0] += (1.f - wet_hp_coeff) * (wet - wet_hp_state[0]);
-    float hp1 = wet - wet_hp_state[0];
-    wet_hp_state[1] += (1.f - wet_hp_coeff) * (hp1 - wet_hp_state[1]);
-    wet = hp1 - wet_hp_state[1];
+    if (!direct_texture) {
+      wet_hp_state[0] += (1.f - wet_hp_coeff) * (wet - wet_hp_state[0]);
+      float hp1 = wet - wet_hp_state[0];
+      wet_hp_state[1] += (1.f - wet_hp_coeff) * (hp1 - wet_hp_state[1]);
+      wet = hp1 - wet_hp_state[1];
+    }
 #endif
 
     // Store post-HPF wet for next sample's feedback injection (pre-reverb,

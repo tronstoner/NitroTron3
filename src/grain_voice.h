@@ -12,9 +12,6 @@
 class GrainVoice {
 public:
     bool IsActive() const { return active_; }
-    // Last window value computed by Process (0 when inactive). Used by the
-    // scheduler to crossfade dry against the grain bus at low K2.
-    float CurrentWindow() const { return active_ ? last_window_ : 0.f; }
 
     // Start a grain. `loops` = number of times to play the fragment
     // (1 = once, >1 = stutter repeat).
@@ -68,8 +65,6 @@ public:
             window = 1.f;
         }
 
-        last_window_ = window;
-
         float sample = buf.ReadFrac(read_pos_f_);
 
         read_pos_f_ += rate_;
@@ -103,5 +98,4 @@ private:
     size_t taper_samples_ = 1;
     int loops_left_ = 0;
     bool active_ = false;
-    float last_window_ = 0.f;
 };
