@@ -742,6 +742,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // Scheduler: continuous stream, K3 adds chaos
       grain_timer--;
       if (grain_timer <= 0) {
+        // Delay: base offset + scatter within K5 range
+        size_t scatter_range = max_range - base_delay;
+        size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
+        size_t delay = base_delay + pos_offset;
+        if (delay > max_range) delay = max_range;
+
         bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
 
         // Pitch: UP holds a stable interval until K1 moves; MID re-rolls every
@@ -762,21 +768,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         }
         float pitch_ratio = harmony_cached_ratio;
         float comp = 1.f / sqrtf(pitch_ratio);
-
-        // Pitch-aware delay floor: a forward grain at rate R consumes L×R
-        // input samples for L output, so start must be at least L×R behind
-        // the write head or the read crosses into stale buffer content (and
-        // K1 stops having an audible effect). Reverse grains only need L.
-        float pitch_span = reverse ? 1.f
-                                   : (pitch_ratio > 1.f ? pitch_ratio : 1.f);
-        size_t required_delay = static_cast<size_t>(pitch_span * static_cast<float>(grain_len)) + 1;
-        size_t emit_delay = base_delay;
-        if (required_delay > emit_delay) emit_delay = required_delay;
-
-        // Scatter within whatever budget is left after the required delay.
-        size_t scatter_range = (max_range > emit_delay) ? (max_range - emit_delay) : 0;
-        size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
-        size_t delay = emit_delay + pos_offset;
 
         int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
         if (loops > max_loops) loops = max_loops;
