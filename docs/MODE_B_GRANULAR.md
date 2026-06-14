@@ -25,7 +25,7 @@ Input ──┬─────────────────────�
                     │                         │
                     │                   [Texture Shaper (SW1/K4)]
                     │                         │
-                    │                    [Wet HPF 150 Hz]
+                    │                    [Wet HPF 120 Hz]
                     │                         │
                     │                         ├──► [Clouds Reverb @ 32 kHz]
                     │                         │       (K5 CCW: dry/wet 0→1)
@@ -108,11 +108,12 @@ K5 is bipolar with a ±5% deadzone around center.
 
 **CW — ring-buffer feedback** (0 at deadzone edge → 0.95 at full CW). Original behavior preserved:
 - Post-HPF wet output (pre-reverb) scaled by feedback amount is added to the ring buffer write path. Feedback becomes new grain material the scheduler can re-scatter.
-- Ceiling at 0.95 to prevent runaway. The wet HPF (150 Hz) runs before feedback injection, so sub content does not accumulate in the loop.
+- Ceiling at 0.95 to prevent runaway. The wet HPF (120 Hz) runs before feedback injection, so sub content does not accumulate in the loop.
+- Feedback signal is soft-clipped through `tanh` with a pre-drive (`FB_SAT_DRIVE = 8`) so the loop saturates at low levels — early distortion acts as the dominant loudness limiter rather than relying on the 0.95 ceiling alone.
 
 ### Wet HPF
 
-2-pole high-pass on the shaper-bus output before mix. Compile-time cutoff around 150 Hz, no user control. Keeps the wet signal from competing with the dry bass for sub-frequency real estate. This is the single most important bass-specific tuning choice in Mode B.
+2-pole high-pass on the shaper-bus output before mix. Compile-time cutoff at 120 Hz, no user control. Keeps the wet signal from competing with the dry bass for sub-frequency real estate. This is the single most important bass-specific tuning choice in Mode B.
 
 ### Mix
 
@@ -138,7 +139,7 @@ The transition between direct-texture and grain mode is instantaneous. K2 slight
 |---|---|---|
 | KNOB 1 | Interval | **Centered.** Noon = unison. CCW → −24 semi, CW → +24 semi. Interpretation depends on Switch 2 (anchor for Fixed and Scale modes, cloud weighting for Cloud mode) |
 | KNOB 2 | Buffer range | Unipolar. CCW = tight (100 ms, recent audio only). CW = deep (full 8 s, long trails) |
-| KNOB 3 | Character / Glitch | Unipolar. CCW = soft, long, tight grains (200 ms, single pass, high overlap). CW = short, sharp, chaotic (20 ms, stutter loops, scatter, reverse probability). Currently merged from two conceptual parameters (grain character + glitch amount) — may split back to two knobs later |
+| KNOB 3 | Character / Glitch | Unipolar. CCW = soft, long, tight grains (200 ms, single pass, 6× overlap). CW = short, sharp, chaotic (20 ms, stutter loops, scatter, reverse probability). Currently merged from two conceptual parameters (grain character + glitch amount) — may split back to two knobs later |
 | KNOB 4 | Texture amount | Unipolar. 0 = clean, 1 = full effect. Intensity of whichever texture mode Switch 1 selects. Gesture-modulated (attack / amp / sustain depending on mode) |
 | KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb dry/wet (0→1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0→0.95). Reverb runs in parallel with feedback path; reverb tail does not enter the ring buffer |
 | KNOB 6 | Mix | Unipolar. 0 = dry, 1 = wet. Equal-power curve |

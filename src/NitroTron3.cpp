@@ -146,7 +146,11 @@ float ringmod_phase = 0.f;    // ringmod carrier oscillator phase
 float ringmod_lp_state = 0.f; // one-pole LPF after ringmod
 
 // Wet HPF: 2-pole high-pass to keep wet out of bass sub range
-static constexpr float WET_HPF_FREQ = 60.f;
+static constexpr float WET_HPF_FREQ = 120.f;
+
+// Feedback saturation drive: pre-multiplies the tanh input so distortion
+// kicks in earlier and the loop self-limits at lower volume.
+static constexpr float FB_SAT_DRIVE = 8.f;
 float wet_hp_state[2] = {};
 float wet_hp_coeff = 0.f;  // computed in Init
 
@@ -492,7 +496,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float gc_sqrt = sqrtf(grain_character);
   int max_loops = 1 + static_cast<int>(gc_sqrt * 7.f);  // 1 to 8
 
-  float overlap = 4.f - glitch_amount * 3.f;
+  float overlap = 6.f - glitch_amount * 5.f;
   size_t base_interval = static_cast<size_t>(
       static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
@@ -616,7 +620,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // so turning K2 back up reveals a buffer with textured material).
     // tanh on the feedback return tames runaway peaks at high K5 by turning
     // overshoot into soft saturation while preserving the additive character.
-    grain_ring.Write(dry + tanhf(prev_wet * feedback_amt));
+    grain_ring.Write(dry + tanhf(prev_wet * feedback_amt * FB_SAT_DRIVE) / FB_SAT_DRIVE);
 
     float wet;
 
