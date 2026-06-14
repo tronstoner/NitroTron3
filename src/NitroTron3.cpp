@@ -217,6 +217,16 @@ static float MapCutoffModeC(float knob) {
          powf(MODE_C_CUTOFF_K1_MAX_HZ / MODE_C_CUTOFF_MIN_HZ, knob);
 }
 
+// K6 mix pre-warp — smoothstep on top of the sqrt equal-power crossfade.
+// At noon: smoothstep(0.5) = 0.5, so sqrt(0.5) = 0.707 (−3 dB each), the
+// same point as plain sqrt. At the extremes the curve flattens: a knob
+// touch from full-dry pulls wet out of silence gently instead of jumping
+// straight to ~−10 dB, and the dry vanishes earlier on the wet side
+// instead of clinging on at ~−13 dB even at mix=0.95.
+static float MixCurve(float mix) {
+  return mix * mix * (3.f - 2.f * mix);
+}
+
 // Quantize knob (0–1) into N equal steps, returning 0..N-1
 static int Quantize(float knob, int steps) {
   int val = static_cast<int>(knob * steps);
@@ -415,8 +425,9 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float filtered = ladder.Process(osc_mix);
     float wet = filtered * env_val * OSC_GAIN;
 
-    float dry_gain = sqrtf(1.f - mix);
-    float wet_gain = sqrtf(mix);
+    const float m = MixCurve(mix);
+    float dry_gain = sqrtf(1.f - m);
+    float wet_gain = sqrtf(m);
     out[0][i] = out[1][i] = dry * DRY_TRIM * dry_gain + wet * wet_gain;
   }
 }
@@ -823,8 +834,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   rev_upsampler_r.Process(mid_r, n_mid, wet_r_block);
 
   // --- Final mix (single mono-collapse point, easy to remove for stereo) ---
-  const float dry_gain = sqrtf(1.f - mix);
-  const float wet_gain = sqrtf(mix);
+  const float m        = MixCurve(mix);
+  const float dry_gain = sqrtf(1.f - m);
+  const float wet_gain = sqrtf(m);
   for (size_t i = 0; i < size; i++) {
     // Per-sample smoothing on reverb_amt to kill zipper across block boundaries.
     reverb_amt_smooth += REVERB_AMT_SMOOTH_COEF * (reverb_amt - reverb_amt_smooth);
@@ -876,8 +888,9 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float drive_amt = (drive_knob < 0.5f)
       ? MODE_C_DRIVE_MIN + (drive_knob * 2.f) * (1.f - MODE_C_DRIVE_MIN)
       : 1.f + ((drive_knob - 0.5f) * 2.f) * (MODE_C_DRIVE_MAX - 1.f);
-  const float dry_gain  = sqrtf(1.f - mix);
-  const float wet_gain  = sqrtf(mix);
+  const float m         = MixCurve(mix);
+  const float dry_gain  = sqrtf(1.f - m);
+  const float wet_gain  = sqrtf(m);
 
   // Sine wavefolder per-block constants (active only at SW1=UP).
   const float fold_blend = (drive_mode == 0) ? fold_amt : 0.f;
