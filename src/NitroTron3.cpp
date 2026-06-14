@@ -766,6 +766,14 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         float pitch_span = reverse ? 1.f
                                    : (pitch_ratio > 1.f ? pitch_ratio : 1.f);
         size_t required_delay = static_cast<size_t>(pitch_span * static_cast<float>(grain_len)) + 1;
+
+        // Cap at max_range/2 so at extreme upward pitch the read deliberately
+        // crosses into the buffer wrap region — grains converge on the same
+        // stale slice and produce the coherent "shimmer" character. Below
+        // the cap, K1 still tracks audibly.
+        size_t pitch_cap = max_range / 2;
+        if (required_delay > pitch_cap) required_delay = pitch_cap;
+
         size_t emit_delay = base_delay;
         if (required_delay > emit_delay) emit_delay = required_delay;
 
