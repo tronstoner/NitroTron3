@@ -4,69 +4,73 @@
 #include <cstdint>
 #include "constants.h"
 
-// 3-band parallel resonant BPF phaser. Band 0 sits at K1's base frequency;
-// bands 1 and 2 scale together off band 0 by PHASER_BPF_RATIO and its
-// square so the formant relationship stays coherent during sweeps. An
-// internal LFO modulates the base frequency exponentially around K1's
-// position (±PHASER_SWEEP_RATIO octaves).
+// 4-stage first-order allpass phaser, modeled on the EHX Small Stone.
+// All four stages share the same modulated allpass corner ω. The output
+// mixes dry + allpass-chain at unity 0.5/0.5 — this internal mix is
+// intrinsic to phaser character (cannot be moved to K6). The wet
+// (allpass-filtered) signal interfering with the dry creates two notches
+// sweeping in tandem; for 4 identical-ω stages, the notches sit at
+// ω · 0.414 and ω · 2.414 (ratio ≈ 5.83), which matches the Small Stone's
+// measured ~5.5 ratio.
 //
-// K3 bipolar: CCW = triangle LFO, CW = sample-and-hold. Magnitude (after
-// the caller's deadzone snap-to-zero) sets LFO rate. K3 at noon → LFO
-// inactive, filter sits statically at K1 (delivers the "static
-// bandpass/highpass" use case from the same control surface).
+// K2 = feedback (Color analog): tap from end of allpass chain back into
+// stage 0's input. Off (K2=0) = clean dry-flat-with-notches sweep; up =
+// deeper, narrower notches with a hint of resonance, classic Small Stone
+// "Color ON" feel. Clamped below self-oscillation by PHASER_FB_MAX.
+//
+// K3 bipolar: CCW = triangle LFO, CW = sample-and-hold. Sign selects
+// shape, magnitude (after the caller's deadzone snap-to-zero) sets LFO
+// rate. Rate maps exponentially from PHASER_LFO_HZ_MIN (true ambient,
+// sub-Hz) up to PHASER_LFO_HZ_MAX (near sub-audio, where triangle
+// modulation starts generating sidebands).
 class Phaser {
  public:
   enum Shape : uint8_t { kTriangle = 0, kSampleHold = 1 };
 
   void Init(float sample_rate) {
-    sr_ = sample_rate;
+    sr_     = sample_rate;
     inv_sr_ = 1.f / sample_rate;
-    for (int i = 0; i < 3; ++i) {
-      bp_[i] = 0.f;
-      lp_[i] = 0.f;
-      g_[i]  = 0.f;
-    }
-    q_inv_         = 1.f;
-    lfo_phase_     = 0.f;
-    lfo_rate_hz_   = 0.f;
-    sh_value_      = 0.f;
-    smoothed_mod_  = 0.f;
-    shape_         = kTriangle;
-    lfo_active_    = false;
-    f1_hz_         = PHASER_F1_HZ_MIN;
-    rng_           = 0xCAFEBABEu;
-    UpdateBandCoeffs(f1_hz_);
+    for (int i = 0; i < kStages; ++i) ap_state_[i] = 0.f;
+    fb_state_     = 0.f;
+    a_            = 0.f;
+    fb_amt_       = 0.f;
+    fc_center_    = PHASER_F1_HZ_MIN;
+    lfo_phase_    = 0.f;
+    lfo_rate_hz_  = 0.f;
+    sh_value_     = 0.f;
+    shape_        = kTriangle;
+    lfo_active_   = false;
+    rng_          = 0xCAFEBABEu;
+    UpdateAllpassCoeff(fc_center_);
   }
 
-  // Per-block. k1, k2 in [0, 1]. k3_signed in [-1, +1]; sign selects shape
-  // (negative = triangle, positive = S&H), magnitude sets LFO rate. The
-  // caller should snap k3_signed to exactly 0 inside its deadzone — that
-  // disables the LFO and locks bands to f1.
+  // k1, k2 in [0, 1]. k3_signed in [-1, +1]; sign = shape (negative
+  // triangle, positive S&H), magnitude past the caller's deadzone = LFO
+  // rate. The caller should snap k3_signed to exactly 0 inside its
+  // deadzone — that disables the LFO and locks ω to f1.
   void SetParams(float k1, float k2, float k3_signed) {
-    f1_hz_ = PHASER_F1_HZ_MIN *
-             powf(PHASER_F1_HZ_MAX / PHASER_F1_HZ_MIN, k1);
+    fc_center_ = PHASER_F1_HZ_MIN *
+                 powf(PHASER_F1_HZ_MAX / PHASER_F1_HZ_MIN, k1);
 
-    const float q = PHASER_Q_MIN + k2 * (PHASER_Q_MAX - PHASER_Q_MIN);
-    q_inv_ = 1.f / q;
+    fb_amt_ = k2 * PHASER_FB_MAX;
 
     if (k3_signed == 0.f) {
       lfo_active_ = false;
     } else {
       lfo_active_ = true;
-      if (k3_signed < 0.f) {
-        shape_ = kTriangle;
-        const float mag = -k3_signed;
-        lfo_rate_hz_ = PHASER_LFO_HZ_MIN +
-                       mag * (PHASER_LFO_HZ_MAX - PHASER_LFO_HZ_MIN);
-      } else {
-        shape_ = kSampleHold;
-        lfo_rate_hz_ = PHASER_LFO_HZ_MIN +
-                       k3_signed * (PHASER_LFO_HZ_MAX - PHASER_LFO_HZ_MIN);
-      }
+      shape_ = (k3_signed < 0.f) ? kTriangle : kSampleHold;
+      const float mag = (k3_signed < 0.f) ? -k3_signed : k3_signed;
+      // Exponential rate mapping over a per-shape range so K3 magnitude
+      // moves perceptually evenly. Triangle reaches near sub-audio at full
+      // travel; S&H tops out well below audio-rate.
+      const float rate_min = (shape_ == kTriangle)
+          ? PHASER_LFO_TRI_HZ_MIN : PHASER_LFO_SH_HZ_MIN;
+      const float rate_max = (shape_ == kTriangle)
+          ? PHASER_LFO_TRI_HZ_MAX : PHASER_LFO_SH_HZ_MAX;
+      lfo_rate_hz_ = rate_min * powf(rate_max / rate_min, mag);
     }
 
-    // LFO off → band coefficients fixed for the whole block.
-    if (!lfo_active_) UpdateBandCoeffs(f1_hz_);
+    if (!lfo_active_) UpdateAllpassCoeff(fc_center_);
   }
 
   float Process(float in) {
@@ -80,7 +84,6 @@ class Phaser {
       }
 
       if (shape_ == kTriangle) {
-        // Triangle in [-1, +1]: 0 → +1 → 0 → −1 → 0 over phase [0, 1).
         const float p = lfo_phase_;
         if      (p < 0.25f) mod = p * 4.f;
         else if (p < 0.75f) mod = 2.f - p * 4.f;
@@ -90,46 +93,51 @@ class Phaser {
       }
     }
 
-    // One-pole smoothing kills S&H step discontinuities and ramps mod
-    // gracefully across the deadzone boundary when K3 engages/disengages.
-    smoothed_mod_ += PHASER_MOD_SMOOTH_COEF * (mod - smoothed_mod_);
-
     if (lfo_active_) {
-      const float fmod = f1_hz_ * FastExp2(smoothed_mod_ * PHASER_SWEEP_RATIO);
-      UpdateBandCoeffs(fmod);
+      // Apply mod directly: S&H stays as true steps, no slew between
+      // values. Triangle is already smooth so no smoothing needed.
+      const float fc = fc_center_ * FastExp2(mod * PHASER_SWEEP_OCT);
+      UpdateAllpassCoeff(fc);
     }
 
-    // Three parallel Chamberlin SVFs, bandpass tap.
-    float sum = 0.f;
-    for (int i = 0; i < 3; ++i) {
-      const float hp = in - q_inv_ * bp_[i] - lp_[i];
-      bp_[i] += g_[i] * hp;
-      lp_[i] += g_[i] * bp_[i];
-      sum    += bp_[i];
+    // 4-stage allpass chain, optional feedback from chain output.
+    // Per-stage 1st-order allpass in transposed direct form II:
+    //   y[n] = -a * x[n] + s[n-1]
+    //   s[n] =  a * y[n] + x[n]
+    float x = in - fb_amt_ * fb_state_;
+    for (int i = 0; i < kStages; ++i) {
+      const float y = -a_ * x + ap_state_[i];
+      ap_state_[i] = a_ * y + x;
+      x = y;
     }
-    return sum * PHASER_OUT_GAIN;
+    fb_state_ = x;
+
+    // Internal dry + wet sum at unity 0.5/0.5. THIS is what creates the
+    // two moving notches; bypassing or relocating it loses phaser character.
+    return 0.5f * (in + x);
   }
 
  private:
-  static constexpr float kPi  = 3.14159265f;
-  static constexpr float kLn2 = 0.6931472f;
+  static constexpr int   kStages = 4;
+  static constexpr float kPi     = 3.14159265f;
+  static constexpr float kLn2    = 0.6931472f;
 
-  float sr_      = 48000.f;
-  float inv_sr_  = 1.f / 48000.f;
-  float f1_hz_   = PHASER_F1_HZ_MIN;
-  float q_inv_   = 1.f;
-  float bp_[3], lp_[3], g_[3];
+  float sr_     = 48000.f;
+  float inv_sr_ = 1.f / 48000.f;
+  float fc_center_;
+  float a_;
+  float fb_amt_;
+  float fb_state_;
+  float ap_state_[kStages];
 
-  float lfo_phase_    = 0.f;
-  float lfo_rate_hz_  = 0.f;
-  float sh_value_     = 0.f;
-  float smoothed_mod_ = 0.f;
-  Shape shape_        = kTriangle;
-  bool  lfo_active_   = false;
+  float lfo_phase_;
+  float lfo_rate_hz_;
+  float sh_value_;
+  Shape shape_;
+  bool  lfo_active_;
 
-  uint32_t rng_       = 0xCAFEBABEu;
+  uint32_t rng_;
 
-  // xorshift32 → [-1, +1). Top 24 bits to a normalized float.
   float RandBipolar() {
     rng_ ^= rng_ << 13;
     rng_ ^= rng_ >> 17;
@@ -138,19 +146,16 @@ class Phaser {
     return v * (2.f / 16777216.f) - 1.f;
   }
 
-  // 2^x via expf (single-precision, ~30 cycles on M7). Domain bounded by
-  // PHASER_SWEEP_RATIO ≤ 0.5 so x ∈ [-0.5, +0.5] in practice.
   static float FastExp2(float x) { return expf(x * kLn2); }
 
-  void UpdateBandCoeffs(float f_base) {
-    float fc = f_base;
-    const float fmax = sr_ * 0.166f; // Chamberlin stable below sr/6
-    for (int i = 0; i < 3; ++i) {
-      float fcl = fc;
-      if (fcl < 20.f) fcl = 20.f;
-      if (fcl > fmax) fcl = fmax;
-      g_[i] = 2.f * sinf(kPi * fcl * inv_sr_);
-      fc *= PHASER_BPF_RATIO;
-    }
+  // Bilinear-transform first-order allpass coefficient:
+  //   H(z) = (-a + z⁻¹) / (1 - a · z⁻¹),   a = (1 − tan(π·fc/sr)) / (1 + tan(π·fc/sr))
+  // Phase passes through −90° at f = fc. Stage stack of 4 → notches at
+  // fc · tan(22.5°) and fc · tan(67.5°).
+  void UpdateAllpassCoeff(float fc) {
+    if (fc < 20.f)         fc = 20.f;
+    if (fc > sr_ * 0.45f)  fc = sr_ * 0.45f;
+    const float t = tanf(kPi * fc * inv_sr_);
+    a_ = (1.f - t) / (1.f + t);
   }
 };

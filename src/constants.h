@@ -198,21 +198,24 @@ constexpr float GRENDEL_SIZE_MIN       = 0.5f;  // K2=0 → centers × 0.5 (larg
 constexpr float GRENDEL_SIZE_MAX       = 1.6f;  // K2=1 → centers × 1.6 (small mouth)
 constexpr float GRENDEL_ENV_PATH_RANGE = 1.2f;  // overshoot factor — env can push 20% past the available-travel boundary (clamp absorbs)
 
-// Phaser (SW2=DOWN). 3-band parallel resonant BPF swept by internal LFO.
-// K1 → base f1 (exp); K2 → Q; K3 bipolar → LFO speed (magnitude) + shape
-// (CCW = triangle, CW = sample-and-hold). K3 = 0 → LFO off, static
-// formant filter. Baseline tuned for an EHX Small Stone-ish character at
-// moderate K1/K2; ear-tune all values.
-constexpr float PHASER_F1_HZ_MIN       = 80.0f;   // K1 fully CCW
-constexpr float PHASER_F1_HZ_MAX       = 2000.0f; // K1 fully CW (kept conservative so f3 = f1 × ratio² stays below sr/6)
-constexpr float PHASER_BPF_RATIO       = 2.0f;    // octave spacing between bands (1.5 = fifth, 1.26 = m3 — ear-tune)
-constexpr float PHASER_SWEEP_RATIO     = 0.5f;    // LFO depth: ±0.5 octaves around f1 (exp)
-constexpr float PHASER_LFO_HZ_MIN      = 0.1f;    // rate just past K3 deadzone (slow but moving)
-constexpr float PHASER_LFO_HZ_MAX      = 5.0f;    // rate at K3 fully off-noon — Small Stone tops ~5 Hz
-constexpr float PHASER_Q_MIN           = 1.0f;    // K2=0 — gentle smear
-constexpr float PHASER_Q_MAX           = 8.0f;    // K2=1 — peaky, vocal — avoid runaway at high Q × high cutoff
-constexpr float PHASER_OUT_GAIN        = 0.4f;    // post-sum compensation — three BPFs summed can spike past unity
-constexpr float PHASER_MOD_SMOOTH_COEF = 0.004f;  // one-pole on LFO mod, ~5 ms tc at 48 kHz — kills S&H clicks and deadzone-crossing snaps
+// Phaser (SW2=DOWN). 4-stage allpass chain modeled on EHX Small Stone.
+// All stages share a modulated allpass corner ω; output = 0.5·(dry + wet).
+// Two notches sweep in tandem at ω · 0.414 and ω · 2.414 (ratio ≈ 5.83,
+// matches Small Stone's measured ~5.5). K1 → ω center (exp); K2 →
+// feedback (Color analog); K3 bipolar → LFO rate (mag, exp) + shape
+// (sign: CCW triangle, CW sample-and-hold). K3 = 0 → LFO off, static
+// notches at K1.
+constexpr float PHASER_F1_HZ_MIN       = 100.f;   // ω fully CCW → notches at ~41 / 241 Hz
+constexpr float PHASER_F1_HZ_MAX       = 4000.f;  // ω fully CW  → notches at ~1660 / 9660 Hz
+constexpr float PHASER_SWEEP_OCT       = 1.5f;    // LFO depth: ±1.5 octaves (3-octave total sweep, matches Small Stone)
+// Triangle LFO range: ambient drift → near sub-audio (sideband-generating).
+constexpr float PHASER_LFO_TRI_HZ_MIN  = 0.02f;   // 50-second cycle
+constexpr float PHASER_LFO_TRI_HZ_MAX  = 80.f;    // near sub-audio
+// S&H rate range: one event per 2 s → 40 events/sec. No audio-rate;
+// S&H character lives well below the triangle's top end.
+constexpr float PHASER_LFO_SH_HZ_MIN   = 0.5f;
+constexpr float PHASER_LFO_SH_HZ_MAX   = 40.f;
+constexpr float PHASER_FB_MAX          = 0.95f;   // feedback ceiling — close to but below 4-stage self-oscillation
 
 // --- Mode B SW1 MIDDLE — Event-Driven Digital Glitch ---
 // Bipolar K4: noon = clean. CCW = bit-flip events, CW = timing events
