@@ -280,25 +280,47 @@ static float Wavefold(float x, float amount) {
 // Mode B harmony logic
 // ---------------------------------------------------------------------------
 
-// Natural harmonic intervals (semitones) — octaves, fifths, fourths.
-// Spanning ±2 octaves for sympathetic resonance.
+// Natural harmonic intervals (semitones). Asymmetric: floor at -1 octave,
+// ceiling at +3 octaves, with upper-harmonic partials filled in.
 static const int RESONANCES[] = {
-    -24, -19, -12, -7, -5, 0, 5, 7, 12, 19, 24
+    -12, -7, -5, 0, 5, 7, 12, 19, 24, 28, 31, 36
 };
-static constexpr int NUM_RES = 11;
+static constexpr int NUM_RES = 12;
+
+// K1 → semitones, asymmetric range [-12, +36], noon = unison.
+static int K1ToSemi(float k1) {
+  if (k1 < 0.5f) return static_cast<int>(roundf((k1 - 0.5f) * 24.f));
+  return static_cast<int>(roundf((k1 - 0.5f) * 72.f));
+}
+
+// Per-semitone feedback scale (SW2 UP / fixed-interval only).
+// Unison piles up because each loop pass replays at the same pitch; pitch-down
+// loses energy to the 150 Hz wet HPF each pass and needs compensation.
+// Curve: unison cut to 0.45, up-side ramps back to 1.0 by +3 semi, down-side
+// boosts +0.12 per semitone for a saturated growl, capped at 1.9.
+static float FixedIntervalFeedbackScale(int k1_semi) {
+  if (k1_semi == 0) return 0.45f;
+  if (k1_semi > 0) {
+    float t = static_cast<float>(k1_semi) / 3.f;
+    if (t > 1.f) t = 1.f;
+    return 0.45f + 0.55f * t;
+  }
+  float scale = 1.f + 0.12f * static_cast<float>(-k1_semi);
+  if (scale > 1.9f) scale = 1.9f;
+  return scale;
+}
 
 // Compute pitch ratio for one grain.
-// harmony == 0 (SW2 UP): fixed interval, K1 = exact semitones.
-// harmony != 0 (SW2 MID/DOWN): resonance, grains lock onto nearby harmonics.
-// variance (0..1) scales the random ±1 neighbor window: at 0 always pick the
-// closest harmonic (stable pitch), at 1 the full ±1 neighbor window is used.
-static float GrainPitchRatio(int harmony, float k1, float variance) {
-  int k1_semi = MapDetuneKnob(k1, 24);  // ±24 semitones
+// harmony == 0 (SW2 UP): fixed interval, K1 = exact semitones in [-12, +36].
+// harmony != 0 (SW2 MID/DOWN): grain picks uniformly from a ±1 entry window
+// around K1's closest RESONANCES entry. No external variance — fixed cloud.
+static float GrainPitchRatio(int harmony, float k1) {
   float semi;
 
   if (harmony == 0) {
-    semi = static_cast<float>(k1_semi);
+    semi = static_cast<float>(K1ToSemi(k1));
   } else {
+    int k1_semi = K1ToSemi(k1);
     int closest = 0;
     int min_dist = 100;
     for (int i = 0; i < NUM_RES; i++) {
@@ -306,13 +328,10 @@ static float GrainPitchRatio(int harmony, float k1, float variance) {
       if (d < 0) d = -d;
       if (d < min_dist) { min_dist = d; closest = i; }
     }
-    int idx = closest;
-    if (RandFloat() < variance) {
-      int lo = (closest > 0) ? closest - 1 : 0;
-      int hi = (closest < NUM_RES - 1) ? closest + 1 : NUM_RES - 1;
-      idx = lo + static_cast<int>(RandFloat() * static_cast<float>(hi - lo + 1));
-      if (idx > hi) idx = hi;
-    }
+    int lo = (closest > 0) ? closest - 1 : 0;
+    int hi = (closest < NUM_RES - 1) ? closest + 1 : NUM_RES - 1;
+    int idx = lo + static_cast<int>(RandFloat() * static_cast<float>(hi - lo + 1));
+    if (idx > hi) idx = hi;
     semi = static_cast<float>(RESONANCES[idx]);
   }
 
@@ -545,6 +564,24 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     feedback_amt = 0.f;
   }
 
+  // Even out perceived loudness across K1.
+  // SW2 UP: scale by K1's exact semitone offset.
+  // SW2 MID: scale by the closest resonance interval (same scan as GrainPitchRatio).
+  // SW2 DOWN: untouched.
+  if (eb.sw2 == 0) {
+    feedback_amt *= FixedIntervalFeedbackScale(K1ToSemi(k1));
+  } else if (eb.sw2 == 1) {
+    int k1_semi = K1ToSemi(k1);
+    int closest_semi = 0;
+    int min_dist = 100;
+    for (int i = 0; i < NUM_RES; i++) {
+      int d = RESONANCES[i] - k1_semi;
+      if (d < 0) d = -d;
+      if (d < min_dist) { min_dist = d; closest_semi = RESONANCES[i]; }
+    }
+    feedback_amt *= FixedIntervalFeedbackScale(closest_semi);
+  }
+
   // Base delay scales with range, floored at grain length
   size_t base_delay = max_range / 8;
   if (base_delay < grain_len) base_delay = grain_len;
@@ -568,8 +605,10 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     tracker.Feed(dry, grain_env);
 
     // Write input + feedback into ring buffer (even in direct-texture mode,
-    // so turning K2 back up reveals a buffer with textured material)
-    grain_ring.Write(dry + prev_wet * feedback_amt);
+    // so turning K2 back up reveals a buffer with textured material).
+    // tanh on the feedback return tames runaway peaks at high K5 by turning
+    // overshoot into soft saturation while preserving the additive character.
+    grain_ring.Write(dry + tanhf(prev_wet * feedback_amt));
 
     float wet;
 
@@ -703,17 +742,21 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
         bool reverse = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * 0.6f);
 
-        // Harmony hold: re-roll pitch every N grains, where N falls from ~6
-        // at K3=0 to 1 at K3=1. Also force re-roll if K1 target moved.
-        int k1_semi_now = MapDetuneKnob(k1, 24);
+        // Pitch: UP holds a stable interval until K1 moves; MID re-rolls every
+        // grain within its ±1 RESONANCES window.
+        int k1_semi_now = K1ToSemi(k1);
         bool force_reroll = (k1_semi_now != harmony_cached_k1_semi);
-        if (harmony_hold_counter <= 0 || force_reroll) {
-          harmony_cached_ratio = GrainPitchRatio(harmony, k1, k3);
+        if (harmony == 0) {
+          if (force_reroll || harmony_hold_counter <= 0) {
+            harmony_cached_ratio = GrainPitchRatio(harmony, k1);
+            harmony_cached_k1_semi = k1_semi_now;
+            harmony_hold_counter = 1;
+          }
+        } else {
+          harmony_cached_ratio = GrainPitchRatio(harmony, k1);
           harmony_cached_k1_semi = k1_semi_now;
-          harmony_hold_counter = 1 + static_cast<int>((1.f - k3) * 5.f);
         }
         float pitch_ratio = harmony_cached_ratio;
-        harmony_hold_counter--;
         float comp = 1.f / sqrtf(pitch_ratio);
 
         int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
