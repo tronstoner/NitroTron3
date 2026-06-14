@@ -480,10 +480,15 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // K2 timescale factor: CCW = 0.5× (shorter/faster), CW = 2× (longer/slower)
   float k2_scale = 0.5f + k2 * 1.5f;
 
+  // Quadratic falloff keeps grains long across most of K3 travel; full CW
+  // dives into stutter territory (480 samples ≈ 10 ms at unit k2_scale).
+  float gc_sq = grain_character * grain_character;
   size_t grain_len = static_cast<size_t>(
-      (9600.f - grain_character * (9600.f - 960.f)) * k2_scale);
+      (9600.f - gc_sq * (9600.f - 480.f)) * k2_scale);
   if (grain_len < 64) grain_len = 64;
-  int max_loops = 1 + static_cast<int>(grain_character * 7.f);  // 1 to 8
+  // Sqrt curve: repeats kick in early — 2 loops by K3≈0.05, 3 by K3≈0.10.
+  float gc_sqrt = sqrtf(grain_character);
+  int max_loops = 1 + static_cast<int>(gc_sqrt * 7.f);  // 1 to 8
 
   float overlap = 4.f - glitch_amount * 3.f;
   size_t base_interval = static_cast<size_t>(
@@ -496,8 +501,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       k3 * static_cast<float>(STUTTER_BUF_SIZE - STUTTER_MIN_LOOP);
   // Event probability per sample: quadratic, erratic at full CW (~every 30 ms)
   float stutter_prob = k3 * k3 * (1.f / 1440.f);
-  // Reverse probability: 0% at low k3, up to 80% at full CW
-  float reverse_chance = k3 * 0.8f;
+  // Reverse probability: sqrt curve so reverses appear early — 18% at K3=0.05,
+  // 25% at K3=0.10, up to 80% at full CW.
+  float reverse_chance = sqrtf(k3) * 0.8f;
   // Cut-out probability: 0% at low k3, up to 40% at full CW
   float cutout_chance = k3 * 0.4f;
 
