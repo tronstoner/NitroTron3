@@ -431,10 +431,6 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // 25% at K3=0.10, up to 80% at full CW.
   float reverse_chance = sqrtf(k3) * 0.8f;
 
-  // K3 dead-zone gate: at low K2 (sparsity > 0), K3 ≤ 0.02 = no emissions,
-  // pure dry passthrough. Above the threshold, normal scheduling resumes.
-  bool emissions_off = (sparsity > 0.f && k3 < 0.02f);
-
   // K4: texture amount (0 = clean, CW = full effect)
   float k4 = RemapKnob(eb.knobs[3]);
 
@@ -545,10 +541,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
     float wet;
 
-    // Unified scheduler: timer-driven emission with K2-dependent gap inflation
-    // and a K3 dead-zone gate at the K2-low + K3-low corner.
+    // Scheduler: always emits. At K3=0 + K2=0 → long grains + 4× overlap →
+    // continuous buffer read (no perceptible grain texture). K3 introduces
+    // chaos (reverse, scatter, loops, shorter grains, sparser gaps).
     grain_timer--;
-    if (grain_timer <= 0 && !emissions_off) {
+    if (grain_timer <= 0) {
       bool reverse = (glitch_amount > 0.1f) && (RandFloat() < reverse_chance);
 
       // Pitch: UP holds a stable interval until K1 moves; MID re-rolls every
@@ -605,24 +602,14 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       grain_timer = static_cast<int>(
           static_cast<float>(base_interval) * (1.f + jitter));
       if (grain_timer < 32) grain_timer = 32;
-    } else if (emissions_off && grain_timer <= 0) {
-      // Keep timer alive so emissions resume quickly when K3 leaves the gate.
-      grain_timer = 4800;  // 100 ms recheck
     }
 
-    // Sum active voices and aggregate window (for low-K2 dry-vs-grain duck).
-    float grain_sum = 0.f;
-    float window_sum = 0.f;
+    // Wet bus is purely buffer-driven — no live dry leaks in. K6 still mixes
+    // raw dry against this wet downstream.
+    wet = 0.f;
     for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
-      grain_sum += grain_voices[v].Process(grain_ring);
-      window_sum += grain_voices[v].CurrentWindow();
+      wet += grain_voices[v].Process(grain_ring);
     }
-    if (window_sum > 1.f) window_sum = 1.f;
-
-    // Dry duck scales with sparsity: at K2=0 grains replace dry (complement
-    // crossfade); at K2 ≥ 0.2 dry stays full-on (additive wash).
-    float duck = sparsity * window_sum;
-    wet = dry * (1.f - duck) + grain_sum;
 
     // Texture shaper — K4 meaning depends on SW1 mode
     switch (texture_mode) {
