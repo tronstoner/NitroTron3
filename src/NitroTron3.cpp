@@ -18,6 +18,7 @@
 #include "glitch_zones.h"
 #include "bitcrush.h"
 #include "synth_osc_c.h"
+#include "freq_shifter.h"
 
 using clevelandmusicco::Hothouse;
 using daisy::AudioHandle;
@@ -48,6 +49,7 @@ PitchTracker tracker;
 static constexpr size_t GRAIN_BUF_SAMPLES = 48000 * 8;  // 8 s at 48 kHz
 float DSY_SDRAM_BSS grain_sdram_buf[GRAIN_BUF_SAMPLES];
 RingBuffer   grain_ring;
+FreqShifter  b_shifter;   // Mode B SW2 DOWN — Bode SSB frequency shifter
 
 static constexpr int NUM_GRAIN_VOICES = 8;
 GrainVoice   grain_voices[NUM_GRAIN_VOICES];
@@ -153,6 +155,28 @@ static constexpr float WET_HPF_FREQ = 120.f;
 static constexpr float FB_SAT_DRIVE = 8.f;
 float wet_hp_state[2] = {};
 float wet_hp_coeff = 0.f;  // computed in Init
+
+// Feedback build-up ducker: one-pole envelope on prev_wet drives a soft
+// 1:∞ attenuation of feedback_amt when the loop level rises above
+// THRESHOLD. Slow attack passes transients; slow release lets the loop
+// simmer down between gestures instead of re-igniting instantly.
+static constexpr float FB_DUCK_THRESHOLD  = 0.20f;  // average wet level above which ducking starts
+static constexpr float FB_DUCK_ATTACK_MS  = 500.f;
+static constexpr float FB_DUCK_RELEASE_MS = 800.f;
+float fb_duck_env = 0.f;
+float fb_duck_atk_g = 0.f;  // computed in Init
+float fb_duck_rel_g = 0.f;
+
+// On-play ducker: dry-input envelope (reuse grain_env, ×10 normalized per
+// passive-bass scale) reduces feedback_amt while playing. Instant attack,
+// slow release so the duck doesn't pulse between notes. AMOUNT caps the
+// reduction so feedback isn't completely killed when playing hard.
+static constexpr float ON_PLAY_RELEASE_MS = 400.f;
+static constexpr float ON_PLAY_ENV_GATE   = 0.02f;
+static constexpr float ON_PLAY_ENV_SCALE  = 10.f;
+static constexpr float ON_PLAY_AMOUNT     = 0.5f;  // max GR while playing
+float on_play_env = 0.f;
+float on_play_rel_g = 0.f;  // computed in Init
 
 // Reverb sample-rate conversion. Clouds reverb runs internally at 32 kHz.
 // 48->32 downsampler is mono (one shared input). 32->48 upsampler is per-
@@ -604,6 +628,23 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // SW2: harmony mode
   int harmony = eb.sw2;  // 0=fixed, 1/2=resonance
 
+  // SW2 DOWN: K1 drives a Bode SSB frequency shifter on the wet bus (inside
+  // the feedback loop). Buffer-read pitch is forced to unison so K1 isn't
+  // doing two jobs at once.
+  bool freq_shift_active = (eb.sw2 == 2);
+  if (freq_shift_active) {
+    float k1_norm = (k1 - 0.5f) * 2.f;  // [-1, 1]
+    float abs_k = fabsf(k1_norm);
+    float shift_hz = 0.f;
+    if (abs_k > FREQ_SHIFT_DEADZONE) {
+      float t = (abs_k - FREQ_SHIFT_DEADZONE) / (1.f - FREQ_SHIFT_DEADZONE);
+      shift_hz = (expf(t * FREQ_SHIFT_CURVE) - 1.f)
+               / (expf(FREQ_SHIFT_CURVE) - 1.f) * FREQ_SHIFT_MAX_HZ;
+      if (k1_norm > 0.f) shift_hz = -shift_hz;  // CCW = down-shift (bass), CW = up-shift (bright)
+    }
+    b_shifter.SetShiftHz(shift_hz);
+  }
+
   // Per-sample wet bus capture (used by block-based reverb pipeline below).
   float wet_block[48];
 
@@ -620,7 +661,26 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // so turning K2 back up reveals a buffer with textured material).
     // tanh on the feedback return tames runaway peaks at high K5 by turning
     // overshoot into soft saturation while preserving the additive character.
-    grain_ring.Write(dry + tanhf(prev_wet * feedback_amt * FB_SAT_DRIVE) / FB_SAT_DRIVE);
+    // Build-up ducker: track |prev_wet| with slow attack / slow release,
+    // pull feedback_amt down by THRESHOLD/env once env exceeds threshold.
+    float abs_pw = fabsf(prev_wet);
+    float g_env = (abs_pw > fb_duck_env) ? fb_duck_atk_g : fb_duck_rel_g;
+    fb_duck_env += g_env * (abs_pw - fb_duck_env);
+    float duck_gain = (fb_duck_env > FB_DUCK_THRESHOLD)
+                    ? (FB_DUCK_THRESHOLD / fb_duck_env)
+                    : 1.f;
+    // On-play ducker: dry env opens an instant duck, releases slowly so
+    // the feedback gain doesn't pulse with individual notes.
+    on_play_env = (grain_env > on_play_env)
+                ? grain_env
+                : on_play_env + on_play_rel_g * (grain_env - on_play_env);
+    float on_play_norm = (on_play_env - ON_PLAY_ENV_GATE) * ON_PLAY_ENV_SCALE;
+    if (on_play_norm < 0.f) on_play_norm = 0.f;
+    if (on_play_norm > 1.f) on_play_norm = 1.f;
+    float on_play_gain = 1.f - on_play_norm * ON_PLAY_AMOUNT;
+
+    float fb_amt_eff = feedback_amt * duck_gain * on_play_gain;
+    grain_ring.Write(dry + tanhf(prev_wet * fb_amt_eff * FB_SAT_DRIVE) / FB_SAT_DRIVE);
 
     float wet;
 
@@ -771,6 +831,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
           harmony_cached_k1_semi = k1_semi_now;
         }
         float pitch_ratio = harmony_cached_ratio;
+        if (freq_shift_active) pitch_ratio = 1.f;  // SW2 DOWN: buffer pitch held at unison
         float comp = 1.f / sqrtf(pitch_ratio);
 
         int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
@@ -846,6 +907,13 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       wet = ringmod_lp_state;
       break;
     }
+    }
+
+    // SW2 DOWN: Bode SSB frequency shifter, applied inside the feedback loop
+    // (output feeds prev_wet → cascading shift each pass). HPF below cleans
+    // any sub-audio energy the shifter introduces near unison.
+    if (freq_shift_active) {
+      wet = b_shifter.Process(wet);
     }
 
     // Wet HPF: 2-pole at 60 Hz to block DC/sub accumulation in the feedback
@@ -1141,9 +1209,13 @@ int main() {
       (MODE_C_GRENDEL_ENV_ATTACK_MS  * 0.001f * sr));
   tracker.Init(sr);
   grain_ring.Init(grain_sdram_buf, GRAIN_BUF_SAMPLES);
+  b_shifter.Init(sr);
 
   // Wet HPF coefficient
   wet_hp_coeff = 1.f / (1.f + 2.f * 3.14159265f * WET_HPF_FREQ / sr);
+  fb_duck_atk_g = 1.f - expf(-1.f / (FB_DUCK_ATTACK_MS  * 0.001f * sr));
+  fb_duck_rel_g = 1.f - expf(-1.f / (FB_DUCK_RELEASE_MS * 0.001f * sr));
+  on_play_rel_g = 1.f - expf(-1.f / (ON_PLAY_RELEASE_MS * 0.001f * sr));
 
   // Reverb resamplers + reverb engine
   rev_downsampler.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);

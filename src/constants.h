@@ -250,6 +250,16 @@ constexpr int   GLITCH_BUFFER_SAMPLES       = 2400;  // 50 ms ring buffer for CW
 constexpr int   GLITCH_RAMP_SAMPLES         = 48;    // 1 ms click-free wet/dry ramp
 constexpr float GLITCH_ENV_GATE             = 0.01f; // raw env_val noise gate — below this, no new events arm (passive bass ≈0.02–0.1 while played)
 
+// --- Mode B SW2 DOWN — Bode frequency shifter (K1 bipolar, unison at noon) ---
+// K1 ranges ±1 kHz with an exponential taper around unison: fine sub-Hz
+// resolution near center, full kHz at the extremes. Center deadzone holds
+// pure unison. Shifter sits inside the feedback loop (post-grain, post-SW3
+// FX, pre-wet-HPF) so each loop pass cascades the shift — pile-up by design.
+// Grain buffer-read pitch is forced to 1.0 in this sub-mode.
+constexpr float FREQ_SHIFT_MAX_HZ    = 1000.f;
+constexpr float FREQ_SHIFT_DEADZONE  = 0.02f;  // |k1_norm| < this → 0 Hz
+constexpr float FREQ_SHIFT_CURVE     = 6.0f;   // taper exponent (higher = more weighted near unison)
+
 // --- Mode B reverb + bipolar K5 ---
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
