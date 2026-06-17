@@ -551,25 +551,29 @@ private:
     }
 
     // ── Mode switching (SW3) ────────────────────────────────────
-    // P.1: SW3 directly drives current_mode_ and edit_buffer.mode. No per-mode
-    // state preserve/restore (single global edit buffer). Dirty marking on
-    // SW3 movement comes in P.3.
+    // SW3 is uniform with SW1/SW2: in manual it just drives the edit buffer;
+    // on a saved preset it additionally marks the preset dirty. Ignored
+    // entirely during save / save-confirm (matches the SW1/SW2 freeze in
+    // ProcessKnobsAndSwitches — save target reflects the buffer at
+    // save-mode entry, not later twiddling).
 
     void ProcessModeSwitchHardware() {
+        if (pedal_state_ == PedalState::SAVE_MODE ||
+            pedal_state_ == PedalState::SAVE_CONFIRM) return;
+
         uint8_t sw3 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
         if (sw3 == current_mode_) return;
-
-        // Cancel save mode on switch
-        pedal_state_ = PedalState::NORMAL;
 
         current_mode_ = sw3;
         state_.edit_buffer.mode = sw3;
 
+        if (state_.active_preset > 0 && !state_.dirty &&
+            IsPresetSaved(state_.active_preset)) {
+            state_.dirty = true;
+        }
+
         UpdateLed1Pattern();
         UpdateLed2Mode();
-
-        // Save to flash so the mode is remembered across reboots
-        SaveToFlash();
     }
 
     // ── Flash persistence ───────────────────────────────────────
