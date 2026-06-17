@@ -245,11 +245,15 @@ public:
         ProcessModeSwitchHardware();
         TickLeds(tick_ms);
 
-        // Periodic auto-save (every ~30 s)
-        save_timer_ += tick_ms;
-        if (save_timer_ >= 30000) {
-            save_timer_ = 0;
-            SaveToFlash();
+        // Debounced auto-save: fires AUTOSAVE_DEBOUNCE_MS after the last
+        // tracked state change. No changes → no flash write.
+        if (save_pending_) {
+            idle_since_change_ms_ += tick_ms;
+            if (idle_since_change_ms_ >= AUTOSAVE_DEBOUNCE_MS) {
+                SaveToFlash();
+                save_pending_ = false;
+                idle_since_change_ms_ = 0;
+            }
         }
     }
 
@@ -335,8 +339,12 @@ private:
     uint8_t last_hw_sw2_ = 0;
     uint8_t last_hw_sw3_ = 0;
 
-    // Auto-save timer
-    uint32_t save_timer_ = 0;
+    // Debounced auto-save. Any state change resets idle_since_change_ms_ to 0
+    // and sets save_pending_. When idle reaches AUTOSAVE_DEBOUNCE_MS with no
+    // further changes, the save fires. If nothing ever changes, no save.
+    static constexpr uint32_t AUTOSAVE_DEBOUNCE_MS = 2000;
+    bool save_pending_ = false;
+    uint32_t idle_since_change_ms_ = 0;
 
     // Tick duration for this cycle
     uint32_t tick_ms_ = 10;
@@ -539,6 +547,7 @@ private:
         // Burst takes over both LEDs; UpdateLed1Pattern / UpdateLed2Mode
         // will be called when the burst finishes (see TickLeds).
         StartBankBurst(state_.active_bank + 1);
+        MarkStateChanged();
     }
 
     // ── Bank burst LED routine ─────────────────────────────────
@@ -633,6 +642,7 @@ private:
 
         UpdateLed1Pattern();
         UpdateLed2Mode();
+        MarkStateChanged();
     }
 
     void OnFs1LongPress() {
@@ -648,6 +658,7 @@ private:
 
         UpdateLed1Pattern();
         UpdateLed2Mode();
+        MarkStateChanged();
     }
 
     // ── FS2 actions ─────────────────────────────────────────────
@@ -681,8 +692,11 @@ private:
             // Fresh knob baseline so dirty doesn't trigger immediately
             SnapshotHardware();
 
-            // Save to flash
+            // Save to flash immediately (save-confirm IS the commit point)
+            // and clear the debounce so we don't write again right after.
             SaveToFlash();
+            save_pending_ = false;
+            idle_since_change_ms_ = 0;
 
             // Show confirm burst, then return to normal
             pedal_state_ = PedalState::SAVE_CONFIRM;
@@ -794,6 +808,7 @@ private:
             state_.dirty = true;
             UpdateLed2Mode();
         }
+        if (any_changed) MarkStateChanged();
     }
 
     // ── Mode switching (SW3) ────────────────────────────────────
@@ -824,9 +839,17 @@ private:
 
         UpdateLed1Pattern();
         UpdateLed2Mode();
+        MarkStateChanged();
     }
 
     // ── Flash persistence ───────────────────────────────────────
+
+    // Arm the debounced auto-save. Call from every code path that mutates
+    // persisted state (knobs, switches, navigation, mode change, dirty).
+    void MarkStateChanged() {
+        save_pending_ = true;
+        idle_since_change_ms_ = 0;
+    }
 
     void SaveToFlash() {
         StorageData& data = storage_->GetSettings();
