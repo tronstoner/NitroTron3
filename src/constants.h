@@ -42,9 +42,17 @@ constexpr uint32_t LED_SAVE_CONFIRM_DUR_MS = 500; // total burst duration
 constexpr uint32_t LED_SAVE_CONFIRM_ON_MS  = 75;  // burst on time
 constexpr uint32_t LED_SAVE_CONFIRM_OFF_MS = 75;  // burst off time
 
-// Bank-switch burst (both LEDs in sync, Roman pattern with fast flicker)
-constexpr uint32_t LED_BANK_FLICKER_MS = 20;   // deterministic on/off chunk inside each pulse
-constexpr uint32_t LED_BANK_HOLD_MS    = 400;  // trailing pause before LEDs return to normal
+// Bank-switch burst (both LEDs in sync, fast flicker).
+// Total burst time is fixed; the Roman numeral count of the new bank
+// determines how many flicker pulses fit inside that window. Bank 1 = one
+// long pulse, bank 2 = two shorter pulses, bank 3 = three even shorter.
+// I/V duration distinction is dropped — pulse count alone differentiates.
+// Only valid for NUM_BANKS ≤ 3 (for 4/5/6 we'd need V back to keep them
+// distinguishable from II/I/II).
+constexpr uint32_t LED_BANK_FLICKER_MS = 20;    // deterministic on/off chunk inside each pulse
+constexpr uint32_t LED_BANK_TOTAL_MS   = 1200;  // total burst duration (sum of pulses + gaps)
+constexpr uint32_t LED_BANK_GAP_MS     = 150;   // fixed pause between pulses
+constexpr uint32_t LED_BANK_HOLD_MS    = 400;   // trailing pause before LEDs return to normal
 
 // Footswitch timing
 constexpr uint32_t FS_LONG_PRESS_MS    = 700;   // long press threshold

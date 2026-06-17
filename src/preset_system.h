@@ -290,12 +290,12 @@ private:
 
     // Bank-switch burst (both LEDs together). Takes over both LEDs for the
     // burst duration, then yields back via UpdateLed1Pattern / UpdateLed2Mode.
-    // Sized for worst-case Roman pattern up to MAX_BANKS (VI): one V (~48
-    // flicker steps) + one I (~8) + element gap + trailing = comfortably < 80.
-    static constexpr int MAX_BANK_BURST_STEPS = 80;
+    // Sized for worst-case Roman pattern up to VIII: V (~75 flicker steps) +
+    // 3×I (~50 each) + gaps + trailing ≈ 230. 256 leaves headroom.
+    static constexpr int MAX_BANK_BURST_STEPS = 256;
     BlinkStep bank_burst_steps_[MAX_BANK_BURST_STEPS];
-    uint8_t bank_burst_total_ = 0;
-    uint8_t bank_burst_step_ = 0;
+    uint16_t bank_burst_total_ = 0;
+    uint16_t bank_burst_step_ = 0;
     uint32_t bank_burst_timer_ = 0;
     bool bank_burst_active_ = false;
 
@@ -308,6 +308,7 @@ private:
     bool knob_live_[NUM_KNOBS] = {false};
     uint8_t last_hw_sw1_ = 0;
     uint8_t last_hw_sw2_ = 0;
+    uint8_t last_hw_sw3_ = 0;
 
     // Auto-save timer
     uint32_t save_timer_ = 0;
@@ -510,16 +511,27 @@ private:
     void StartBankBurst(uint8_t bank_num) {
         if (bank_num < 1 || bank_num > NUM_PRESETS) return;  // PRESET_PATTERNS holds I..VIII
 
-        // Build the timeline: each Roman symbol of the Roman pattern becomes
-        // a flicker burst of the same total duration as a normal pulse,
-        // filled with LED_BANK_FLICKER_MS on/off chunks.
+        // Count the number of pulses (I/V symbols) in the Roman pattern.
+        // Total burst = LED_BANK_TOTAL_MS, split into N equal pulses with
+        // fixed gaps between them: N*pulse + (N-1)*gap = TOTAL.
         const PresetPattern& roman = PRESET_PATTERNS[bank_num - 1];
-        uint8_t n = 0;
+        uint32_t n_pulses = 0;
+        for (uint8_t i = 0; i < roman.num_steps; i++) {
+            if (roman.steps[i].led_on) n_pulses++;
+        }
+        if (n_pulses == 0) return;
+        uint32_t total_gap = (n_pulses > 1) ? (n_pulses - 1) * LED_BANK_GAP_MS : 0;
+        uint32_t pulse_ms = (LED_BANK_TOTAL_MS > total_gap)
+                            ? (LED_BANK_TOTAL_MS - total_gap) / n_pulses
+                            : LED_BANK_FLICKER_MS;
+
+        int n = 0;
+        uint32_t pulses_emitted = 0;
         for (uint8_t i = 0; i < roman.num_steps && n < MAX_BANK_BURST_STEPS; i++) {
             const BlinkStep& s = roman.steps[i];
             if (s.led_on) {
                 // Fill this pulse with on/off flicker chunks.
-                uint32_t remaining = s.duration_ms;
+                uint32_t remaining = pulse_ms;
                 bool on = true;
                 while (remaining > 0 && n < MAX_BANK_BURST_STEPS) {
                     uint32_t chunk = (remaining < LED_BANK_FLICKER_MS)
@@ -528,17 +540,20 @@ private:
                     remaining -= chunk;
                     on = !on;
                 }
-            } else if (s.duration_ms == LED_REPEAT_GAP_MS) {
-                // Final repeat gap → replace with our trailing hold.
-                if (n < MAX_BANK_BURST_STEPS) {
-                    bank_burst_steps_[n++] = {static_cast<uint16_t>(LED_BANK_HOLD_MS), false};
+                pulses_emitted++;
+                // Insert gap if more pulses follow.
+                if (pulses_emitted < n_pulses && n < MAX_BANK_BURST_STEPS) {
+                    bank_burst_steps_[n++] = {static_cast<uint16_t>(LED_BANK_GAP_MS), false};
                 }
-            } else {
-                // Element gap between symbols — pass through.
-                bank_burst_steps_[n++] = s;
             }
+            // Roman element-gap and repeat-gap steps are ignored; spacing is
+            // handled by the explicit inter-pulse gap above.
         }
-        bank_burst_total_ = n;
+        // Trailing hold before LEDs return to normal.
+        if (n < MAX_BANK_BURST_STEPS) {
+            bank_burst_steps_[n++] = {static_cast<uint16_t>(LED_BANK_HOLD_MS), false};
+        }
+        bank_burst_total_ = static_cast<uint16_t>(n);
         bank_burst_step_ = 0;
         bank_burst_timer_ = bank_burst_steps_[0].duration_ms;
         bool on = bank_burst_steps_[0].led_on;
@@ -687,6 +702,7 @@ private:
         }
         last_hw_sw1_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_1);
         last_hw_sw2_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_2);
+        last_hw_sw3_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
     }
 
     // ── Knob / switch processing (main loop) ───────────────────
@@ -756,8 +772,12 @@ private:
         if (pedal_state_ == PedalState::SAVE_MODE ||
             pedal_state_ == PedalState::SAVE_CONFIRM) return;
 
+        // Detect physical SW3 movement (against snapshot), not mismatch with
+        // current_mode_. A preset whose stored mode differs from the physical
+        // SW3 position is fine — only an actual switch flip should mark dirty.
         uint8_t sw3 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
-        if (sw3 == current_mode_) return;
+        if (sw3 == last_hw_sw3_) return;
+        last_hw_sw3_ = sw3;
 
         current_mode_ = sw3;
         state_.edit_buffer.mode = sw3;
