@@ -1251,6 +1251,23 @@ int main() {
     // it's too easy to trigger while preset-cycling. PresetSystem flags the
     // request from its own both-FS gesture handler.
     if (preset.ShouldEnterBootloader()) {
+      // Stop audio/ADC so the LEDs flash cleanly, then a fast alternating
+      // burst (8 × 150 ms = 1.2 s total) — clear feedback that bootloader
+      // entry was registered without dragging the wait out.
+      hw.StopAdc();
+      hw.StopAudio();
+      for (int i = 0; i < 8; i++) {
+        led_status.Set(1.f);
+        led_bypass.Set(0.f);
+        led_status.Update();
+        led_bypass.Update();
+        daisy::System::Delay(75);
+        led_status.Set(0.f);
+        led_bypass.Set(1.f);
+        led_status.Update();
+        led_bypass.Update();
+        daisy::System::Delay(75);
+      }
       daisy::System::ResetToBootloader();
     }
   }
