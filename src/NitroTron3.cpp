@@ -1247,8 +1247,12 @@ int main() {
     // Pitch tracker: run YIN in main loop (Mode A, Mode B, Mode C SW1=DOWN).
     tracker.Update();
 
-    // Bootloader: FS1 held 2 s (Phase 1 — proven safe)
-    hw.CheckResetToBootloader();
+    // Bootloader: both footswitches held 2 s. FS1-alone path is dropped —
+    // it's too easy to trigger while preset-cycling. PresetSystem flags the
+    // request from its own both-FS gesture handler.
+    if (preset.ShouldEnterBootloader()) {
+      daisy::System::ResetToBootloader();
+    }
   }
 
   return 0;

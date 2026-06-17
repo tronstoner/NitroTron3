@@ -56,7 +56,7 @@ constexpr uint32_t LED_BANK_HOLD_MS    = 400;   // trailing pause before LEDs re
 
 // Footswitch timing
 constexpr uint32_t FS_LONG_PRESS_MS    = 700;   // long press threshold
-// Bootloader: handled by hw.CheckResetToBootloader() at 2000 ms
+constexpr uint32_t FS_BOOT_HOLD_MS     = 2000;  // both-FS hold → DFU bootloader
 
 // Knob dirty detection
 constexpr float KNOB_DIRTY_THRESHOLD   = 0.02f; // 2% travel to trigger dirty

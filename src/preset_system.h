@@ -221,13 +221,24 @@ public:
         UpdateLed1Pattern();
         UpdateLed2Mode();
 
-        // Snapshot hardware for dirty detection
-        SnapshotHardware();
+        // SnapshotHardware deferred to the first Tick. The ADC isn't started
+        // by hw.StartAdc() until after Init returns, so a snapshot here
+        // would capture zeros — and the first real ADC reading in
+        // ProcessKnobsAndSwitches would then exceed KNOB_DIRTY_THRESHOLD
+        // against that zero baseline and mark the loaded preset dirty.
+        needs_init_snapshot_ = true;
     }
 
     // Call from main loop every tick (10 ms)
     void Tick(uint32_t tick_ms) {
         tick_ms_ = tick_ms;
+
+        if (needs_init_snapshot_) {
+            // ADC has been running through ≥1 audio block by now — knob
+            // values are real, safe to snapshot as the baseline.
+            SnapshotHardware();
+            needs_init_snapshot_ = false;
+        }
 
         ProcessFootswitches();
         ProcessKnobsAndSwitches();
@@ -249,6 +260,16 @@ public:
 
     bool IsBypassed() const { return bypass_; }
     uint8_t GetCurrentMode() const { return current_mode_; }
+
+    // Set when the both-FS gesture has been held continuously past
+    // FS_BOOT_HOLD_MS. Cleared on read. Main loop polls this and calls
+    // System::ResetToBootloader() so the audio side controls the reset
+    // timing (after a Tick rather than inside the gesture handler).
+    bool ShouldEnterBootloader() {
+        bool req = bootloader_request_;
+        bootloader_request_ = false;
+        return req;
+    }
 
 private:
     Hothouse* hw_ = nullptr;
@@ -273,9 +294,13 @@ private:
     bool fs2_long_fired_ = false;
     // Both-FS combo gesture. Set when both FS are detected pressed. While
     // active, individual FS1/FS2 short and long presses are suppressed.
-    // On release, hold duration determines: short = bank cycle, long-hold
-    // bootloader is handled by Hothouse externally.
+    // On release, hold duration determines: short = bank cycle.
+    // Held past FS_BOOT_HOLD_MS arms the bootloader request, polled and
+    // executed by the main loop via ShouldEnterBootloader().
     uint32_t both_down_time_ = 0;
+    bool bootloader_request_ = false;
+    bool boot_armed_ = false;  // true once the hold threshold is crossed
+    bool needs_init_snapshot_ = false;  // defer first SnapshotHardware to first Tick (ADC warm-up)
 
     // LED 1: preset pattern
     int8_t led1_pattern_ = -1;  // -1 = off (manual), 0–7 = preset index
@@ -438,7 +463,17 @@ private:
             both_down_time_ = now;
             fs1_long_fired_ = true;
             fs2_long_fired_ = true;
+            boot_armed_ = false;
             OnBothDown();
+        }
+
+        // Bootloader: both held past threshold → arm request. Main loop
+        // polls ShouldEnterBootloader() and resets there.
+        if (fs1_now && fs2_now && both_down_time_ != 0 && !boot_armed_) {
+            if (now - both_down_time_ >= FS_BOOT_HOLD_MS) {
+                boot_armed_ = true;
+                bootloader_request_ = true;
+            }
         }
 
         // FS1 falling edge → short press (suppressed if combo active or fired)
