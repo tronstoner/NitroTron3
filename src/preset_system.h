@@ -229,6 +229,11 @@ private:
     uint32_t fs2_down_time_ = 0;
     bool fs1_long_fired_ = false;
     bool fs2_long_fired_ = false;
+    // Both-FS combo gesture. Set when both FS are detected pressed. While
+    // active, individual FS1/FS2 short and long presses are suppressed.
+    // On release, hold duration determines: short = bank cycle, long-hold
+    // bootloader is handled by Hothouse externally.
+    uint32_t both_down_time_ = 0;
 
     // LED 1: preset pattern
     int8_t led1_pattern_ = -1;  // -1 = off (manual), 0–7 = preset index
@@ -315,19 +320,13 @@ private:
             fs1_down_time_ = now;
             fs1_long_fired_ = false;
         }
-        // FS1 long press detection (fires on threshold, not release)
-        if (fs1_now && !fs1_long_fired_ && fs1_down_time_ > 0) {
+        // FS1 long press detection (fires on threshold, not release).
+        // Suppressed while both-FS combo is active — the combo owns the gesture.
+        if (fs1_now && !fs1_long_fired_ && fs1_down_time_ > 0 && both_down_time_ == 0) {
             if (now - fs1_down_time_ >= FS_LONG_PRESS_MS) {
                 fs1_long_fired_ = true;
                 OnFs1LongPress();
             }
-        }
-        // FS1 falling edge → short press
-        if (!fs1_now && fs1_pressed_last_) {
-            if (!fs1_long_fired_ && fs1_down_time_ > 0) {
-                OnFs1ShortPress();
-            }
-            fs1_down_time_ = 0;
         }
 
         // FS2 rising edge
@@ -335,16 +334,41 @@ private:
             fs2_down_time_ = now;
             fs2_long_fired_ = false;
         }
-        // FS2 long press detection
-        if (fs2_now && !fs2_long_fired_ && fs2_down_time_ > 0) {
+        // FS2 long press detection — also suppressed during combo.
+        if (fs2_now && !fs2_long_fired_ && fs2_down_time_ > 0 && both_down_time_ == 0) {
             if (now - fs2_down_time_ >= FS_LONG_PRESS_MS) {
                 fs2_long_fired_ = true;
                 OnFs2LongPress();
             }
         }
-        // FS2 falling edge → short press
+
+        // Combo detection: both pressed → arm. Mark individual presses
+        // as "long-fired" so the falling-edge handlers below don't fire
+        // their short-press actions.
+        if (fs1_now && fs2_now && both_down_time_ == 0) {
+            both_down_time_ = now;
+            fs1_long_fired_ = true;
+            fs2_long_fired_ = true;
+            OnBothDown();
+        }
+
+        // FS1 falling edge → short press (suppressed if combo active or fired)
+        if (!fs1_now && fs1_pressed_last_) {
+            if (both_down_time_ != 0) {
+                OnComboReleased(now - both_down_time_);
+                both_down_time_ = 0;
+            } else if (!fs1_long_fired_ && fs1_down_time_ > 0) {
+                OnFs1ShortPress();
+            }
+            fs1_down_time_ = 0;
+        }
+
+        // FS2 falling edge → short press (same gating)
         if (!fs2_now && fs2_pressed_last_) {
-            if (!fs2_long_fired_ && fs2_down_time_ > 0) {
+            if (both_down_time_ != 0) {
+                OnComboReleased(now - both_down_time_);
+                both_down_time_ = 0;
+            } else if (!fs2_long_fired_ && fs2_down_time_ > 0) {
                 OnFs2ShortPress();
             }
             fs2_down_time_ = 0;
@@ -352,6 +376,49 @@ private:
 
         fs1_pressed_last_ = fs1_now;
         fs2_pressed_last_ = fs2_now;
+    }
+
+    // ── Both-FS combo actions ──────────────────────────────────
+
+    void OnBothDown() {
+        // Hook for future use (e.g. start a visual countdown). Hothouse
+        // handles the 2 s bootloader detection externally; nothing else to
+        // do here yet.
+    }
+
+    void OnComboReleased(uint32_t held_ms) {
+        // Short tap (< long-press threshold) → bank cycle. Held longer is
+        // the deadband / bootloader region; Hothouse already grabbed it at
+        // 2 s if applicable, so we do nothing in code.
+        if (held_ms < FS_LONG_PRESS_MS) {
+            CycleBank();
+        }
+    }
+
+    // ── Bank cycling ───────────────────────────────────────────
+
+    void CycleBank() {
+        state_.active_bank = (state_.active_bank + 1) % NUM_BANKS;
+
+        if (pedal_state_ == PedalState::SAVE_MODE) {
+            // Save target slot number unchanged; bank context shifts so
+            // the next FS2 long-press writes into the new bank's slot.
+            // LEDs unchanged — LED 1 still shows save target, LED 2 keeps
+            // save-mode pattern. (P.5 adds the burst on top.)
+            return;
+        }
+
+        if (state_.active_preset > 0) {
+            // Load same slot in the new bank — saved → loads + clears dirty,
+            // empty → manual-like (hardware read).
+            LoadPreset(state_.active_preset);
+            state_.dirty = false;
+        }
+        // Manual (active_preset == 0): edit buffer preserved, only the
+        // addressable slot space changes.
+
+        UpdateLed1Pattern();
+        UpdateLed2Mode();
     }
 
     // ── FS1 actions ─────────────────────────────────────────────
