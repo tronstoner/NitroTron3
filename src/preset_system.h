@@ -465,12 +465,15 @@ private:
     void LoadPreset(uint8_t preset_num) {
         if (preset_num < 1 || preset_num > NUM_PRESETS) return;
         if (IsPresetSaved(preset_num)) {
-            // Saved slot: load stored values. Slot's mode field is not wired
-            // in P.1 — current_mode_ stays whatever it was.
+            // Saved slot: load stored values (including mode). current_mode_
+            // follows the slot's stored mode → audio dispatch swaps with the
+            // preset, not with SW3.
             state_.edit_buffer =
                 state_.banks[state_.active_bank].presets[preset_num - 1];
+            current_mode_ = state_.edit_buffer.mode;
+            if (current_mode_ >= NUM_MODES) current_mode_ = 0;
         } else {
-            // Empty slot: act like manual — read hardware
+            // Empty slot: act like manual — read hardware (mode from SW3)
             current_mode_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
             state_.edit_buffer.mode = current_mode_;
             ReadHardwareIntoEditBuffer();
