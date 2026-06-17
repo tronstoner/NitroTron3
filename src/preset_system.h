@@ -57,6 +57,38 @@ struct StorageData {
 static constexpr uint32_t STORAGE_VERSION = 3;
 
 // ---------------------------------------------------------------------------
+// Legacy v2 storage layout (kept only for one-shot migration to v3).
+// Per-mode preset banks, no slot.mode field. Maps cleanly to the new
+// banks model: each mode's 8 slots become one of the first three banks,
+// with the slot's mode field stamped to its source mode (= SW3 position
+// the preset was saved under).
+// ---------------------------------------------------------------------------
+
+namespace legacy_v2 {
+
+struct ModePresetData {
+    float knobs[NUM_KNOBS];
+    uint8_t sw1;
+    uint8_t sw2;
+};
+
+struct ModeState {
+    ModePresetData edit_buffer;
+    ModePresetData presets[NUM_PRESETS];
+    bool preset_saved[NUM_PRESETS];
+    uint8_t active_preset;
+    bool dirty;
+};
+
+struct StorageData {
+    uint32_t version;
+    ModeState modes[NUM_MODES];
+    uint8_t last_mode;
+};
+
+}  // namespace legacy_v2
+
+// ---------------------------------------------------------------------------
 // LED blink pattern tables
 // ---------------------------------------------------------------------------
 
@@ -139,8 +171,18 @@ public:
 
         // Load from flash
         StorageData& data = storage_->GetSettings();
-        if (data.version != STORAGE_VERSION) {
-            // Version mismatch or corrupt — reset to factory
+        if (data.version == 2) {
+            // One-shot migration from per-mode banks → global+banks model.
+            // sizeof(StorageData) > sizeof(legacy_v2::StorageData), so the
+            // first sizeof(legacy_v2::StorageData) bytes of the buffer hold
+            // the old layout verbatim — safe to reinterpret-and-copy.
+            legacy_v2::StorageData old;
+            std::memcpy(&old, &data, sizeof(old));
+            MigrateV2ToV3(old, data);
+            data.version = STORAGE_VERSION;
+            storage_->Save();
+        } else if (data.version != STORAGE_VERSION) {
+            // Unknown / corrupt — reset to factory
             storage_->RestoreDefaults();
         }
 
@@ -274,6 +316,41 @@ private:
     uint32_t tick_ms_ = 10;
 
     // ── Helpers ─────────────────────────────────────────────────
+
+    // v2 → v3 migration. Each old mode m's 8 slots become bank m's 8 slots,
+    // with each slot's new mode field set to m (= SW3 position the preset
+    // was saved under). active_bank starts at the old last_mode so the
+    // pedal comes back exactly where it left off.
+    static void MigrateV2ToV3(const legacy_v2::StorageData& old, StorageData& out) {
+        out = MakeDefaults();
+        uint8_t last_mode = (old.last_mode < NUM_MODES) ? old.last_mode : 0;
+
+        // Carry each mode's preset bank into the corresponding new bank.
+        // Modes A/B/C map to banks 1/2/3 (indices 0/1/2). Banks beyond
+        // NUM_MODES remain at factory defaults from MakeDefaults().
+        for (int m = 0; m < NUM_MODES && m < MAX_BANKS; m++) {
+            for (int p = 0; p < NUM_PRESETS; p++) {
+                const legacy_v2::ModePresetData& src = old.modes[m].presets[p];
+                ModePresetData& dst = out.state.banks[m].presets[p];
+                for (int k = 0; k < NUM_KNOBS; k++) dst.knobs[k] = src.knobs[k];
+                dst.sw1 = src.sw1;
+                dst.sw2 = src.sw2;
+                dst.mode = static_cast<uint8_t>(m);
+                out.state.banks[m].preset_saved[p] = old.modes[m].preset_saved[p];
+            }
+        }
+
+        // Edit buffer, active preset and dirty come from the last active mode.
+        const legacy_v2::ModePresetData& src_eb = old.modes[last_mode].edit_buffer;
+        for (int k = 0; k < NUM_KNOBS; k++)
+            out.state.edit_buffer.knobs[k] = src_eb.knobs[k];
+        out.state.edit_buffer.sw1 = src_eb.sw1;
+        out.state.edit_buffer.sw2 = src_eb.sw2;
+        out.state.edit_buffer.mode = last_mode;
+        out.state.active_bank = last_mode;
+        out.state.active_preset = old.modes[last_mode].active_preset;
+        out.state.dirty = old.modes[last_mode].dirty;
+    }
 
     static StorageData MakeDefaults() {
         StorageData d = {};
