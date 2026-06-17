@@ -42,6 +42,10 @@ constexpr uint32_t LED_SAVE_CONFIRM_DUR_MS = 500; // total burst duration
 constexpr uint32_t LED_SAVE_CONFIRM_ON_MS  = 75;  // burst on time
 constexpr uint32_t LED_SAVE_CONFIRM_OFF_MS = 75;  // burst off time
 
+// Bank-switch burst (both LEDs in sync, Roman pattern with fast flicker)
+constexpr uint32_t LED_BANK_FLICKER_MS = 20;   // deterministic on/off chunk inside each pulse
+constexpr uint32_t LED_BANK_HOLD_MS    = 400;  // trailing pause before LEDs return to normal
+
 // Footswitch timing
 constexpr uint32_t FS_LONG_PRESS_MS    = 700;   // long press threshold
 // Bootloader: handled by hw.CheckResetToBootloader() at 2000 ms

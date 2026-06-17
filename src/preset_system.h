@@ -246,6 +246,17 @@ private:
     uint32_t led2_timer_ = 0;
     uint32_t led2_confirm_remaining_ = 0;
 
+    // Bank-switch burst (both LEDs together). Takes over both LEDs for the
+    // burst duration, then yields back via UpdateLed1Pattern / UpdateLed2Mode.
+    // Sized for worst-case Roman pattern up to MAX_BANKS (VI): one V (~48
+    // flicker steps) + one I (~8) + element gap + trailing = comfortably < 80.
+    static constexpr int MAX_BANK_BURST_STEPS = 80;
+    BlinkStep bank_burst_steps_[MAX_BANK_BURST_STEPS];
+    uint8_t bank_burst_total_ = 0;
+    uint8_t bank_burst_step_ = 0;
+    uint32_t bank_burst_timer_ = 0;
+    bool bank_burst_active_ = false;
+
     // Hardware tracking for dirty detection (detect movement, not difference from stored)
     float last_hw_knobs_[NUM_KNOBS];
     // Per-knob "live" flag. False after preset load / snapshot: edit buffer
@@ -403,22 +414,62 @@ private:
         if (pedal_state_ == PedalState::SAVE_MODE) {
             // Save target slot number unchanged; bank context shifts so
             // the next FS2 long-press writes into the new bank's slot.
-            // LEDs unchanged — LED 1 still shows save target, LED 2 keeps
-            // save-mode pattern. (P.5 adds the burst on top.)
-            return;
-        }
-
-        if (state_.active_preset > 0) {
+            // LEDs unchanged underneath the burst.
+        } else if (state_.active_preset > 0) {
             // Load same slot in the new bank — saved → loads + clears dirty,
             // empty → manual-like (hardware read).
             LoadPreset(state_.active_preset);
             state_.dirty = false;
         }
-        // Manual (active_preset == 0): edit buffer preserved, only the
-        // addressable slot space changes.
+        // Manual (active_preset == 0): edit buffer preserved.
 
-        UpdateLed1Pattern();
-        UpdateLed2Mode();
+        // Burst takes over both LEDs; UpdateLed1Pattern / UpdateLed2Mode
+        // will be called when the burst finishes (see TickLeds).
+        StartBankBurst(state_.active_bank + 1);
+    }
+
+    // ── Bank burst LED routine ─────────────────────────────────
+
+    void StartBankBurst(uint8_t bank_num) {
+        if (bank_num < 1 || bank_num > NUM_PRESETS) return;  // PRESET_PATTERNS holds I..VIII
+
+        // Build the timeline: each Roman symbol of the Roman pattern becomes
+        // a flicker burst of the same total duration as a normal pulse,
+        // filled with LED_BANK_FLICKER_MS on/off chunks.
+        const PresetPattern& roman = PRESET_PATTERNS[bank_num - 1];
+        uint8_t n = 0;
+        for (uint8_t i = 0; i < roman.num_steps && n < MAX_BANK_BURST_STEPS; i++) {
+            const BlinkStep& s = roman.steps[i];
+            if (s.led_on) {
+                // Fill this pulse with on/off flicker chunks.
+                uint32_t remaining = s.duration_ms;
+                bool on = true;
+                while (remaining > 0 && n < MAX_BANK_BURST_STEPS) {
+                    uint32_t chunk = (remaining < LED_BANK_FLICKER_MS)
+                                     ? remaining : LED_BANK_FLICKER_MS;
+                    bank_burst_steps_[n++] = {static_cast<uint16_t>(chunk), on};
+                    remaining -= chunk;
+                    on = !on;
+                }
+            } else if (s.duration_ms == LED_REPEAT_GAP_MS) {
+                // Final repeat gap → replace with our trailing hold.
+                if (n < MAX_BANK_BURST_STEPS) {
+                    bank_burst_steps_[n++] = {static_cast<uint16_t>(LED_BANK_HOLD_MS), false};
+                }
+            } else {
+                // Element gap between symbols — pass through.
+                bank_burst_steps_[n++] = s;
+            }
+        }
+        bank_burst_total_ = n;
+        bank_burst_step_ = 0;
+        bank_burst_timer_ = bank_burst_steps_[0].duration_ms;
+        bool on = bank_burst_steps_[0].led_on;
+        led1_->Set(on ? 1.f : 0.f);
+        led2_->Set(on ? 1.f : 0.f);
+        led1_->Update();
+        led2_->Update();
+        bank_burst_active_ = true;
     }
 
     // ── FS1 actions ─────────────────────────────────────────────
@@ -680,7 +731,9 @@ private:
     // ── LED 2: state mode ───────────────────────────────────────
 
     void UpdateLed2Mode() {
-        if (bypass_) {
+        if (pedal_state_ == PedalState::SAVE_MODE) {
+            SetLed2(Led2Mode::SAVE_MODE);
+        } else if (bypass_) {
             SetLed2(Led2Mode::OFF);
         } else if (state_.dirty && state_.active_preset > 0) {
             SetLed2(Led2Mode::DIRTY);
@@ -716,6 +769,30 @@ private:
     // ── LED tick (called every main loop iteration) ─────────────
 
     void TickLeds(uint32_t elapsed_ms) {
+        // Bank burst owns both LEDs for its duration. Other LED state
+        // machines are quiescent until the burst finishes.
+        if (bank_burst_active_) {
+            if (bank_burst_timer_ <= elapsed_ms) {
+                bank_burst_step_++;
+                if (bank_burst_step_ >= bank_burst_total_) {
+                    bank_burst_active_ = false;
+                    // Yield LEDs back to their owners.
+                    UpdateLed1Pattern();
+                    UpdateLed2Mode();
+                } else {
+                    bank_burst_timer_ = bank_burst_steps_[bank_burst_step_].duration_ms;
+                    bool on = bank_burst_steps_[bank_burst_step_].led_on;
+                    led1_->Set(on ? 1.f : 0.f);
+                    led2_->Set(on ? 1.f : 0.f);
+                }
+            } else {
+                bank_burst_timer_ -= elapsed_ms;
+            }
+            led1_->Update();
+            led2_->Update();
+            return;
+        }
+
         // LED 1: pattern
         if (led1_pattern_ >= 0) {
             if (led1_timer_ <= elapsed_ms) {
