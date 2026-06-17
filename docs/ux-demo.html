@@ -572,6 +572,7 @@
       <div class="state-display" id="stateDisplay">
         <div class="row"><span class="label">Pedal state:</span><span class="value" id="sdState">NORMAL</span></div>
         <div class="row"><span class="label">Mode:</span><span class="value" id="sdMode">A (Bordun)</span></div>
+        <div class="row"><span class="label">Bank:</span><span class="value" id="sdBank">1 / 3</span></div>
         <div class="row"><span class="label">Preset:</span><span class="value" id="sdPreset">Manual</span></div>
         <div class="row"><span class="label">Dirty:</span><span class="value" id="sdDirty">No</span></div>
         <div class="row"><span class="label">Bypass:</span><span class="value" id="sdBypass">Off (active)</span></div>
@@ -595,7 +596,7 @@
         <kbd>Click</kbd> toggles to cycle UP/MID/DOWN<br>
         <kbd>Click</kbd> footswitch for short press<br>
         <kbd>Hold</kbd> footswitch for long press (hold until border turns red)<br>
-        Hold <kbd>FS1+FS2</kbd> 2s for bootloader
+        <kbd>Tap</kbd> 1+2 to cycle banks · <kbd>Hold</kbd> 1+2 for 2 s for bootloader
       </div>
     </div>
 
@@ -633,7 +634,7 @@
           </div>
           <div class="const-row">
             <label>Repeat gap</label>
-            <input type="number" id="cRepeatGap" value="600" step="50" min="100" max="2000">
+            <input type="number" id="cRepeatGap" value="700" step="50" min="100" max="2000">
             <span class="unit">ms</span>
           </div>
         </div>
@@ -686,6 +687,20 @@
         </div>
 
         <div class="const-group">
+          <div class="const-group-title">Bank burst (both LEDs, on bank switch)</div>
+          <div class="const-row">
+            <label>Flicker chunk</label>
+            <input type="number" id="cBankFlicker" value="20" step="5" min="10" max="80">
+            <span class="unit">ms</span>
+          </div>
+          <div class="const-row">
+            <label>Trailing pause</label>
+            <input type="number" id="cBankHold" value="400" step="50" min="100" max="2000">
+            <span class="unit">ms</span>
+          </div>
+        </div>
+
+        <div class="const-group">
           <div class="const-group-title">Footswitch timing</div>
           <div class="const-row">
             <label>Long press threshold</label>
@@ -715,52 +730,60 @@
     // ── State ───────────────────────────────────────────────────
     const NUM_MODES = 3;
     const NUM_PRESETS = 8;
+    const NUM_BANKS = 3;       // active bank count (designed for up to MAX_BANKS)
+    const MAX_BANKS = 6;       // upper bound supported by the Roman LED scheme (I..VI)
     const MODE_NAMES = ['A (Bordun)', 'B (Sprawl)', 'C (Schism)'];
     const SW3_LABELS = ['Bordun', 'Sprawl', 'Schism'];
     const SW_LABELS = [['UP', 'MID', 'DOWN'], ['UP', 'MID', 'DOWN'], SW3_LABELS];
 
     let state = {
-      mode: 0,            // 0-2, from SW3
-      preset: 0,          // 0 = manual, 1-5 = preset
+      mode: 0,            // 0-2, current audio mode (driven by SW3 in manual; by preset's stored mode when a preset is active)
+      bank: 0,            // 0-based active bank
+      preset: 0,          // 0 = manual, 1-8 = preset
       dirty: false,
       bypass: false,
       saveMode: false,
-      saveTarget: 0,      // 1-5 in save mode
+      saveTarget: 0,      // 1-8 in save mode (slot number; bank context = state.bank)
       bootloaderCountdown: false,
     };
 
-    // Per-mode storage: edit buffers and preset slots
-    let storage = [];
-    for (let m = 0; m < NUM_MODES; m++) {
-      let modeData = {
-        editBuffer: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
-        editSwitches: [0, 0],  // SW1, SW2 positions in edit buffer
-        activePreset: 0,  // 0 = manual, 1-8 = preset (persisted per mode)
-        dirty: false,      // persisted per mode
-        presets: [],
-        presetSwitches: []
-      };
+    // Single global edit buffer. Per the global preset model, mode is part of
+    // the edit buffer (no per-mode buffers, no hidden state outside presets).
+    let editBuffer = {
+      mode: 0,
+      knobs: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+      switches: [0, 0],
+    };
+
+    // Bank storage: MAX_BANKS banks × NUM_PRESETS slots. Only first NUM_BANKS are reachable.
+    let banks = [];
+    for (let b = 0; b < MAX_BANKS; b++) {
+      let bank = { presets: [], saved: [] };
       for (let p = 0; p < NUM_PRESETS; p++) {
-        modeData.presets.push([
-          Math.random() * 0.8 + 0.1,
-          Math.random() * 0.8 + 0.1,
-          Math.random() * 0.8 + 0.1,
-          Math.random() * 0.8 + 0.1,
-          Math.random() * 0.8 + 0.1,
-          Math.random() * 0.8 + 0.1,
-        ]);
-        modeData.presetSwitches.push([
-          Math.floor(Math.random() * 3),
-          Math.floor(Math.random() * 3),
-        ]);
+        bank.presets.push({
+          mode: Math.floor(Math.random() * NUM_MODES),
+          knobs: [
+            Math.random() * 0.8 + 0.1,
+            Math.random() * 0.8 + 0.1,
+            Math.random() * 0.8 + 0.1,
+            Math.random() * 0.8 + 0.1,
+            Math.random() * 0.8 + 0.1,
+            Math.random() * 0.8 + 0.1,
+          ],
+          switches: [
+            Math.floor(Math.random() * 3),
+            Math.floor(Math.random() * 3),
+          ],
+        });
+        bank.saved.push(b < NUM_BANKS);  // populate reachable banks; higher banks empty
       }
-      storage.push(modeData);
+      banks.push(bank);
     }
 
     let hwKnobs = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];    // physical knob positions (hardware)
-    let knobValues = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];  // edit buffer values (what DSP uses)
+    let knobValues = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];  // mirror of editBuffer.knobs for UI rendering
     let switchPositions = [0, 0, 0]; // 0=UP, 1=MID, 2=DOWN (hardware)
-    let ebSwitches = [0, 0];         // SW1, SW2 edit buffer positions
+    let ebSwitches = [0, 0];         // mirror of editBuffer.switches for UI rendering
 
     // ── LED state ───────────────────────────────────────────────
     let led1On = false;
@@ -799,6 +822,7 @@
       if (state.bootloaderCountdown) stateStr = 'BOOTLOADER...';
       $('sdState').textContent = stateStr;
       $('sdMode').textContent = MODE_NAMES[state.mode];
+      $('sdBank').textContent = `${state.bank + 1} / ${NUM_BANKS}`;
       $('sdPreset').textContent = state.preset === 0 ? 'Manual' : `Preset ${state.preset}`;
       $('sdDirty').textContent = state.dirty ? 'Yes' : 'No';
       $('sdBypass').textContent = state.bypass ? 'On (bypassed)' : 'Off (active)';
@@ -1035,14 +1059,13 @@
     document.addEventListener('mouseup', () => { activeKnob = null; });
 
     function onKnobChanged(idx) {
-      // Hardware knob always overrides that parameter in the edit buffer
+      // Hardware knob always overrides that parameter in the global edit buffer
       knobValues[idx] = hwKnobs[idx];
-      storage[state.mode].editBuffer[idx] = hwKnobs[idx];
+      editBuffer.knobs[idx] = hwKnobs[idx];
 
       // In preset mode, mark dirty
       if (state.preset > 0 && !state.dirty && !state.saveMode) {
         state.dirty = true;
-        storage[state.mode].dirty = true;
         log(`Preset ${state.preset} edited (dirty)`, 'warn');
         startLed2Normal();
         updateDisplay();
@@ -1069,17 +1092,18 @@
         switchPositions[idx] = pos;
 
         if (idx === 2) {
-          // SW3: mode switch (always hardware, no EB)
+          // SW3: mode switch. Under the global model SW3 is a soft control —
+          // it updates the edit buffer's mode (and marks the preset dirty if
+          // one is active). Treated uniformly with SW1/SW2.
           document.getElementById(`sv${idx}`).textContent = SW_LABELS[idx][pos];
-          onModeChanged(pos);
+          onSw3Changed(pos);
         } else {
           // SW1/SW2: hardware change → also update edit buffer
           ebSwitches[idx] = pos;
-          storage[state.mode].editSwitches[idx] = pos;
+          editBuffer.switches[idx] = pos;
 
           if (state.preset > 0 && !state.dirty && !state.saveMode) {
             state.dirty = true;
-            storage[state.mode].dirty = true;
             log(`Preset ${state.preset} edited (dirty)`, 'warn');
             startLed2Normal();
           }
@@ -1091,31 +1115,131 @@
       });
     });
 
-    function onModeChanged(newMode) {
-      // Save full state of current mode
-      storage[state.mode].editBuffer = [...knobValues];
-      storage[state.mode].editSwitches = [...ebSwitches];
-      storage[state.mode].activePreset = state.preset;
-      storage[state.mode].dirty = state.dirty;
-
-      // Cancel save mode on switch
-      state.saveMode = false;
-
-      // Restore full state of new mode
+    // SW3 under the global preset model. The hardware switch updates the
+    // edit buffer's stored mode. While on a preset, that's an edit → dirty.
+    // No per-mode buffers, no saved-state restoration on mode change.
+    function onSw3Changed(newMode) {
       state.mode = newMode;
-      state.preset = storage[newMode].activePreset;
-      state.dirty = storage[newMode].dirty;
-
-      knobValues = [...storage[newMode].editBuffer];
-      ebSwitches = [...storage[newMode].editSwitches];
-      for (let i = 0; i < 6; i++) updateKnobVisual(i);
-      updateSwitchDisplays();
-
-      startPresetBlink(state.preset);
+      editBuffer.mode = newMode;
+      if (state.preset > 0 && !state.dirty && !state.saveMode) {
+        state.dirty = true;
+        log(`Preset ${state.preset} edited (dirty)`, 'warn');
+      }
       startLed2Normal();
       updateDisplay();
-      const presetStr = state.preset === 0 ? 'Manual' : `Preset ${state.preset}${state.dirty ? ' (dirty)' : ''}`;
-      log(`Mode → ${MODE_NAMES[newMode]}, restored ${presetStr}`, 'state');
+      log(`Mode → ${MODE_NAMES[newMode]}`, 'state');
+    }
+
+    // Load a preset slot into the global edit buffer.
+    // Saved slot → values jump and dirty clears.
+    // Empty slot → manual-like behaviour (hardware knobs flow into edit buffer).
+    function loadPreset(bankIdx, slot) {
+      const slotData = banks[bankIdx].presets[slot - 1];
+      const isSaved = banks[bankIdx].saved[slot - 1];
+      if (isSaved) {
+        editBuffer.mode = slotData.mode;
+        editBuffer.knobs = [...slotData.knobs];
+        editBuffer.switches = [...slotData.switches];
+        state.mode = slotData.mode;
+        knobValues = [...editBuffer.knobs];
+        ebSwitches = [...editBuffer.switches];
+      } else {
+        // Empty slot: read hardware into edit buffer
+        editBuffer.mode = switchPositions[2];
+        editBuffer.knobs = [...hwKnobs];
+        editBuffer.switches = [switchPositions[0], switchPositions[1]];
+        state.mode = switchPositions[2];
+        knobValues = [...editBuffer.knobs];
+        ebSwitches = [...editBuffer.switches];
+      }
+      state.dirty = false;
+      for (let i = 0; i < 6; i++) updateKnobVisual(i);
+      updateSwitchDisplays();
+    }
+
+    // Both-FS short tap → cycle to next bank.
+    // Manual: bank changes, edit buffer untouched, active_preset stays 0.
+    // On a preset: load same slot in the new bank (saved → loads & clears dirty;
+    //              empty → empty-slot manual-like state, LED keeps slot number).
+    // Save mode: save_target unchanged, but now points at the new bank's slot.
+    function onBankCycle() {
+      const prevBank = state.bank;
+      state.bank = (state.bank + 1) % NUM_BANKS;
+      const newBank = state.bank;
+
+      if (state.saveMode) {
+        log(`Save target → Bank ${newBank + 1} Preset ${state.saveTarget}`, 'action');
+      } else if (state.preset > 0) {
+        loadPreset(newBank, state.preset);
+        log(`Bank ${prevBank + 1} → ${newBank + 1}, loaded Preset ${state.preset}${banks[newBank].saved[state.preset - 1] ? '' : ' (empty)'}`, 'action');
+      } else {
+        log(`Bank ${prevBank + 1} → ${newBank + 1} (manual, edit buffer preserved)`, 'action');
+      }
+
+      startBankBurst(newBank + 1);
+      // After the burst, normal LED state is restored by startBankBurst's
+      // completion callback. Don't restart normal LEDs here.
+      updateDisplay();
+    }
+
+    // Bank-switch confirmation burst: both LEDs flash the Roman pattern of the
+    // new bank number, with each I/V symbol filled by deterministic fast
+    // flicker (cBankFlicker on/off). Plays once, then restores normal LED state.
+    function startBankBurst(bankNum) {
+      stopLed1Pattern();
+      stopLed2Pattern();
+      led1Generation++;
+      const gen = led1Generation;
+
+      const shortOn = C('cShortOn');
+      const longOn = C('cLongOn');
+      const elemGap = C('cElemGap');
+      const flickerChunk = C('cBankFlicker');
+      const trailingHold = C('cBankHold');
+      const symbols = ROMAN[bankNum];
+
+      // Build timeline: each Roman symbol becomes a flicker burst of the same
+      // total duration as a normal pulse, filled with on/off chunks.
+      const steps = [];
+      for (let i = 0; i < symbols.length; i++) {
+        const dur = (symbols[i] === 'V') ? longOn : shortOn;
+        let elapsed = 0;
+        let on = true;
+        while (elapsed < dur) {
+          const chunk = Math.min(flickerChunk, dur - elapsed);
+          steps.push([chunk, on]);
+          elapsed += chunk;
+          on = !on;
+        }
+        if (i < symbols.length - 1) steps.push([elemGap, false]);
+      }
+      steps.push([trailingHold, false]);
+
+      let idx = 0;
+      function tick() {
+        if (gen !== led1Generation) return;
+        if (idx >= steps.length) {
+          // Burst complete — restore normal LED state.
+          setLed(1, false);
+          setLed(2, false);
+          if (state.saveMode) {
+            startLed2SaveMode();
+            startPresetBlink(state.saveTarget);
+          } else {
+            startPresetBlink(state.preset);
+            startLed2Normal();
+          }
+          return;
+        }
+        const [dur, on] = steps[idx];
+        setLed(1, on);
+        setLed(2, on);
+        led1Timer = setTimeout(() => { idx++; tick(); }, dur);
+      }
+      const romanStr = symbols.join('');
+      document.getElementById('sdLed1').textContent = `Bank ${bankNum} burst (${romanStr})`;
+      document.getElementById('sdLed2').textContent = `Bank ${bankNum} burst (${romanStr})`;
+      tick();
     }
 
     // ── Footswitch handling ─────────────────────────────────────
@@ -1215,19 +1339,27 @@
 
     let fs2LongTimer = null;
 
-    // FS1+FS2 combo button
+    // FS1+FS2 combo button.
+    // Release before LongPress threshold → bank cycle.
+    // Release between LongPress and BootHold → ignored (deadband).
+    // Held to BootHold → DFU bootloader.
     const fsBothEl = document.getElementById('fsBoth');
     let fsBothTimer = null;
+    let fsBothDownTime = null;
+    let fsBothBootFired = false;
 
     fsBothEl.addEventListener('mousedown', e => {
       e.preventDefault();
       fsBothEl.classList.add('held');
-      fs1DownTime = fs2DownTime = bothDownTime = Date.now();
+      fsBothDownTime = Date.now();
+      fsBothBootFired = false;
+      fs1DownTime = fs2DownTime = bothDownTime = fsBothDownTime;
       state.bootloaderCountdown = true;
       updateDisplay();
-      log('Both footswitches held — bootloader in ' + (C('cBootHold') / 1000) + 's...', 'warn');
+      log('Both footswitches held — short = bank cycle, ' + (C('cBootHold') / 1000) + 's = bootloader', 'warn');
 
       fsBothTimer = setTimeout(() => {
+        fsBothBootFired = true;
         log('BOOTLOADER MODE ENTERED', 'warn');
         state.bootloaderCountdown = false;
         let count = 0;
@@ -1245,33 +1377,54 @@
         updateDisplay();
       }, C('cBootHold'));
 
-      // Release anywhere cancels/completes — not just on the button
       const onUp = () => {
         document.removeEventListener('mouseup', onUp);
         fsBothEl.classList.remove('held');
+        const heldFor = (fsBothDownTime !== null) ? (Date.now() - fsBothDownTime) : 0;
         fs1DownTime = fs2DownTime = null;
         bothDownTime = null;
+        fsBothDownTime = null;
         state.bootloaderCountdown = false;
         if (fsBothTimer) { clearTimeout(fsBothTimer); fsBothTimer = null; }
         updateDisplay();
+
+        if (fsBothBootFired) return;  // already in bootloader, do nothing
+        const longPress = C('cLongPress');
+        if (heldFor < longPress) {
+          onBankCycle();  // short tap → bank cycle
+        } else {
+          log(`Both released after ${heldFor} ms — deadband, no action`, 'state');
+        }
       };
       document.addEventListener('mouseup', onUp);
     });
 
-    // Bootloader: both held
+    // Both-FS combined gesture detection (real footswitches).
+    // While both are down: individual FS1/FS2 short and long presses are
+    // suppressed (this gesture owns the interaction).
+    //   Released < longPress threshold → bank cycle.
+    //   Held >= bootHold → DFU bootloader.
+    //   Released between longPress and bootHold → deadband, no action.
+    let bothBootFired = false;
+
     function isCheckingBoot() { return bothDownTime !== null; }
+    function bothActive() { return bothDownTime !== null; }
 
     function checkBothDown() {
-      if (fs1DownTime !== null && fs2DownTime !== null) {
+      if (fs1DownTime !== null && fs2DownTime !== null && bothDownTime === null) {
         bothDownTime = Date.now();
+        bothBootFired = false;
+        // Cancel any pending individual long-press timers — the combo owns this.
+        clearTimeout(fs1LongTimer);
+        clearTimeout(fs2LongTimer);
         state.bootloaderCountdown = true;
         updateDisplay();
-        log('Both footswitches held — bootloader in ' + (C('cBootHold') / 1000) + 's...', 'warn');
+        log('Both footswitches held — short = bank cycle, ' + (C('cBootHold') / 1000) + 's = bootloader', 'warn');
 
         bootloaderTimer = setTimeout(() => {
+          bothBootFired = true;
           log('BOOTLOADER MODE ENTERED', 'warn');
           state.bootloaderCountdown = false;
-          // Flash both LEDs
           let count = 0;
           const flash = setInterval(() => {
             setLed(1, count % 2 === 0);
@@ -1289,26 +1442,44 @@
       }
     }
 
+    // Called from either FS mouseup when the combo was active. Evaluates the
+    // combo's hold duration and fires bank cycle or no-op, then arms the
+    // releasing FS to *not* fire its individual short press.
     function cancelBothDown() {
-      if (bothDownTime !== null) {
-        bothDownTime = null;
-        state.bootloaderCountdown = false;
-        if (bootloaderTimer) { clearTimeout(bootloaderTimer); bootloaderTimer = null; }
-        updateDisplay();
+      if (bothDownTime === null) return;
+      const heldFor = Date.now() - bothDownTime;
+      bothDownTime = null;
+      state.bootloaderCountdown = false;
+      if (bootloaderTimer) { clearTimeout(bootloaderTimer); bootloaderTimer = null; }
+      updateDisplay();
+
+      if (bothBootFired) return;
+      const longPress = C('cLongPress');
+      if (heldFor < longPress) {
+        onBankCycle();
+      } else {
+        log(`Both released after ${heldFor} ms — deadband, no action`, 'state');
       }
+      // Suppress whatever individual FS short press is about to fire — the
+      // combo already handled this gesture. Both FS down-times are still set;
+      // mark them as "long-fired" so the mouseup handler bails out.
+      fs1LongFired = true;
+      fs2LongFired = true;
     }
 
     // ── FS1 actions ─────────────────────────────────────────────
     function onFs1LongPress() {
       if (state.saveMode) return; // ignore in save mode
 
-      // Jump straight to manual mode — read hardware knobs + switches
+      // Jump straight to manual mode — read hardware knobs + switches (incl. SW3)
       state.preset = 0;
       state.dirty = false;
       knobValues = [...hwKnobs];
-      storage[state.mode].editBuffer = [...hwKnobs];
+      editBuffer.knobs = [...hwKnobs];
       ebSwitches = [switchPositions[0], switchPositions[1]];
-      storage[state.mode].editSwitches = [...ebSwitches];
+      editBuffer.switches = [...ebSwitches];
+      editBuffer.mode = switchPositions[2];
+      state.mode = switchPositions[2];
       for (let i = 0; i < 6; i++) updateKnobVisual(i);
       updateSwitchDisplays();
 
@@ -1320,56 +1491,42 @@
 
     function onFs1ShortPress() {
       if (state.saveMode) {
-        // Cycle target slot
+        // Cycle target slot in the current bank
         state.saveTarget = (state.saveTarget % NUM_PRESETS) + 1;
         startPresetBlink(state.saveTarget);
-
-        log(`Save target → Preset ${state.saveTarget}`, 'action');
+        log(`Save target → Bank ${state.bank + 1} Preset ${state.saveTarget}`, 'action');
         updateDisplay();
         return;
       }
 
       if (state.dirty && state.preset > 0) {
-        // Reload current preset (knobs + switches)
-        const presetData = storage[state.mode].presets[state.preset - 1];
-        knobValues = [...presetData];
-        storage[state.mode].editBuffer = [...presetData];
-        const presetSw = storage[state.mode].presetSwitches[state.preset - 1];
-        ebSwitches = [...presetSw];
-        storage[state.mode].editSwitches = [...presetSw];
-        for (let i = 0; i < 6; i++) updateKnobVisual(i);
-        updateSwitchDisplays();
-        state.dirty = false;
+        // Reload current preset (revert)
+        loadPreset(state.bank, state.preset);
         log(`Preset ${state.preset} reloaded (reverted)`, 'action');
         startLed2Normal();
         updateDisplay();
         return;
       }
 
-      // Cycle: Manual → 1 → 2 → 3 → 4 → 5 → Manual
+      // Cycle: Manual → 1 → 2 → … → 8 → Manual (within current bank)
       state.preset = (state.preset + 1) % (NUM_PRESETS + 1);
       state.dirty = false;
 
       if (state.preset === 0) {
-        // Manual mode: WYSIWYG — read hardware knob + switch positions into edit buffer
+        // Manual mode: WYSIWYG — read hardware (knobs + all three switches)
         knobValues = [...hwKnobs];
-        storage[state.mode].editBuffer = [...hwKnobs];
+        editBuffer.knobs = [...hwKnobs];
         ebSwitches = [switchPositions[0], switchPositions[1]];
-        storage[state.mode].editSwitches = [...ebSwitches];
+        editBuffer.switches = [...ebSwitches];
+        editBuffer.mode = switchPositions[2];
+        state.mode = switchPositions[2];
         for (let i = 0; i < 6; i++) updateKnobVisual(i);
         updateSwitchDisplays();
         log('→ Manual mode (reading hardware)', 'action');
       } else {
-        // Load preset (knobs + switches)
-        const presetData = storage[state.mode].presets[state.preset - 1];
-        knobValues = [...presetData];
-        storage[state.mode].editBuffer = [...presetData];
-        const presetSw = storage[state.mode].presetSwitches[state.preset - 1];
-        ebSwitches = [...presetSw];
-        storage[state.mode].editSwitches = [...presetSw];
-        for (let i = 0; i < 6; i++) updateKnobVisual(i);
-        updateSwitchDisplays();
-        log(`→ Preset ${state.preset} loaded`, 'action');
+        loadPreset(state.bank, state.preset);
+        const tag = banks[state.bank].saved[state.preset - 1] ? '' : ' (empty)';
+        log(`→ Bank ${state.bank + 1} Preset ${state.preset} loaded${tag}`, 'action');
       }
 
       startPresetBlink(state.preset);
@@ -1395,11 +1552,16 @@
 
     function onFs2LongPress() {
       if (state.saveMode) {
-        // Confirm save
+        // Confirm save — writes edit buffer (including stored mode) into the
+        // active bank's selected slot.
         const slot = state.saveTarget;
-        storage[state.mode].presets[slot - 1] = [...storage[state.mode].editBuffer];
-        storage[state.mode].presetSwitches[slot - 1] = [...storage[state.mode].editSwitches];
-        log(`SAVED to Mode ${MODE_NAMES[state.mode]} Preset ${slot}!`, 'action');
+        banks[state.bank].presets[slot - 1] = {
+          mode: editBuffer.mode,
+          knobs: [...editBuffer.knobs],
+          switches: [...editBuffer.switches],
+        };
+        banks[state.bank].saved[slot - 1] = true;
+        log(`SAVED Bank ${state.bank + 1} Preset ${slot} (mode ${MODE_NAMES[editBuffer.mode]})`, 'action');
 
         state.saveMode = false;
         state.preset = slot;

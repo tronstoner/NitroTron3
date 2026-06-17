@@ -27,7 +27,7 @@ constexpr float ENV_FOLD_MOD     = 0.250f;   // envelope → wavefold amount (×
 constexpr uint32_t LED_SHORT_ON_MS     = 150;   // I symbol on duration
 constexpr uint32_t LED_LONG_ON_MS      = 950;   // V symbol on duration
 constexpr uint32_t LED_ELEM_GAP_MS     = 200;   // gap between symbols
-constexpr uint32_t LED_REPEAT_GAP_MS   = 600;   // gap before pattern repeats
+constexpr uint32_t LED_REPEAT_GAP_MS   = 700;   // gap before pattern repeats
 
 // LED 2: dirty indicator
 constexpr uint32_t LED_DIRTY_ON_MS     = 50;    // dirty flash on time
