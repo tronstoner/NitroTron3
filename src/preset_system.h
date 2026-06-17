@@ -16,33 +16,45 @@ using daisy::System;
 static constexpr int NUM_MODES   = 3;
 static constexpr int NUM_PRESETS = 8;
 static constexpr int NUM_KNOBS   = 6;
+static constexpr int NUM_BANKS   = 3;   // user-facing bank count
+static constexpr int MAX_BANKS   = 6;   // storage cap (Roman LED scheme caps at VI)
 
+// A preset / edit buffer record. Carries mode alongside knobs+switches so
+// any slot can recall any mode in one footswitch press.
 struct ModePresetData {
     float knobs[NUM_KNOBS];
-    uint8_t sw1;  // Switch 1 position (0/1/2)
-    uint8_t sw2;  // Switch 2 position (0/1/2)
+    uint8_t sw1;   // Switch 1 position (0/1/2)
+    uint8_t sw2;   // Switch 2 position (0/1/2)
+    uint8_t mode;  // 0=A, 1=B, 2=C — the sw3 value this slot belongs to
 };
 
-struct ModeState {
-    ModePresetData edit_buffer;
+struct Bank {
     ModePresetData presets[NUM_PRESETS];
-    bool preset_saved[NUM_PRESETS];  // true if slot has been saved to
-    uint8_t active_preset;  // 0 = manual, 1–8 = preset
+    bool preset_saved[NUM_PRESETS];
+};
+
+// Single global state: one edit buffer shared across modes; banks hold the
+// addressable preset space (only first NUM_BANKS are reachable via the
+// both-FS gesture, storage holds MAX_BANKS so raising the count later is a
+// recompile only).
+struct GlobalState {
+    ModePresetData edit_buffer;
+    Bank banks[MAX_BANKS];
+    uint8_t active_bank;     // 0 .. NUM_BANKS-1
+    uint8_t active_preset;   // 0 = manual, 1..NUM_PRESETS = preset
     bool dirty;
 };
 
 struct StorageData {
     uint32_t version;
-    ModeState modes[NUM_MODES];
-    uint8_t last_mode;
+    GlobalState state;
 
     bool operator!=(const StorageData& o) const {
-        // Compare raw bytes — all fields are POD
         return memcmp(this, &o, sizeof(StorageData)) != 0;
     }
 };
 
-static constexpr uint32_t STORAGE_VERSION = 2;
+static constexpr uint32_t STORAGE_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // LED blink pattern tables
@@ -132,29 +144,26 @@ public:
             storage_->RestoreDefaults();
         }
 
-        // Restore state
+        // Copy saved state into RAM
         StorageData& saved = storage_->GetSettings();
-        current_mode_ = saved.last_mode;
+        state_ = saved.state;
+        if (state_.active_bank >= NUM_BANKS) state_.active_bank = 0;
+
+        // current_mode_ derives from edit_buffer.mode (single source of truth
+        // for "what mode is loaded"). Slot's mode field is not yet wired in P.1.
+        current_mode_ = state_.edit_buffer.mode;
         if (current_mode_ >= NUM_MODES) current_mode_ = 0;
 
-        // Copy saved mode states into RAM
-        for (int m = 0; m < NUM_MODES; m++) {
-            mode_state_[m] = saved.modes[m];
-        }
-
-        // Check if factory boot (all presets zeroed = never saved)
+        // Check if factory boot (no preset has been saved in any bank)
         bool factory = (storage_->GetState() ==
                         daisy::PersistentStorage<StorageData>::State::FACTORY);
         if (factory) {
-            // Read current hardware into all mode edit buffers
+            // Read current hardware into the edit buffer (mode from SW3)
+            current_mode_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
+            state_.edit_buffer.mode = current_mode_;
             ReadHardwareIntoEditBuffer();
-            for (int m = 1; m < NUM_MODES; m++) {
-                mode_state_[m].edit_buffer = mode_state_[0].edit_buffer;
-            }
         }
 
-        active_preset_ = mode_state_[current_mode_].active_preset;
-        dirty_         = mode_state_[current_mode_].dirty;
         bypass_        = false;
         pedal_state_   = PedalState::NORMAL;
 
@@ -193,7 +202,7 @@ public:
 
     // Read current edit buffer for audio callback
     const ModePresetData& GetEditBuffer() const {
-        return mode_state_[current_mode_].edit_buffer;
+        return state_.edit_buffer;
     }
 
     bool IsBypassed() const { return bypass_; }
@@ -205,11 +214,9 @@ private:
     Led* led2_ = nullptr;
     daisy::PersistentStorage<StorageData>* storage_ = nullptr;
 
-    // Mode state (RAM working copy)
-    ModeState mode_state_[NUM_MODES];
+    // Global state (RAM working copy)
+    GlobalState state_ = {};
     uint8_t current_mode_ = 0;
-    uint8_t active_preset_ = 0;  // mirrors mode_state_[current_mode_].active_preset
-    bool dirty_ = false;
     bool bypass_ = false;
 
     PedalState pedal_state_ = PedalState::NORMAL;
@@ -255,33 +262,36 @@ private:
     static StorageData MakeDefaults() {
         StorageData d = {};
         d.version = STORAGE_VERSION;
-        d.last_mode = 0;
-        for (int m = 0; m < NUM_MODES; m++) {
-            for (int k = 0; k < NUM_KNOBS; k++)
-                d.modes[m].edit_buffer.knobs[k] = 0.5f;
-            d.modes[m].edit_buffer.sw1 = 0;
-            d.modes[m].edit_buffer.sw2 = 0;
-            d.modes[m].active_preset = 0;
-            d.modes[m].dirty = false;
+        // Default edit buffer
+        for (int k = 0; k < NUM_KNOBS; k++) d.state.edit_buffer.knobs[k] = 0.5f;
+        d.state.edit_buffer.sw1 = 0;
+        d.state.edit_buffer.sw2 = 0;
+        d.state.edit_buffer.mode = 0;
+        d.state.active_bank = 0;
+        d.state.active_preset = 0;
+        d.state.dirty = false;
+        // Empty preset slots in every bank
+        for (int b = 0; b < MAX_BANKS; b++) {
             for (int p = 0; p < NUM_PRESETS; p++) {
                 for (int k = 0; k < NUM_KNOBS; k++)
-                    d.modes[m].presets[p].knobs[k] = 0.5f;
-                d.modes[m].presets[p].sw1 = 0;
-                d.modes[m].presets[p].sw2 = 0;
-                d.modes[m].preset_saved[p] = false;
+                    d.state.banks[b].presets[p].knobs[k] = 0.5f;
+                d.state.banks[b].presets[p].sw1 = 0;
+                d.state.banks[b].presets[p].sw2 = 0;
+                d.state.banks[b].presets[p].mode = 0;
+                d.state.banks[b].preset_saved[p] = false;
             }
         }
         return d;
     }
 
     void ReadHardwareIntoEditBuffer() {
-        ModePresetData& eb = mode_state_[current_mode_].edit_buffer;
         for (int i = 0; i < NUM_KNOBS; i++) {
-            eb.knobs[i] = hw_->GetKnobValue(
+            state_.edit_buffer.knobs[i] = hw_->GetKnobValue(
                 static_cast<Hothouse::Knob>(i));
         }
-        eb.sw1 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_1);
-        eb.sw2 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_2);
+        state_.edit_buffer.sw1 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_1);
+        state_.edit_buffer.sw2 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_2);
+        // mode field left to caller — typically current_mode_ / SW3
     }
 
     uint8_t ReadSwitchPosition(Hothouse::Toggleswitch sw) {
@@ -354,27 +364,26 @@ private:
             return;
         }
 
-        if (dirty_ && active_preset_ > 0 && IsPresetSaved(active_preset_)) {
+        if (state_.dirty && state_.active_preset > 0 && IsPresetSaved(state_.active_preset)) {
             // Reload current saved preset (revert)
-            LoadPreset(active_preset_);
-            dirty_ = false;
-            mode_state_[current_mode_].dirty = false;
+            LoadPreset(state_.active_preset);
+            state_.dirty = false;
             UpdateLed2Mode();
             return;
         }
 
         // Cycle: Manual→1→2→…→8→Manual
-        active_preset_ = (active_preset_ + 1) % (NUM_PRESETS + 1);
-        mode_state_[current_mode_].active_preset = active_preset_;
-        dirty_ = false;
-        mode_state_[current_mode_].dirty = false;
+        state_.active_preset = (state_.active_preset + 1) % (NUM_PRESETS + 1);
+        state_.dirty = false;
 
-        if (active_preset_ == 0) {
-            // Manual mode: read hardware
+        if (state_.active_preset == 0) {
+            // Manual mode: read hardware (mode tracks SW3)
+            current_mode_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
+            state_.edit_buffer.mode = current_mode_;
             ReadHardwareIntoEditBuffer();
             SnapshotHardware();
         } else {
-            LoadPreset(active_preset_);
+            LoadPreset(state_.active_preset);
         }
 
         UpdateLed1Pattern();
@@ -384,12 +393,11 @@ private:
     void OnFs1LongPress() {
         if (pedal_state_ == PedalState::SAVE_MODE) return;
 
-        // Jump to manual — read hardware knobs
-        active_preset_ = 0;
-        mode_state_[current_mode_].active_preset = 0;
-        dirty_ = false;
-        mode_state_[current_mode_].dirty = false;
-
+        // Jump to manual — read hardware (knobs + switches incl. SW3)
+        state_.active_preset = 0;
+        state_.dirty = false;
+        current_mode_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
+        state_.edit_buffer.mode = current_mode_;
         ReadHardwareIntoEditBuffer();
         SnapshotHardware();
 
@@ -416,16 +424,14 @@ private:
 
     void OnFs2LongPress() {
         if (pedal_state_ == PedalState::SAVE_MODE) {
-            // Confirm save — write edit buffer to target slot
-            mode_state_[current_mode_].presets[save_target_ - 1] =
-                mode_state_[current_mode_].edit_buffer;
-            mode_state_[current_mode_].preset_saved[save_target_ - 1] = true;
+            // Confirm save — write edit buffer to target slot in active bank
+            Bank& bank = state_.banks[state_.active_bank];
+            bank.presets[save_target_ - 1] = state_.edit_buffer;
+            bank.preset_saved[save_target_ - 1] = true;
 
             // Now on this preset, clean
-            active_preset_ = save_target_;
-            mode_state_[current_mode_].active_preset = save_target_;
-            dirty_ = false;
-            mode_state_[current_mode_].dirty = false;
+            state_.active_preset = save_target_;
+            state_.dirty = false;
 
             // Fresh knob baseline so dirty doesn't trigger immediately
             SnapshotHardware();
@@ -442,7 +448,7 @@ private:
 
         // Enter save mode
         pedal_state_ = PedalState::SAVE_MODE;
-        save_target_ = (active_preset_ > 0) ? active_preset_ : 1;
+        save_target_ = (state_.active_preset > 0) ? state_.active_preset : 1;
 
         SetLed2(Led2Mode::SAVE_MODE);
         // LED 1 shows save target
@@ -453,17 +459,20 @@ private:
 
     bool IsPresetSaved(uint8_t preset_num) const {
         if (preset_num < 1 || preset_num > NUM_PRESETS) return false;
-        return mode_state_[current_mode_].preset_saved[preset_num - 1];
+        return state_.banks[state_.active_bank].preset_saved[preset_num - 1];
     }
 
     void LoadPreset(uint8_t preset_num) {
         if (preset_num < 1 || preset_num > NUM_PRESETS) return;
         if (IsPresetSaved(preset_num)) {
-            // Saved slot: load stored values
-            mode_state_[current_mode_].edit_buffer =
-                mode_state_[current_mode_].presets[preset_num - 1];
+            // Saved slot: load stored values. Slot's mode field is not wired
+            // in P.1 — current_mode_ stays whatever it was.
+            state_.edit_buffer =
+                state_.banks[state_.active_bank].presets[preset_num - 1];
         } else {
             // Empty slot: act like manual — read hardware
+            current_mode_ = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
+            state_.edit_buffer.mode = current_mode_;
             ReadHardwareIntoEditBuffer();
         }
         SnapshotHardware();
@@ -488,7 +497,7 @@ private:
         if (pedal_state_ == PedalState::SAVE_MODE ||
             pedal_state_ == PedalState::SAVE_CONFIRM) return;
 
-        ModePresetData& eb = mode_state_[current_mode_].edit_buffer;
+        ModePresetData& eb = state_.edit_buffer;
         bool any_changed = false;
 
         for (int i = 0; i < NUM_KNOBS; i++) {
@@ -531,41 +540,32 @@ private:
         }
 
         // Mark dirty only for saved presets — empty slots act like manual
-        if (any_changed && active_preset_ > 0 && !dirty_ &&
-            IsPresetSaved(active_preset_)) {
-            dirty_ = true;
-            mode_state_[current_mode_].dirty = true;
+        if (any_changed && state_.active_preset > 0 && !state_.dirty &&
+            IsPresetSaved(state_.active_preset)) {
+            state_.dirty = true;
             UpdateLed2Mode();
         }
     }
 
     // ── Mode switching (SW3) ────────────────────────────────────
+    // P.1: SW3 directly drives current_mode_ and edit_buffer.mode. No per-mode
+    // state preserve/restore (single global edit buffer). Dirty marking on
+    // SW3 movement comes in P.3.
 
     void ProcessModeSwitchHardware() {
         uint8_t sw3 = ReadSwitchPosition(Hothouse::TOGGLESWITCH_3);
         if (sw3 == current_mode_) return;
 
-        // Save departing mode
-        mode_state_[current_mode_].active_preset = active_preset_;
-        mode_state_[current_mode_].dirty = dirty_;
-
         // Cancel save mode on switch
         pedal_state_ = PedalState::NORMAL;
 
-        // Switch to new mode
         current_mode_ = sw3;
-
-        // Restore incoming mode
-        active_preset_ = mode_state_[current_mode_].active_preset;
-        dirty_         = mode_state_[current_mode_].dirty;
-
-        // Snapshot knobs for dirty detection in new mode
-        SnapshotHardware();
+        state_.edit_buffer.mode = sw3;
 
         UpdateLed1Pattern();
         UpdateLed2Mode();
 
-        // Save to flash (mode switch)
+        // Save to flash so the mode is remembered across reboots
         SaveToFlash();
     }
 
@@ -574,10 +574,7 @@ private:
     void SaveToFlash() {
         StorageData& data = storage_->GetSettings();
         data.version = STORAGE_VERSION;
-        data.last_mode = current_mode_;
-        for (int m = 0; m < NUM_MODES; m++) {
-            data.modes[m] = mode_state_[m];
-        }
+        data.state = state_;
         storage_->Save();
     }
 
@@ -587,7 +584,7 @@ private:
         if (pedal_state_ == PedalState::SAVE_MODE) {
             StartLed1Pattern(save_target_);
         } else {
-            StartLed1Pattern(active_preset_);
+            StartLed1Pattern(state_.active_preset);
         }
     }
 
@@ -611,7 +608,7 @@ private:
     void UpdateLed2Mode() {
         if (bypass_) {
             SetLed2(Led2Mode::OFF);
-        } else if (dirty_ && active_preset_ > 0) {
+        } else if (state_.dirty && state_.active_preset > 0) {
             SetLed2(Led2Mode::DIRTY);
         } else {
             SetLed2(Led2Mode::SOLID);
