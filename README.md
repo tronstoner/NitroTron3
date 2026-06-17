@@ -72,7 +72,7 @@ make program-dfu  # flash via DFU bootloader
 
 ## Current state — Stage 5 (Preset System) + Mode B (Sprawl)
 
-Complete Mode A Bordun effect with full preset system. PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. Mode B Sprawl effect with grain scheduler, pitch-tracked harmony, texture shaping, and scatter control. Edit buffer + 8 stored presets per mode, dirty tracking, flash persistence across power cycles. FS1 navigates presets, FS2 toggles bypass or enters save mode. LED 1 shows preset number via Roman numeral blink encoding, LED 2 indicates active/bypass/dirty/save state.
+Complete Mode A Bordun effect with full preset system. PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. Mode B Sprawl effect with grain scheduler, pitch-tracked harmony, texture shaping, and scatter control. **Preset system: one global edit buffer, 3 banks × 8 slots (each slot carries its own mode), dirty tracking, debounced flash persistence across power cycles.** FS1 navigates presets within the active bank; FS1+FS2 short tap cycles banks; FS2 toggles bypass or enters save mode; FS1+FS2 held 2 s enters DFU. LED 1 shows preset number via Roman-numeral blink encoding; LED 2 indicates active/bypass/dirty/save; both LEDs play a Roman-numeral burst on bank change.
 
 ### Mode A — Bordun
 
@@ -105,7 +105,8 @@ Input ──┬─────────────────────�
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl)<br/>**DOWN** - Mode C (Schism) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
-| FS1 held 2 s | Bootloader | Enter DFU bootloader for flashing |
+| FS1+FS2 short tap | Bank cycle | Cycle active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works in save mode to retarget a save into another bank. |
+| FS1+FS2 held 2 s | Bootloader | Enter DFU bootloader for flashing (both LEDs alternate for 1.2 s before reset) |
 
 #### LEDs
 
@@ -153,7 +154,8 @@ Input ──┬─────────────────────�
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl — this mode)<br/>**DOWN** - Mode C (Schism) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
-| FS1 held 2 s | Bootloader | Enter DFU bootloader for flashing |
+| FS1+FS2 short tap | Bank cycle | Cycle active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works in save mode to retarget a save into another bank. |
+| FS1+FS2 held 2 s | Bootloader | Enter DFU bootloader for flashing (both LEDs alternate for 1.2 s before reset) |
 
 #### LEDs
 
@@ -181,7 +183,8 @@ Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1–C.5 implement the wet/
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl)<br/>**DOWN** - Mode C (Schism — this mode) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
-| FS1 held 2 s | Bootloader | Enter DFU bootloader for flashing |
+| FS1+FS2 short tap | Bank cycle | Cycle active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works in save mode to retarget a save into another bank. |
+| FS1+FS2 held 2 s | Bootloader | Enter DFU bootloader for flashing (both LEDs alternate for 1.2 s before reset) |
 
 #### LEDs
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-A multi-mode digital effects pedal for bass guitar, built on the Electro-Smith Daisy Seed. Three independent effect modes are selectable via Switch 3, each with an edit buffer and 8 stored presets. Only the active mode runs at any time — inactive modes have zero CPU cost.
+A multi-mode digital effects pedal for bass guitar, built on the Electro-Smith Daisy Seed. Three independent effect modes are selectable via Switch 3. Presets are global across modes — each preset slot carries its own mode and full parameter state. Slots are organised into 3 banks of 8 (24 reachable presets, storage sized for up to 6 banks). Only the active mode runs at any time — inactive modes have zero CPU cost.
 
 **Mode A — Bordun** (fully specced in `MODE_A_DRONE.md`)
 Inspired by the Moog MoogerFooger FreqBox (MF-102). An internally generated oscillator, amplitude-controlled by an envelope follower tracking the bass input, mixed back with the dry signal. No oscillator sync, no FM modulation.
@@ -85,6 +85,7 @@ These are consistent across all modes:
 | Switch 3 | Mode select — Bordun / Sprawl / Schism |
 | Footswitch 1 | Preset navigation (see Preset System below) |
 | Footswitch 2 | Bypass (true bypass via Hothouse relay). Long press: save mode |
+| FS1 + FS2 short tap | Cycle bank (1 → 2 → 3 → 1) |
 | FS1 + FS2 held 2 s | Enter DFU bootloader for flashing |
 
 Switches 1–2 and knobs 1–6 are mode-specific — see each mode's spec file.
@@ -95,45 +96,54 @@ See `TUNING.md` for the tuning-mode override that repurposes controls during dev
 
 ## Preset System
 
-Inspired by the EHX Ring Thing UX, adapted for a two-LED, two-footswitch interface.
+Inspired by the EHX Ring Thing UX, adapted for a two-LED, two-footswitch interface. Implementation reference: `docs/PRESET_IMPL.md`.
 
-### Slots
+### Slots, banks, edit buffer
 
-- **Edit buffer** — the live working state. One per mode, persisted to flash for power-cycle recall. Each edit buffer includes the **active preset number** (0 = Manual, 1–8 = preset) and **dirty flag**, so the full mode state survives power cycles and mode switches.
-- **8 stored presets per mode** — 24 slots total across three modes. Independent per mode: switching modes loads that mode's own edit buffer, active preset, and dirty state.
+- **One global edit buffer.** Holds knobs + sw1 + sw2 + mode. Persisted to flash. Manual mode = the edit buffer with no preset loaded; manual is fully WYSIWYG, no hidden state outside presets.
+- **8 stored presets per bank, 3 reachable banks** (storage sized for 6 banks). Each preset slot stores its own mode — recalling a preset can swap mode + parameters in one footswitch press.
+- **Active bank** persists across power cycles. Only the active bank's slots are addressable via FS1 at any moment.
 
-Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`. Per-mode preset data structures live in each mode's spec file.
+Stored in Daisy Seed onboard flash via DaisySP `PersistentStorage`.
 
 ### Navigation (Normal Mode)
 
-**FS1 short press** cycles through: Manual → Preset 1 → … → Preset 8 → Manual → …
+**FS1 short press** cycles through: Manual → Preset 1 → … → Preset 8 → Manual → … within the active bank.
 
-**FS1 long press** jumps directly to Manual mode from any preset, reading hardware knob positions into the edit buffer. This is a quick escape — no need to cycle through all presets to get back to manual.
+**FS1 long press** jumps directly to Manual mode from any preset, reading current hardware (knobs + SW1 + SW2 + SW3) into the edit buffer.
 
-Loading a saved preset copies its stored values into the edit buffer. Knob values jump immediately — no pickup mode.
+**FS1 + FS2 short tap** (released before the long-press threshold) cycles the active bank: 1 → 2 → 3 → 1. Both LEDs play a brief Roman-numeral burst to confirm the new bank.
 
-**Empty (unsaved) slots** act like manual mode: hardware knob positions are read into the edit buffer. No dirty tracking — knobs write through freely. LED 1 still shows the slot number. Saving to a slot marks it as saved; subsequent loads will use the stored values.
+Loading a saved preset copies its stored values into the edit buffer including its mode. Knob values jump immediately — no pickup mode.
 
-**Manual mode** = the current edit buffer with no preset loaded. On first-ever boot (factory state), the pedal enters manual mode and reads the current knob positions into the edit buffer. On subsequent boots, the pedal restores the last active state (preset number + edit buffer) from flash.
+**Empty (unsaved) slots** act like manual mode: hardware knob positions flow into the edit buffer. No dirty tracking — knobs write through freely. LED 1 still shows the slot number. Saving to a slot marks it as saved; subsequent loads will use the stored values.
+
+### Bank cycling behaviour (per context)
+
+- **Manual** — bank advances, edit buffer preserved, active preset stays 0. Only the addressable slot space changes.
+- **On a saved preset** — bank advances, then the same slot number loads from the new bank (saved → loads + clears dirty; empty → manual-like, LED 1 still shows the slot number).
+- **In save mode** — bank advances, save target slot number unchanged. The next FS2 long-press writes into the new bank's slot. This is the cross-bank save path.
 
 ### Dirty State (Preset Edited)
 
-When a preset is loaded and any knob is moved, the edit buffer diverges from the stored preset. This is the **dirty** state:
+When a preset is loaded and any knob, SW1, SW2, or SW3 is moved past its threshold, the edit buffer diverges from the stored preset. This is the **dirty** state:
 
-- **LED 2** switches from solid on to a **rapid flash** pattern, indicating the loaded preset has been altered. (Inspired by EHX pedals that flash LEDs to indicate edited presets.)
+- **LED 2** switches from solid on to a **rapid flash** pattern.
 - The stored preset slot is not modified — only the edit buffer changes.
 
 While dirty:
-- **FS1 short press** → **reloads the current preset**, reverting the edit buffer to the stored values. This is a performance feature: tweak parameters live, then instantly reset to the saved state. LED 2 returns to solid.
-- **FS1 short press** does **not** cycle to the next preset while dirty. You must reload first, then press again to cycle.
+- **FS1 short press** → **reloads the current preset**, reverting the edit buffer to the stored values. LED 2 returns to solid.
+- **FS1 short press** does **not** cycle while dirty. Reload first, then press again to cycle.
+
+SW3 dirty marking detects **physical movement** of the switch, not a mismatch between the loaded preset's stored mode and the SW3 position. Loading a Mode B preset while SW3 sits at Mode A is fine — only an actual switch flip marks dirty.
 
 ### LED Preset Indication (LED 1)
 
-LED 1 indicates the active preset using a Roman-numeral-inspired encoding with three blink types: **I** (short blink), **V** (long blink), **X** (rapid flicker).
+LED 1 indicates the active preset using a Roman-numeral-inspired encoding: **I** (short blink), **V** (long blink).
 
 | State | Symbol | LED 1 pattern |
 |---|---|---|
-| Manual (no preset) | — | Off (mode-specific use, e.g. waveform indicator in Mode A) |
+| Manual (no preset) | — | Off |
 | Preset 1 | I | short |
 | Preset 2 | II | short, short |
 | Preset 3 | III | short, short, short |
@@ -143,69 +153,76 @@ LED 1 indicates the active preset using a Roman-numeral-inspired encoding with t
 | Preset 7 | VII | long, short, short |
 | Preset 8 | VIII | long, short, short, short |
 
-Default timing (source of truth: `docs/ux-demo.html`):
+Default timing (source of truth: `docs/ux-demo.html`, mirrored in `src/constants.h`):
 
 | Constant | Value | Description |
 |---|---|---|
 | I (short) on | 150 ms | Short blink duration |
 | V (long) on | 950 ms | Long blink duration |
 | Element gap | 200 ms | Gap between symbols |
-| Repeat gap | 600 ms | Gap before pattern repeats |
+| Repeat gap | 700 ms | Gap before pattern repeats |
 | Dirty flash | 50/50 ms | On/off time for dirty indicator (LED 2) |
 | Save mode blink | 150/150 ms | On/off time for save mode (LED 2) |
 | Save confirm burst | 75/75 ms for 500 ms | Rapid flash after save confirmed (LED 2) |
 | Long press threshold | 700 ms | FS1/FS2 long press detection |
-| Bootloader hold | 2000 ms | FS1 held to enter DFU |
+| Both-FS bootloader hold | 2000 ms | Both FS held to enter DFU |
+| Bank burst total | 1200 ms | Total time for the bank-switch indicator |
+| Bank burst gap | 150 ms | Pause between bank-burst pulses |
+| Bank burst flicker | 20 ms | On/off chunk inside each bank-burst pulse |
+| Bank burst trailing hold | 400 ms | Pause after burst, before LEDs return to normal |
 
-Selecting a preset always restarts the blink pattern from the beginning.
+### Bank-switch burst (both LEDs)
 
-**Implementation note:** firmware should use a pre-computed lookup table of `{duration_ms, led_on}` step arrays per preset — no runtime pattern logic. The interactive demo (`docs/ux-demo.html`) can be used to tune timing constants before generating the table.
+When the user cycles banks, both LEDs play a one-shot Roman-numeral burst for the new bank number, then yield back to normal LED state (LED 1 preset blink, LED 2 bypass/dirty/save).
+
+- **Both LEDs in sync** — visually distinct from LED 1's solo preset blink and LED 2's solo state indicators.
+- **Each pulse is internal fast flicker** — deterministic 20 ms on/off chunks throughout the pulse, reading visually distinct from a clean pulse.
+- **Fixed total burst time, 1.2 s.** Bank 1 = one 1200 ms pulse; bank 2 = two 525 ms pulses + 150 ms gap; bank 3 = three 300 ms pulses + 2 × 150 ms gaps. Pulse count alone differentiates banks 1–3 (I/V duration distinction is dropped — going beyond 3 banks would need it back).
 
 ### Save Mode
 
 **FS2 long press** → enters save mode.
 
-- **Target slot is pre-selected** to the currently loaded preset. If you loaded Preset 3 and tweaked it, save targets Preset 3 by default — no need to remember or cycle.
+- **Target slot is pre-selected** to the currently loaded preset (or 1 from manual).
 - **LED 2** blinks fast (distinct from the dirty-state flash) to indicate save mode.
 - **LED 1** shows the target slot's blink pattern.
 
 While in save mode:
-- **FS1 short press** → **cycles through target slots** (1 → 2 → … → 8 → 1 → …). LED 1 updates to show the new target. Starts at the pre-selected slot, so one press moves to the next.
-- **FS2 long press** → **confirms save**. Edit buffer is written to the selected slot. LED 2 flashes rapidly for ~500 ms to confirm success. Returns to normal mode (preset now clean).
-- **FS2 short press** → **cancels save**. Returns to normal mode, no write performed.
+- **FS1 short press** → cycles target slot (1 → … → 8 → 1).
+- **FS1 + FS2 short tap** → cycles bank. Target slot unchanged; the save will land in the new bank's slot.
+- **FS2 long press** → **confirms save**. Edit buffer is written to the selected bank/slot. LED 2 flashes rapidly for ~500 ms. Returns to normal mode (preset now clean).
+- **FS2 short press** → **cancels save**.
 
-Save mode also times out after a few seconds of inactivity (returns to normal mode, no save).
+The edit buffer captures its current mode at save time, so the stored slot carries the active mode.
 
-**Saving from manual mode:** FS2 long press enters save mode with target defaulting to Preset 1. Use FS1 to cycle to the desired slot, then FS2 long press to confirm. The current edit buffer is always what gets saved.
+### Mode Switching (SW3)
 
-### Mode Switching
+SW3 is a soft control, treated uniformly with SW1 and SW2:
+- **Manual:** SW3 movement updates the edit buffer's stored mode and the active audio mode immediately.
+- **On a saved preset:** SW3 movement marks the preset dirty and the audio mode follows SW3. FS1 short reverts to the preset (including its stored mode).
 
-Switching modes via Switch 3 **preserves and restores the full state of each mode**:
-
-1. The current mode's edit buffer, active preset number, and dirty flag are saved.
-2. The new mode's edit buffer, active preset number, and dirty flag are restored.
-3. LEDs update to reflect the restored state (preset blink pattern, dirty indicator).
-
-This means if you're on Preset III (dirty) in Mode A, switch to Mode B, then back to Mode A — you return to Preset III (dirty) with the same knob values. Each mode remembers exactly where you left it.
+There is no per-mode state preservation any more — there is only one global edit buffer.
 
 ### Power Cycle Behavior
 
-On boot, the pedal restores the last active mode and each mode's full state (edit buffer + active preset + dirty flag) from flash. The pedal comes back exactly as it was when powered off — same mode, same preset, same parameters.
+On boot, the pedal restores: active bank, active preset, dirty flag, full edit buffer (including mode). Returns exactly to where the user left off.
 
-**First boot (factory state):** all modes start in Manual with knobs read from panel positions.
+**Persistence policy:** discrete navigation events (preset cycle, bank cycle, jump to manual, SW3 move, knob/switch movement) arm a debounced auto-save. After 2 s of inactivity the state is written to flash. No changes → no flash writes. Save-confirm (FS2 long) writes immediately.
+
+**Migration:** if flash holds the old per-mode layout (version 2), it's migrated on boot — each mode's 8 presets become bank 1/2/3 slots, with each slot's stored mode set to its source mode. Existing presets are preserved.
+
+**First boot (factory state):** edit buffer reads current hardware (knobs + SW1 + SW2 + SW3). All preset slots in all banks remain empty.
 
 ### Knob Behavior
 
-- **On preset load:** values jump immediately to stored values. No pickup, no interpolation.
-- **After load:** moving any knob overrides that parameter in the edit buffer. The stored preset is not modified (dirty state).
+- **On preset load:** values jump immediately to stored values. Knobs are then "frozen" (not live) — the edit buffer holds the loaded value and ignores hardware until the user moves a knob past `KNOB_DIRTY_THRESHOLD` (2 % of travel). Once moved, the knob takes over and the edit buffer tracks hardware at full ADC resolution.
 - **Manual mode on startup:** all knob positions are read and applied to the edit buffer.
 
 ### Bootloader Entry
 
-**Hold both FS1 and FS2 simultaneously for 2 seconds** → enters DFU bootloader for flashing. This combination cannot be triggered accidentally during normal preset or bypass operation because:
-- FS1 and FS2 are never both actionable at the same time in normal use (FS1 = preset, FS2 = bypass)
-- The 2-second hold window rejects accidental simultaneous taps
-- Detection requires both switches to be held continuously — if either is released early, the timer resets
+**Hold both FS1 and FS2 simultaneously for 2 seconds.** The audio + ADC stop, both LEDs alternate at 75 ms per phase for 1.2 s as visible confirmation, then DFU is entered.
+
+The FS1-alone bootloader path is dropped — it was too easy to trigger by accident while preset-cycling. Only the both-FS hold counts now.
 
 ---
 
@@ -231,12 +248,12 @@ On boot, the pedal restores the last active mode and each mode's full state (edi
 - **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
 - **Mode B spec** — DONE. Sprawl fully specced in `MODE_B_GRANULAR.md`.
 - **Knob remap** — DONE. Measured physical range 0.000–0.968, calibrated `RemapKnob()` with named constants.
-- **Preset system** — DONE. FS1 preset navigation (edit buffer + 8 presets per mode), Roman numeral LED blink encoding (I/V patterns), save mode via FS2 long press + confirm. Dirty tracking, flash persistence via `PersistentStorage`, mode switching saves/restores per-mode state. Auto-save every ~30 s. Bootloader via FS1 held 2 s (Phase 1; Phase 2 will add FS1+FS2 dual-hold). Implementation plan in `docs/PRESET_IMPL.md`.
+- **Preset system** — DONE. Global model: one edit buffer (knobs + sw1 + sw2 + mode), 3 banks × 8 slots (storage sized for 6), each slot carries its own mode. FS1 cycles within the active bank; FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs confirms the new bank); FS2 long enters save mode (banks can also be cycled inside save mode for cross-bank saves). SW3 is a soft control uniform with SW1/SW2 — moves on a saved preset mark dirty by physical movement. FS1+FS2 held 2 s enters DFU (alternating LED burst); FS1-alone bootloader path dropped. Debounced auto-save (2 s after last edit; no-change → no flash write). One-shot v2 → v3 migration preserves existing per-mode presets into banks 1/2/3. Implementation reference in `docs/PRESET_IMPL.md`; planning history in `docs/PRESET_GLOBAL_PLAN.md`.
 - **Stage 6** — DONE. Multi-mode scaffold: Switch 3 dispatches `ProcessDrone()` / `ProcessGranular()` / `ProcessFreqShift()`. Modes B and C are dry passthrough stubs. Bypass handled once in `AudioCallback`, mode functions only run when active. Pitch tracker conditional on Mode A.
 - **Mode B (Sprawl)** — IN PROGRESS. Granular engine working: ring buffer (8 s SDRAM), grain scheduler, 8 voices, Hann windowing, pitch-tracked harmony (fixed interval + resonance modes), texture shaper (decimator/wavefolder bipolar on SW1 UP, zoned digital glitch on MID — bipolar K4, XOR CCW / bit-rotate CW — replacing the earlier chorale formant filter, ringmod on DOWN), wet HPF 150 Hz, equal-power mix. Knob layout: K1=interval, K2=buffer range, K3=character/glitch (merged, splittable), K4=texture amount, **K5=reverb/feedback bipolar** (CCW=Clouds reverb, center=off, CW=feedback 0.95 ceiling), K6=mix. Direct-texture mode (K2 fully CCW): grain engine bypassed, input→texture shaper, K3=micro-stutter. **Wet-path reverb**: Clouds FDN (vendored from MI, MIT), 32 kHz internal via polyphase 48↔32 resampler, mono in / stereo out (collapsed to mono at mix for future stereo upgrade), reverb tail does not feed ring buffer.
 - **Mode C (Schism)** — IN PROGRESS. C.1–C.5 DONE: K5 is now a bipolar pre-filter drive (CCW attenuate ~−12 dB, noon unity, CW up to 8× — universal across all SW2 modes); sine wavefolder under SW1=UP (K4 fold); **gated bit crusher under SW1=MID** (K4 maps bit depth `MODE_C_BITCRUSH_BITS_MAX(16) → BITS_MIN(4)`; env-gated with 1 ms click-free ramp at gate edges — explorative distortion variant); Moog ladder under SW2=UP using new `MoogLadderV2` (single input saturator post-feedback, no per-stage tanh darkening; k-cutoff cross-comp for consistent self-osc; (1+res) input level comp; +0.05 asymmetric DC bias for transistor-flavored even harmonics) — K1 cutoff, K2 sqrt-curved resonance up to self-osc, K3 bipolar env-to-cutoff with passive-bass ×10 normalization and 10 kHz top clamp; Plague filter under SW2=DOWN (`svf_nonlinear.h` + `plague.h`) — still needs another tuning pass; Grendel formant filter under SW2=MID — 4 parallel RBJ BPF biquads, vowel path oo→oh→ah→eh→ee (CCW dark/closed → CW bright/open), K1 path, K2 size (mouth scale, ×0.5 → ×1.6), K3 bipolar env coupled on path *and* size (block-rate coef updates) — CCW K3 opens path toward ee + tightens size, CW K3 closes toward oo + opens size (±20% size swing at full K3 + hard pluck). Uses its own 400 ms slow-swell env smoother regardless of K3 sign (snap shape reserved for the ladder). Mode A's `MoogLadder` is intentionally untouched (signed off). Per-filter input pads (×0.3 for Moog and Grendel; Plague unpadded) put spectrum-shaping filters in their clean sweet zone at K5 noon while preserving Plague's hot-input fold zone. Post-filter signal chain: pre-limit lift `MODE_C_POST_FILTER_GAIN = 1.3` so quieter notes engage the limiter cleanly, `PeakLimiter` with 2-band split at 160 Hz (LF preserved so bass fundamentals don't duck under HF resonance peaks; HF soft-knee limited with "warmth-when-working" tanh blend that only blooms while the limiter is reducing gain), then an amp-env VCA (`wet *= env_val * 12`) that gates the wet path so self-resonance doesn't ring alone when the bass isn't playing. Ladder lift and Plague balance env both read an asymmetric A/R smoother on the shared env (`MODE_C_FILTER_ENV_ATTACK_MS = 30`, `RELEASE_MS = 150` — slower than the 33 Hz 4-pole VCA env, K3-sign-dependent shape: peak follower CW, slow rise CCW) so cutoff/balance sweeps don't twitch on transients. Grendel uses its own dedicated slow-swell smoother (`MODE_C_GRENDEL_ENV_ATTACK_MS = 400`, instant snap-back) regardless of K3 sign — formant motion always breathes, never snaps. The VCA stays on the raw env for snap.
-- **FLASH at 91.42%** — slightly higher after SW1=MID bit-crusher + filter-env smoother. Migration still ready via one-line linker swap to `STM32H750IB_qspi.lds` if Plague re-tuning or further Mode C work pushes higher.
-- **Next** — Mode C: ear-tune bit-crush bit-depth range and filter-env A/R times on hardware; redo Plague tuning (drive/character/balance — see `docs/plague-bearer-daisy-handover.md`); lock K3 polarity for SW2=UP/MID if any drift surfaces. All gated on pedal access. FS1+FS2 dual-hold bootloader (Phase 2) and pitch tracking improvements still deferred.
+- **FLASH at ~95%** — climbed during the global preset / banks rewrite plus Mode C work. Migration still ready via one-line linker swap to `STM32H750IB_qspi.lds` once it pushes past 100% or audio code needs the headroom.
+- **Next** — Mode C: ear-tune bit-crush bit-depth range and filter-env A/R times on hardware; redo Plague tuning (drive/character/balance — see `docs/plague-bearer-daisy-handover.md`); lock K3 polarity for SW2=UP/MID if any drift surfaces. All gated on pedal access. Pitch tracking improvements still deferred.
 
 ## Staged Development Timeline
 
@@ -258,7 +275,7 @@ K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=f
 Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. Octave-locked wrap point fixed to A (compile-time constant `TRACKING_WRAP_NOTE`). All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
 
 ### Stage 5 — Preset system ✓
-FS1 preset navigation (edit buffer + 8 slots per mode), save mode (FS2 long press + FS2 confirm), Roman numeral LED blink encoding on LED 1, flash storage via `PersistentStorage`. Audio callback reads from edit buffer, not hardware. Dirty tracking with 2% knob threshold. Mode switching preserves/restores full per-mode state. Bootloader: FS1 held 2 s (Phase 1).
+Original per-mode model first, then migrated to a global model: one edit buffer (knobs + sw1 + sw2 + mode), 3 banks × 8 slots (storage sized for 6), each slot carries its own mode. Audio callback reads from the edit buffer, not hardware. FS1 cycles slots within the active bank, FS2 toggles bypass / enters save mode, FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs), FS1+FS2 held 2 s enters DFU. SW3 is a soft control — moves it on a saved preset mark dirty. Debounced auto-save (2 s after last edit) replaces the original 30 s interval. One-shot v2 → v3 migration preserves existing per-mode presets.
 
 ### Stage 6 — Multi-mode scaffold ✓
 Switch 3 dispatches to `ProcessDrone()`, `ProcessGranular()`, `ProcessFreqShift()`. Modes B and C are dry passthrough stubs. Bypass handled once in `AudioCallback`. Pitch tracker runs only in Mode A. Architecture ready for mode implementation.

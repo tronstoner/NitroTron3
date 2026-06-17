@@ -1,398 +1,252 @@
-# Preset System — Implementation Plan (Stage 5)
+# Preset System — Implementation
 
-Spec: `PROJECT.md` § Preset System. Source of truth for timing constants: `docs/ux-demo.html`.
-
----
-
-## Scope
-
-Implement the full preset system for NitroTron3:
-- FS1 preset navigation (short press cycle, long press → manual)
-- FS2 bypass (short press) + save mode (long press → confirm/cancel)
-- Bootloader: Phase 1 keeps `CheckResetToBootloader()` (FS1 held 2 s). Phase 2 swaps to FS1+FS2 dual-hold after flash test confirms recovery works.
-- LED 1: Roman numeral blink pattern (presets 1–8), off in manual
-- LED 2: solid (active), off (bypassed), rapid flash (dirty), fast blink (save mode), burst (save confirm)
-- Edit buffer + 8 stored presets per mode, dirty tracking
-- Flash persistence via `PersistentStorage` — survives power cycles
-- Mode switching (SW3) saves/restores full per-mode state
+As-built reference for the preset system. Spec lineage: `docs/PROJECT.md` § Preset System and `docs/PRESET_GLOBAL_PLAN.md` (the migration plan from per-mode to global+banks). Timing-constant source of truth: `docs/ux-demo.html`.
 
 ---
 
-## Timing Constants (from ux-demo.html)
+## Model
 
-These are the authoritative values. All go in `constants.h`.
-
-### Preset LED (LED 1) — Roman numeral encoding
-
-| Constant | Value | Description |
-|---|---|---|
-| `LED_SHORT_ON_MS` | 150 | I symbol on duration |
-| `LED_LONG_ON_MS` | 950 | V symbol on duration |
-| `LED_ELEM_GAP_MS` | 200 | gap between symbols |
-| `LED_REPEAT_GAP_MS` | 600 | gap before pattern repeats |
-
-### Dirty indicator (LED 2)
-
-| Constant | Value | Description |
-|---|---|---|
-| `LED_DIRTY_ON_MS` | 50 | dirty flash on time |
-| `LED_DIRTY_OFF_MS` | 50 | dirty flash off time |
-
-### Save mode (LED 2)
-
-| Constant | Value | Description |
-|---|---|---|
-| `LED_SAVE_MODE_ON_MS` | 150 | save mode blink on |
-| `LED_SAVE_MODE_OFF_MS` | 150 | save mode blink off |
-
-### Save confirm (LED 2)
-
-| Constant | Value | Description |
-|---|---|---|
-| `LED_SAVE_CONFIRM_DUR_MS` | 500 | total burst duration |
-| `LED_SAVE_CONFIRM_ON_MS` | 75 | burst on time |
-| `LED_SAVE_CONFIRM_OFF_MS` | 75 | burst off time |
-
-### Footswitch timing
-
-| Constant | Value | Description |
-|---|---|---|
-| `FS_LONG_PRESS_MS` | 700 | long press threshold |
-| `FS_BOOT_HOLD_MS` | 2000 | bootloader entry hold time |
-| `KNOB_DIRTY_THRESHOLD` | 0.02 | knob movement threshold for dirty detection |
+- **Single global edit buffer.** One `ModePresetData` record holds knobs + sw1 + sw2 + mode. Manual mode is fully WYSIWYG — no hidden state outside presets.
+- **Banks of presets.** `NUM_BANKS` banks (default 3, storage sized for `MAX_BANKS = 6`). Each bank has `NUM_PRESETS = 8` slots. Only the active bank is addressable via FS1 at any given moment.
+- **Slot carries mode.** Every preset record stores which mode it belongs to (the SW3 position it was saved under). Cycling presets across the bank can swap mode + parameters in one footswitch press.
+- **SW3 is a soft control.** Uniform with SW1/SW2: moves the edit buffer's mode; on a saved preset, marks dirty. No per-mode state preserve/restore.
 
 ---
 
-## PROJECT.md Discrepancy
-
-PROJECT.md says save-confirm flash lasts "~1 second" but the UX demo uses 500 ms. The demo is the source of truth — update PROJECT.md to say "~500 ms" and add a full timing constants table.
-
----
-
-## Architecture Overview
-
-### New files
-
-| File | Purpose |
-|---|---|
-| `src/preset_system.h` | PresetSystem class — state machine, LED engine, flash storage |
-
-### Modified files
-
-| File | Changes |
-|---|---|
-| `src/constants.h` | Add all timing constants above |
-| `src/NitroTron3.cpp` | Replace FS/LED logic with PresetSystem calls |
-| `docs/PROJECT.md` | Update status, fix save-confirm duration |
-| `README.md` | Update controls/LEDs tables |
-
-### Not changed
-
-`env_follower.h`, `moog_ladder.h`, `moog_osc.h`, `pitch_tracker.h` — no DSP changes.
-
----
-
-## Data Structures
-
-### ModePresetData — what gets stored per mode
+## Data structures (`src/preset_system.h`)
 
 ```cpp
+static constexpr int NUM_MODES   = 3;
+static constexpr int NUM_PRESETS = 8;
+static constexpr int NUM_KNOBS   = 6;
+static constexpr int NUM_BANKS   = 3;   // user-facing bank count
+static constexpr int MAX_BANKS   = 6;   // storage cap (Roman LED scheme caps at VI)
+
 struct ModePresetData {
-    float knobs[6];          // 6 knob values (0.0–1.0)
-    uint8_t sw1;             // Switch 1 position (0/1/2)
-    uint8_t sw2;             // Switch 2 position (0/1/2)
+    float knobs[NUM_KNOBS];
+    uint8_t sw1;
+    uint8_t sw2;
+    uint8_t mode;          // 0=A, 1=B, 2=C — sw3 value this slot belongs to
 };
-```
 
-### ModeState — full per-mode state (in RAM and flash)
-
-```cpp
-struct ModeState {
-    ModePresetData edit_buffer;              // current working state
-    ModePresetData presets[8];               // 8 stored presets
-    uint8_t active_preset;                   // 0 = manual, 1–8 = preset
-    bool dirty;                              // edit buffer diverged from preset
+struct Bank {
+    ModePresetData presets[NUM_PRESETS];
+    bool preset_saved[NUM_PRESETS];
 };
-```
 
-### StorageData — the PersistentStorage template struct
+struct GlobalState {
+    ModePresetData edit_buffer;
+    Bank banks[MAX_BANKS];
+    uint8_t active_bank;       // 0 .. NUM_BANKS-1
+    uint8_t active_preset;     // 0 = manual, 1..NUM_PRESETS = preset
+    bool dirty;
+};
 
-```cpp
 struct StorageData {
-    uint32_t version;                        // schema version for migration
-    ModeState modes[3];                      // A, B, C
-    uint8_t last_mode;                       // which mode was active at shutdown
-
-    bool operator!=(const StorageData& o) const;
+    uint32_t version;
+    GlobalState state;
 };
+
+static constexpr uint32_t STORAGE_VERSION = 3;
 ```
 
-**Size estimate:** `ModePresetData` = 6×4 + 2 = 26 bytes. `ModeState` = 26 + 26×8 + 1 + 1 = 236 bytes. `StorageData` = 4 + 236×3 + 1 = 713 bytes. Well within flash page limits.
+Sizing: `GlobalState` ≈ 1.6 KB at `MAX_BANKS=6`. Fits comfortably in `PersistentStorage`.
+
+### Legacy v2 layout (kept only for one-shot migration)
+
+`namespace legacy_v2 { struct StorageData { ... ModeState modes[3]; uint8_t last_mode; }; }` — the pre-rewrite layout, used to read existing per-mode bank data and remap it into the new banks.
 
 ---
 
-## Pedal State Machine
+## Pedal state machine
+
+Identical to the original spec — banks/global don't change this:
 
 ```
         ┌──────────┐
   ┌─────│  NORMAL  │
   │     └──────────┘
-  │          │
-  │   FS2 long press
-  │          │
+  │          │  FS2 long press
   │          ▼
   │    ┌───────────┐
   │    │ SAVE_MODE │
   │    └───────────┘
-  │          │
-  │  FS2 long (confirm)
-  │  FS2 short (cancel)
-  │          │
+  │          │  FS2 long (confirm) / FS2 short (cancel)
   │          ▼
   │   ┌──────────────┐
   └───│ SAVE_CONFIRM │  (500 ms burst, then → NORMAL)
       └──────────────┘
 ```
 
-Bootloader entry is outside the state machine — handled by `hw.CheckResetToBootloader()` (FS1 held 2 s). Phase 2 will replace with FS1+FS2 dual-hold.
-
-States:
-- **NORMAL** — default operating state. FS1 navigates presets, FS2 toggles bypass.
-- **SAVE_MODE** — entered via FS2 long press. FS1 cycles target slot, FS2 long confirms, FS2 short cancels.
-- **SAVE_CONFIRM** — 500 ms LED burst after successful save, then auto-returns to NORMAL.
+Bank cycling is **state-independent** — it works in NORMAL and SAVE_MODE (where it lets you save into a different bank without leaving save mode).
 
 ---
 
-## Footswitch Handling
+## Footswitches
 
-**Cannot use `hw.CheckResetToBootloader()`** — it only checks FS1 and consumes the switch state. We must implement our own footswitch processing.
+Single owner: `PresetSystem::ProcessFootswitches()`. The Hothouse FS1-only bootloader path (`hw.CheckResetToBootloader()`) is **dropped** — too easy to trigger accidentally while preset-cycling.
 
-### Detection approach
+### Detection logic
 
-In the main loop (every 10 ms tick):
-1. Read `hw.switches[FOOTSWITCH_1].Pressed()` and `.TimeHeldMs()`
-2. Read `hw.switches[FOOTSWITCH_2].Pressed()` and `.TimeHeldMs()`
-3. Detect rising/falling edges and hold durations ourselves
+Per tick (~10 ms):
 
-### Edge detection + long press
+1. Read FS1 / FS2 `Pressed()`.
+2. Track rising edges → `fs*_down_time_`. Track `fs*_long_fired_`.
+3. While both are down: suppress individual short/long actions; the combo owns the gesture.
+4. Falling edge of either with combo active → evaluate combo hold time and act.
 
-```
-FS pressed → start timer
-  ├── Single FS held ≥ 700 ms → fire long press, set flag
-  └── FS released < 700 ms and no long fired → fire short press
-```
+### Gesture table
 
-Key rules:
-- **Long press fires on threshold crossing** (not on release). This matches the UX demo behavior.
-- **Short press fires on release** (if long press didn't fire).
-- **Bootloader:** Phase 1 keeps `hw.CheckResetToBootloader()` call in main loop. FS1 held 2 s still enters DFU. Since FS1 long press fires at 700 ms (well before 2 s), there's no conflict — user gets "jump to manual" at 700 ms, and only reaches bootloader if they keep holding past 2 s. Phase 2 will replace with FS1+FS2 dual-hold after verifying flash works.
+| Gesture | Action |
+|---|---|
+| FS1 short (released before `FS_LONG_PRESS_MS`) | Save mode: cycle save target slot. Dirty + on saved preset: revert. Else: cycle Manual → 1 → … → 8 → Manual within active bank. |
+| FS1 long (held past `FS_LONG_PRESS_MS`) | Jump to Manual — read all hardware including SW3 into edit buffer. |
+| FS2 short | Save mode: cancel → NORMAL. Else: toggle bypass. |
+| FS2 long | Save mode: confirm save (writes edit buffer to `banks[active_bank].presets[save_target-1]`, then SAVE_CONFIRM). Else: enter SAVE_MODE (target slot pre-selected to current preset, or 1 from manual). |
+| Both short (released < `FS_LONG_PRESS_MS`) | Cycle bank: `active_bank = (active_bank+1) % NUM_BANKS`. Per context: manual → bank shifts, edit buffer preserved. On preset → load same slot in new bank. Save mode → bank shifts, save target unchanged. |
+| Both held ≥ `FS_BOOT_HOLD_MS` (2 s) | Arm bootloader request. Main loop calls `System::ResetToBootloader()` after a 1.2 s alternating LED1/LED2 burst (`75 ms` per phase × 8 pairs). |
 
-### FS1 actions (NORMAL state)
+### Constants (in `src/constants.h`)
 
-| Event | Condition | Action |
+| Constant | Value | Description |
 |---|---|---|
-| Short press | save mode | Cycle save target (1→2→…→8→1) |
-| Short press | dirty, preset loaded | Reload current preset (revert) |
-| Short press | not dirty | Cycle: Manual→1→2→…→8→Manual |
-| Long press | not save mode | Jump to Manual (read hardware knobs) |
+| `FS_LONG_PRESS_MS` | 700 | long-press / combo-short threshold |
+| `FS_BOOT_HOLD_MS` | 2000 | both-FS bootloader hold |
+| `KNOB_DIRTY_THRESHOLD` | 0.02 | knob movement → live takeover threshold |
 
-### FS2 actions
+---
 
-| Event | State | Action |
+## LED engine
+
+### LED 1 — preset blink (Roman numeral)
+
+Pre-computed `PRESET_PATTERNS[NUM_PRESETS]` table, one step array per slot, encoding I/V/X. Manual mode (active_preset = 0): LED off. Same as pre-rewrite.
+
+Timing constants (LED 1):
+
+| Constant | Value |
+|---|---|
+| `LED_SHORT_ON_MS` | 150 |
+| `LED_LONG_ON_MS` | 950 |
+| `LED_ELEM_GAP_MS` | 200 |
+| `LED_REPEAT_GAP_MS` | 700 |
+
+### LED 2 — state indicator
+
+Modes (mutually exclusive): `SOLID`, `OFF`, `DIRTY`, `SAVE_MODE`, `SAVE_CONFIRM`.
+
+| Mode | Pattern | Constants |
 |---|---|---|
-| Short press | save mode | Cancel save → NORMAL |
-| Short press | normal | Toggle bypass |
-| Long press | save mode | Confirm save → SAVE_CONFIRM |
-| Long press | normal | Enter SAVE_MODE |
+| SOLID | always on | — |
+| OFF | always off (bypass) | — |
+| DIRTY | rapid flash | `LED_DIRTY_ON_MS` = 50, `LED_DIRTY_OFF_MS` = 50 |
+| SAVE_MODE | fast blink | `LED_SAVE_MODE_ON_MS` = 150, `LED_SAVE_MODE_OFF_MS` = 150 |
+| SAVE_CONFIRM | burst | `LED_SAVE_CONFIRM_ON_MS` = 75, `LED_SAVE_CONFIRM_OFF_MS` = 75, `LED_SAVE_CONFIRM_DUR_MS` = 500 |
+
+`UpdateLed2Mode()` selects based on `pedal_state_`, `bypass_`, `dirty_`.
+
+### Bank-switch burst (both LEDs, on bank change)
+
+A one-shot routine that takes over both LEDs for a fixed total duration, then yields back to LED 1 / LED 2's normal owners.
+
+- **Both LEDs in sync** — visually distinguishes from LED 1's preset blink (single LED) and LED 2's dirty/save patterns (single LED).
+- **Each pulse is internal fast flicker** — deterministic `LED_BANK_FLICKER_MS` (20 ms) on/off chunks. Reads visually distinct from a clean pulse.
+- **Pulse count = Roman numeral count of new bank.** Bank 1 = 1 pulse, bank 2 = 2 pulses, bank 3 = 3 pulses.
+- **Fixed total burst time.** `LED_BANK_TOTAL_MS = 1200` covers all pulses + inter-pulse gaps. Each pulse gets `(LED_BANK_TOTAL_MS - (N-1) × LED_BANK_GAP_MS) / N` of flicker; bank 1 = one 1200 ms pulse, bank 2 = two 525 ms pulses + 150 ms gap, bank 3 = three 300 ms pulses + 2 × 150 ms gaps.
+- **Trailing pause** `LED_BANK_HOLD_MS = 400` before LEDs return to normal.
+- I/V pulse-duration distinction is dropped — count alone differentiates 1–3. For `NUM_BANKS > 3` we'd need V back to keep IV/V/VI legible.
+
+Constants:
+
+| Constant | Value |
+|---|---|
+| `LED_BANK_FLICKER_MS` | 20 |
+| `LED_BANK_TOTAL_MS` | 1200 |
+| `LED_BANK_GAP_MS` | 150 |
+| `LED_BANK_HOLD_MS` | 400 |
+
+### Bootloader LED burst (NitroTron3.cpp)
+
+When `PresetSystem::ShouldEnterBootloader()` returns true: stop ADC + audio, alternate LED 1 / LED 2 at 75 ms per phase for 8 iterations (~1.2 s total), then `System::ResetToBootloader()`.
 
 ---
 
-## LED Blink Engine
+## Edit buffer + knob handling
 
-### LED 1 — Preset pattern
+The audio callback reads from `state_.edit_buffer` via `preset.GetEditBuffer()`. The main loop (`PresetSystem::Tick` at 10 ms) runs `ProcessKnobsAndSwitches()` which mediates hardware → edit buffer.
 
-Pre-computed lookup table: each preset (1–8) maps to a sequence of `{duration_ms, led_on}` steps.
+### Knob takeover (live / frozen)
 
-```cpp
-struct BlinkStep {
-    uint16_t duration_ms;
-    bool led_on;
-};
+Each knob has a `knob_live_[i]` flag. After preset load or `SnapshotHardware()`, all knobs are `live=false` — the edit buffer holds the loaded value and ignores hardware until the user moves the knob past `KNOB_DIRTY_THRESHOLD`. Once a knob crosses that, it flips to `live=true` and edit buffer tracks hw at full ADC resolution every tick.
 
-// Example: Preset 4 = IV = [150ms on, 200ms off, 950ms on, 600ms off]
-```
+This is the "soft pickup" pattern — knob position on the panel doesn't have to match the loaded preset value, but the audio still uses the preset's value until you touch that knob.
 
-The engine:
-- Stores the current step array and index
-- In the main loop tick, decrements a countdown timer
-- When timer expires, advances to next step (wrapping), sets LED, loads next duration
-- `StartPattern(preset_num)` resets to step 0
-- `StopPattern()` turns LED off
+### Switch movement (SW1, SW2, SW3)
 
-In **manual mode** (preset 0): LED 1 is off. No waveform indicator — waveform is audible.
+Each switch is tracked against `last_hw_sw*_` (snapshot baseline). A change updates the edit buffer and (on a saved preset) marks dirty. SW3 follows the same pattern — preset loads may change `current_mode_` to differ from the physical SW3 position, but dirty fires only on actual physical movement.
 
-### LED 2 — State indicator
+### `SnapshotHardware()`
 
-Multiple mutually-exclusive patterns:
-- **Solid on** — active (not bypassed, not dirty)
-- **Off** — bypassed
-- **Rapid flash** (50/50 ms) — dirty (preset edited)
-- **Fast blink** (150/150 ms) — save mode
-- **Burst flash** (75/75 ms for 500 ms) — save confirmed
-
-Same step-based engine, but simpler patterns. The save-confirm burst uses a separate countdown to auto-return to normal after 500 ms.
+Reads current hw knob values and SW1/SW2/SW3 positions into `last_hw_*` baselines, and freezes all knobs (`knob_live_ = false`). Called after preset load, FS1 long, and similar baseline-reset events. Deferred to the **first Tick** (not Init) so it runs after `hw.StartAdc()` has produced real ADC values.
 
 ---
 
-## Knob / Switch Handling Changes
+## Flash persistence
 
-### Current behavior (no preset system)
+### Debounced auto-save
 
-Knobs are read directly in `AudioCallback` via `hw.GetKnobValue()`. There's no edit buffer — the audio callback reads hardware directly every block.
+Every state mutation calls `MarkStateChanged()` which sets `save_pending_ = true` and zeroes `idle_since_change_ms_`. The Tick increments idle, and when it reaches `AUTOSAVE_DEBOUNCE_MS` (2000 ms) with no further changes, fires one `SaveToFlash()` and clears the pending flag.
 
-### New behavior (with preset system)
+- **No changes ever → no flash writes.**
+- Replaces the original fixed 30 s interval (which fired even when nothing changed).
+- Power-cycle loss window: ~2 s of the last edit. Save-confirm (FS2 long) saves immediately to bypass the debounce.
 
-**The edit buffer is the DSP's input.** The audio callback reads from the edit buffer, not from hardware knobs.
+Call sites that `MarkStateChanged()`:
+- `ProcessKnobsAndSwitches` (any knob takeover or SW1/SW2 movement)
+- `ProcessModeSwitchHardware` (SW3 movement)
+- `OnFs1ShortPress` (preset cycle / dirty revert / manual)
+- `OnFs1LongPress` (jump to manual)
+- `CycleBank` (bank advance)
 
-Flow:
-1. **Manual mode:** Every knob change writes directly to edit buffer. DSP always matches hardware.
-2. **Preset loaded:** Edit buffer holds preset values. Knob movement overwrites that parameter in the edit buffer and sets dirty flag.
-3. **Preset load:** Copy stored preset into edit buffer. All 6 knobs + 2 switches jump immediately.
+`OnFs2LongPress` save-confirm path calls `SaveToFlash()` directly and clears `save_pending_`.
 
-### Where knob reading happens
+### Migration (v2 → v3)
 
-Option A: Read knobs in audio callback (current), compare to edit buffer
-Option B: Read knobs in main loop, update edit buffer, audio callback reads edit buffer
+On boot, if `data.version == 2`:
+1. Reinterpret the loaded RAM buffer's first `sizeof(legacy_v2::StorageData)` bytes as `legacy_v2::StorageData` (memcpy into a stack instance).
+2. Build a fresh `GlobalState` from it: each old mode m's 8 presets → `banks[m]`, with each slot's new `mode` field stamped to `m`. `active_bank = last_mode`, `active_preset / dirty / edit_buffer` come from the last active mode.
+3. Write back v3 layout, save.
 
-**Recommended: Option B.** The main loop already runs every 10 ms — plenty fast for knob response. This keeps the audio callback clean and avoids race conditions with the preset system.
+Banks 3..5 stay at factory defaults. Active bank starts where the pedal left off.
 
-Implementation:
-- Main loop reads all 6 knobs + SW1 + SW2 every tick
-- If any value changed significantly (dead zone to avoid jitter), update edit buffer
-- Audio callback reads from a `current_params` struct that the main loop writes
+### Factory boot
 
-### Switch 3 (mode select)
-
-SW3 is **not** part of the edit buffer — it's a global control. Mode switching logic runs in the main loop.
-
----
-
-## Flash Persistence
-
-### When to save to flash
-
-1. **Mode switch** — save departing mode's full state (edit buffer + active preset + dirty)
-2. **Save confirm** — write edit buffer to target preset slot
-3. **Periodic auto-save** — save edit buffer state every ~30 seconds if changed (protects against power loss)
-
-### PersistentStorage usage
-
-```cpp
-PersistentStorage<StorageData> flash(hw.seed.qspi);
-
-// Init with factory defaults
-StorageData defaults = {};
-defaults.version = 1;
-// All modes: manual, clean, knobs at 0.5, switches at UP
-flash.Init(defaults);
-
-// Load on boot
-StorageData& data = flash.GetSettings();
-// Restore state.mode, edit buffers, presets, etc.
-
-// Save
-auto& data = flash.GetSettings();
-// Copy current state into data
-flash.Save();
-```
-
-### First boot (factory state)
-
-`PersistentStorage::GetState()` returns `FACTORY`. All modes start in Manual with knobs read from current hardware positions.
+If `PersistentStorage::GetState() == FACTORY` (first ever boot or fully wiped flash), the edit buffer reads hardware (`current_mode_ = SW3`, knobs/SW1/SW2 → buffer). All preset slots in all banks remain empty.
 
 ---
 
-## Implementation Steps
+## Behavior summary (per gesture × context)
 
-### Step 1: Constants and data structures
-
-- Add all timing constants to `constants.h`
-- Create `src/preset_system.h` with:
-  - `ModePresetData`, `ModeState`, `StorageData` structs
-  - `BlinkStep` struct and pre-computed pattern tables
-  - `PresetSystem` class declaration
-
-### Step 2: LED blink engine
-
-- Implement `BlinkEngine` (or inline in PresetSystem):
-  - `StartPresetPattern(uint8_t preset)` — loads step array, resets timer
-  - `StopPresetPattern()` — LED 1 off
-  - `SetLed2Mode(Led2Mode mode)` — switches LED 2 pattern
-  - `Tick(uint32_t elapsed_ms)` — advances both LED timers, sets LED hardware
-
-### Step 3: Footswitch state machine
-
-- Implement footswitch processing:
-  - Track press start times, long-press-fired flags
-  - Bootloader dual-hold detection (highest priority)
-  - Dispatch short/long press events to handlers
-- Implement all FS1/FS2 handlers per the state table above
-
-### Step 4: Edit buffer integration
-
-- Add `current_params` struct readable by audio callback
-- Move knob/switch reading from audio callback to main loop
-- Audio callback reads from `current_params` instead of `hw.GetKnobValue()`
-- Dirty detection: any knob/switch change while a preset is loaded
-
-### Step 5: Flash storage
-
-- Define `StorageData` with `operator!=`
-- Init `PersistentStorage` in `main()`
-- Load state on boot (or read hardware on factory boot)
-- Save on mode switch, save confirm, and periodic auto-save
-
-### Step 6: Mode switching
-
-- SW3 change detection in main loop
-- Save departing mode state, restore incoming mode state
-- Update LEDs to reflect restored state
-
-### Step 7: Integration and cleanup
-
-- Remove old LED waveform indicator logic
-- Remove old `bypass ^= RisingEdge()` from audio callback
-- **Keep** `hw.CheckResetToBootloader()` in main loop (Phase 1 — FS1 held 2 s still works)
-- Wire everything together in main loop
-
-### Step 8: Documentation
-
-- Update `PROJECT.md`: Current Status, Next, fix save-confirm duration
-- Update `README.md`: controls and LEDs tables for the new system
+| Gesture | Manual (preset=0) | On saved preset | On empty slot | Save mode |
+|---|---|---|---|---|
+| Knob movement past threshold | Edit buffer updates | Dirty + LED 2 flash | Edit buffer updates (acts like manual) | Frozen — change ignored |
+| SW1 / SW2 movement | Edit buffer updates | Dirty + LED 2 flash | Edit buffer updates | Frozen |
+| SW3 movement | Mode + edit buffer.mode update | Dirty + LED 2 flash; mode follows SW3 | Mode + edit buffer.mode update | Frozen |
+| FS1 short | Cycle to preset 1 | Dirty: revert / clean: cycle to next | Cycle to next | Cycle save target |
+| FS1 long | (no-op, already manual) | Jump to manual (reads hardware) | Jump to manual | (no-op) |
+| FS2 short | Toggle bypass | Toggle bypass | Toggle bypass | Cancel save |
+| FS2 long | Enter save mode (target = 1) | Enter save mode (target = current) | Enter save mode (target = current) | Confirm save |
+| Both short (bank cycle) | Bank advances, edit buffer preserved | Bank advances, load same slot in new bank | Bank advances, load same slot in new bank | Bank advances, save target unchanged |
+| Both held 2 s | Bootloader (LED burst → reset) | Bootloader | Bootloader | Bootloader |
 
 ---
 
-## Design Decisions (Resolved)
+## File layout
 
-1. **LED 1 in manual mode:** Off. No waveform indicator. Waveform is audible.
-2. **Knob dead zone for dirty detection:** 0.02 (2% of travel). Avoids ADC jitter false triggers.
-3. **Save mode timeout:** None. Save mode stays active until explicitly confirmed or cancelled.
+| File | Purpose |
+|---|---|
+| `src/preset_system.h` | `PresetSystem` class — state machine, footswitch + knob handling, LED engine, flash storage, migration |
+| `src/constants.h` | All timing constants |
+| `src/NitroTron3.cpp` | `preset.Init()`, `preset.Tick(10)`, audio callback reads `preset.GetEditBuffer()`, polls `preset.ShouldEnterBootloader()` |
 
----
-
-## Pre-computed Blink Patterns
-
-Reference for implementation. Each row ends with the repeat gap (off).
-
-| Preset | Symbols | Steps |
-|---|---|---|
-| 1 (I) | `[150 on, 600 off]` |
-| 2 (II) | `[150 on, 200 off, 150 on, 600 off]` |
-| 3 (III) | `[150 on, 200 off, 150 on, 200 off, 150 on, 600 off]` |
-| 4 (IV) | `[150 on, 200 off, 950 on, 600 off]` |
-| 5 (V) | `[950 on, 600 off]` |
-| 6 (VI) | `[950 on, 200 off, 150 on, 600 off]` |
-| 7 (VII) | `[950 on, 200 off, 150 on, 200 off, 150 on, 600 off]` |
-| 8 (VIII) | `[950 on, 200 off, 150 on, 200 off, 150 on, 200 off, 150 on, 600 off]` |
-
-Max steps: 8 (preset 8). Total pattern length for preset 8: 950+200+150+200+150+200+150+600 = 2600 ms.
+UI prototype: `docs/ux-demo.html` (browser playground mirroring the firmware behaviour for fast iteration on timing constants and gesture flow).

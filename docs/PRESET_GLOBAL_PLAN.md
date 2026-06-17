@@ -1,12 +1,20 @@
 # Global Preset System — Plan
 
-Status: planning. Replaces the per-mode preset bank with a single global bank where each slot stores its own mode, organised into multiple banks selectable via a both-FS short tap. Requires a storage version bump and one-time factory reset on first boot.
+Status: implemented through P.5; P.6 listening pass and P.7 docs in progress. As-built reference: `docs/PRESET_IMPL.md`. This document captures the original plan and notes where the implementation diverged.
 
 Open decisions in the previous revision have been resolved:
 - **Edit buffer model:** Option 1 — single global edit buffer (no per-mode buffers; manual mode is fully WYSIWYG with no hidden state).
 - **Slot count:** 8 per bank (Roman LED scheme works cleanly up to VIII).
 - **SW3 treatment:** uniform with SW1/SW2 — moving it on a preset marks dirty, FS1 short reverts.
-- **Banks:** new in this revision (see § Banks).
+- **Banks:** added in this revision (see § Banks).
+
+Divergences from the plan during implementation (kept for the record; full as-built details in `PRESET_IMPL.md`):
+- **Migration instead of factory reset.** V2 → V3 migrates existing per-mode presets into banks 1/2/3 (each slot tagged with its source mode = the SW3 position it was saved under). No data loss.
+- **Bank burst is fixed-total, equal pulses.** `LED_BANK_TOTAL_MS = 1200` divided by pulse count; bank 1 = one 1200 ms pulse, bank 2 = 2 × 525 + 150 gap, bank 3 = 3 × 300 + 2 × 150 gaps. I/V duration distinction dropped (only 3 banks reachable, count alone differentiates).
+- **Debounced auto-save** replaces the original 30 s fixed interval. Any state change resets a 2 s idle timer; save fires once on idle, then stops until the next change. No-change → no flash writes.
+- **FS1-alone bootloader path dropped** (it was too easy to trigger by accident while preset-cycling). Both-FS held 2 s is now the sole DFU entry, with a 1.2 s alternating-LED burst as visible confirmation.
+- **SW3 dirty fires on physical movement** (tracked via `last_hw_sw3_` snapshot), not on mismatch between the loaded preset's stored mode and the SW3 position.
+- **Init snapshot deferred to first Tick** so it runs after `hw.StartAdc()` and captures real ADC values — otherwise the first tick after boot would interpret the ADC warm-up delta as knob movement and falsely mark dirty.
 
 ---
 

@@ -689,6 +689,16 @@
         <div class="const-group">
           <div class="const-group-title">Bank burst (both LEDs, on bank switch)</div>
           <div class="const-row">
+            <label>Total burst time</label>
+            <input type="number" id="cBankTotal" value="1200" step="100" min="400" max="3000">
+            <span class="unit">ms</span>
+          </div>
+          <div class="const-row">
+            <label>Gap between pulses</label>
+            <input type="number" id="cBankGap" value="150" step="25" min="50" max="500">
+            <span class="unit">ms</span>
+          </div>
+          <div class="const-row">
             <label>Flicker chunk</label>
             <input type="number" id="cBankFlicker" value="20" step="5" min="10" max="80">
             <span class="unit">ms</span>
@@ -1182,36 +1192,40 @@
       updateDisplay();
     }
 
-    // Bank-switch confirmation burst: both LEDs flash the Roman pattern of the
-    // new bank number, with each I/V symbol filled by deterministic fast
-    // flicker (cBankFlicker on/off). Plays once, then restores normal LED state.
+    // Bank-switch confirmation burst: both LEDs play the new bank's
+    // Roman-numeral pulse count, with each pulse filled by deterministic
+    // fast flicker. Total burst time is fixed (cBankTotal), divided across
+    // N equal pulses with cBankGap between them. I/V duration distinction
+    // is dropped — pulse count alone differentiates banks 1–3.
     function startBankBurst(bankNum) {
       stopLed1Pattern();
       stopLed2Pattern();
       led1Generation++;
       const gen = led1Generation;
 
-      const shortOn = C('cShortOn');
-      const longOn = C('cLongOn');
-      const elemGap = C('cElemGap');
+      const totalMs = C('cBankTotal');
+      const gapMs = C('cBankGap');
       const flickerChunk = C('cBankFlicker');
       const trailingHold = C('cBankHold');
       const symbols = ROMAN[bankNum];
 
-      // Build timeline: each Roman symbol becomes a flicker burst of the same
-      // total duration as a normal pulse, filled with on/off chunks.
+      // Count pulses (I/V symbols), split totalMs into N equal flicker pulses
+      // with (N-1) gaps of cBankGap between them.
+      const nPulses = symbols.length;
+      const totalGap = (nPulses > 1) ? (nPulses - 1) * gapMs : 0;
+      const pulseMs = (totalMs > totalGap) ? Math.floor((totalMs - totalGap) / nPulses) : flickerChunk;
+
       const steps = [];
-      for (let i = 0; i < symbols.length; i++) {
-        const dur = (symbols[i] === 'V') ? longOn : shortOn;
+      for (let i = 0; i < nPulses; i++) {
         let elapsed = 0;
         let on = true;
-        while (elapsed < dur) {
-          const chunk = Math.min(flickerChunk, dur - elapsed);
+        while (elapsed < pulseMs) {
+          const chunk = Math.min(flickerChunk, pulseMs - elapsed);
           steps.push([chunk, on]);
           elapsed += chunk;
           on = !on;
         }
-        if (i < symbols.length - 1) steps.push([elemGap, false]);
+        if (i < nPulses - 1) steps.push([gapMs, false]);
       }
       steps.push([trailingHold, false]);
 
@@ -1425,18 +1439,20 @@
           bothBootFired = true;
           log('BOOTLOADER MODE ENTERED', 'warn');
           state.bootloaderCountdown = false;
+          // Alternating LED burst — 8 × 150 ms = 1.2 s total (matches firmware)
           let count = 0;
           const flash = setInterval(() => {
-            setLed(1, count % 2 === 0);
-            setLed(2, count % 2 === 0);
+            const phase = count % 2 === 0;
+            setLed(1, phase);
+            setLed(2, !phase);
             count++;
-            if (count > 10) {
+            if (count >= 16) {
               clearInterval(flash);
               setLed(1, false);
               setLed(2, false);
               log('(Reset pedal to exit bootloader)', 'warn');
             }
-          }, 150);
+          }, 75);
           updateDisplay();
         }, C('cBootHold'));
       }
