@@ -2,6 +2,18 @@
 
 A DIY digital bass effects pedal built on the [Electro-Smith Daisy Seed](https://electro-smith.com/products/daisy-seed) and [Cleveland Music Co. Hothouse DSP kit](https://shop.clevelandmusicco.com/products/hothouse-digital-signal-processing-platform-kit). Licensed under [GPL v3](LICENSE).
 
+## Overview
+
+Three independent effects share a single hardware front-end. The signal-chain philosophy of this pedal is: **after** whammy and octavers, **before** overdrives and distortion.
+
+**BORDUN (Mode A).** A harmonic companion to the bass, modelled after a specific usage of the Moog MoogerFooger FreqBox (MF-107) — its envelope-gated oscillator mixed in alongside the dry signal, kept clean of sync and FM modulation. An internally generated oscillator, gated and shaped by the bass's own envelope, lays subtle or assertive accompanying harmonics over the input — pure intervals, fifths, octaves, drone-like wash. Placed **before** overdrive in the chain it stacks musically into a saturated sound; on its own it sits as a parallel voice along the played notes. Tracking modes lock the harmony to the played pitch; fixed mode anchors a drone against which the bass moves.
+
+**SPRAWL (Mode B).** Granular-delay-based texture and soundscape engine. A rolling buffer feeds a grain scheduler whose voices can pitch-shift non-linearly, drift, scatter, and stutter — built to fill the void around the bass, intended for improvisation and experimental performance. Functionally a multi-mode effect on its own: all colouring and texturing stages (decimator/fold, event-driven glitch, ringmod, frequency shifter) are reachable in a non-delay path too (K2 fully CCW). High feedback with the tanh saturator pushes the loop into harmonic cloud blooms; the Bode SSB shifter inside the feedback loop cascades each pass and rapidly grows beyond pitched material.
+
+**SCHISM (Mode C).** Dynamic bass filter and digital distortion unit, with a fat pitch-tracked synth voice as a third drive option. The filter can self-oscillate in a controlled manner — singing-into-screaming textures that play well into a downstream overdrive or fuzz. The bit-XOR drive enriches overtones cleanly and lights up especially well placed **before** overdrive/fuzz. The phaser sub-mode is provisional and likely to be replaced with a different effect once a fitting one is found.
+
+**Presets.** A global preset system recalls mode + full parameter state in one footswitch press. One global edit buffer, 3 banks × 8 slots = 24 reachable presets. Each slot carries its own mode, so cycling presets can swap mode mid-set. FS1 cycles slots within the active bank; FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs); FS2 long enters save mode (banks can be cycled inside save mode for cross-bank saves); FS1+FS2 held 2 s enters DFU. State persists across power cycles via debounced 2 s flash auto-save. The existing per-mode preset layout (older firmware) is migrated, not wiped.
+
 ## Hardware
 
 - [Daisy Seed 65 MB](https://electro-smith.com/products/daisy-seed) (STM32H750, 480 MHz Cortex-M7, 32-bit float, 48 kHz audio; 64 MB QSPI flash variant)
@@ -97,19 +109,9 @@ make program    # flash via OpenOCD / ST-Link
 make program-dfu  # flash via DFU bootloader
 ```
 
-## Overview
+## Modes in detail
 
-A multi-mode bass effects pedal. Three independent effects share a single hardware front-end and a global preset system that recalls mode + full parameter state in one footswitch press.
-
-**Presets.** One global edit buffer, 3 banks × 8 slots (24 reachable presets). Each slot carries its own mode, so cycling presets can swap mode mid-set. FS1 cycles slots within the active bank; FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs); FS2 long enters save mode (banks can be cycled inside save mode for cross-bank saves); FS1+FS2 held 2 s enters DFU. State persists across power cycles via debounced 2 s flash auto-save. The existing per-mode preset layout (older firmware) is migrated, not wiped.
-
-**Mode A — Bordun.** A harmonic companion to the bass, modelled after a specific usage of the Moog MoogerFooger FreqBox (MF-102) — its envelope-gated oscillator mixed in alongside the dry signal, kept clean of sync and FM modulation. An internally generated oscillator, gated and shaped by the bass's own envelope, lays subtle or assertive accompanying harmonics over the input — pure intervals, fifths, octaves, drone-like wash. Placed **before** overdrive in the chain it stacks musically into a saturated sound; on its own it sits as a parallel voice along the played notes. Tracking modes lock the harmony to the played pitch; fixed mode anchors a drone against which the bass moves.
-
-**Mode B — Sprawl.** Granular-delay-based texture and soundscape engine. A rolling buffer feeds a grain scheduler whose voices can pitch-shift non-linearly, drift, scatter, and stutter — built to fill the void around the bass, intended for improvisation and experimental performance. Functionally a multi-mode effect on its own: all colouring and texturing stages (decimator/fold, event-driven glitch, ringmod, frequency shifter) are reachable in a non-delay path too (K2 fully CCW). High feedback with the tanh saturator pushes the loop into harmonic cloud blooms; the Bode SSB shifter inside the feedback loop cascades each pass and rapidly grows beyond pitched material.
-
-**Mode C — Schism.** Dynamic bass filter and digital distortion unit, with a fat pitch-tracked synth voice as a third drive option. The filter can self-oscillate in a controlled manner — singing-into-screaming textures that play well into a downstream overdrive or fuzz. The bit-XOR drive enriches overtones cleanly and lights up especially well placed **before** overdrive/fuzz. The signal-chain philosophy of this pedal is: **after** whammy and octavers, **before** overdrives and distortion. The phaser sub-mode is provisional and likely to be replaced with a different effect once a fitting one is found.
-
-### Mode A — Bordun
+### BORDUN (Mode A)
 
 PolyBLEP oscillator (waveform via SW1) → Huovilainen Moog ladder → env-controlled VCA → equal-power mix with the dry. SW2 selects the pitch source: fixed (K1 semitones, K2 octave), octave-locked tracking (pitch class follows the bass within K2's octave, K1 adds an interval), or direct tracking (osc follows the bass exactly, K1/K2 are relative offsets). K5 detunes a second oscillator against the first for beating. K4 sweeps ladder cutoff in SAW/SQR; in TRI it morphs cutoff → wavefolder past noon.
 
@@ -139,7 +141,7 @@ Input ──┬─────────────────────�
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square |
 | SWITCH 2 | Drone mode | **UP** - Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** - Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval)<br/>**DOWN** - Direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
-| SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl)<br/>**DOWN** - Mode C (Schism) |
+| SWITCH 3 | Mode select | **UP** - BORDUN (Mode A)<br/>**MIDDLE** - SPRAWL (Mode B)<br/>**DOWN** - SCHISM (Mode C) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
 | FS1+FS2 short tap | Bank cycle | Cycle active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works in save mode to retarget a save into another bank. |
@@ -152,7 +154,7 @@ Input ──┬─────────────────────�
 | LED 1 (left) | Preset indicator: off = Manual, Roman numeral blink pattern for presets 1–8 (I=short, V=long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows target slot. |
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
-### Mode B — Sprawl
+### SPRAWL (Mode B)
 
 8 s SDRAM ring buffer feeding 8 grain voices (Hann-windowed) → texture shaper (SW1: decimator/fold, event-driven glitch zones, or ringmod) → wet HPF 120 Hz → optional Bode SSB shifter (SW2=DOWN) → tanh-saturated feedback loop with build-up + on-play duckers → optional Clouds reverb on K5 CCW (mutually exclusive with feedback on K5 CW). SW2 picks the harmony source: fixed interval, resonance window pick, or frequency shifter. K2 fully CCW bypasses the grain engine and routes the dry directly into the texture shaper for a non-delay path with micro-stutter on K3.
 
@@ -194,7 +196,7 @@ Input ──┬─────────────────────�
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Texture mode | **UP** - Decimator/Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold)<br/>**MIDDLE** - Event-driven digital glitch (bipolar K4: noon = clean, CCW = random bit-flip events, CW = random timing events {freeze / stutter / reverse}; sparse near deadzone → continuous at extremes via event chaining)<br/>**DOWN** - Ringmod (K4 CCW–30% = tremolo 1–15 Hz, 30%–CW = bell partials, pitch-tracked with keytracked LPF) |
 | SWITCH 2 | Harmony / shift | **UP** - Fixed interval (K1 = ±12 semitones above tracked note)<br/>**MIDDLE** - Resonance (grains lock onto nearby harmonics; K1 spans ±36 semi scan)<br/>**DOWN** - Bode SSB frequency shifter on the wet bus (inside the feedback loop, so each pass cascades the shift). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential, CCW = down, CW = up |
-| SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl — this mode)<br/>**DOWN** - Mode C (Schism) |
+| SWITCH 3 | Mode select | **UP** - BORDUN (Mode A)<br/>**MIDDLE** - SPRAWL (Mode B — this mode)<br/>**DOWN** - SCHISM (Mode C) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
 | FS1+FS2 short tap | Bank cycle | Cycle active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works in save mode to retarget a save into another bank. |
@@ -207,7 +209,7 @@ Input ──┬─────────────────────�
 | LED 1 (left) | Preset indicator: off = Manual, Roman numeral blink pattern for presets 1–8 (I=short, V=long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows target slot. |
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
-### Mode C — Schism (C.6 in progress)
+### SCHISM (Mode C — C.6 in progress)
 
 Two-stage chain: drive (SW1) → filter (SW2). SW1 picks the drive: sine wavefolder (K4 = fold), gated bit crusher (K4 = bit depth, env-gated so silent input → silent output), or pitch-tracked synth oscillator (YIN-tracked semitone-quantized bass pitch drives a hypersaw → single saw → single rect → PWM morph along K4, env-VCA'd before the filter). SW2 picks the filter: Moog ladder v2 (tuned for self-osc), Grendel 4-BPF formant (vowel path oo → ee on K1), or phaser (provisional). K1/K2/K3 are filter cutoff/depth/env-mod; K5 is a bipolar pre-filter drive (CCW attenuate, noon unity, CW up to 8×). Asymmetric env smoothers per filter shape K3-direction (peak-follower CW, slow-swell CCW). Post-filter: small pre-limit lift, 2-band peak limiter (LF preserved so fundamentals don't duck), amp-env VCA so self-resonance doesn't ring on silence. Full status in `docs/MODE_C_DISCOVERY.md`.
 
@@ -223,7 +225,7 @@ Two-stage chain: drive (SW1) → filter (SW2). SW1 picks the drive: sine wavefol
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Drive | **UP** - Sine wavefolder (K4 = fold amount)<br/>**MIDDLE** - Gated bit crusher (K4 = bit depth 16 → 4, env-gated)<br/>**DOWN** - Pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph, raw-env VCA pre-filter) |
 | SWITCH 2 | Filter | **UP** - Moog ladder (K1 cutoff, K2 resonance, K3 env)<br/>**MIDDLE** - Grendel formant (K1 vowel path, K2 size, K3 env on path)<br/>**DOWN** - Plague (K1 input balance, K2 intensity, K3 env on balance) |
-| SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl)<br/>**DOWN** - Mode C (Schism — this mode) |
+| SWITCH 3 | Mode select | **UP** - BORDUN (Mode A)<br/>**MIDDLE** - SPRAWL (Mode B)<br/>**DOWN** - SCHISM (Mode C — this mode) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
 | FS1+FS2 short tap | Bank cycle | Cycle active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works in save mode to retarget a save into another bank. |

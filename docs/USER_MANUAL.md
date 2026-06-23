@@ -6,17 +6,47 @@ subtitle: DIY digital bass pedal — Daisy Seed + Hothouse
 # NitroTron3
 
 A multi-mode digital bass effects pedal built on the Electro-Smith Daisy
-Seed and Cleveland Music Co. Hothouse DSP kit.
+Seed and Cleveland Music Co. Hothouse DSP kit. The signal-chain
+philosophy is: **after** whammy and octavers, **before** overdrives and
+distortion.
 
-Three modes share a single hardware front-end and a global preset system
-that recalls mode and full parameter set in one footswitch press:
+## Modes at a glance
 
-- **Bordun** — harmonic companion to the bass
-- **Sprawl** — granular delay, textures and soundscapes
-- **Schism** — dynamic filter + digital distortion
+**BORDUN (Mode A).** A harmonic companion to the bass, modelled after a
+specific usage of the Moog MoogerFooger FreqBox (MF-107) — its
+envelope-gated oscillator mixed in alongside the dry signal, kept clean
+of sync and FM modulation. An internally generated oscillator, gated and
+shaped by the bass's own envelope, lays subtle or assertive
+accompanying harmonics over the input — pure intervals, fifths, octaves,
+drone-like wash. Placed **before** overdrive in the chain it stacks
+musically into a saturated sound; on its own it sits as a parallel voice
+along the played notes. Tracking modes lock the harmony to the played
+pitch; fixed mode anchors a drone against which the bass moves.
 
-The signal-chain philosophy of this pedal is: **after** whammy and
-octavers, **before** overdrives and distortion.
+**SPRAWL (Mode B).** Granular-delay-based texture and soundscape engine.
+A rolling buffer feeds a grain scheduler whose voices can pitch-shift
+non-linearly, drift, scatter, and stutter — built to fill the void
+around the bass, intended for improvisation and experimental
+performance. Functionally a multi-mode effect on its own: all colouring
+and texturing stages (decimator/fold, event-driven glitch, ringmod,
+frequency shifter) are reachable in a non-delay path too (K2 fully CCW).
+High feedback with the tanh saturator pushes the loop into harmonic
+cloud blooms; the Bode SSB shifter inside the feedback loop cascades
+each pass and rapidly grows beyond pitched material.
+
+**SCHISM (Mode C).** Dynamic bass filter and digital distortion unit,
+with a fat pitch-tracked synth voice as a third drive option. The
+filter can self-oscillate in a controlled manner — singing-into-screaming
+textures that play well into a downstream overdrive or fuzz. The
+bit-XOR drive enriches overtones cleanly and lights up especially well
+placed **before** overdrive/fuzz. The phaser sub-mode is provisional
+and likely to be replaced with a different effect in a future release.
+
+**Presets.** A global preset system recalls mode + full parameter state
+in one footswitch press. One global edit buffer, 3 banks × 8 slots = 24
+reachable presets. Each slot carries its own mode, so cycling presets
+can swap mode mid-set. See the *Footswitches and Presets* section
+below.
 
 ## Hardware overview
 
@@ -28,26 +58,22 @@ octavers, **before** overdrives and distortion.
 
 **SW3 selects the mode**:
 
-- **UP** — Mode A — Bordun
-- **MIDDLE** — Mode B — Sprawl
-- **DOWN** — Mode C — Schism
+- **UP** — BORDUN (Mode A)
+- **MIDDLE** — SPRAWL (Mode B)
+- **DOWN** — SCHISM (Mode C)
 
 The mode determines what every other knob and switch does. Each mode is
 documented in its own section below.
 
 ---
 
-# Mode A — Bordun
+# BORDUN (Mode A)
 
-A harmonic companion to the bass, modelled after a specific usage of the
-Moog MoogerFooger FreqBox (MF-102) — its envelope-gated oscillator mixed
-in alongside the dry signal, kept clean of sync and FM modulation.
-
-A two-oscillator voice (saw, triangle, or square) tracks the input,
-gated by an envelope follower so the drone only sounds while you play. A
-Moog ladder filter shapes the tone; in triangle mode the same knob
-crosses over into wavefolding. Placed **before** overdrive in the chain
-the drone stacks musically into the saturated sound.
+A two-oscillator voice (waveform via SW1) tracks the bass input, gated
+by an envelope follower so the drone only sounds while you play. A Moog
+ladder filter shapes the tone; in triangle mode K4 crosses over into
+wavefolding past noon. SW2 picks the pitch source: fixed, octave-locked
+tracking, or direct tracking.
 
 ![Mode A pedal layout](pedal-mode-a.svg){.pedal-layout}
 
@@ -66,25 +92,16 @@ the drone stacks musically into the saturated sound.
 
 ---
 
-# Mode B — Sprawl
+# SPRAWL (Mode B)
 
-Granular-delay-based texture and soundscape engine. A rolling 8-second
-buffer feeds a grain scheduler whose voices can pitch-shift non-linearly,
-drift, scatter, and stutter — built to fill the void around the bass,
-intended for improvisation and experimental performance.
-
-Functionally a multi-mode effect on its own: all colouring and texturing
-stages (decimator/fold, event-driven glitch, ringmod, frequency shifter)
-are reachable in a non-delay path too — set K2 fully CCW to bypass the
-grain engine and route the dry directly through the texture shaper, with
-K3 becoming a micro-stutter control.
-
-K5 is bipolar: one direction adds Clouds reverb on the wet bus, the other
-drives a tanh-saturated feedback loop with build-up and on-play duckers
-that keep the loop musical. High feedback grows into harmonic cloud
-blooms. SW2 DOWN replaces grain pitch-shifting with a Bode SSB
-frequency shifter living inside the feedback loop — each pass cascades
-the shift, rapidly growing beyond pitched material.
+8-second SDRAM ring buffer feeding 8 grain voices, with a choice of
+texture shaper (SW1) and harmony source (SW2). K5 is bipolar — CCW
+routes the wet bus through a Clouds reverb, CW drives a tanh-saturated
+feedback loop with build-up and on-play duckers that keep the loop
+musical. K2 fully CCW bypasses the grain engine and routes the dry
+through the texture shaper directly, with K3 becoming a micro-stutter
+control. SW2 DOWN replaces grain pitch-shifting with a Bode SSB
+frequency shifter living inside the feedback loop.
 
 ![Mode B pedal layout](pedal-mode-b.svg){.pedal-layout}
 
@@ -103,24 +120,19 @@ the shift, rapidly growing beyond pitched material.
 
 ---
 
-# Mode C — Schism
+# SCHISM (Mode C)
 
-Dynamic bass filter and digital distortion unit, with a fat pitch-tracked
-synth voice as a third drive option. The filter can self-oscillate in a
-controlled manner — singing-into-screaming textures that play well into a
-downstream overdrive or fuzz. The bit-crush drive enriches overtones
-cleanly and lights up especially well placed before an overdrive or
-fuzz.
-
-K1–K3 drive the filter selected by SW2; K4 drives the source flavor
-selected by SW1 (wavefolder, bit crusher, or pitch-tracked synth
-oscillator). K5 is a bipolar pre-filter drive (attenuate / unity /
-boost, universal across all SW2 filter modes); K6 is the dry/wet mix.
+Two-stage chain: drive (SW1) → filter (SW2). K1–K3 drive the filter
+selected by SW2; K4 drives the source flavor selected by SW1
+(wavefolder, gated bit crusher, or pitch-tracked synth oscillator). K5
+is a bipolar pre-filter drive (attenuate / unity / boost, universal
+across all SW2 filter modes); K6 is the dry/wet mix.
 
 Three filter flavors: a tuned **Moog ladder** (single input saturator,
 cutoff-tracked resonance, asymmetric drive), a vowel-pathed **Grendel
 formant** filter, and a 4-stage **phaser** with internal LFO. K3 is a
-bipolar envelope-to-filter modulator with a center deadzone.
+bipolar envelope-to-filter modulator with a center deadzone (or, on
+the phaser, a bipolar LFO rate + shape selector).
 
 Three drive flavors. **SW1=UP** is the sine wavefolder. **SW1=MIDDLE**
 is a gated bit crusher (K4 sweeps the XOR bit position, input-envelope
@@ -135,9 +147,6 @@ The wet path runs through a 2-band post-filter peak limiter (low end
 preserved so bass fundamentals don't duck under resonance peaks) and is
 gated by an amplitude-env VCA — when you stop playing, the wet path goes
 silent so self-resonance never rings alone.
-
-*The phaser sub-mode is provisional and likely to be replaced with a
-different effect in a future release.*
 
 ![Mode C pedal layout](pedal-mode-c.svg){.pedal-layout}
 
