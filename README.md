@@ -1,12 +1,11 @@
 # NitroTron3
 
-A DIY digital bass effects pedal built on the Electro-Smith Daisy Seed and Cleveland Music Co. Hothouse DSP kit. Licensed under [GPL v3](LICENSE).
+A DIY digital bass effects pedal built on the [Electro-Smith Daisy Seed](https://electro-smith.com/products/daisy-seed) and [Cleveland Music Co. Hothouse DSP kit](https://shop.clevelandmusicco.com/products/hothouse-digital-signal-processing-platform-kit). Licensed under [GPL v3](LICENSE).
 
 ## Hardware
 
-- Daisy Seed (STM32H750, 480 MHz Cortex-M7, 32-bit float, 48 kHz audio)
-- Hothouse DSP Pedal Kit (6 knobs, 3x 3-position toggles, 2 footswitches, LED, true-bypass relay)
-- Hammond 125B enclosure
+- [Daisy Seed 65 MB](https://electro-smith.com/products/daisy-seed) (STM32H750, 480 MHz Cortex-M7, 32-bit float, 48 kHz audio; 64 MB QSPI flash variant)
+- [Hothouse DSP Pedal Kit](https://shop.clevelandmusicco.com/products/hothouse-digital-signal-processing-platform-kit) (6 knobs, 3x 3-position toggles, 2 footswitches, LED, true-bypass relay, enclosure)
 
 ## Repository setup
 

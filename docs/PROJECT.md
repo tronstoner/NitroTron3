@@ -18,27 +18,22 @@ Two-stage distortion → filter chain. Switchable distortion (sine wavefolder, P
 ## Hardware Platform
 
 ### Core Module
-- **Electro-Smith Daisy Seed** — STM32-based DSP platform, 480 MHz, 32-bit float, 96 kHz audio
-- **Memory:** 128 KB internal flash, 8 MB QSPI flash, 512 KB SRAM
+- **[Electro-Smith Daisy Seed 65 MB](https://electro-smith.com/products/daisy-seed)** — STM32-based DSP platform, 480 MHz, 32-bit float, 96 kHz audio
+- **Memory:** 128 KB internal flash, 64 MB QSPI flash (the 65 MB variant), 512 KB SRAM
 - Programmable in C++/Arduino, PureData/PlugData, or Max/MSP Gen~
-- Source: **Thonk (UK)** — ships to Austria, ~£31
+- Source: **Thonk (UK)** — ships to Austria
 
-**QSPI migration plan:** The firmware currently targets 128 KB internal flash (77% used after Stage 5). When adding Modes B and C pushes usage past ~90%, switch the linker script from `STM32H750IB_flash.lds` to `STM32H750IB_qspi.lds` (one-line Makefile change). This moves code to the 8 MB QSPI flash — effectively unlimited for this project. The Cortex-M7 instruction cache (16 KB) keeps audio-hot code at full speed; the tight DSP loops that run every sample will stay cached permanently. Requires the Daisy bootloader (already in use for DFU flashing).
+**QSPI migration plan:** The firmware targets the 128 KB internal flash. When usage gets uncomfortable, switch the linker script from `STM32H750IB_flash.lds` to `STM32H750IB_qspi.lds` (one-line Makefile change). The 64 MB QSPI flash is effectively unlimited for this project; the Cortex-M7 instruction cache (16 KB) keeps audio-hot code at full speed and the tight DSP loops that run every sample stay cached permanently. Requires the Daisy bootloader (already in use for DFU flashing).
 
 ### Pedal PCB / Kit
-- **Hothouse DSP Pedal Kit** (without enclosure) by Cleveland Music Co.
+- **[Hothouse DSP Pedal Kit](https://shop.clevelandmusicco.com/products/hothouse-digital-signal-processing-platform-kit)** by Cleveland Music Co.
 - Provides: audio I/O buffering, power filtering, voltage regulation, noise filtering, all hardware controls pre-specced
 - Includes: 6 potentiometers, 3 × 3-position toggle switches, 2 footswitches, jacks, LED
 - Daisy Seed purchased separately and seated on the Hothouse PCB
 - Source: **Reverb.com** (Cleveland Music Co. store) — ships to Europe
 
-### Enclosure
-- **Hammond 125B** format — self-drilled and finished
-- The Hothouse is designed for this enclosure
-
 ### Additional Sourcing (Austria/EU)
 - Components if needed: **Musikding.de** (Germany, fast shipping to AT)
-- Enclosure: **Musikding.de** or **Banzai Music (DE)**
 
 ---
 
@@ -281,7 +276,7 @@ Original per-mode model first, then migrated to a global model: one edit buffer 
 Switch 3 dispatches to `ProcessDrone()`, `ProcessGranular()`, `ProcessFreqShift()`. Modes B and C are dry passthrough stubs. Bypass handled once in `AudioCallback`. Pitch tracker runs only in Mode A. Architecture ready for mode implementation.
 
 ### Stage 7 — Enclosure
-Drill Hammond 125B to Hothouse template. Finish and label.
+Drill the kit enclosure and label.
 
 ### Deferred
 - **Tuning mode** — USB serial workflow needs a fix (freezes on terminal connect). Will revisit after core effect is playable.

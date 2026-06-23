@@ -71,9 +71,8 @@ NitroTron3/
 
 ## Hardware reference
 
-- Daisy Seed (Electro-Smith, STM32, 480 MHz, 32-bit float, 96 kHz — we run at 48 kHz)
-- Hothouse DSP Pedal Kit (6 knobs, 3x 3-position toggles, 2 footswitches, LED, true-bypass relay)
-- Hammond 125B enclosure
+- [Daisy Seed 65 MB](https://electro-smith.com/products/daisy-seed) — Electro-Smith, STM32H750, 480 MHz, 32-bit float, 96 kHz (we run at 48 kHz), 64 MB QSPI flash variant
+- [Hothouse DSP Pedal Kit](https://shop.clevelandmusicco.com/products/hothouse-digital-signal-processing-platform-kit) — Cleveland Music Co., 6 knobs, 3x 3-position toggles, 2 footswitches, LED, true-bypass relay, enclosure
 
 ## Controls documentation format
 
