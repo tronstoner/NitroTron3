@@ -8,15 +8,22 @@ subtitle: DIY digital bass pedal — Daisy Seed + Hothouse
 A multi-mode digital bass effects pedal built on the Electro-Smith Daisy
 Seed and Cleveland Music Co. Hothouse DSP kit.
 
-Three modes — **Bordun** (sustained drone), **Sprawl** (granular texture),
-and **Schism** (drive + filter) — each with its own controls and eight
-storable presets.
+Three modes share a single hardware front-end and a global preset system
+that recalls mode and full parameter set in one footswitch press:
+
+- **Bordun** — harmonic companion to the bass
+- **Sprawl** — granular delay, textures and soundscapes
+- **Schism** — dynamic filter + digital distortion
+
+The signal-chain philosophy of this pedal is: **after** whammy and
+octavers, **before** overdrives and distortion.
 
 ## Hardware overview
 
 - 6 knobs (K1–K6, left-to-right, top row then bottom)
 - 3 three-position toggle switches (SW1–SW3)
-- 2 footswitches (FS1 = preset / FS2 = bypass)
+- 2 footswitches (FS1 = preset / FS2 = bypass; both held together for
+  bank-cycle / bootloader)
 - 2 indicator LEDs
 
 **SW3 selects the mode**:
@@ -32,10 +39,15 @@ documented in its own section below.
 
 # Mode A — Bordun
 
-A pitched drone that follows your bass. A two-oscillator voice (saw,
-triangle, or square) tracks the input, gated by an envelope follower so
-the drone only sounds while you play. A Moog ladder filter shapes the
-tone; in triangle mode the same knob crosses over into wavefolding.
+A harmonic companion to the bass, modelled after a specific usage of the
+Moog MoogerFooger FreqBox (MF-102) — its envelope-gated oscillator mixed
+in alongside the dry signal, kept clean of sync and FM modulation.
+
+A two-oscillator voice (saw, triangle, or square) tracks the input,
+gated by an envelope follower so the drone only sounds while you play. A
+Moog ladder filter shapes the tone; in triangle mode the same knob
+crosses over into wavefolding. Placed **before** overdrive in the chain
+the drone stacks musically into the saturated sound.
 
 ![Mode A pedal layout](pedal-mode-a.svg){.pedal-layout}
 
@@ -56,16 +68,23 @@ tone; in triangle mode the same knob crosses over into wavefolding.
 
 # Mode B — Sprawl
 
-A live granular companion. An 8-second ring buffer continuously captures
-your input; a grain scheduler scatters short pitched copies above the
-dry signal, harmonically locked to the tracked bass note. A texture
-shaper colors the wet path with a choice of three flavors. K5 is
-bipolar — one direction adds reverb, the other adds ring-buffer feedback
-for self-sustaining drones.
+Granular-delay-based texture and soundscape engine. A rolling 8-second
+buffer feeds a grain scheduler whose voices can pitch-shift non-linearly,
+drift, scatter, and stutter — built to fill the void around the bass,
+intended for improvisation and experimental performance.
 
-When K2 is fully CCW, the grain engine bypasses and the input routes
-directly through the texture shaper — "direct-texture" mode — with K3
-becoming a micro-stutter control.
+Functionally a multi-mode effect on its own: all colouring and texturing
+stages (decimator/fold, event-driven glitch, ringmod, frequency shifter)
+are reachable in a non-delay path too — set K2 fully CCW to bypass the
+grain engine and route the dry directly through the texture shaper, with
+K3 becoming a micro-stutter control.
+
+K5 is bipolar: one direction adds Clouds reverb on the wet bus, the other
+drives a tanh-saturated feedback loop with build-up and on-play duckers
+that keep the loop musical. High feedback grows into harmonic cloud
+blooms. SW2 DOWN replaces grain pitch-shifting with a Bode SSB
+frequency shifter living inside the feedback loop — each pass cascades
+the shift, rapidly growing beyond pitched material.
 
 ![Mode B pedal layout](pedal-mode-b.svg){.pedal-layout}
 
@@ -73,33 +92,38 @@ becoming a micro-stutter control.
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Interval | ±24 semitones, centered with deadzone. Pitch offset applied to each grain relative to tracked bass note |
+| KNOB 1 | Harmony / shift | Meaning follows SW2. **SW2=UP**: fixed interval, K1 = ±12 semitones. **SW2=MID**: resonance pick, K1 spans the ±36-semitone scan. **SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar with ±2 % deadzone — CCW = down-shift (bass), CW = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison |
 | KNOB 2 | Buffer range | CCW = tight (100 ms). CW = deep (full 8 s). **Fully CCW** enters direct-texture mode (grain engine bypassed) |
 | KNOB 3 | Character / Glitch | **Grain mode**: CCW = soft/long/tight, CW = short/sharp/chaotic. **Direct-texture mode**: micro-stutter — CCW = clean, CW = frequent choppy repeats |
 | KNOB 4 | Texture amount | Depends on SW1 position — see below |
-| KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0 → 1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0 → 0.95). Reverb tail does not feed the ring buffer |
+| KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0 → 1). **Center (±5 %)** = off. **CW** = ring-buffer feedback (0 → 0.95) into the tanh saturator. Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Texture mode | **UP** — Decimator / Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Event-driven digital glitch (bipolar K4: noon = clean ±5%, CCW = random bit-flip events, CW = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining) • **DOWN** — Ringmod (K4 0 – 30% = tremolo 1 – 15 Hz, 30 – 100% = bell partials, pitch-tracked with keytracked LPF) |
-| SWITCH 2 | Harmony | **UP** — Fixed interval (K1 semitones above tracked note) • **MIDDLE / DOWN** — Resonance (grains lock onto nearby harmonics) |
+| SWITCH 1 | Texture mode | **UP** — Decimator / Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Event-driven digital glitch (bipolar K4: noon = clean ±5 %, CCW = random bit-flip events, CW = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining) • **DOWN** — Ringmod (K4 0 – 30 % = tremolo 1 – 15 Hz, 30 – 100 % = bell partials, pitch-tracked with keytracked LPF) |
+| SWITCH 2 | Harmony / shift | **UP** — Fixed interval (K1 = ±12 semitones above tracked note) • **MIDDLE** — Resonance (grains lock onto nearby harmonics; K1 spans ±36-semi scan) • **DOWN** — Bode SSB frequency shifter on the wet bus (inside the feedback loop). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential |
 
 ---
 
 # Mode C — Schism
 
-A drive + filter mode. K1–K3 drive the filter selected by SW2; K4 drives
-the source flavor selected by SW1 (wavefolder, bit crusher, or
-pitch-tracked synth oscillator). K5 is a bipolar pre-filter drive
-(attenuate / unity / boost, universal across all SW2 filter modes), K6
-is the dry/wet mix.
+Dynamic bass filter and digital distortion unit, with a fat pitch-tracked
+synth voice as a third drive option. The filter can self-oscillate in a
+controlled manner — singing-into-screaming textures that play well into a
+downstream overdrive or fuzz. The bit-crush drive enriches overtones
+cleanly and lights up especially well placed before an overdrive or
+fuzz.
+
+K1–K3 drive the filter selected by SW2; K4 drives the source flavor
+selected by SW1 (wavefolder, bit crusher, or pitch-tracked synth
+oscillator). K5 is a bipolar pre-filter drive (attenuate / unity /
+boost, universal across all SW2 filter modes); K6 is the dry/wet mix.
 
 Three filter flavors: a tuned **Moog ladder** (single input saturator,
 cutoff-tracked resonance, asymmetric drive), a vowel-pathed **Grendel
-formant** filter, and the dual-band **Plague** filter (lo + hi SVF
-bands cross-fed with tanh saturation). K3 is a bipolar
-envelope-to-filter modulator with a center deadzone.
+formant** filter, and a 4-stage **phaser** with internal LFO. K3 is a
+bipolar envelope-to-filter modulator with a center deadzone.
 
 Three drive flavors. **SW1=UP** is the sine wavefolder. **SW1=MIDDLE**
-is a gated bit crusher (K4 sweeps bit depth from 16 → 4, input-envelope
+is a gated bit crusher (K4 sweeps the XOR bit position, input-envelope
 gated). **SW1=DOWN** is a pitch-tracked synth oscillator: the bass note
 is tracked (YIN, semitone-quantized) and an oscillator engine replaces
 the dry path, amplitude-gated by the env follower before it hits the
@@ -112,8 +136,8 @@ preserved so bass fundamentals don't duck under resonance peaks) and is
 gated by an amplitude-env VCA — when you stop playing, the wet path goes
 silent so self-resonance never rings alone.
 
-*Note: Mode C is still in active development — controls and timbres may
-shift between releases.*
+*The phaser sub-mode is provisional and likely to be replaced with a
+different effect in a future release.*
 
 ![Mode C pedal layout](pedal-mode-c.svg){.pedal-layout}
 
@@ -121,14 +145,14 @@ shift between releases.*
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (80 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = ee, CW = oo). SW2=DOWN: Plague input balance (CCW = lo only, CW = hi only) |
-| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: Plague intensity (tandem input + feedback drive) |
-| KNOB 3 | Env → filter amount | Bipolar with ±5% center deadzone. SW2=UP: opens/closes Moog cutoff (passive-bass scaled). SW2=MID: shifts the vowel path. SW2=DOWN: shifts Plague balance. Center = static |
-| KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold; internal loudness compensation). SW1=MID: bit-crush amount (CCW = 16-bit clean, CW = 4-bit gnarly, env-gated). SW1=DOWN: synth-osc timbre — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
-| KNOB 5 | Filter drive (bipolar) | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and Plague. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone; Plague is unpadded (needs hot input to fold) |
+| KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (80 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = oo dark/closed, CW = ee bright/open). SW2=DOWN: phaser notch centre |
+| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: phaser feedback / depth |
+| KNOB 3 | Env / LFO modulation | SW2=UP: bipolar env-to-cutoff (passive-bass scaled). SW2=MID: bipolar env on vowel path and size. SW2=DOWN: bipolar phaser LFO rate (sign selects shape — CCW triangle, CW sample-and-hold; magnitude = rate; centre = LFO off, static notch at K1). All with ±5 % centre deadzone |
+| KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold; internal loudness compensation). SW1=MID: bit-crush amount (CCW = clean, CW = max XOR fuzz, env-gated). SW1=DOWN: synth-osc timbre — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
+| KNOB 5 | Filter drive (bipolar) | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and the phaser. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 = fold amount) • **MIDDLE** — Gated bit crusher (K4 = bit depth 16 → 4) • **DOWN** — Pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
-| SWITCH 2 | Filter | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env) • **MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path) • **DOWN** — Plague (K1 input balance, K2 intensity, K3 env on balance) |
+| SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 = fold amount) • **MIDDLE** — Gated bit crusher (K4 = XOR bit position) • **DOWN** — Pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
+| SWITCH 2 | Filter | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env) • **MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path) • **DOWN** — Phaser (K1 notch centre, K2 feedback, K3 LFO rate/shape) |
 
 ---
 
@@ -142,7 +166,8 @@ The footswitches and the preset system work the same way in every mode.
 |-|-|
 | FOOTSWITCH 1 | **Short press**: cycle Manual → 1 → … → 8 → Manual (or reload the current preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode, or confirm save if already in save mode. **Short press in save mode**: cancel save |
-| FS1 held 2 s | Enter DFU bootloader for flashing new firmware |
+| FS1 + FS2 short tap | Cycle the active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works inside save mode to retarget the save into another bank |
+| FS1 + FS2 held 2 s | Enter DFU bootloader for flashing new firmware (both LEDs alternate for 1.2 s before reset) |
 
 ## Indicator LEDs
 
@@ -150,14 +175,32 @@ The footswitches and the preset system work the same way in every mode.
 |-|-|
 | LED 1 (left) | **Preset indicator.** Off = Manual mode. Otherwise a Roman-numeral blink pattern shows the preset number (I = short, V = long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows the target slot |
 | LED 2 (right) | **State indicator.** Solid = active, off = bypassed, rapid flash = dirty (preset edited but not saved), fast blink = save mode armed, burst = save confirmed |
+| Both LEDs | **Bank-switch burst.** On bank change, both LEDs flash a Roman-numeral pattern of the new bank number (I / II / III, each pulse filled with deterministic fast flicker so it's visually distinct from a preset blink) for ~1.6 s, then return to their normal display |
 
 ## Preset behavior
 
-- Each mode has its own 8 stored presets plus an edit buffer (Manual).
-- Adjusting any knob or switch dirties the active preset (LED 2 rapid flash).
-- Short-press FS1 while dirty to **reload** the preset and discard edits.
-- Long-press FS2 to enter save mode; short-press FS1 to pick a target
-  slot; long-press FS2 again to confirm. Short-press FS2 cancels.
-- Presets persist across power cycles via internal flash storage.
-- Switching modes via SW3 saves the current mode's edit buffer
-  automatically and restores the destination mode's state.
+- **One global edit buffer**, shared across all modes. Manual mode is
+  fully WYSIWYG — what the panel shows is what plays.
+- **3 banks × 8 slots = 24 reachable presets.** Each slot stores its
+  own mode, knobs, SW1 and SW2, so cycling presets can swap mode
+  mid-set.
+- **Bank cycling** (FS1+FS2 short tap, 1 → 2 → 3 → 1): in manual the
+  bank changes silently; on a saved preset the same slot number loads
+  from the new bank; in save mode the save target shifts into the new
+  bank (cross-bank save).
+- **Dirty marking.** Adjusting any knob or switch — including SW3 —
+  while on a saved preset dirties it (LED 2 rapid flash). Short-press
+  FS1 while dirty to reload the preset and discard edits.
+- **Save flow.** Long-press FS2 to enter save mode (LED 2 fast blink;
+  LED 1 shows the target slot). Short-press FS1 to cycle the target
+  slot; FS1+FS2 short tap to cycle the bank; long-press FS2 to confirm
+  (LED 2 burst, returns to normal mode with the preset now clean);
+  short-press FS2 to cancel.
+- **Power-cycle behavior.** The pedal restores the full state on boot:
+  active bank, active preset, the edit buffer (including mode), dirty
+  flag. State is written to flash on a debounced 2-second timer after
+  the last change — no writes happen when nothing is changing.
+- **Migration.** Presets saved under older firmware (one bank per mode)
+  are migrated on first boot of the new firmware: Mode A's slots →
+  Bank 1, Mode B's slots → Bank 2, Mode C's slots → Bank 3, with each
+  slot tagged with its source mode. No data loss.
