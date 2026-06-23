@@ -17,19 +17,47 @@ NitroTron3/
 ├── src/                        # source code
 │   ├── NitroTron3.cpp          # main application
 │   ├── constants.h             # compile-time DSP constants
-│   ├── moog_osc.h              # MoogOsc class — parabolic waveshaper + PolyBLEP
-│   ├── moog_ladder.h           # Huovilainen Moog ladder filter (24 dB/oct LP)
-│   ├── env_follower.h          # Moog envelope follower (rectifier → 4-pole LP)
-│   ├── pitch_tracker.h         # YIN pitch tracker for bass (4x decimation)
-│   └── preset_system.h         # preset navigation, flash storage, LED patterns
+│   ├── preset_system.h         # global preset bank, banks, flash, LED engines
+│   │
+│   ├── moog_osc.h              # parabolic waveshaper + PolyBLEP (Mode A)
+│   ├── moog_ladder.h           # Huovilainen Moog ladder (Mode A)
+│   ├── moog_ladder_v2.h        # tuned ladder for Mode C SW2=UP
+│   ├── env_follower.h          # shared Moog-topology env follower
+│   ├── pitch_tracker.h         # YIN pitch tracker (4x decimation)
+│   │
+│   ├── ring_buffer.h           # 8 s SDRAM ring (Mode B)
+│   ├── grain_voice.h           # windowed grain voice (Mode B)
+│   ├── freq_shifter.h          # Bode SSB frequency shifter (Mode B SW2=DOWN)
+│   ├── glitch_zones.h          # event-driven digital glitch (Mode B SW1=MID)
+│   ├── resampler.h             # 48 ↔ 32 kHz polyphase (reverb path)
+│   ├── clouds/                 # vendored MI Clouds reverb (MIT)
+│   │
+│   ├── grendel.h               # 4-BPF formant filter (Mode C SW2=MID)
+│   ├── phaser.h                # 4-stage allpass phaser (Mode C SW2=DOWN)
+│   ├── synth_osc_c.h           # hypersaw / square+PWM osc (Mode C SW1=DOWN)
+│   ├── bitcrush.h              # gated bit crusher (Mode C SW1=MID)
+│   └── peak_limiter.h          # 2-band soft limiter (Mode C post-filter)
+│
 ├── docs/                       # specs, plans, research
 │   ├── PROJECT.md              # top-level plan, staging, architecture
 │   ├── MODE_A_DRONE.md         # Mode A full spec
 │   ├── MODE_B_GRANULAR.md      # Mode B full spec
-│   ├── TUNING.md               # tuning-mode spec
+│   ├── MODE_B_IMPL.md          # Mode B implementation notes
+│   ├── MODE_B_REVERB_TASK.md   # Mode B reverb integration notes
+│   ├── MODE_B_TEXTURE_IDEAS.md # Mode B texture-shaper exploration
+│   ├── MODE_C_DISCOVERY.md     # Mode C discovery doc
+│   ├── MODE_C_PHASER_PLAN.md   # Mode C phaser design
+│   ├── PRESET_IMPL.md          # preset system as-built reference
+│   ├── PRESET_GLOBAL_PLAN.md   # preset system planning history
 │   ├── PITCH_TRACKING.md       # pitch tracking research + plan
-│   ├── PRESET_IMPL.md          # preset system implementation plan
-│   └── ux-demo.html            # interactive preset UX demo
+│   ├── STUTTER_SPEC.md         # direct-texture stutter spec
+│   ├── STUTTER_IMPLEMENTATION_NOTES.md
+│   ├── TUNING.md               # tuning-mode spec
+│   ├── USER_MANUAL.md          # end-user manual (with PDF render)
+│   ├── ux-demo.html            # interactive preset / bank UX demo
+│   ├── mode-b-engines.html     # interactive Mode B engine exploration
+│   └── pedal-mode-{a,b,c}.svg  # per-mode pedal layout diagrams
+│
 ├── lib/
 │   └── HothouseExamples/       # submodule
 │       ├── libDaisy/            # nested submodule — hardware abstraction
@@ -70,9 +98,17 @@ make program    # flash via OpenOCD / ST-Link
 make program-dfu  # flash via DFU bootloader
 ```
 
-## Current state — Stage 5 (Preset System) + Mode B (Sprawl)
+## Current state — Mode A complete, Mode B fleshed out, Mode C in late stages
 
-Complete Mode A Bordun effect with full preset system. PolyBLEP oscillator → Huovilainen ladder filter → VCA controlled by envelope follower tracking bass input → mix with dry signal. Mode B Sprawl effect with grain scheduler, pitch-tracked harmony, texture shaping, and scatter control. **Preset system: one global edit buffer, 3 banks × 8 slots (each slot carries its own mode), dirty tracking, debounced flash persistence across power cycles.** FS1 navigates presets within the active bank; FS1+FS2 short tap cycles banks; FS2 toggles bypass or enters save mode; FS1+FS2 held 2 s enters DFU. LED 1 shows preset number via Roman-numeral blink encoding; LED 2 indicates active/bypass/dirty/save; both LEDs play a Roman-numeral burst on bank change.
+**Preset system (global model).** One global edit buffer (knobs + sw1 + sw2 + mode), 3 banks × 8 slots (storage sized for 6), each slot carries its own mode. Dirty tracking, debounced 2 s flash persistence (no-change → no write), v2 → v3 migration preserves prior per-mode presets. FS1 cycles slots within the active bank; FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs); FS2 toggles bypass / enters save mode; FS1+FS2 held 2 s enters DFU. SW3 is a soft control treated uniformly with SW1/SW2.
+
+**Mode A — Bordun.** PolyBLEP oscillator → Huovilainen ladder → env-VCA → mix.
+
+**Mode B — Sprawl.** Granular: 8 s SDRAM ring buffer → 8 grain voices → texture shaper (SW1 chooses decimator/fold, glitch zones, or ringmod) → wet HPF 120 Hz → tanh-saturated feedback loop with build-up + on-play duckers → optional Clouds reverb (K5 bipolar against feedback). Pitch-tracked harmony (SW2): fixed interval, resonance window pick, or Bode SSB frequency shifter (SW2 DOWN, K1 = ±1 kHz exponential, inside the feedback loop). K2 fully CCW enters direct-texture mode with micro-stutter.
+
+**Mode C — Schism.** Two-stage drive → filter chain. SW1 selects drive (sine wavefolder / gated bit crusher / pitch-tracked synth osc); SW2 selects filter (Moog ladder v2, Grendel formant, phaser). K5 is a bipolar pre-filter drive. Asymmetric env smoothers for ladder/formant. Post-filter 2-band peak limiter + amp-env VCA so self-resonance doesn't ring alone.
+
+LED 1 shows preset via Roman-numeral blink; LED 2 shows active/bypass/dirty/save; both LEDs play a Roman-numeral burst on bank change.
 
 ### Mode A — Bordun
 
@@ -120,37 +156,41 @@ Input ──┬─────────────────────�
 #### Signal Chain
 
 ```
-Input ──┬──────────────────────────────────────────► [Mix K6] ──► Output
-        │                                               ▲
-        ├──► [EnvFollower] ──► grain amplitude           │
-        │                                                │
-        ├──► [PitchTracker] ──► harmony logic            │
-        │                                                │
+Input ──┬──────────────────────────────────────────────────► [Mix K6] ──► Output
+        │                                                       ▲
+        ├──► [EnvFollower] ──► grain amplitude                  │
+        ├──► [PitchTracker] ──► harmony logic                   │
+        │                                                       │
         └──► [Ring Buffer, 8s SDRAM] ──► [Grain Scheduler]
-                    ▲                         │
-                    │                   [Grain Voices × 8]
-                    │                         │
-                    │                   [Texture Shaper (SW1)]
-                    │                         │
-                    │                    [Wet HPF 120 Hz]
-                    │                         │           │
-                    │                         │   [Clouds Reverb @ 32 kHz]
-                    │                         │     (K5 CCW: reverb amt)
-                    └── [Feedback K5 CW] ◄────┴───────────┴──────────┘
+                  ▲                            │
+                  │                      [Grain Voices × 8]
+                  │                            │
+                  │                      [Texture Shaper (SW1)]
+                  │                            │
+                  │                      [Freq Shifter (SW2=DOWN only)]
+                  │                            │
+                  │                      [Wet HPF 120 Hz]
+                  │                            │
+                  │                            ├───► [Clouds Reverb @ 32 kHz] (K5 CCW)
+                  │                            │
+                  │   [Build-up ducker] ◄──────┤
+                  │   [On-play ducker] ◄── EnvFollower
+                  │            │               │
+                  └── [tanh saturator × K5 CW feedback] ◄────────┘
 ```
 
 #### Controls
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Interval | ±24 semitones, centered with dead zone. Pitch offset applied to each grain relative to tracked bass note |
+| KNOB 1 | Harmony / shift | Meaning follows SW2. **SW2=UP**: fixed interval, K1 = ±12 semitones. **SW2=MID**: resonance pick, K1 spans the ±36-semitone scan. **SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar K1 with ±2% deadzone — CCW = down-shift (more bass), CW = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison so K1 isn't doing two jobs |
 | KNOB 2 | Buffer range | CCW = tight (100 ms). CW = deep (full 8 s). **Fully CCW**: enters direct-texture mode — grain engine bypassed, input routes straight to texture shaper |
 | KNOB 3 | Character / Glitch | **Grain mode**: CCW = soft/long/tight, CW = short/sharp/chaotic. **Direct-texture mode** (K2 fully CCW): micro-stutter — CCW = clean, CW = frequent choppy repeats |
 | KNOB 4 | Texture amount | Depends on SW1 position. See Switch 1 notes |
 | KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0→1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0→0.95). Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Texture mode | **UP** - Decimator/Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold)<br/>**MIDDLE** - Event-driven digital glitch (bipolar K4: noon = clean, CCW = random bit-flip events, CW = random timing events {freeze / stutter / reverse}; sparse near deadzone → continuous at extremes via event chaining)<br/>**DOWN** - Ringmod (K4 CCW–30% = tremolo 1–15 Hz, 30%–CW = bell partials, pitch-tracked with keytracked LPF) |
-| SWITCH 2 | Harmony | **UP** - Fixed interval (K1 semitones above tracked note)<br/>**MIDDLE** - Resonance (grains lock onto nearby harmonics)<br/>**DOWN** - Resonance (grains lock onto nearby harmonics) |
+| SWITCH 2 | Harmony / shift | **UP** - Fixed interval (K1 = ±12 semitones above tracked note)<br/>**MIDDLE** - Resonance (grains lock onto nearby harmonics; K1 spans ±36 semi scan)<br/>**DOWN** - Bode SSB frequency shifter on the wet bus (inside the feedback loop, so each pass cascades the shift). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential, CCW = down, CW = up |
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl — this mode)<br/>**DOWN** - Mode C (Schism) |
 | FOOTSWITCH 1 | Preset | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual |
 | FOOTSWITCH 2 | Bypass / Save | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel |
