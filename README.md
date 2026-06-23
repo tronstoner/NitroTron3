@@ -111,6 +111,8 @@ LED 1 shows preset via Roman-numeral blink; LED 2 shows active/bypass/dirty/save
 
 ### Mode A — Bordun
 
+A harmonic companion to the bass. An internally generated oscillator, gated and shaped by the bass's own envelope, lays subtle or assertive accompanying harmonics over the input — pure intervals, fifths, octaves, drone-like wash. Placed **before** overdrive in the chain it stacks musically into a saturated sound; on its own it sits as a parallel voice along the played notes. Tracking modes lock the harmony to the played pitch; fixed mode anchors a drone against which the bass moves.
+
 #### Signal Chain
 
 ```
@@ -151,6 +153,8 @@ Input ──┬─────────────────────�
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
 ### Mode B — Sprawl
+
+Granular-delay-based texture and soundscape engine. A rolling buffer feeds a grain scheduler whose voices can pitch-shift non-linearly, drift, scatter, and stutter — built to fill the void around the bass, intended for improvisation and experimental performance. Functionally a multi-mode effect on its own: all colouring and texturing stages (decimator/fold, event-driven glitch, ringmod, frequency shifter) are reachable in a non-delay path too (K2 fully CCW). High feedback with the tanh saturator pushes the loop into harmonic cloud blooms; the Bode SSB shifter inside the feedback loop cascades each pass and rapidly grows beyond pitched material.
 
 #### Signal Chain
 
@@ -204,6 +208,8 @@ Input ──┬─────────────────────�
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
 ### Mode C — Schism (C.6 in progress)
+
+Dynamic bass filter and digital distortion unit, with a fat pitch-tracked synth voice as a third drive option. The filter can self-oscillate in a controlled manner — singing-into-screaming textures that play well into a downstream overdrive or fuzz. The bit-XOR drive enriches overtones cleanly and lights up especially well placed **before** overdrive/fuzz. The signal-chain philosophy of this pedal is: **after** whammy and octavers, **before** overdrives and distortion. The phaser sub-mode is provisional and likely to be replaced with a different effect once a fitting one is found.
 
 Discovery in progress (`docs/MODE_C_DISCOVERY.md`). C.1–C.5 implement the wet/dry mix scaffold, the SW1=UP sine wavefolder, the SW2=UP Moog ladder (tuned `MoogLadderV2`: single input saturator, k-cutoff cross-comp, level comp, asymmetric bias) with env-to-cutoff, the SW2=DOWN Plague filter, and the SW2=MID Grendel formant filter (4 parallel BPFs along a curated oo → oh → ah → eh → ee vowel path, CCW = dark/closed → CW = bright/open). **SW1=MID is a gated bit crusher** (K4 = bit depth from 16 → 4 bits, input-envelope gate so silent input → silent output) — explorative distortion variant. **SW1=DOWN is a pitch-tracked synth oscillator**: YIN-tracked semitone-quantized bass pitch drives an oscillator engine whose timbre K4 morphs — saw on the CCW half (7-voice hypersaw at full CCW with 50-cent detune, collapsing to a single-saw sweet-spot plateau just below noon), rect on the CW half (single rect just past noon, ramping into PWM with depth-then-rate at full CW). The synth output is amplitude-controlled by the raw env follower (Mode A-style direct VCA) **before** the SW2 filter, so the filter colors the gated synth instead of the dry bass. Post-filter chain: slight pre-limit lift (×1.3), 2-band peak limiter (LF below ~160 Hz preserved so fundamentals don't duck) with "warmth-when-working" bloom, then an amp-env VCA that gates the wet path so self-resonance doesn't ring alone. Per-filter input pads put Moog and Grendel in their clean sweet zone at K5 noon; Plague is unpadded (needs hot input to fold). Ladder + Plague env modulation reads a 30 ms / 150 ms asymmetric A/R smoother (less twitchy than the VCA gate); Grendel uses its own slower 400 ms swell smoother (slow attack, instant snap-back) so vowel/size sweeps breathe rather than snap.
 
