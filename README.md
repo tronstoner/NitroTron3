@@ -111,7 +111,7 @@ LED 1 shows preset via Roman-numeral blink; LED 2 shows active/bypass/dirty/save
 
 ### Mode A — Bordun
 
-A harmonic companion to the bass. An internally generated oscillator, gated and shaped by the bass's own envelope, lays subtle or assertive accompanying harmonics over the input — pure intervals, fifths, octaves, drone-like wash. Placed **before** overdrive in the chain it stacks musically into a saturated sound; on its own it sits as a parallel voice along the played notes. Tracking modes lock the harmony to the played pitch; fixed mode anchors a drone against which the bass moves.
+A harmonic companion to the bass, modelled after a specific usage of the Moog MoogerFooger FreqBox (MF-102) — its envelope-gated oscillator mixed in alongside the dry signal, kept clean of sync and FM modulation. An internally generated oscillator, gated and shaped by the bass's own envelope, lays subtle or assertive accompanying harmonics over the input — pure intervals, fifths, octaves, drone-like wash. Placed **before** overdrive in the chain it stacks musically into a saturated sound; on its own it sits as a parallel voice along the played notes. Tracking modes lock the harmony to the played pitch; fixed mode anchors a drone against which the bass moves.
 
 #### Signal Chain
 
