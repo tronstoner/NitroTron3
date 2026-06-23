@@ -5,14 +5,13 @@ subtitle: DIY digital bass pedal — Daisy Seed + Hothouse
 
 # NitroTron3
 
-A project of [Nitro Mahalia](https://nitromahalia.net) — a band whose
-live bass sound has so far relied on routing the bass through hardware
-synthesizers to reach its signature voices. This pedal packages several
-of those voices into a single bass-specific unit, built on the
-Electro-Smith Daisy Seed and Cleveland Music Co. Hothouse DSP kit.
+A project of [Nitro Mahalia](https://nitromahalia.net) — a bass-driven
+band whose sound includes routing the bass through hardware
+synthesizers. This pedal packages several of those signature
+bass-through-synth voices into a single bass-specific unit, built on
+the Electro-Smith Daisy Seed and Cleveland Music Co. Hothouse DSP kit.
 Three distinct modes, each doing something not easily found in
-off-the-shelf pedals; each chosen because it covers a job that
-previously required dragging a synth around.
+off-the-shelf pedals.
 
 ## Modes at a glance
 

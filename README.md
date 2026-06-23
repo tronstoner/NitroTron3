@@ -4,7 +4,7 @@ A DIY digital bass effects pedal built on the [Electro-Smith Daisy Seed](https:/
 
 ## Overview
 
-NitroTron3 is a project of [Nitro Mahalia](https://nitromahalia.net) — a band whose live bass sound has so far relied on routing the bass through hardware synthesizers to reach its signature voices. This pedal packages several of those voices into a single bass-specific unit. Three distinct modes, each doing something not easily found in off-the-shelf pedals; each chosen because it covers a job that previously required dragging a synth around.
+NitroTron3 is a project of [Nitro Mahalia](https://nitromahalia.net) — a bass-driven band whose sound includes routing the bass through hardware synthesizers. This pedal packages several of those signature bass-through-synth voices into a single bass-specific unit: three distinct modes, each doing something not easily found in off-the-shelf pedals.
 
 **BORDUN (Mode A).** A harmonic companion to the bass, modelled after a specific usage of the Moog MoogerFooger FreqBox (MF-107) — its envelope-gated oscillator mixed in alongside the dry signal, kept clean of sync and FM modulation. An internally generated oscillator, gated and shaped by the bass's own envelope, lays subtle or assertive accompanying harmonics over the input — pure intervals, fifths, octaves, drone-like wash. Placed **before** overdrive in the chain it stacks musically into a saturated sound; on its own it sits as a parallel voice along the played notes. Tracking modes lock the harmony to the played pitch; fixed mode anchors a drone against which the bass moves.
 
