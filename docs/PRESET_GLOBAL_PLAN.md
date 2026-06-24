@@ -1,6 +1,6 @@
 # Global Preset System — Plan
 
-Status: implemented through P.5; P.6 listening pass and P.7 docs in progress. As-built reference: `docs/PRESET_IMPL.md`. This document captures the original plan and notes where the implementation diverged.
+Status: complete. P.1–P.5 implemented, P.6 hardware listening pass passed (all behaviour verified on the pedal — cross-mode preset cycling, FS1 long → manual, SW3-on-preset dirty/revert, bank cycle from every context with the LED burst, both-FS DFU, boot restore of bank + preset + mode), P.7 docs landed. Shipped in NitroTron3 v0.1 (pre-release). As-built reference: `docs/PRESET_IMPL.md`. This document captures the original plan and notes where the implementation diverged.
 
 Open decisions in the previous revision have been resolved:
 - **Edit buffer model:** Option 1 — single global edit buffer (no per-mode buffers; manual mode is fully WYSIWYG with no hidden state).
