@@ -85,8 +85,6 @@ These are consistent across all modes:
 
 Switches 1–2 and knobs 1–6 are mode-specific — see each mode's spec file.
 
-See `TUNING.md` for the tuning-mode override that repurposes controls during development.
-
 ---
 
 ## Preset System
@@ -225,7 +223,7 @@ The FS1-alone bootloader path is dropped — it was too easy to trigger by accid
 
 - **Input:** Hothouse input buffer handles instrument-level signals (passive and active bass) — biases and scales to Daisy Seed ADC range (0–3.3 V). No hardware trim required.
 - **Output:** Buffered back to instrument level by Hothouse output stage.
-- **Internal balance:** Per-mode, calibrated via tuning mode. See `TUNING.md`.
+- **Internal balance:** Per-mode, calibrated by ear and committed as compile-time constants in `src/constants.h`.
 
 ---
 
@@ -240,7 +238,7 @@ The FS1-alone bootloader path is dropped — it was too easy to trigger by accid
 - **Wavefolding** — DONE. Triangle mode: K4 noon→CW applies wavefolding. Envelope subtly modulates fold amount and filter cutoff for dynamic response.
 - **Per-waveform gains** — DONE. Independent level trim for saw/tri/square in constants.h.
 - **Serial logging** — DONE. `StartLog(false)` + raw knob values printed every ~2 s from main loop using `FLT_FMT3` macros. Safe: no printing from audio callback.
-- **Tuning mode** — DEFERRED. Depends on working serial logging. Ear-tuning via constants.h for now.
+- **Tuning mode** — DROPPED. Originally planned as an in-pedal page-based tuning UI; in practice ear-tuning against `src/constants.h` (with optional serial readouts when wanted) has been enough.
 - **Mode B spec** — DONE. Sprawl fully specced in `MODE_B_GRANULAR.md`.
 - **Knob remap** — DONE. Measured physical range 0.000–0.968, calibrated `RemapKnob()` with named constants.
 - **Preset system** — DONE. Verified on hardware (P.6 listening pass passed). Global model: one edit buffer (knobs + sw1 + sw2 + mode), 3 banks × 8 slots (storage sized for 6), each slot carries its own mode. FS1 cycles within the active bank; FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs confirms the new bank); FS2 long enters save mode (banks can also be cycled inside save mode for cross-bank saves). SW3 is a soft control uniform with SW1/SW2 — moves on a saved preset mark dirty by physical movement. FS1+FS2 held 2 s enters DFU (alternating LED burst); FS1-alone bootloader path dropped. Debounced auto-save (2 s after last edit; no-change → no flash write). One-shot v2 → v3 migration preserves existing per-mode presets into banks 1/2/3. Implementation reference in `docs/PRESET_IMPL.md`; planning history in `docs/PRESET_GLOBAL_PLAN.md`.
@@ -279,7 +277,6 @@ Switch 3 dispatches to `ProcessDrone()`, `ProcessGranular()`, `ProcessFreqShift(
 Drill the kit enclosure and label.
 
 ### Deferred
-- **Tuning mode** — USB serial workflow needs a fix (freezes on terminal connect). Will revisit after core effect is playable.
 - **Mode B direct-texture mode** — DONE. K2 fully CCW bypasses grain engine, K3 = micro-stutter.
 - **Mode C** — Schism: implement per `MODE_C_DISCOVERY.md`
 
@@ -291,7 +288,7 @@ Drill the kit enclosure and label.
 DSP core as a JUCE `AudioProcessor` plugin. Run as AU/VST in Reaper. Tune constants in a GUI with exact value readouts before touching hardware. Useful for early iteration on oscillator character and filter tone.
 
 ### Phase 2 — Hardware
-Port to Daisy. Tuning mode does final tuning against real hardware and real bass. See `TUNING.md`.
+Port to Daisy. Final tuning happens by ear against real hardware and bass, with values committed back into `src/constants.h`.
 
 ### Phase 3 — Enclosure
 Drill, paint, label.
@@ -321,7 +318,6 @@ Drill, paint, label.
 ## Document Map
 
 - `PROJECT.md` — this file. Top-level plan, hardware, staging, multi-mode architecture.
-- `TUNING.md` — tuning-mode spec. How to dial in constants without a display and commit them to source.
 - `MODE_A_DRONE.md` — Mode A (Bordun) full spec: oscillator model, envelope follower, ladder filter, controls, presets.
 - `MODE_B_GRANULAR.md` — Mode B (Sprawl) full spec: granular processor, signal chain, controls.
 - `MODE_C_DISCOVERY.md` — Mode C (Schism) discovery notes: distortion + filter chain, implementation stages.

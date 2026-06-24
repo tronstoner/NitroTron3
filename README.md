@@ -69,7 +69,6 @@ NitroTron3/
 │   ├── PITCH_TRACKING.md       # pitch tracking research + plan
 │   ├── STUTTER_SPEC.md         # direct-texture stutter spec
 │   ├── STUTTER_IMPLEMENTATION_NOTES.md
-│   ├── TUNING.md               # tuning-mode spec
 │   ├── USER_MANUAL.md          # end-user manual (with PDF render)
 │   ├── ux-demo.html            # interactive preset / bank UX demo
 │   ├── mode-b-engines.html     # interactive Mode B engine exploration

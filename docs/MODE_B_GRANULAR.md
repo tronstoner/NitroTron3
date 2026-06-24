@@ -6,7 +6,7 @@ Inspired by the Chase Bliss Mood pedal's "micro-looper as collaborator" philosop
 
 **The pedal reacts to how you play.** Attack sharpness and sustain length, extracted from the envelope follower, modulate the tonal-shaping stage. Short-hard plucks and long-smooth notes produce different sounds from the same knob setting.
 
-**Not** included: freeze/capture mode (always live), fixed-interval-only pitch mode (always tracked), separate tuning-mode pages (Mode B tunes via `constants.h`).
+**Not** included: freeze/capture mode (always live), fixed-interval-only pitch mode (always tracked). Tuning happens via `src/constants.h` directly.
 
 ---
 

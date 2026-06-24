@@ -1,6 +1,10 @@
 # Mode C — Schism — Discovery Notes
 
-Status: discovery, not spec. Values, mappings, and some structural choices are open and will be settled by ear during implementation. Once playable, this is replaced by `MODE_C.md` following the structure of `MODE_A_DRONE.md`.
+Status: historical discovery doc, kept for reference. The two- / three-stage architecture (SW1 drive → SW2 filter → mix) shipped largely as planned, but the SW2=DOWN filter is no longer Plague Bearer.
+
+**SW2=DOWN history.** Plague Bearer (the dual-band resonant nonlinear filter described below) was modelled, tuned, and audited but never produced a sound worth keeping in the pedal. The slot now holds a 4-stage allpass phaser instead (see `docs/MODE_C_PHASER_PLAN.md`). The phaser itself is provisional — we're still hunting for a third filter / effect that earns the slot. The Plague Bearer material below is preserved as a record of the path and an option to revisit; the Plague handover notes for the Daisy port live in `docs/plague-bearer-daisy-handover.md`.
+
+Other values, mappings, and some structural choices in this doc may have shifted by ear during implementation — `docs/MODE_C_DISCOVERY.md` is the original plan, not the as-built reference.
 
 ---
 

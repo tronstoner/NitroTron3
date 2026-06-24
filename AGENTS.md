@@ -19,9 +19,6 @@ Do not jump into code or propose changes without first understanding the project
 **Working on DSP / Mode A (Bordun) code:**
 - `docs/MODE_A_DRONE.md` — oscillator, envelope follower, ladder filter, controls, presets, compile-time constants.
 
-**Adjusting tuning mode, or helping the user dial in constants:**
-- `docs/TUNING.md` — tuning-mode entry/exit, page layout, serial print format, dev flash slot, workflow.
-
 **Working on pitch tracking:**
 - `docs/PITCH_TRACKING.md` — research, algorithm comparison (zero-crossing vs YIN vs MPM), signal conditioning, implementation plan.
 
@@ -41,7 +38,7 @@ Reusable task recipes live in `.agents/skills/`. Each subdirectory contains a `S
 - **build** — compile the firmware and report success/failure
 - **commit-prep** — prepare a commit message and stage files
 - **release** — cut a tagged GitHub release (build, stage artifacts, assemble `THIRD_PARTY_LICENSES.md`, draft release notes, tag, push, `gh release create`); gates irreversible steps on explicit user confirmation
-- **tune** — tuning-mode workflow
+- **tune** — view / edit compile-time DSP constants in `src/constants.h` and rebuild
 - **update-controls** — regenerate README control/LED tables from source
 
 ## Repository structure
