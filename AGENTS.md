@@ -40,6 +40,7 @@ Reusable task recipes live in `.agents/skills/`. Each subdirectory contains a `S
 
 - **build** — compile the firmware and report success/failure
 - **commit-prep** — prepare a commit message and stage files
+- **release** — cut a tagged GitHub release (build, stage artifacts, assemble `THIRD_PARTY_LICENSES.md`, draft release notes, tag, push, `gh release create`); gates irreversible steps on explicit user confirmation
 - **tune** — tuning-mode workflow
 - **update-controls** — regenerate README control/LED tables from source
 
