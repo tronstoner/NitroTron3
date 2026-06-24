@@ -14,6 +14,12 @@ NitroTron3 is a project of [Nitro Mahalia](https://nitromahalia.net) — This pe
 
 **Presets.** A global preset system recalls mode + full parameter state in one footswitch press. One global edit buffer, 3 banks × 8 slots = 24 reachable presets. Each slot carries its own mode, so cycling presets can swap mode mid-set. FS1 cycles slots within the active bank; FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs); FS2 long enters save mode (banks can be cycled inside save mode for cross-bank saves); FS1+FS2 held 2 s enters DFU. State persists across power cycles via debounced 2 s flash auto-save. The existing per-mode preset layout (older firmware) is migrated, not wiped.
 
+## Get the firmware
+
+Pre-built binaries (`.bin` for DFU, `.hex` for ST-Link / Daisy Web Programmer), the user manual PDF, and the licence bundle are attached to every tagged release: [github.com/tronstoner/NitroTron3/releases](https://github.com/tronstoner/NitroTron3/releases). Flashing steps live in [`INSTALL.md`](INSTALL.md) — short version: hold both footswitches on the pedal for 2 s to enter DFU, then `dfu-util -a 0 -s 0x08000000:leave -D NitroTron3-vX.Y.bin`. (Other Hothouse pedals use FS1 alone — not this one.)
+
+Build from source instead if you want to modify the firmware — see *Repository setup* and *Getting started* below.
+
 ## Hardware
 
 - [Daisy Seed 65 MB](https://electro-smith.com/products/daisy-seed) (STM32H750, 480 MHz Cortex-M7, 32-bit float, 48 kHz audio; 64 MB QSPI flash variant)
