@@ -304,6 +304,15 @@ static float Wavefold(float x, float amount) {
   return folded * PEAK;
 }
 
+// Digital wraparound (Mode C SW1=MID, K4 CCW). Wraps x modulo [-1, 1] like an
+// overflowing DAC: as the driven signal climbs past +1 it jumps to -1 and
+// keeps going. Sawtooth discontinuities → harsh buzzy digital distortion.
+static float WrapFold(float x) {
+  float y = fmodf(x + 1.f, 2.f);
+  if (y < 0.f) y += 2.f;
+  return y - 1.f;
+}
+
 // ---------------------------------------------------------------------------
 // Mode B harmony logic
 // ---------------------------------------------------------------------------
@@ -1017,10 +1026,24 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float dry_gain  = sqrtf(1.f - m);
   const float wet_gain  = sqrtf(m);
 
-  // Sine wavefolder per-block constants (active only at SW1=UP).
-  const float fold_blend = (drive_mode == 0) ? fold_amt : 0.f;
+  // K4 is bipolar around noon for SW1=UP and SW1=MID (noon = clean):
+  //   CW  half drives the primary flavor (sine fold / bit-flip),
+  //   CCW half drives the secondary flavor (tanh overdrive / wraparound).
+  // SW1=DOWN keeps K4 as the full-range saw↔rect timbre morph (untouched).
+  const float k4_cw  = (fold_amt > 0.5f) ? (fold_amt - 0.5f) * 2.f : 0.f;  // 0..1
+  const float k4_ccw = (fold_amt < 0.5f) ? (0.5f - fold_amt) * 2.f : 0.f;  // 0..1
+
+  // SW1=UP CW — sine wavefolder.
+  const float fold_blend = (drive_mode == 0) ? k4_cw : 0.f;
   const float fold_drive = 1.f + fold_blend * SINEFOLD_DRIVE_MAX;
   const float fold_comp  = 1.f - fold_blend * (1.f - SINEFOLD_COMP_AT_MAX);
+  // SW1=UP CCW — tanh overdrive (Mode B feedback-drive character).
+  const float od_blend = (drive_mode == 0) ? k4_ccw : 0.f;
+  const float od_drive = 1.f + od_blend * (MODE_C_OD_DRIVE_MAX - 1.f);
+  const float od_comp  = 1.f - od_blend * (1.f - MODE_C_OD_COMP_AT_MAX);
+  // SW1=MID CCW — digital wraparound (overflow fold).
+  const float wrap_blend = (drive_mode == 1) ? k4_ccw : 0.f;
+  const float wrap_drive = 1.f + wrap_blend * (MODE_C_WRAP_DRIVE_MAX - 1.f);
 
   // K3 bipolar with center deadzone → signed env amount in [-1, +1].
   float k3_signed = (k3 - 0.5f) * 2.f;
@@ -1106,11 +1129,27 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     // Drive stage (SW1).
     //   0=UP sinefold, 1=MID bitcrush (gated), 2=DOWN pitch-tracked synth osc.
     float wet = dry;
-    if (drive_mode == 0 && fold_blend > 0.001f) {
-      const float folded = sinf(dry * fold_drive * 1.5707963f);
-      wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
+    if (drive_mode == 0) {
+      // K4 CW = sine fold, K4 CCW = tanh overdrive, noon = clean dry.
+      if (fold_blend > 0.001f) {
+        const float folded = sinf(dry * fold_drive * 1.5707963f);
+        wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
+      } else if (od_blend > 0.001f) {
+        // Asymmetric tanh: fixed bias in the tanh-input domain (constant, mild
+        // asymmetry independent of drive), DC offset subtracted out so silence
+        // stays 0 and small signals always pass (no gating at high drive).
+        const float driven = tanhf(dry * od_drive + MODE_C_OD_BIAS) -
+                             tanhf(MODE_C_OD_BIAS);
+        wet = dry * (1.f - od_blend) + driven * od_blend * od_comp;
+      }
     } else if (drive_mode == 1) {
-      wet = bitcrush_c.Process(dry, fold_amt, env_val);
+      // K4 CW = gated bit-flipper, K4 CCW = digital wraparound, noon = clean.
+      if (k4_cw > 0.001f) {
+        wet = bitcrush_c.Process(dry, k4_cw, env_val);
+      } else if (wrap_blend > 0.001f) {
+        const float wrapped = WrapFold(dry * wrap_drive);
+        wet = dry * (1.f - wrap_blend) + wrapped * wrap_blend * MODE_C_WRAP_COMP;
+      }
     } else if (drive_mode == 2) {
       // Pitch-tracked synth osc → raw-env VCA (Mode A style) → SW2 filter.
       // K4 (fold_amt) is the timbre morph; YIN pitch quantized to semitones.
@@ -1127,17 +1166,18 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       float mod_cutoff = base_cutoff * lift;
       if (mod_cutoff > MODE_C_CUTOFF_MAX_HZ) mod_cutoff = MODE_C_CUTOFF_MAX_HZ;
       ladder_c_v2.SetCutoff(mod_cutoff);
-      // Spectrum-shaping filter: pad before drive so K5 noon sits in its sweet zone.
-      wet = ladder_c_v2.Process(wet * MODE_C_MOOG_INPUT_PAD);
+      // Spectrum-shaping filter: pad before drive so K5 noon sits in its sweet
+      // zone; makeup after restores ≈ unity wet gain at K5 noon.
+      wet = ladder_c_v2.Process(wet * MODE_C_MOOG_INPUT_PAD) * MODE_C_MOOG_MAKEUP;
     } else if (grendel_on) {
       // Spectrum-shaping filter: pad before pre-tanh so K5 noon stays clean.
       wet = tanhf(wet * drive_amt * MODE_C_GRENDEL_INPUT_PAD);
-      wet = grendel_c.Process(wet);
+      wet = grendel_c.Process(wet) * MODE_C_GRENDEL_MAKEUP;
     } else if (phaser_on) {
       // Clean parallel-BPF filter; pad keeps K5 noon in the linear zone,
       // K5 CW still drives via the soft pre-tanh.
       wet = tanhf(wet * drive_amt * MODE_C_PHASER_INPUT_PAD);
-      wet = phaser_c.Process(wet);
+      wet = phaser_c.Process(wet) * MODE_C_PHASER_MAKEUP;
     }
 
     // Slight post-filter lift so the limiter has something to grab on quieter

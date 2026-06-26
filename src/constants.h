@@ -71,9 +71,23 @@ constexpr float LADDER_CUTOFF_OFFSET = 0.000f; // tone knob trim
 constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
 
 // --- Mode C — Schism ---
-// Sine wavefolder (SW1=UP, K4 = fold amount). Compensation curve ear-tuned in C.2.
-constexpr float SINEFOLD_DRIVE_MAX   = 35.0f;  // pre-sin drive at K4=1 (1× at K4=0)
-constexpr float SINEFOLD_COMP_AT_MAX = 0.55f;  // post-fold gain at K4=1 (1.0 at K4=0)
+// SW1=UP drive — K4 bipolar around noon. NOON = clean.
+//   CW  half: sine wavefolder (fold amount 0 → max).
+//   CCW half: tanh overdrive (Mode B feedback-drive character; drive 1 → max).
+// Sine wavefolder compensation curve ear-tuned in C.2.
+constexpr float SINEFOLD_DRIVE_MAX   = 35.0f;  // pre-sin drive at K4 full CW (1× at noon)
+constexpr float SINEFOLD_COMP_AT_MAX = 0.55f;  // post-fold gain at K4 full CW (1.0 at noon)
+// Tanh overdrive (K4 full CCW). Same gain-compensated soft-clip as Mode B's
+// feedback saturator (tanh at drive ~8); COMP keeps wet loudness roughly flat.
+constexpr float MODE_C_OD_DRIVE_MAX   = 80.0f; // pre-tanh drive at K4 full CCW (1× at noon)
+constexpr float MODE_C_OD_COMP_AT_MAX = 0.60f; // post-tanh gain at K4 full CCW (1.0 at noon)
+// Asymmetric bias as a fixed offset in the tanh-input domain: tanh(dry·drive +
+// bias) with tanh(bias) subtracted back out (no DC leak). Constant, mild
+// asymmetry that colors the crossover/low-level region → even harmonics,
+// "tube"/asymmetric-amp flavor. Independent of drive, so it never collapses the
+// small-signal response (a signal-domain bias × high drive half-wave-mutes).
+// 0 = symmetric. Higher = more lopsided; back off if one polarity chokes.
+constexpr float MODE_C_OD_BIAS        = 1.2f;
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
 constexpr float MODE_C_LADDER_RES_MAX = 1.2f;  // pushed past ~1.0 self-osc threshold; in-loop tanh bounds it
@@ -95,6 +109,15 @@ constexpr float MODE_C_DRIVE_MAX      = 8.0f;  // K5 full CW  → very hot pre-f
 constexpr float MODE_C_MOOG_INPUT_PAD    = 0.3f;
 constexpr float MODE_C_GRENDEL_INPUT_PAD = 0.3f;
 constexpr float MODE_C_PHASER_INPUT_PAD  = 0.3f;
+
+// Per-filter post-filter makeup gains — apply AFTER the filter Process. A small
+// lift only: K5 deliberately keeps its double duty (level + filter drive
+// character — the "analog" feel), so we do NOT fully compensate the input pad
+// (full unity at noon = 2.6). 1.4 nudges the floor up a touch without shifting
+// the whole K5 loudness curve out from under its sweet spot. Ear-tune per filter.
+constexpr float MODE_C_MOOG_MAKEUP    = 1.4f;
+constexpr float MODE_C_GRENDEL_MAKEUP = 1.4f;
+constexpr float MODE_C_PHASER_MAKEUP  = 1.4f;
 
 // Amp-env VCA — final wet-path gate (same pattern as Mode A's drone gating).
 // Multiplies wet by env_val × MODE_C_VCA_GAIN so the wet path is silent when the
@@ -183,14 +206,25 @@ constexpr float MODE_C_CUTOFF_K1_MAX_HZ = 8000.0f;
 // stage. Keep close to unity to leave headroom for resonant peaks.
 constexpr float MODE_C_POST_FILTER_GAIN = 1.3f;
 
-// Bit-flipper (SW1=MIDDLE drive flavor). Deterministic XOR of a chosen Q15 bit
-// on every sample — same mechanism as Mode B SW1 MIDDLE CCW, without the
-// random event timing. K4 sweeps the XOR bit position from 0 (LSB, inaudible)
-// to MAX_BIT (= 13, ±0.25 fs swings, maximum fuzz). Gate keys the wet/dry off
+// SW1=MID drive — K4 bipolar around noon. NOON = clean.
+//   CW  half: bit-flipper (XOR bit position, gated).
+//   CCW half: digital wraparound (overflow fold; drive 1 → max).
+//
+// Bit-flipper (CW). Deterministic XOR of a chosen Q15 bit on every sample —
+// same mechanism as Mode B SW1 MIDDLE CCW, without the random event timing.
+// K4 noon→CW sweeps the XOR bit position from 0 (LSB, inaudible) to MAX_BIT
+// (= 13, ±0.25 fs swings, maximum fuzz). Gate keys the wet/dry off the
 // envelope so silent input stays silent (passive bass env ≈0.02–0.1).
-constexpr int   MODE_C_BITCRUSH_MAX_BIT      = 13;      // K4=1 → flip bit 13 (±0.25 of full scale)
+constexpr int   MODE_C_BITCRUSH_MAX_BIT      = 13;      // K4 full CW → flip bit 13 (±0.25 of full scale)
 constexpr float MODE_C_BITCRUSH_ENV_GATE     = 0.01f;   // raw env_val gate threshold
 constexpr int   MODE_C_BITCRUSH_RAMP_SAMPLES = 48;      // 1 ms click-free gate edge
+
+// Digital wraparound (CW→CCW half). Overdriven signal wraps modulo [-1,1] like
+// an overflowing DAC instead of clamping — each rail crossing jumps to the
+// opposite rail. Harsh buzzy "broken digital" character. No gate needed (a
+// near-zero input wraps to near-zero, so quiet stays quiet).
+constexpr float MODE_C_WRAP_DRIVE_MAX = 8.0f;  // pre-wrap drive at K4 full CCW (1× at noon)
+constexpr float MODE_C_WRAP_COMP      = 0.50f; // post-wrap gain (output is full-scale sawtooth)
 
 // Post-filter peak limiter (Mode C only, all SW2 modes).
 // 2-band split: LF (≤ SPLIT_HZ) passes through untouched so bass fundamentals
