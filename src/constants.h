@@ -100,6 +100,7 @@ constexpr float MODE_C_ENV_MOD_RANGE  = 120.0f; // depth on normalized env; lift
 constexpr float MODE_C_ENV_SCALE      = 10.0f; // passive-bass env normalization (matches Mode A's effective ×10)
 constexpr float MODE_C_CUTOFF_MAX_HZ  = 10000.f; // top clamp for env-modulated cutoff (keeps Huovilainen stable)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
+constexpr float MODE_C_K3_CURVE       = 2.0f;  // response curve on |k3| env amount: >1 = fine near noon, coarse toward extremes (endpoints unchanged)
 // Audio-rate cutoff self-FM (SW2=UP Moog). K5 noon→CW fades in modulation of
 // the ladder cutoff by the filter input signal: mod_cutoff *= 1 + depth·k5·in.
 // The input's harmonics splatter sidebands around the resonant peak so it reads
@@ -184,8 +185,12 @@ constexpr float MODE_C_SYNTH_VCA_GAIN         = 12.f;  // passive-bass env norma
 //          Snappy filter opening on transients, decaying tail.
 // K3 CCW → slow-rise env: one-pole attack (ATTACK_MS), instant snap-back when
 //          env drops. Gradual filter opening (swell), clean return to K1.
-constexpr float MODE_C_FILTER_ENV_ATTACK_MS  = 600.0f;  // CCW slow-rise time constant (ladder)
-constexpr float MODE_C_FILTER_ENV_RELEASE_MS = 150.0f;  // CW release time constant (ladder)
+// CW release time shortens with K3 travel (snappier decay toward RELEASE_MIN_MS).
+// CCW attack (swell) is a FIXED time constant — scaling it fought the depth/clamp
+// coupling (deeper mod outruns longer tau) and felt wrong, so the swell stays put.
+constexpr float MODE_C_FILTER_ENV_ATTACK_MS      = 600.0f;  // CCW slow-rise swell (constant)
+constexpr float MODE_C_FILTER_ENV_RELEASE_MS     = 150.0f;  // CW release at noon (ladder)
+constexpr float MODE_C_FILTER_ENV_RELEASE_MIN_MS = 40.0f;   // CW release at full CW (shortest)
 
 // Grendel env smoother — same shape pattern as the ladder (asymmetric per
 // K3 sign), at symmetric 400 ms values so CW release and CCW attack feel

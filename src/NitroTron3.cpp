@@ -1014,6 +1014,7 @@ float prev_block_env_c = 0.f;
 float env_c_filter         = 0.f;
 float env_c_filter_atk_coef = 0.f;
 float env_c_filter_rel_coef = 0.f;
+float mode_c_sr            = 48000.f;  // cached sample rate for per-block coef updates
 
 // Grendel env smoother — always swell shape (slow attack, instant snap-back),
 // regardless of K3 sign. Snap-style envelopes are reserved for the Moog
@@ -1085,11 +1086,23 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   // ramps from 0 right at the deadzone edge -- otherwise k3_abs jumps from
   // 0 (inside) to K3_DEADZONE (just outside), which with the current
   // ENV_SCALE x ENV_MOD_RANGE gain produces a multi-x cutoff step during play.
-  const float k3_norm = (k3_abs > 0.f)
+  const float k3_lin = (k3_abs > 0.f)
       ? (k3_abs - K3_DEADZONE) / (1.f - K3_DEADZONE)
       : 0.f;
+  // Response curve: expand control resolution near noon, compress toward the
+  // extremes. Endpoints are fixed (0→0, 1→1) so the tuned modulation bandwidth
+  // is unchanged; only the dial feel shifts.
+  const float k3_norm = powf(k3_lin, MODE_C_K3_CURVE);
   const float env_lift_gain = k3_norm * MODE_C_ENV_SCALE * MODE_C_ENV_MOD_RANGE;
+  // K3 magnitude scales the CW release time only: further CW shortens the
+  // release (snappier decay) toward RELEASE_MIN_MS. The CCW attack (swell) is
+  // left at its constant seeded coef — scaling the swell time fought the
+  // depth/clamp coupling and felt wrong. Only the active side's coef is
+  // consumed in the loop below (shape keys off k3 sign).
   if (ladder_on) {
+    const float rel_ms = MODE_C_FILTER_ENV_RELEASE_MS +
+        k3_lin * (MODE_C_FILTER_ENV_RELEASE_MIN_MS - MODE_C_FILTER_ENV_RELEASE_MS);
+    env_c_filter_rel_coef = 1.f - expf(-1.f / (rel_ms * 0.001f * mode_c_sr));
     ladder_c_v2.SetDrive(drive_amt);
     // sqrt curve so resonance is audible across the full knob range.
     ladder_c_v2.SetResonance(sqrtf(k2) * MODE_C_LADDER_RES_MAX);
@@ -1279,7 +1292,9 @@ int main() {
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
 
-  // Mode C filter-env smoother: precompute atk/rel coefs. coef = 1 - exp(-1 / (tau * sr))
+  // Mode C filter-env smoother: seed atk/rel coefs at the noon (base) times;
+  // ProcessFreqShift rescales them per block from K3 travel. coef = 1 - exp(-1 / (tau * sr))
+  mode_c_sr = sr;
   env_c_filter_atk_coef = 1.f - expf(-1.f /
       (MODE_C_FILTER_ENV_ATTACK_MS  * 0.001f * sr));
   env_c_filter_rel_coef = 1.f - expf(-1.f /
