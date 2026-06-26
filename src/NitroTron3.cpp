@@ -1046,9 +1046,12 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float drive_amt = (drive_knob < 0.5f)
       ? MODE_C_DRIVE_MIN + (drive_knob * 2.f) * (1.f - MODE_C_DRIVE_MIN)
       : 1.f + ((drive_knob - 0.5f) * 2.f) * (MODE_C_DRIVE_MAX - 1.f);
-  // K5 noon→CW also fades in audio-rate cutoff self-FM for the Moog ladder
-  // (filter input as the modulation source) — grit on the resonance. 0 at noon.
-  const float k5_fm_amt     = (drive_knob > 0.5f) ? (drive_knob - 0.5f) * 2.f : 0.f;
+  // K5 fades in audio-rate cutoff self-FM for the Moog ladder (filter input as
+  // the modulation source) — grit on the resonance. Begins a bit before noon
+  // (MODE_C_MOOG_FM_START) so there's always a touch of FM, reaches max at CW.
+  const float k5_fm_amt     = (drive_knob > MODE_C_MOOG_FM_START)
+      ? (drive_knob - MODE_C_MOOG_FM_START) / (1.f - MODE_C_MOOG_FM_START)
+      : 0.f;
   const float moog_fm_depth = k5_fm_amt * MODE_C_MOOG_FM_DEPTH;
   const float m         = MixCurve(mix);
   const float dry_gain  = sqrtf(1.f - m);
