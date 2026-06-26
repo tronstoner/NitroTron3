@@ -1045,6 +1045,10 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float drive_amt = (drive_knob < 0.5f)
       ? MODE_C_DRIVE_MIN + (drive_knob * 2.f) * (1.f - MODE_C_DRIVE_MIN)
       : 1.f + ((drive_knob - 0.5f) * 2.f) * (MODE_C_DRIVE_MAX - 1.f);
+  // K5 noon→CW also fades in audio-rate cutoff self-FM for the Moog ladder
+  // (filter input as the modulation source) — grit on the resonance. 0 at noon.
+  const float k5_fm_amt     = (drive_knob > 0.5f) ? (drive_knob - 0.5f) * 2.f : 0.f;
+  const float moog_fm_depth = k5_fm_amt * MODE_C_MOOG_FM_DEPTH;
   const float m         = MixCurve(mix);
   const float dry_gain  = sqrtf(1.f - m);
   const float wet_gain  = sqrtf(m);
@@ -1194,6 +1198,11 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       // env shape (smoother above) differs. CW = snappy auto-wah, CCW = swell.
       const float lift = 1.f + env_c_filter * env_lift_gain;
       float mod_cutoff = base_cutoff * lift;
+      // Audio-rate self-FM (K5 noon→CW): modulate cutoff with the filter input
+      // signal (wet = drive-stage output) so the resonant peak grows sidebands
+      // — grittier, less sterile. moog_fm_depth is 0 below K5 noon.
+      mod_cutoff *= 1.f + moog_fm_depth * wet;
+      if (mod_cutoff < MODE_C_CUTOFF_MIN_HZ) mod_cutoff = MODE_C_CUTOFF_MIN_HZ;
       if (mod_cutoff > MODE_C_CUTOFF_MAX_HZ) mod_cutoff = MODE_C_CUTOFF_MAX_HZ;
       ladder_c_v2.SetCutoff(mod_cutoff);
       // Spectrum-shaping filter: pad before drive so K5 noon sits in its sweet

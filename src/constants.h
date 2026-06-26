@@ -100,6 +100,11 @@ constexpr float MODE_C_ENV_MOD_RANGE  = 120.0f; // depth on normalized env; lift
 constexpr float MODE_C_ENV_SCALE      = 10.0f; // passive-bass env normalization (matches Mode A's effective ×10)
 constexpr float MODE_C_CUTOFF_MAX_HZ  = 10000.f; // top clamp for env-modulated cutoff (keeps Huovilainen stable)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
+// Audio-rate cutoff self-FM (SW2=UP Moog). K5 noon→CW fades in modulation of
+// the ladder cutoff by the filter input signal: mod_cutoff *= 1 + depth·k5·in.
+// The input's harmonics splatter sidebands around the resonant peak so it reads
+// gritty/vocal instead of a sterile sine. Cutoff stays clamped to [MIN,MAX] Hz.
+constexpr float MODE_C_MOOG_FM_DEPTH  = 3.0f;  // FM depth at K5 full CW (linear, ×filter input)
 
 // Mode C filter drive (K5 — bipolar around noon, applies across all SW2 filter modes).
 // CCW → attenuate, NOON → unity (1.0), CW → boost. Piecewise linear in dB-ish space.
