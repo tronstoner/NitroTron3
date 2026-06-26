@@ -4,14 +4,13 @@
 #include <cstdint>
 #include "constants.h"
 
-// 4-stage first-order allpass phaser, modeled on the EHX Small Stone.
-// All four stages share the same modulated allpass corner ω. The output
-// mixes dry + allpass-chain at unity 0.5/0.5 — this internal mix is
-// intrinsic to phaser character (cannot be moved to K6). The wet
-// (allpass-filtered) signal interfering with the dry creates two notches
-// sweeping in tandem; for 4 identical-ω stages, the notches sit at
-// ω · 0.414 and ω · 2.414 (ratio ≈ 5.83), which matches the Small Stone's
-// measured ~5.5 ratio.
+// First-order allpass phaser, voiced toward the EHX Small Stone but denser.
+// All stages share the same modulated allpass corner ω. The output mixes
+// dry + allpass-chain at unity 0.5/0.5 — this internal mix is intrinsic to
+// phaser character (cannot be moved to K6). The wet (allpass-filtered)
+// signal interfering with the dry creates notches sweeping in tandem: N
+// identical-ω stages produce N/2 notches (a stock Small Stone is 4 stages /
+// 2 notches; we run 6 / 3 notches for a thicker, denser sweep).
 //
 // K2 = feedback (Color analog): tap from end of allpass chain back into
 // stage 0's input. Off (K2=0) = clean dry-flat-with-notches sweep; up =
@@ -31,6 +30,13 @@ class Phaser {
     sr_     = sample_rate;
     inv_sr_ = 1.f / sample_rate;
     for (int i = 0; i < kStages; ++i) ap_state_[i] = 0.f;
+    // Per-stage coefficient detune: symmetric spread in coefficient space
+    // around the shared corner. Cheap (additive offset, no extra tanf/sample)
+    // and breaks the perfect-alignment "digital" notch stack — stages land at
+    // slightly different corners so notches/resonance spread organically.
+    const float center = (kStages - 1) * 0.5f;
+    for (int i = 0; i < kStages; ++i)
+      stage_offset_[i] = PHASER_STAGE_SPREAD * ((i - center) / center);
     fb_state_     = 0.f;
     a_            = 0.f;
     fb_amt_       = 0.f;
@@ -100,14 +106,21 @@ class Phaser {
       UpdateAllpassCoeff(fc);
     }
 
-    // 4-stage allpass chain, optional feedback from chain output.
-    // Per-stage 1st-order allpass in transposed direct form II:
+    // Allpass chain, optional feedback from chain output. Per-stage 1st-order
+    // allpass in transposed direct form II, each stage detuned in coefficient
+    // space (stage_offset_) off the shared corner:
     //   y[n] = -a * x[n] + s[n-1]
     //   s[n] =  a * y[n] + x[n]
-    float x = in - fb_amt_ * fb_state_;
+    // Feedback path is soft-saturated (tanh) like an analog OTA loop: at low
+    // resonance it's ~linear, but as the loop rings up it blooms and self-
+    // limits instead of ringing as a pure (sterile, "digital") sine.
+    float x = in - fb_amt_ * tanhf(fb_state_);
     for (int i = 0; i < kStages; ++i) {
-      const float y = -a_ * x + ap_state_[i];
-      ap_state_[i] = a_ * y + x;
+      float ai = a_ + stage_offset_[i];
+      if      (ai >  0.999f) ai =  0.999f;
+      else if (ai < -0.999f) ai = -0.999f;
+      const float y = -ai * x + ap_state_[i];
+      ap_state_[i] = ai * y + x;
       x = y;
     }
     fb_state_ = x;
@@ -118,7 +131,7 @@ class Phaser {
   }
 
  private:
-  static constexpr int   kStages = 4;
+  static constexpr int   kStages = 6;
   static constexpr float kPi     = 3.14159265f;
   static constexpr float kLn2    = 0.6931472f;
 
@@ -129,6 +142,7 @@ class Phaser {
   float fb_amt_;
   float fb_state_;
   float ap_state_[kStages];
+  float stage_offset_[kStages];
 
   float lfo_phase_;
   float lfo_rate_hz_;

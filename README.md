@@ -50,7 +50,7 @@ NitroTron3/
 │   ├── clouds/                 # vendored MI Clouds reverb (MIT)
 │   │
 │   ├── grendel.h               # 4-BPF formant filter (Mode C SW2=MID)
-│   ├── phaser.h                # 4-stage allpass phaser (Mode C SW2=DOWN)
+│   ├── phaser.h                # 6-stage allpass phaser (Mode C SW2=DOWN)
 │   ├── synth_osc_c.h           # hypersaw / square+PWM osc (Mode C SW1=DOWN)
 │   ├── bitcrush.h              # gated bit crusher (Mode C SW1=MID)
 │   └── peak_limiter.h          # 2-band soft limiter (Mode C post-filter)

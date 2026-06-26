@@ -131,9 +131,12 @@ across all SW2 filter modes); K6 is the dry/wet mix.
 
 Three filter flavors: a tuned **Moog ladder** (single input saturator,
 cutoff-tracked resonance, asymmetric drive), a vowel-pathed **Grendel
-formant** filter, and a 4-stage **phaser** with internal LFO. K3 is a
-bipolar envelope-to-filter modulator with a center deadzone (or, on
-the phaser, a bipolar LFO rate + shape selector).
+formant** filter, and a 6-stage **phaser** with internal LFO. The
+phaser runs slightly detuned per stage (organic, less "digital") with a
+soft-saturated feedback loop, so K2 sweeps from a clean sweep up into
+a resonant bloom / controlled self-oscillation. K3 is a bipolar
+envelope-to-filter modulator with a center deadzone (or, on the phaser,
+a bipolar LFO rate + shape selector).
 
 Three drive flavors. **SW1=UP** is the sine wavefolder. **SW1=MIDDLE**
 is a gated bit crusher (K4 sweeps the XOR bit position, input-envelope
@@ -156,7 +159,7 @@ silent so self-resonance never rings alone.
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
 | KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (80 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = oo dark/closed, CW = ee bright/open). SW2=DOWN: phaser notch centre |
-| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: phaser feedback / depth |
+| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: phaser feedback (clean sweep → resonant bloom → controlled self-oscillation at full CW) |
 | KNOB 3 | Env / LFO modulation | SW2=UP: bipolar env-to-cutoff (passive-bass scaled). SW2=MID: bipolar env on vowel path and size. SW2=DOWN: bipolar phaser LFO rate (sign selects shape — CCW triangle, CW sample-and-hold; magnitude = rate; centre = LFO off, static notch at K1). All with ±5 % centre deadzone |
 | KNOB 4 | Drive character | SW1=UP: sine wavefold amount (0 = clean, 1 = max fold; internal loudness compensation). SW1=MID: bit-crush amount (CCW = clean, CW = max XOR fuzz, env-gated). SW1=DOWN: synth-osc timbre — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
 | KNOB 5 | Filter drive (bipolar) | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and the phaser. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone |

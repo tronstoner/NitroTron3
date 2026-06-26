@@ -320,7 +320,8 @@ constexpr float PHASER_LFO_TRI_HZ_MAX  = 80.f;    // near sub-audio
 // S&H character lives well below the triangle's top end.
 constexpr float PHASER_LFO_SH_HZ_MIN   = 0.5f;
 constexpr float PHASER_LFO_SH_HZ_MAX   = 40.f;
-constexpr float PHASER_FB_MAX          = 0.95f;   // feedback ceiling — close to but below 4-stage self-oscillation
+constexpr float PHASER_FB_MAX          = 0.98f;   // feedback ceiling — wide open; tanh-in-loop bounds runaway and detune keeps it from going sterile, so K2 full CW reaches into bounded self-oscillation
+constexpr float PHASER_STAGE_SPREAD    = 0.04f;   // per-stage allpass coeff detune; breaks perfect notch alignment (organic, less "digital"). 0 = all stages identical
 
 // --- Mode B SW1 MIDDLE — Event-Driven Digital Glitch ---
 // Bipolar K4: noon = clean. CCW = bit-flip events, CW = timing events

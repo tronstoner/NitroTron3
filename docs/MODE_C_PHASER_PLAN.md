@@ -1,6 +1,19 @@
 # Mode C SW2=DOWN — Phaser Plan
 
-Status: planning. Replaces the Plague Bearer slot. Implementation begins once the two open forks (below) are resolved.
+Status: **as-built diverged from this plan.** The slot shipped, replacing Plague Bearer, but the implementation is NOT the 3-band parallel resonant BPF described below. It's a **6-stage first-order allpass phaser** (Small Stone topology, denser than a stock 4-stage), implemented in `src/phaser.h`. The BPF plan below is kept for historical context only — the `PHASER_BPF_RATIO` / `PHASER_Q_*` constants it lists were never created.
+
+As-built voicing (ear-tuned):
+- **6 allpass stages** → 3 notches (stock Small Stone is 4 stages / 2 notches; we run denser/thicker).
+- **Per-stage coefficient detune** (`PHASER_STAGE_SPREAD`): stages sit at slightly different corners so notches/resonance spread organically instead of stacking into one razor peak — removes the "digital" perfect-alignment edge.
+- **Soft-saturated feedback** (`tanh` inside the loop, analog-OTA style): at low feedback it's ~linear; as the loop rings up it blooms and self-limits instead of ringing as a sterile sine. Also bounds runaway.
+- **Feedback ceiling** `PHASER_FB_MAX = 0.98`: wide open — K2 reaches into bounded self-oscillation at full CW; the `tanh` is the safety, so no conservative pre-limit is needed.
+- K1 = notch centre (exp), K2 = feedback, K3 = bipolar LFO rate + shape (CCW triangle / CW sample-and-hold, centre = static). Internal dry+wet sum locked at 0.5/0.5. No env-follower routing.
+
+Live `PHASER_*` constants are in `src/constants.h`; this doc is not the source of truth for values.
+
+---
+
+Original planning notes (historical — describes the abandoned BPF approach):
 
 ---
 
