@@ -212,12 +212,23 @@ constexpr float MODE_C_POST_FILTER_GAIN = 1.3f;
 //
 // Bit-flipper (CW). Deterministic XOR of a chosen Q15 bit on every sample —
 // same mechanism as Mode B SW1 MIDDLE CCW, without the random event timing.
-// K4 noon→CW sweeps the XOR bit position from 0 (LSB, inaudible) to MAX_BIT
-// (= 13, ±0.25 fs swings, maximum fuzz). Gate keys the wet/dry off the
-// envelope so silent input stays silent (passive bass env ≈0.02–0.1).
-constexpr int   MODE_C_BITCRUSH_MAX_BIT      = 13;      // K4 full CW → flip bit 13 (±0.25 of full scale)
+// K4 noon→CW sweeps the XOR bit position from 0 (LSB, inaudible) to MAX_BIT.
+// Bit 15 is the sign bit → flips polarity, output snaps to a near-full-scale
+// square (loudest, least dynamic). Gate keys the wet/dry off the envelope so
+// silent input stays silent (passive bass env ≈0.02–0.1).
+constexpr int   MODE_C_BITCRUSH_MAX_BIT      = 15;      // K4 full CW → flip bit 15 (sign bit, full-scale square)
 constexpr float MODE_C_BITCRUSH_ENV_GATE     = 0.01f;   // raw env_val gate threshold
 constexpr int   MODE_C_BITCRUSH_RAMP_SAMPLES = 48;      // 1 ms click-free gate edge
+// Per-bit loudness comp table (index = flipped bit, 0..15). The flipper picks a
+// discrete bit, so the wet level jumps in discrete steps (and bit 15, the sign-
+// flip square, is an outlier no smooth curve fits) — a table lets each step be
+// leveled independently by ear. The wet (flipped) output is multiplied by
+// TABLE[bit]. Low bits ≈ clean (1.0); higher bits get pulled down. Tune each
+// entry against the dry reference until the K4 sweep holds an even loudness.
+constexpr float MODE_C_BITCRUSH_COMP_TABLE[16] = {
+    1.00f, 1.10f, 1.20f, 1.30f, 1.40f, 1.50f, 1.40f, 1.30f,  // bits 0–7  (inaudible → faint)
+    1.20f, 1.10f, 1.00f, 0.80f, 0.70f, 0.60f, 0.50f, 0.45f,  // bits 8–15 (audible → sign-flip square)
+};
 
 // Digital wraparound (CW→CCW half). Overdriven signal wraps modulo [-1,1] like
 // an overflowing DAC instead of clamping — each rail crossing jumps to the

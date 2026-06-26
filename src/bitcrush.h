@@ -36,6 +36,11 @@ class BitCrush {
       flipped = Q15ToFloat(static_cast<int16_t>(q ^ xor_mask));
     }
 
+    // Loudness comp: high bits (esp. the bit-15 square) are far louder than
+    // low-bit grit, and the level jumps in discrete steps. Look up a per-bit
+    // gain so each step can be leveled independently (index is the clamped bit).
+    const float comp = MODE_C_BITCRUSH_COMP_TABLE[bit];
+
     // Gate: ramp wet/dry toward 1.f when env opens, 0.f when env closes.
     const float target = (env > MODE_C_BITCRUSH_ENV_GATE) ? 1.f : 0.f;
     const float ramp_step =
@@ -47,7 +52,7 @@ class BitCrush {
       ramp_ -= ramp_step;
       if (ramp_ < target) ramp_ = target;
     }
-    return in * (1.f - ramp_) + flipped * ramp_;
+    return in * (1.f - ramp_) + flipped * comp * ramp_;
   }
 
  private:
