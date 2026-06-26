@@ -73,21 +73,26 @@ constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
 // --- Mode C — Schism ---
 // SW1=UP drive — K4 bipolar around noon. NOON = clean.
 //   CW  half: sine wavefolder (fold amount 0 → max).
-//   CCW half: tanh overdrive (Mode B feedback-drive character; drive 1 → max).
+//   CCW half: Chebyshev waveshaper (octave-up / metallic harmonic generator).
 // Sine wavefolder compensation curve ear-tuned in C.2.
 constexpr float SINEFOLD_DRIVE_MAX   = 35.0f;  // pre-sin drive at K4 full CW (1× at noon)
 constexpr float SINEFOLD_COMP_AT_MAX = 0.55f;  // post-fold gain at K4 full CW (1.0 at noon)
-// Tanh overdrive (K4 full CCW). Same gain-compensated soft-clip as Mode B's
-// feedback saturator (tanh at drive ~8); COMP keeps wet loudness roughly flat.
-constexpr float MODE_C_OD_DRIVE_MAX   = 80.0f; // pre-tanh drive at K4 full CCW (1× at noon)
-constexpr float MODE_C_OD_COMP_AT_MAX = 0.60f; // post-tanh gain at K4 full CCW (1.0 at noon)
-// Asymmetric bias as a fixed offset in the tanh-input domain: tanh(dry·drive +
-// bias) with tanh(bias) subtracted back out (no DC leak). Constant, mild
-// asymmetry that colors the crossover/low-level region → even harmonics,
-// "tube"/asymmetric-amp flavor. Independent of drive, so it never collapses the
-// small-signal response (a signal-domain bias × high drive half-wave-mutes).
-// 0 = symmetric. Higher = more lopsided; back off if one polarity chokes.
-constexpr float MODE_C_OD_BIAS        = 1.2f;
+// Chebyshev waveshaper (K4 full CCW). Drives the input toward [-1,1], then sums
+// Chebyshev polynomials T2..T5. Each Tn maps a sinusoid to its n-th harmonic
+// (T2 = 2nd / octave-up, T3 = 3rd, T4 = 4th, T5 = 5th), so the H* mix sets a
+// metallic / ring-mod-ish spectrum. Value at x=0 subtracted out (T2/T4 carry
+// constant terms) so silence stays silent.
+constexpr float MODE_C_CHEBY_DRIVE_MAX = 30.0f; // pre-shaper drive at K4 full CCW (1× at noon)
+constexpr float MODE_C_CHEBY_COMP      = 0.5f;  // post-shaper output gain
+constexpr float MODE_C_CHEBY_H2        = 1.f;   // 2nd harmonic weight (octave up)
+constexpr float MODE_C_CHEBY_H3        = 0.3f;  // 3rd harmonic weight
+constexpr float MODE_C_CHEBY_H4        = 0.7f;  // 4th harmonic weight
+constexpr float MODE_C_CHEBY_H5        = 0.2f;  // 5th harmonic weight
+// Pre-shaper low-pass (2-pole) — feeds the octave generator a near-sine so T2
+// produces a clean octave instead of intermod mush from the bass's own
+// harmonics (the Octavia trick). Lower = cleaner/stronger octave but darker;
+// raise toward 600+ to let more of the bass's brightness/metallic content in.
+constexpr float MODE_C_CHEBY_LP_HZ     = 250.0f;
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
 constexpr float MODE_C_LADDER_RES_MAX = 1.2f;  // pushed past ~1.0 self-osc threshold; in-loop tanh bounds it
@@ -208,7 +213,7 @@ constexpr float MODE_C_POST_FILTER_GAIN = 1.3f;
 
 // SW1=MID drive — K4 bipolar around noon. NOON = clean.
 //   CW  half: bit-flipper (XOR bit position, gated).
-//   CCW half: digital wraparound (overflow fold; drive 1 → max).
+//   CCW half: tanh overdrive (Mode B feedback-drive character; drive 1 → max).
 //
 // Bit-flipper (CW). Deterministic XOR of a chosen Q15 bit on every sample —
 // same mechanism as Mode B SW1 MIDDLE CCW, without the random event timing.
@@ -230,12 +235,24 @@ constexpr float MODE_C_BITCRUSH_COMP_TABLE[16] = {
     1.20f, 1.10f, 1.00f, 0.80f, 0.70f, 0.60f, 0.50f, 0.45f,  // bits 8–15 (audible → sign-flip square)
 };
 
-// Digital wraparound (CW→CCW half). Overdriven signal wraps modulo [-1,1] like
-// an overflowing DAC instead of clamping — each rail crossing jumps to the
-// opposite rail. Harsh buzzy "broken digital" character. No gate needed (a
-// near-zero input wraps to near-zero, so quiet stays quiet).
+// Digital wraparound (CCW half — PARKED, tanh OD is active in the slot).
+// Overdriven signal wraps modulo [-1,1] like an overflowing DAC instead of
+// clamping — each rail crossing jumps to the opposite rail. Harsh buzzy
+// "broken digital" character. Kept so the CCW branch can switch back to it.
 constexpr float MODE_C_WRAP_DRIVE_MAX = 8.0f;  // pre-wrap drive at K4 full CCW (1× at noon)
 constexpr float MODE_C_WRAP_COMP      = 0.50f; // post-wrap gain (output is full-scale sawtooth)
+
+// Tanh overdrive (CCW half — ACTIVE). K4 full CCW. Gain-compensated soft-clip
+// (Mode B feedback-saturator character); COMP keeps wet loudness roughly flat.
+constexpr float MODE_C_OD_DRIVE_MAX   = 80.0f; // pre-tanh drive at K4 full CCW (1× at noon)
+constexpr float MODE_C_OD_COMP_AT_MAX = 0.60f; // post-tanh gain at K4 full CCW (1.0 at noon)
+// Asymmetric bias as a fixed offset in the tanh-input domain: tanh(dry·drive +
+// bias) with tanh(bias) subtracted back out (no DC leak). Constant, mild
+// asymmetry that colors the crossover/low-level region → even harmonics,
+// "tube"/asymmetric-amp flavor. Independent of drive, so it never collapses the
+// small-signal response (a signal-domain bias × high drive half-wave-mutes).
+// 0 = symmetric. Higher = more lopsided; back off if one polarity chokes.
+constexpr float MODE_C_OD_BIAS        = 1.2f;
 
 // Post-filter peak limiter (Mode C only, all SW2 modes).
 // 2-band split: LF (≤ SPLIT_HZ) passes through untouched so bass fundamentals

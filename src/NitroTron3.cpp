@@ -304,13 +304,29 @@ static float Wavefold(float x, float amount) {
   return folded * PEAK;
 }
 
-// Digital wraparound (Mode C SW1=MID, K4 CCW). Wraps x modulo [-1, 1] like an
-// overflowing DAC: as the driven signal climbs past +1 it jumps to -1 and
+// Digital wraparound (Mode C SW1=MID, K4 CCW). PARKED — Chebyshev is active in
+// the slot; kept so the CCW branch can switch back. Wraps x modulo [-1, 1] like
+// an overflowing DAC: as the driven signal climbs past +1 it jumps to -1 and
 // keeps going. Sawtooth discontinuities → harsh buzzy digital distortion.
-static float WrapFold(float x) {
+__attribute__((unused)) static float WrapFold(float x) {
   float y = fmodf(x + 1.f, 2.f);
   if (y < 0.f) y += 2.f;
   return y - 1.f;
+}
+
+// Chebyshev waveshaper (Mode C SW1=MID, K4 CCW). Input must be pre-driven and
+// clamped to [-1, 1]. Sums T2..T5 — each a pure n-th-harmonic generator — per
+// the MODE_C_CHEBY_H* mix → metallic / ring-mod timbre. The raw value at x=0 is
+// removed so silent input → silent output (T2/T4 carry constant terms).
+static float Chebyshev(float x) {
+  const float x2 = x * x;
+  const float t2 = 2.f * x2 - 1.f;
+  const float t3 = (4.f * x2 - 3.f) * x;
+  const float t4 = (8.f * x2 - 8.f) * x2 + 1.f;
+  const float t5 = ((16.f * x2 - 20.f) * x2 + 5.f) * x;
+  const float dc = -MODE_C_CHEBY_H2 + MODE_C_CHEBY_H4;  // raw value at x=0
+  return MODE_C_CHEBY_H2 * t2 + MODE_C_CHEBY_H3 * t3 +
+         MODE_C_CHEBY_H4 * t4 + MODE_C_CHEBY_H5 * t5 - dc;
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,6 +1022,13 @@ float env_c_filter_rel_coef = 0.f;
 float env_c_grendel          = 0.f;
 float env_c_grendel_atk_coef = 0.f;
 
+// Chebyshev pre-shaper low-pass (SW1=MID CCW). 2-pole (two cascaded one-poles)
+// that isolates the fundamental so T2 makes a clean octave instead of intermod
+// mush. Coef computed in main() from MODE_C_CHEBY_LP_HZ.
+float cheby_lp1 = 0.f;
+float cheby_lp2 = 0.f;
+float cheby_lp_g = 0.f;
+
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
   const ModePresetData& eb = preset.GetEditBuffer();
@@ -1028,7 +1051,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
 
   // K4 is bipolar around noon for SW1=UP and SW1=MID (noon = clean):
   //   CW  half drives the primary flavor (sine fold / bit-flip),
-  //   CCW half drives the secondary flavor (tanh overdrive / wraparound).
+  //   CCW half drives the secondary flavor (Chebyshev / tanh overdrive).
   // SW1=DOWN keeps K4 as the full-range saw↔rect timbre morph (untouched).
   const float k4_cw  = (fold_amt > 0.5f) ? (fold_amt - 0.5f) * 2.f : 0.f;  // 0..1
   const float k4_ccw = (fold_amt < 0.5f) ? (0.5f - fold_amt) * 2.f : 0.f;  // 0..1
@@ -1037,13 +1060,13 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float fold_blend = (drive_mode == 0) ? k4_cw : 0.f;
   const float fold_drive = 1.f + fold_blend * SINEFOLD_DRIVE_MAX;
   const float fold_comp  = 1.f - fold_blend * (1.f - SINEFOLD_COMP_AT_MAX);
-  // SW1=UP CCW — tanh overdrive (Mode B feedback-drive character).
-  const float od_blend = (drive_mode == 0) ? k4_ccw : 0.f;
+  // SW1=UP CCW — Chebyshev waveshaper (octave-up / metallic harmonic generator).
+  const float cheby_blend = (drive_mode == 0) ? k4_ccw : 0.f;
+  const float cheby_drive = 1.f + cheby_blend * (MODE_C_CHEBY_DRIVE_MAX - 1.f);
+  // SW1=MID CCW — tanh overdrive (Mode B feedback-drive character).
+  const float od_blend = (drive_mode == 1) ? k4_ccw : 0.f;
   const float od_drive = 1.f + od_blend * (MODE_C_OD_DRIVE_MAX - 1.f);
   const float od_comp  = 1.f - od_blend * (1.f - MODE_C_OD_COMP_AT_MAX);
-  // SW1=MID CCW — digital wraparound (overflow fold).
-  const float wrap_blend = (drive_mode == 1) ? k4_ccw : 0.f;
-  const float wrap_drive = 1.f + wrap_blend * (MODE_C_WRAP_DRIVE_MAX - 1.f);
 
   // K3 bipolar with center deadzone → signed env amount in [-1, +1].
   float k3_signed = (k3 - 0.5f) * 2.f;
@@ -1130,10 +1153,25 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     //   0=UP sinefold, 1=MID bitcrush (gated), 2=DOWN pitch-tracked synth osc.
     float wet = dry;
     if (drive_mode == 0) {
-      // K4 CW = sine fold, K4 CCW = tanh overdrive, noon = clean dry.
+      // K4 CW = sine fold, K4 CCW = Chebyshev waveshaper, noon = clean dry.
       if (fold_blend > 0.001f) {
         const float folded = sinf(dry * fold_drive * 1.5707963f);
         wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
+      } else if (cheby_blend > 0.001f) {
+        // Pre-shaper 2-pole LP → near-sine so T2 makes a clean octave (Octavia
+        // trick). Filter only feeds the shaper; the dry-blend term stays full.
+        cheby_lp1 += cheby_lp_g * (dry - cheby_lp1);
+        cheby_lp2 += cheby_lp_g * (cheby_lp1 - cheby_lp2);
+        float xd = cheby_lp2 * cheby_drive;
+        if (xd > 1.f) xd = 1.f;
+        else if (xd < -1.f) xd = -1.f;
+        const float shaped = Chebyshev(xd);
+        wet = dry * (1.f - cheby_blend) + shaped * cheby_blend * MODE_C_CHEBY_COMP;
+      }
+    } else if (drive_mode == 1) {
+      // K4 CW = gated bit-flipper, K4 CCW = tanh overdrive, noon = clean.
+      if (k4_cw > 0.001f) {
+        wet = bitcrush_c.Process(dry, k4_cw, env_val);
       } else if (od_blend > 0.001f) {
         // Asymmetric tanh: fixed bias in the tanh-input domain (constant, mild
         // asymmetry independent of drive), DC offset subtracted out so silence
@@ -1141,14 +1179,6 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
         const float driven = tanhf(dry * od_drive + MODE_C_OD_BIAS) -
                              tanhf(MODE_C_OD_BIAS);
         wet = dry * (1.f - od_blend) + driven * od_blend * od_comp;
-      }
-    } else if (drive_mode == 1) {
-      // K4 CW = gated bit-flipper, K4 CCW = digital wraparound, noon = clean.
-      if (k4_cw > 0.001f) {
-        wet = bitcrush_c.Process(dry, k4_cw, env_val);
-      } else if (wrap_blend > 0.001f) {
-        const float wrapped = WrapFold(dry * wrap_drive);
-        wet = dry * (1.f - wrap_blend) + wrapped * wrap_blend * MODE_C_WRAP_COMP;
       }
     } else if (drive_mode == 2) {
       // Pitch-tracked synth osc → raw-env VCA (Mode A style) → SW2 filter.
@@ -1256,6 +1286,7 @@ int main() {
   fb_duck_atk_g = 1.f - expf(-1.f / (FB_DUCK_ATTACK_MS  * 0.001f * sr));
   fb_duck_rel_g = 1.f - expf(-1.f / (FB_DUCK_RELEASE_MS * 0.001f * sr));
   on_play_rel_g = 1.f - expf(-1.f / (ON_PLAY_RELEASE_MS * 0.001f * sr));
+  cheby_lp_g = 1.f - expf(-2.f * 3.14159265f * MODE_C_CHEBY_LP_HZ / sr);
 
   // Reverb resamplers + reverb engine
   rev_downsampler.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
