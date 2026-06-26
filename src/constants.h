@@ -96,7 +96,7 @@ constexpr float MODE_C_CHEBY_LP_HZ     = 250.0f;
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
 constexpr float MODE_C_LADDER_RES_MAX = 1.2f;  // pushed past ~1.0 self-osc threshold; in-loop tanh bounds it
-constexpr float MODE_C_ENV_MOD_RANGE  = 120.0f; // depth on normalized env; lift = 1 + env_scaled * |k3| * range
+constexpr float MODE_C_ENV_MOD_RANGE  = 420.0f; // depth on normalized env; lift = 1 + env_scaled * |k3| * range
 constexpr float MODE_C_ENV_SCALE      = 10.0f; // passive-bass env normalization (matches Mode A's effective ×10)
 constexpr float MODE_C_CUTOFF_MAX_HZ  = 10000.f; // top clamp for env-modulated cutoff (keeps Huovilainen stable)
 constexpr float K3_DEADZONE           = 0.05f; // bipolar K3 noon ±deadzone → env amount = 0
@@ -213,7 +213,7 @@ constexpr float MODE_C_GRENDEL_SIZE_MOD_AMT = 2.0f;
 
 // Mode C ladder K1 cutoff range — extended below Mode A's MapCutoff (80 Hz)
 // so K1 fully CCW can really shut. Top matches Mode A and the env-mod clamp.
-constexpr float MODE_C_CUTOFF_MIN_HZ = 30.0f;
+constexpr float MODE_C_CUTOFF_MIN_HZ = 20.0f;
 constexpr float MODE_C_CUTOFF_K1_MAX_HZ = 8000.0f;
 
 // Post-filter linear gain, applied before the limiter. Slight lift so the
