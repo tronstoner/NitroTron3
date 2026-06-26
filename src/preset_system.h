@@ -237,16 +237,21 @@ public:
             // ADC has been running through ≥1 audio block by now — knob
             // values are real, safe to snapshot as the baseline.
             SnapshotHardware();
-            // Manual mode is fully WYSIWYG: adopt the current physical knob
-            // positions on boot rather than the restored ones, so knobs that
-            // were moved while the pedal was off take effect immediately (no
-            // need to wiggle each one past the dirty threshold). Manual only —
-            // a loaded preset still freezes to its stored values.
+            // Manual mode is fully WYSIWYG: adopt the current physical control
+            // positions on boot rather than the restored ones, so anything
+            // moved while the pedal was off takes effect immediately (no
+            // wiggling past the dirty threshold). Switches count the same as
+            // knobs here — all part of the manual state. Manual only: a loaded
+            // preset still freezes/restores its stored values.
             if (state_.active_preset == 0) {
                 for (int i = 0; i < NUM_KNOBS; i++) {
                     state_.edit_buffer.knobs[i] = last_hw_knobs_[i];
                     knob_live_[i] = true;
                 }
+                state_.edit_buffer.sw1  = last_hw_sw1_;
+                state_.edit_buffer.sw2  = last_hw_sw2_;
+                current_mode_           = last_hw_sw3_;  // SW3 drives the active mode
+                state_.edit_buffer.mode = current_mode_;
             }
             needs_init_snapshot_ = false;
         }
