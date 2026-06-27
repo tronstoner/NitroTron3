@@ -83,15 +83,15 @@
         font-size="17" fill="#444">Drive</text>
   <text x="130" y="658" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">▲ UP</tspan>
-    <tspan dx="6" fill="#444">Sine wavefold</tspan>
+    <tspan dx="6" fill="#444">Fold / Cheby</tspan>
   </text>
   <text x="130" y="685" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">● MID</tspan>
-    <tspan dx="6" fill="#444">XOR Crusher</tspan>
+    <tspan dx="6" fill="#444">Crush / Drive</tspan>
   </text>
   <text x="130" y="712" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">▼ DOWN</tspan>
-    <tspan dx="6" fill="#444">Ensemble OSC</tspan>
+    <tspan dx="6" fill="#444">Synth osc</tspan>
   </text>
 
   <g transform="translate(300,540)">
@@ -115,7 +115,7 @@
   </text>
   <text x="300" y="712" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">▼ DOWN</tspan>
-    <tspan dx="6" fill="#444">Plague Bearer</tspan>
+    <tspan dx="6" fill="#444">Phaser</tspan>
   </text>
 
   <g transform="translate(470,540)">

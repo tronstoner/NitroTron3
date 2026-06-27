@@ -36,11 +36,22 @@ Read off the FLASH usage. If the build fails, stop.
 
 ### 3. Build the user manual PDF
 
+The manual embeds the per-mode pedal-layout SVGs, which are **generated** from
+`docs/gen_layout_svg.py` (see the `update-controls` skill). **Regenerate them
+first and confirm the labels match the current controls** — the Makefile only
+rebuilds the SVGs when the *script* is newer, so stale labels baked into the
+script are NOT caught by `make` and will silently ship in the PDF.
+
 ```sh
+python3 docs/gen_layout_svg.py        # regenerate from the source of truth
+git status --short docs/pedal-mode-*.svg   # did any labels change? eyeball them
 make manual
 ```
 
-The PDF is at `docs/USER_MANUAL.pdf`. Skip the step if the file is up to date relative to `docs/USER_MANUAL.md` and the SVGs (compare mtimes).
+The PDF is at `docs/USER_MANUAL.pdf`. If any SVG label is wrong, fix the `MODES`
+dict in `docs/gen_layout_svg.py` (never hand-edit the `.svg`), regenerate, and
+rebuild. Cross-check the diagrams against the README controls table before
+shipping.
 
 ### 4. Stage the release artifacts under `release/<version>/`
 

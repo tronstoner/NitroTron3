@@ -111,11 +111,11 @@
   </text>
   <text x="300" y="685" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">● MID</tspan>
-    <tspan dx="6" fill="#444">Harmonic</tspan>
+    <tspan dx="6" fill="#444">Resonance</tspan>
   </text>
   <text x="300" y="712" text-anchor="middle" font-size="15" fill="#222">
     <tspan font-weight="700">▼ DOWN</tspan>
-    <tspan dx="6" fill="#444">Harmonic</tspan>
+    <tspan dx="6" fill="#444">Freq shift</tspan>
   </text>
 
   <g transform="translate(470,540)">
