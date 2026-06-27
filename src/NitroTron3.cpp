@@ -329,6 +329,13 @@ static float Chebyshev(float x) {
          MODE_C_CHEBY_H4 * t4 + MODE_C_CHEBY_H5 * t5 - dc;
 }
 
+// Shared symmetric saturation primitive for the Mode C SW1=MID overdrive (TS →
+// amp). Both the pedal and amp stages use this one curve; asymmetry is added
+// only by a bias offset at the call site (Saturate(x+bias) − Saturate(bias)),
+// never baked into the curve. Swap to the clamped cubic (x − x³/3, clamped at
+// |x|≥1 to ±2/3) here to A/B the harder-kneed variant.
+static inline float Saturate(float x) { return x / (1.f + fabsf(x)); }
+
 // ---------------------------------------------------------------------------
 // Mode B harmony logic
 // ---------------------------------------------------------------------------
@@ -1029,6 +1036,11 @@ float env_c_grendel_atk_coef = 0.f;
 float cheby_lp1 = 0.f;
 float cheby_lp2 = 0.f;
 float cheby_lp_g = 0.f;
+// Mode C SW1=MID overdrive (TS → amp) one-pole filter states + coeffs.
+float od_hp_z = 0.f;        // pre-clip high-pass state (hp = x − lp)
+float od_hp_g = 0.f;
+float od_clean_lp_z = 0.f;  // clean-blend low-pass state
+float od_clean_lp_g = 0.f;
 
 void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                       size_t size) {
@@ -1071,10 +1083,19 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   // SW1=UP CCW — Chebyshev waveshaper (octave-up / metallic harmonic generator).
   const float cheby_blend = (drive_mode == 0) ? k4_ccw : 0.f;
   const float cheby_drive = 1.f + cheby_blend * (MODE_C_CHEBY_DRIVE_MAX - 1.f);
-  // SW1=MID CCW — tanh overdrive (Mode B feedback-drive character).
-  const float od_blend = (drive_mode == 1) ? k4_ccw : 0.f;
-  const float od_drive = 1.f + od_blend * (MODE_C_OD_DRIVE_MAX - 1.f);
-  const float od_comp  = 1.f - od_blend * (1.f - MODE_C_OD_COMP_AT_MAX);
+  // SW1=MID CCW — TS → amp overdrive. No dry/wet blend (clean is K6's job).
+  // Gain staging across the CCW travel: the pedal (TS) stage builds FIRST —
+  // subtle near noon via MODE_C_OD_K4_CURVE — while the amp stage holds at unity
+  // until MODE_C_OD_AMP_KNEE, then ramps in only over the TOP of the travel.
+  const float od_blend = (drive_mode == 1) ? k4_ccw : 0.f;  // raw amount: gate + comp
+  const float od_ped_t = powf(od_blend, MODE_C_OD_K4_CURVE); // pedal gain ramp (curved)
+  const float od_amp_t = (od_blend > MODE_C_OD_AMP_KNEE)
+      ? (od_blend - MODE_C_OD_AMP_KNEE) / (1.f - MODE_C_OD_AMP_KNEE)
+      : 0.f;                                                 // amp gain ramp (top only)
+  const float od_drive     = 1.f + od_ped_t * (MODE_C_OD_DRIVE_MAX - 1.f);
+  const float od_amp_drive = 1.f + od_amp_t * (MODE_C_OD_AMP_DRIVE - 1.f);
+  const float od_comp      = MODE_C_OD_COMP_AT_NOON +
+      od_blend * (MODE_C_OD_COMP_AT_MAX - MODE_C_OD_COMP_AT_NOON);
 
   // K3 bipolar with center deadzone → signed env amount in [-1, +1].
   float k3_signed = (k3 - 0.5f) * 2.f;
@@ -1146,6 +1167,12 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     // Update shared envelope follower from raw bass each sample.
     env_val = env.Process(dry);
 
+    // Keep the SW1=MID overdrive's pre-clip HPF / clean-LP states settled every
+    // sample (even while the OD branch is inactive) so there's no stale-state
+    // transient/click when K4 crosses into the CCW drive region.
+    od_hp_z       += od_hp_g * (dry - od_hp_z);
+    od_clean_lp_z += od_clean_lp_g * (dry - od_clean_lp_z);
+
     // Feed pitch tracker every sample so its filters stay warm regardless of
     // SW1 position; consumed only when drive_mode == 2 (SW1=DOWN synth osc).
     tracker.Feed(dry, env_val);
@@ -1193,12 +1220,21 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       if (k4_cw > 0.001f) {
         wet = bitcrush_c.Process(dry, k4_cw, env_val);
       } else if (od_blend > 0.001f) {
-        // Asymmetric tanh: fixed bias in the tanh-input domain (constant, mild
-        // asymmetry independent of drive), DC offset subtracted out so silence
-        // stays 0 and small signals always pass (no gating at high drive).
-        const float driven = tanhf(dry * od_drive + MODE_C_OD_BIAS) -
-                             tanhf(MODE_C_OD_BIAS);
-        wet = dry * (1.f - od_blend) + driven * od_blend * od_comp;
+        // TS → tube amp. Pre-clip HPF keeps the lows out of the pedal stage
+        // (anti-mud); a touch of low-passed clean is summed back before the amp
+        // stage (TS body/character); the amp stage saturates the sum. One shared
+        // symmetric Saturate(); asymmetry only via the bias offset, DC removed so
+        // silence stays 0.
+        const float hp = dry - od_hp_z;  // states updated at loop top
+        const float pedal = Saturate(hp * od_drive + MODE_C_OD_BIAS) -
+                            Saturate(MODE_C_OD_BIAS);
+        const float amp_in = pedal + od_clean_lp_z * MODE_C_OD_CLEAN_MIX;
+        const float driven =
+            Saturate(amp_in * od_amp_drive + MODE_C_OD_AMP_BIAS) -
+            Saturate(MODE_C_OD_AMP_BIAS);
+        // No dry/wet blend here — K4 sets drive only; clean is K6's job. Output
+        // is the comp'd distorted signal (od_comp eases level as drive rises).
+        wet = driven * od_comp;
       }
     } else if (drive_mode == 2) {
       // Pitch-tracked synth osc → raw-env VCA (Mode A style) → SW2 filter.
@@ -1314,6 +1350,8 @@ int main() {
   fb_duck_rel_g = 1.f - expf(-1.f / (FB_DUCK_RELEASE_MS * 0.001f * sr));
   on_play_rel_g = 1.f - expf(-1.f / (ON_PLAY_RELEASE_MS * 0.001f * sr));
   cheby_lp_g = 1.f - expf(-2.f * 3.14159265f * MODE_C_CHEBY_LP_HZ / sr);
+  od_hp_g       = 1.f - expf(-2.f * 3.14159265f * MODE_C_OD_HP_HZ / sr);
+  od_clean_lp_g = 1.f - expf(-2.f * 3.14159265f * MODE_C_OD_CLEAN_LP_HZ / sr);
 
   // Reverb resamplers + reverb engine
   rev_downsampler.Init(RESAMPLER_CUTOFF_HZ, RESAMPLER_PROTO_FS_HZ);
