@@ -147,8 +147,12 @@ wavefolder (K4 CW) and a Chebyshev waveshaper (K4 CCW) — an octave-up /
 metallic harmonic generator with a pre-shaper low-pass so it makes a
 clean octave instead of intermod mush. **SW1=MIDDLE** is a gated
 bit-flipper (K4 CW — XOR a chosen bit, swept by K4, input-envelope
-gated, per-bit loudness compensation) and a tanh overdrive (K4 CCW;
-its voicing is still being tuned by ear). **SW1=DOWN** is a pitch-tracked
+gated, per-bit loudness compensation) and a **Tube Screamer → tube-amp**
+overdrive (K4 CCW): a pre-clip high-pass into a pedal saturation stage, a
+touch of low-passed clean for body, then an amp saturation stage. K4-CCW
+is a staged master gain — the pedal/TS drive builds first, the amp drive
+comes in over the top of the travel; clean is via the K6 mix. **SW1=DOWN**
+is a pitch-tracked
 synth oscillator: the bass note is tracked (YIN, semitone-quantized) and
 an oscillator engine replaces the dry path, amplitude-gated by the env
 follower before it hits the filter. Here K4 is full-range (no noon
@@ -168,10 +172,10 @@ end is preserved so bass fundamentals don't duck under resonance peaks.
 | KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (20 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = oo dark/closed, CW = ee bright/open). SW2=DOWN: phaser notch centre |
 | KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: phaser feedback (clean sweep → resonant bloom → controlled self-oscillation at full CW) |
 | KNOB 3 | Env / LFO modulation | Runs through a response curve (fine near noon, coarse toward the extremes). SW2=UP: bipolar env-to-cutoff (passive-bass scaled). SW2=MID: bipolar env on vowel path and size. SW2=DOWN: bipolar phaser LFO rate (sign selects shape — CCW triangle, CW sample-and-hold; magnitude = rate; centre = LFO off, static notch at K1). All with ±5 % centre deadzone |
-| KNOB 4 | Drive character | Bipolar around noon (noon = clean dry) for SW1=UP and SW1=MID. SW1=UP: CW = sine wavefold (0 → max, internal loudness comp), CCW = Chebyshev waveshaper (octave-up / metallic). SW1=MID: CW = gated bit-flipper (XOR bit position, env-gated), CCW = tanh overdrive (voicing provisional). SW1=DOWN: synth-osc timbre (full-range) — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
+| KNOB 4 | Drive character | Bipolar around noon (noon = clean dry) for SW1=UP and SW1=MID. SW1=UP: CW = sine wavefold (0 → max, internal loudness comp), CCW = Chebyshev waveshaper (octave-up / metallic). SW1=MID: CW = gated bit-flipper (XOR bit position, env-gated), CCW = Tube-Screamer→tube-amp overdrive (staged master gain — pedal/TS drive builds first, amp drive enters over the top of the travel; clean via K6). SW1=DOWN: synth-osc timbre (full-range) — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
 | KNOB 5 | Filter drive (bipolar) | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and the phaser. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone. On the Moog ladder, K5 from just before noon up to full CW also fades in audio-rate cutoff self-FM (modulated by the filter input) for a gritty, vocal resonance |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 CW) / Chebyshev waveshaper (K4 CCW), noon = clean • **MIDDLE** — Gated bit-flipper (K4 CW, env-gated) / tanh overdrive (K4 CCW), noon = clean • **DOWN** — Pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
+| SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 CW) / Chebyshev waveshaper (K4 CCW), noon = clean • **MIDDLE** — Gated bit-flipper (K4 CW, env-gated) / Tube-Screamer→tube-amp overdrive (K4 CCW), noon = clean • **DOWN** — Pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
 | SWITCH 2 | Filter | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env) • **MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path) • **DOWN** — Phaser (K1 notch centre, K2 feedback, K3 LFO rate/shape) |
 
 ---
