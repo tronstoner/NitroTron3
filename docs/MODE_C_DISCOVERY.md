@@ -46,8 +46,8 @@ K5 (wet level) is a post-filter, pre-mix trim on the wet path. Always active, re
 
 | Switch | Function | Positions |
 |---|---|---|
-| **SW1** | Drive | UP: Sine wavefolder · MID: Gated bit crusher (C.6 explorative) · DOWN: Pitch-tracked synth oscillator (K4 = saw↔rect timbre morph) |
-| **SW2** | Filter | UP: Moog ladder · MID: Grendel formant · DOWN: Plague |
+| **SW1** | Drive | UP: Sine wavefolder (K4 CW) / Chebyshev waveshaper (K4 CCW) · MID: Gated bit-flipper (K4 CW) / tanh overdrive (K4 CCW) · DOWN: Pitch-tracked synth oscillator (K4 = saw↔rect timbre morph) — for UP and MID, K4 is bipolar around noon (noon = clean) |
+| **SW2** | Filter | UP: Moog ladder · MID: Grendel formant · DOWN: Phaser (as-built; the SW2=DOWN slot was originally Plague — see history note at the top) |
 | **SW3** | Mode select | UP: Mode A · MID: Mode B · DOWN: Mode C |
 
 To audition the drive alone: SW2=UP with K1 (cutoff) fully open and K2 (resonance) at zero — functionally a filter bypass. (Note: the former SW1=DOWN passthrough is now a pitch-tracked synth oscillator, so "filter-only on dry bass" is no longer available; SW1=UP with K4 at zero is the closest equivalent.)
@@ -56,18 +56,18 @@ To audition the drive alone: SW2=UP with K1 (cutoff) fully open and K2 (resonanc
 
 ## Controls
 
-Top row (K1–K3) = filter section, reinterpreting per SW2. K4 = drive character (reinterpreting per SW1). K5 = global wet level. K6 = global mix.
+Top row (K1–K3) = filter section, reinterpreting per SW2. K4 = drive character (reinterpreting per SW1). K6 = global mix. **As-built note:** K5 ended up not as the planned "wet level" trim but as a bipolar pre-filter drive (CCW attenuate ~−12 dB, noon unity, CW up to 8×, universal across SW2 modes; on the Moog ladder it also fades in audio-rate cutoff self-FM from a touch before noon to full CW). The table below reflects the as-built code.
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Filter "where" | Ladder: cutoff Hz (exp). Grendel: vowel position along curated path (linear). Plague: hi/lo input balance (CCW: input → lo band only, noon: both bands equal, CW: input → hi band only) |
-| KNOB 2 | Filter "how much" | Ladder: resonance. Grendel: Size (mouth scale). Plague: intensity (input gain + feedback drive in tandem — see Plague section) |
-| KNOB 3 | Env → filter amount | Modulates K1 per the active SW2 mode. Polarity TBD per SW2 — see [Env follower behavior](#env-follower-behavior) |
-| KNOB 4 | Drive character | Per SW1 stage. SW1=UP (sine fold): fold amount, internal loudness compensation. SW1=MID (bit crush): bit depth 16 → 4. SW1=DOWN (synth osc): timbre morph — CCW half = saw (max hypersaw → single saw, small single-saw sweet-spot plateau just below noon), CW half = rect (single rect → PWM with depth-then-rate ramp) |
-| KNOB 5 | Wet level | Post-filter, pre-mix wet-path trim. Always active. May turn out redundant against K6 after listening — evaluated post-C.5 |
+| KNOB 1 | Filter "where" | Ladder: cutoff Hz (exp, 20 Hz – 8 kHz). Grendel: vowel position along curated path (linear). Phaser: notch centre |
+| KNOB 2 | Filter "how much" | Ladder: resonance (sqrt curve, up to self-osc). Grendel: Size (mouth scale). Phaser: feedback (clean sweep → resonant bloom → controlled self-oscillation) |
+| KNOB 3 | Env / LFO amount | Bipolar with ±5% centre deadzone, run through a response curve (fine near noon). Ladder/Grendel: env → filter (see [Env follower behavior](#env-follower-behavior)). Phaser: LFO rate + shape (CCW triangle / CW sample-and-hold; centre = static) |
+| KNOB 4 | Drive character | Per SW1 stage; bipolar around noon (noon = clean) for UP and MID. SW1=UP: CW = sine fold (internal loudness comp), CCW = Chebyshev waveshaper (octave-up / metallic, pre-shaper LP). SW1=MID: CW = gated bit-flipper (XOR bit position, env-gated, per-bit comp table), CCW = tanh overdrive (voicing still being tuned). SW1=DOWN: timbre morph (full range) — CCW half = saw (max hypersaw → single saw, small single-saw sweet-spot plateau just below noon), CW half = rect (single rect → PWM with depth-then-rate ramp) |
+| KNOB 5 | Filter drive (bipolar) | CCW attenuate (~−12 dB) → noon unity → CW boost (up to 8×). Sets the Moog input drive; pre-tanh in front of Grendel and the phaser. Moog/Grendel/phaser have a fixed ×0.3 internal pad so noon lands in their clean zone. Moog only: K5 just-before-noon → CW fades in audio-rate cutoff self-FM |
 | KNOB 6 | Mix | Dry/wet. Fully CCW = dry, fully CW = wet only. Always active |
-| SWITCH 1 | Drive | **UP** - Sine wavefolder<br/>**MIDDLE** - Gated bit crusher<br/>**DOWN** - Pitch-tracked synth oscillator (K4 morphs saw ↔ rect) |
-| SWITCH 2 | Filter | **UP** - Moog ladder<br/>**MIDDLE** - Grendel formant<br/>**DOWN** - Plague |
+| SWITCH 1 | Drive | **UP** - Sine wavefolder (CW) / Chebyshev waveshaper (CCW)<br/>**MIDDLE** - Gated bit-flipper (CW) / tanh overdrive (CCW)<br/>**DOWN** - Pitch-tracked synth oscillator (K4 morphs saw ↔ rect) |
+| SWITCH 2 | Filter | **UP** - Moog ladder<br/>**MIDDLE** - Grendel formant<br/>**DOWN** - Phaser (as-built; was Plague — see history note at top) |
 | SWITCH 3 | Mode select | **UP** - Mode A<br/>**MIDDLE** - Mode B<br/>**DOWN** - Mode C |
 | FOOTSWITCH 1 | Preset | Per `PROJECT.md` Preset System |
 | FOOTSWITCH 2 | Bypass / Save | Per `PROJECT.md` Preset System |
@@ -78,17 +78,23 @@ K1, K2, K3 reinterpret per SW2 position; K4, K5 reinterpret per SW1 position. Th
 
 ## Drive stage (SW1)
 
-### UP — Sine wavefolder
+### UP — Sine wavefolder (CW) / Chebyshev waveshaper (CCW)
 
-Symmetric harmonic saturation. Reuses the wavefolder used in Mode A (triangle mode) and Mode B (shaper bus). K4 controls fold amount: 0 = nearly transparent, 1 = maximum folding. The wavefolder's geometry keeps peaks bounded; perceived loudness stays roughly flat across K4 thanks to internal compensation (`SINEFOLD_COMP_AT_MAX`).
+**As-built:** K4 is bipolar around noon — noon = clean dry, CW = sine wavefolder, CCW = Chebyshev waveshaper.
+
+Sine wavefolder (K4 CW): symmetric harmonic saturation. Reuses the wavefolder used in Mode A (triangle mode) and Mode B (shaper bus). K4 CW controls fold amount: noon = nearly transparent, full CW = maximum folding. The wavefolder's geometry keeps peaks bounded; perceived loudness stays roughly flat across K4 thanks to internal compensation (`SINEFOLD_COMP_AT_MAX`).
+
+Chebyshev waveshaper (K4 CCW): an octave-up / metallic harmonic generator. The input is driven toward [-1,1] and summed through Chebyshev polynomials T2..T5 (`MODE_C_CHEBY_H2..H5`), each mapping a sinusoid to its n-th harmonic. A 2-pole pre-shaper low-pass (`MODE_C_CHEBY_LP_HZ`) feeds the octave generator a near-sine so T2 produces a clean octave instead of intermod mush (the Octavia trick). The raw value at x=0 is subtracted out so silence stays silent.
 
 No gesture modulation — the env follower drives the filter, not the drive stage.
 
-### MID — Gated bit crusher (explorative)
+### MID — Gated bit-flipper (CW) / tanh overdrive (CCW)
 
-Linear-PCM quantizer with an input-envelope noise gate. K4 sweeps bit depth from `MODE_C_BITCRUSH_BITS_MAX` (16 = effectively transparent) down to `MODE_C_BITCRUSH_BITS_MIN` (4 = classic gnarl). The gate (`MODE_C_BITCRUSH_ENV_GATE`) keys the wet/dry mix off the shared envelope follower with a 1 ms click-free ramp so silent input → silent output and no zipper noise sits on the wet path when the bass is quiet.
+**As-built:** the originally-planned linear-PCM bit-depth quantizer was replaced by a deterministic **bit-flipper** (the same mechanism as Mode B's event-driven glitch, applied continuously) and K4 became bipolar — noon = clean dry, CW = bit-flipper, CCW = tanh overdrive.
 
-First-pass distortion variant being evaluated alongside the sine wavefolder. May be replaced or refined during C.6 listening (candidates: SR reduction added on top, asymmetric/chebyshev wavefold, tape-style saturation, transistor fuzz).
+Bit-flipper (K4 CW): XOR of a single chosen Q15 bit on every sample. K4 sweeps the bit position from 0 (LSB, inaudible) up to `MODE_C_BITCRUSH_MAX_BIT` (15 = the sign bit → polarity flip, a near-full-scale square). Because the flipper picks a discrete bit, wet loudness jumps in discrete steps, so a 16-entry per-bit loudness-comp table (`MODE_C_BITCRUSH_COMP_TABLE`) levels each step by ear. The gate (`MODE_C_BITCRUSH_ENV_GATE`) keys the wet/dry mix off the shared envelope follower with a 1 ms click-free ramp so silent input → silent output and no XOR pedestal sits on the wet path when the bass is quiet.
+
+Tanh overdrive (K4 CCW): a soft-clip drive with a fixed asymmetric input-domain bias (`MODE_C_OD_BIAS`) for even-harmonic "tube" color, DC-compensated so silence stays silent. Its exact voicing is still being ear-tuned.
 
 ### DOWN — Pitch-tracked synth oscillator
 
@@ -133,7 +139,7 @@ Open: synth output octave (currently follows the tracked bass note 1:1, ear-tune
 
 ### UP — Moog ladder
 
-Reuses `MoogLadder` from Mode A. 24 dB/oct LP with per-stage `tanh` saturation. K1 = cutoff (exponential, 80 Hz – 8 kHz). K2 = resonance. K3 modulates cutoff via env follower.
+**As-built:** uses a dedicated `MoogLadderV2` (not Mode A's `MoogLadder`, which is signed off and untouched) — a single input saturator post-feedback rather than per-stage `tanh` darkening, with k-cutoff cross-comp for consistent self-osc, (1+res) input level comp, and a +0.05 asymmetric DC bias for transistor-flavored even harmonics. 24 dB/oct LP. K1 = cutoff (exponential, 20 Hz – 8 kHz via `MapCutoffModeC`). K2 = sqrt-curved resonance up to self-osc. K3 = bipolar env-to-cutoff (response-curved, passive-bass ×10 normalized, deepened sweep, 20 Hz floor / 10 kHz top clamp). K5 from a touch before noon up to full CW additionally fades in audio-rate cutoff self-FM, modulated by the filter input (sidebands around the resonant peak — gritty/vocal rather than a sterile sine).
 
 ### MID — Grendel formant
 
