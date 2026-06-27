@@ -4,6 +4,62 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+## v0.2 — 2026-06-27 — Pre-release
+
+Focused on **SCHISM (Mode C)** — its drives, filters, and control feel — plus a
+global fix for knob zipper noise. Mode C is functionally complete but still
+being voiced by ear (see Known limitations).
+
+### Added
+
+- **SCHISM — Tube Screamer → tube-amp overdrive** (SW1=MIDDLE, K4 CCW): pre-clip
+  high-pass → pedal saturation → a touch of low-passed clean for body → amp
+  saturation. Clamped-cubic soft clipping with bias-offset asymmetry; K4 is a
+  staged master gain (pedal/TS drive builds first, amp drive enters over the top
+  of the travel). Clean is handled by the K6 mix.
+- **SCHISM — Chebyshev octave-up waveshaper** (SW1=UP, K4 CCW): a metallic /
+  octave-up harmonic generator fed by a pre-shaper low-pass for a clean octave.
+- **SCHISM — audio-rate cutoff self-FM** on the Moog ladder, faded in by K5 (CW)
+  for gritty, vocal resonance instead of a sterile self-oscillation.
+- **Preset system — WYSIWYG manual boot**: manual mode now adopts the physical
+  knob *and* switch positions on boot, so the pedal matches its panel.
+
+### Changed
+
+- **SCHISM — K4 is now bipolar around noon** (noon = clean) for SW1=UP and
+  SW1=MIDDLE, with one drive flavor on each side; drive slots reorganized.
+- **SCHISM — SW1=MIDDLE CW is now a gated bit-flipper** (XOR of a chosen bit,
+  env-gated, per-bit loudness compensation), replacing the earlier bit-crusher.
+- **SCHISM — Moog ladder retuned** (MoogLadderV2): K3 env response curve and
+  asymmetric attack/release, deeper env-to-cutoff range, lower (20 Hz) cutoff
+  floor, per-filter input pads and makeup gains.
+- **SCHISM — phaser rebuilt**: 6-stage allpass with per-stage detune and a
+  soft-saturated feedback loop reaching bounded self-oscillation.
+- **SCHISM — amp-envelope VCA is currently disabled** while the wet path is
+  auditioned (the SW1=DOWN synth voice keeps its own envelope VCA).
+
+### Fixed
+
+- **Knob zipper noise (all modes).** Knob values update once per audio block, so
+  block-rate values applied to audio-rate gains stair-stepped audibly when a
+  control moved. Added per-sample smoothing on the K6 dry/wet mix (Modes A/B/C)
+  and on Mode C's K5 drive and K4 drive-character gains. Steady-state tone is
+  unchanged.
+
+### Housekeeping
+
+- README points to GitHub Releases for pre-built binaries; documented the
+  `release` skill and refreshed the `tune` skill; dropped stale tuning-mode docs
+  and recorded the Plague Bearer → phaser pivot.
+
+### Known limitations
+
+- The SCHISM phaser (SW2=DOWN) is still provisional and may be replaced.
+- The SCHISM amp-envelope VCA is disabled in this build (see Changed).
+- Mode C voicing (overdrive, bit-flipper comp, Chebyshev mix, filter-env times)
+  is still being ear-tuned on hardware.
+- Pitch tracking (YIN, 4× decimated) can still glitch on muted-string transients.
+
 ## v0.1 — 2026-06-24 — Pre-release
 
 First public pre-release. Verified on hardware. The feature set is not yet settled and may change in later releases. Shared so interested parties can flash it and give feedback.
