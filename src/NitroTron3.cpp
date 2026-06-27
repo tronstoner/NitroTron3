@@ -332,9 +332,15 @@ static float Chebyshev(float x) {
 // Shared symmetric saturation primitive for the Mode C SW1=MID overdrive (TS →
 // amp). Both the pedal and amp stages use this one curve; asymmetry is added
 // only by a bias offset at the call site (Saturate(x+bias) − Saturate(bias)),
-// never baked into the curve. Swap to the clamped cubic (x − x³/3, clamped at
-// |x|≥1 to ±2/3) here to A/B the harder-kneed variant.
-static inline float Saturate(float x) { return x / (1.f + fabsf(x)); }
+// never baked into the curve.
+// ACTIVE: clamped cubic x − x³/3 (unity slope at 0, knee at |x|=1, hard-clamped
+// flat at ±2/3 beyond) — stays linear longer at low level then clips harder.
+// Alternative (warmer/rounder, asymptotic, never hard-clips): x/(1+|x|).
+static inline float Saturate(float x) {
+  if (x >=  1.f) return  2.f / 3.f;
+  if (x <= -1.f) return -2.f / 3.f;
+  return x - x * x * x * (1.f / 3.f);
+}
 
 // ---------------------------------------------------------------------------
 // Mode B harmony logic

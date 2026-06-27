@@ -262,18 +262,18 @@ constexpr float MODE_C_WRAP_COMP      = 0.50f; // post-wrap gain (output is full
 // (Saturate(x+bias) − Saturate(bias), DC removed — never baked into the curve).
 // Gain staging is reset vs the old single-stage tanh — all values ear-tunable.
 constexpr float MODE_C_OD_HP_HZ       = 180.0f; // pre-clip high-pass into the pedal stage (anti-mud). Higher = crunchier/more mid-focused; lower = fuller into the clip
-constexpr float MODE_C_OD_DRIVE_MAX   = 120.0f; // pedal-stage drive at K4 full CCW (1× at noon)
+constexpr float MODE_C_OD_DRIVE_MAX   = 60.0f;  // pedal-stage drive at K4 full CCW (1× at noon)
 constexpr float MODE_C_OD_BIAS        = 0.6f;   // pedal-stage asymmetry (bias offset only). 0 = symmetric; higher = more lopsided
 constexpr float MODE_C_OD_CLEAN_MIX   = 0.4f;   // low-passed clean summed in before the amp stage (TS body/character)
 constexpr float MODE_C_OD_CLEAN_LP_HZ = 300.0f; // low-pass on that clean blend (keeps lows/body, no fizz)
-constexpr float MODE_C_OD_AMP_DRIVE   = 10.0f;  // amp-stage gain after the pedal stage (the "into a tube amp" stack)
+constexpr float MODE_C_OD_AMP_DRIVE   = 4.0f;   // amp-stage gain after the pedal stage (the "into a tube amp" stack)
 constexpr float MODE_C_OD_AMP_BIAS    = 0.3f;   // amp-stage asymmetry (bias offset only)
 // Output makeup interpolates across the CCW travel from COMP_AT_NOON (just off
 // noon — a BOOST, because the HPF strips the fundamental so the min-drive wet is
 // much quieter than the clean dry; this matches levels so there's no drop/click)
 // down to COMP_AT_MAX at full CCW (a CUT, to tame the loud top). Both ear-tune.
 constexpr float MODE_C_OD_COMP_AT_NOON = 4.00f; // makeup just off noon — boosts the quiet min-drive wet up to ≈ clean level (no transition drop)
-constexpr float MODE_C_OD_COMP_AT_MAX  = 0.40f; // makeup at K4 full CCW — cut to tame the loud top end
+constexpr float MODE_C_OD_COMP_AT_MAX  = 0.65f; // makeup at K4 full CCW — cut to tame the loud top end (bumped from 0.40 to cover the cubic Saturate's ±2/3 ceiling)
 constexpr float MODE_C_OD_K4_CURVE    = 3.0f;   // taper on K4-CCW → PEDAL drive: >1 = finer near noon + max packs into less travel at the top (full CCW max unchanged). 1 = linear
 constexpr float MODE_C_OD_AMP_KNEE    = 0.72f;  // K4-CCW position where the AMP stage starts ramping in (below = unity, so pedal/TS gain builds first; amp only enters over the top of the travel)
 
