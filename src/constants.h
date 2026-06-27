@@ -364,3 +364,4 @@ constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
 constexpr float REVERB_TIME        = 0.70f;  // reverb decay (krt in Clouds)
 constexpr float REVERB_MAX_FEEDBACK = 0.95f; // CW side: existing ring-buffer feedback ceiling
 constexpr float REVERB_AMT_SMOOTH_COEF = 0.002f; // one-pole on K5 reverb amount, ~10 ms tc
+constexpr float PARAM_SMOOTH_COEF      = 0.002f; // generic control smoother (Smoother), ~10 ms tc — de-zipper audio-rate knob gains

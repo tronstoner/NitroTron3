@@ -194,6 +194,28 @@ clouds::Reverb reverb_instance;
 // Smoothed K5 reverb amount — kills zipper noise across block boundaries.
 float reverb_amt_smooth = 0.f;
 
+// One-pole control smoother. Knob values update only once per audio block, so a
+// block-rate value applied to an audio-rate gain stair-steps = zipper noise.
+// Call once per sample with the block's target; the returned value ramps toward
+// it (PARAM_SMOOTH_COEF ≈ 10 ms). Call EVERY sample (not branch-conditionally)
+// so the state never goes stale and there's no transient on re-entry.
+struct Smoother {
+  float v = 0.f;
+  inline float operator()(float target) {
+    v += PARAM_SMOOTH_COEF * (target - v);
+    return v;
+  }
+};
+// K6 dry/wet mix (per mode), Mode C K5 drive, and Mode C K4 drive-character
+// gains — the audio-rate gains that would otherwise zipper when their knob moves.
+Smoother smix_a;                          // A: K6 (raw mix → MixCurve)
+Smoother sdg_b, swg_b;                    // B: K6 dry/wet gains
+Smoother sdg_c, swg_c;                    // C: K6 dry/wet gains
+Smoother sdrv_c;                          // C: K5 pre-filter drive_amt
+Smoother sfbl_c, sfdr_c, sfco_c;          // C: K4 sinefold blend/drive/comp
+Smoother scbl_c, schd_c;                  // C: K4 Chebyshev blend/drive
+Smoother sodd_c, soda_c, sodc_c;          // C: K4 overdrive drive/amp-drive/comp
+
 // Mode B SW1 MIDDLE: event-driven digital glitch processor (stateful)
 GlitchEvents glitch_events;
 
@@ -512,7 +534,7 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float filtered = ladder.Process(osc_mix);
     float wet = filtered * env_val * OSC_GAIN;
 
-    const float m = MixCurve(mix);
+    const float m = MixCurve(smix_a(mix));  // smoothed mix → no K6 zipper
     float dry_gain = sqrtf(1.f - m);
     float wet_gain = sqrtf(m);
     out[0][i] = out[1][i] = dry * DRY_TRIM * dry_gain + wet * wet_gain;
@@ -1009,7 +1031,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     const float wet_l = wet_block[i] * inv_ra + wet_l_block[i] * ra;
     const float wet_r = wet_block[i] * inv_ra + wet_r_block[i] * ra;
     const float wet_mono = (wet_l + wet_r) * 0.5f;  // remove for stereo
-    out[0][i] = out[1][i] = dry * dry_gain + wet_mono * wet_gain;
+    // Smooth the K6 gains per sample → no zipper when the mix knob moves.
+    out[0][i] = out[1][i] = dry * sdg_b(dry_gain) + wet_mono * swg_b(wet_gain);
   }
 }
 
@@ -1133,7 +1156,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     const float rel_ms = MODE_C_FILTER_ENV_RELEASE_MS +
         k3_lin * (MODE_C_FILTER_ENV_RELEASE_MIN_MS - MODE_C_FILTER_ENV_RELEASE_MS);
     env_c_filter_rel_coef = 1.f - expf(-1.f / (rel_ms * 0.001f * mode_c_sr));
-    ladder_c_v2.SetDrive(drive_amt);
+    // Drive is set per-sample in the loop (smoothed) to avoid zipper.
     // sqrt curve so resonance is audible across the full knob range.
     ladder_c_v2.SetResonance(sqrtf(k2) * MODE_C_LADDER_RES_MAX);
   }
@@ -1179,6 +1202,22 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     od_hp_z       += od_hp_g * (dry - od_hp_z);
     od_clean_lp_z += od_clean_lp_g * (dry - od_clean_lp_z);
 
+    // Per-sample control smoothing — de-zipper the block-rate knob gains for
+    // K6 (mix), K5 (drive), and K4 (drive character). Smoothers run every
+    // sample toward the per-block targets, so there's no stale-state transient
+    // when a branch becomes active. Steady-state values are unchanged.
+    const float dgc = sdg_c(dry_gain);
+    const float wgc = swg_c(wet_gain);
+    const float drv = sdrv_c(drive_amt);
+    const float fbl = sfbl_c(fold_blend);
+    const float fdr = sfdr_c(fold_drive);
+    const float fco = sfco_c(fold_comp);
+    const float cbl = scbl_c(cheby_blend);
+    const float chd = schd_c(cheby_drive);
+    const float odd = sodd_c(od_drive);
+    const float oda = soda_c(od_amp_drive);
+    const float odc = sodc_c(od_comp);
+
     // Feed pitch tracker every sample so its filters stay warm regardless of
     // SW1 position; consumed only when drive_mode == 2 (SW1=DOWN synth osc).
     tracker.Feed(dry, env_val);
@@ -1208,18 +1247,18 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     if (drive_mode == 0) {
       // K4 CW = sine fold, K4 CCW = Chebyshev waveshaper, noon = clean dry.
       if (fold_blend > 0.001f) {
-        const float folded = sinf(dry * fold_drive * 1.5707963f);
-        wet = dry * (1.f - fold_blend) + folded * fold_blend * fold_comp;
+        const float folded = sinf(dry * fdr * 1.5707963f);
+        wet = dry * (1.f - fbl) + folded * fbl * fco;
       } else if (cheby_blend > 0.001f) {
         // Pre-shaper 2-pole LP → near-sine so T2 makes a clean octave (Octavia
         // trick). Filter only feeds the shaper; the dry-blend term stays full.
         cheby_lp1 += cheby_lp_g * (dry - cheby_lp1);
         cheby_lp2 += cheby_lp_g * (cheby_lp1 - cheby_lp2);
-        float xd = cheby_lp2 * cheby_drive;
+        float xd = cheby_lp2 * chd;
         if (xd > 1.f) xd = 1.f;
         else if (xd < -1.f) xd = -1.f;
         const float shaped = Chebyshev(xd);
-        wet = dry * (1.f - cheby_blend) + shaped * cheby_blend * MODE_C_CHEBY_COMP;
+        wet = dry * (1.f - cbl) + shaped * cbl * MODE_C_CHEBY_COMP;
       }
     } else if (drive_mode == 1) {
       // K4 CW = gated bit-flipper, K4 CCW = tanh overdrive, noon = clean.
@@ -1232,15 +1271,15 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
         // symmetric Saturate(); asymmetry only via the bias offset, DC removed so
         // silence stays 0.
         const float hp = dry - od_hp_z;  // states updated at loop top
-        const float pedal = Saturate(hp * od_drive + MODE_C_OD_BIAS) -
+        const float pedal = Saturate(hp * odd + MODE_C_OD_BIAS) -
                             Saturate(MODE_C_OD_BIAS);
         const float amp_in = pedal + od_clean_lp_z * MODE_C_OD_CLEAN_MIX;
         const float driven =
-            Saturate(amp_in * od_amp_drive + MODE_C_OD_AMP_BIAS) -
+            Saturate(amp_in * oda + MODE_C_OD_AMP_BIAS) -
             Saturate(MODE_C_OD_AMP_BIAS);
         // No dry/wet blend here — K4 sets drive only; clean is K6's job. Output
         // is the comp'd distorted signal (od_comp eases level as drive rises).
-        wet = driven * od_comp;
+        wet = driven * odc;
       }
     } else if (drive_mode == 2) {
       // Pitch-tracked synth osc → raw-env VCA (Mode A style) → SW2 filter.
@@ -1263,17 +1302,18 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       if (mod_cutoff < MODE_C_CUTOFF_MIN_HZ) mod_cutoff = MODE_C_CUTOFF_MIN_HZ;
       if (mod_cutoff > MODE_C_CUTOFF_MAX_HZ) mod_cutoff = MODE_C_CUTOFF_MAX_HZ;
       ladder_c_v2.SetCutoff(mod_cutoff);
+      ladder_c_v2.SetDrive(drv);  // smoothed K5 drive (per sample) → no zipper
       // Spectrum-shaping filter: pad before drive so K5 noon sits in its sweet
       // zone; makeup after restores ≈ unity wet gain at K5 noon.
       wet = ladder_c_v2.Process(wet * MODE_C_MOOG_INPUT_PAD) * MODE_C_MOOG_MAKEUP;
     } else if (grendel_on) {
       // Spectrum-shaping filter: pad before pre-tanh so K5 noon stays clean.
-      wet = tanhf(wet * drive_amt * MODE_C_GRENDEL_INPUT_PAD);
+      wet = tanhf(wet * drv * MODE_C_GRENDEL_INPUT_PAD);
       wet = grendel_c.Process(wet) * MODE_C_GRENDEL_MAKEUP;
     } else if (phaser_on) {
       // Clean parallel-BPF filter; pad keeps K5 noon in the linear zone,
       // K5 CW still drives via the soft pre-tanh.
-      wet = tanhf(wet * drive_amt * MODE_C_PHASER_INPUT_PAD);
+      wet = tanhf(wet * drv * MODE_C_PHASER_INPUT_PAD);
       wet = phaser_c.Process(wet) * MODE_C_PHASER_MAKEUP;
     }
 
@@ -1288,7 +1328,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     // env-driven amplitude shaping. Reinstate by uncommenting the line below.
     // wet *= env_val * MODE_C_VCA_GAIN;
 
-    out[0][i] = out[1][i] = dry * dry_gain + wet * wet_gain;
+    out[0][i] = out[1][i] = dry * dgc + wet * wgc;  // smoothed K6 gains
   }
   prev_block_env_c = env_val;
 }
