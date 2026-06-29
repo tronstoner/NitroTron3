@@ -21,6 +21,17 @@ constexpr float ENV_RELEASE_BIAS = 1.000f;   // filter asymmetry, release
 constexpr float ENV_FILTER_MOD   = 0.500f;   // envelope → filter cutoff (subtle opening)
 constexpr float ENV_FOLD_MOD     = 0.250f;   // envelope → wavefold amount (×5 internally)
 
+// --- Env → VCA downward expander (Mode A drone + Mode C SW1=DOWN synth) ---
+// NOT a gate: above THRESH the envelope passes unchanged (full touch
+// sensitivity); below it the env is scaled toward zero by a power curve, so a
+// rig's noise floor can't hold the VCA open (phantom tones) or smear note-offs.
+// Deals with different noise floors / input levels without changing behaviour
+// over time. THRESH is on the raw env scale (passive bass plays ~0.02–0.1).
+// RATIO = 1 → off (linear, prior behaviour, for A/B); higher = more decisive
+// pull-down of the floor region (steeper expansion below THRESH).
+constexpr float ENV_VCA_EXP_THRESH = 0.020f;
+constexpr float ENV_VCA_EXP_RATIO  = 2.0f;
+
 // --- Preset system timing (from ux-demo.html) ---
 
 // LED 1: Roman numeral preset blink

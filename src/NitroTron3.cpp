@@ -364,6 +364,19 @@ static inline float Saturate(float x) {
   return x - x * x * x * (1.f / 3.f);
 }
 
+// Downward expander applied ONLY at the env→VCA amplitude stages (Mode A drone,
+// Mode C SW1=DOWN synth) — see ENV_VCA_EXP_* in constants.h. Above the threshold
+// the env passes unchanged (full touch sensitivity); below it the env is scaled
+// toward zero by a power curve so a rig's noise floor can't open the VCA or
+// smear note-offs. Not a gate — the response stays continuous. powf only runs
+// in the sub-threshold (quiet) region. RATIO <= 1 → linear passthrough (off).
+static inline float EnvExpand(float env) {
+  if (ENV_VCA_EXP_RATIO <= 1.f || ENV_VCA_EXP_THRESH <= 0.f ||
+      env >= ENV_VCA_EXP_THRESH)
+    return env;
+  return env * powf(env / ENV_VCA_EXP_THRESH, ENV_VCA_EXP_RATIO - 1.f);
+}
+
 // ---------------------------------------------------------------------------
 // Mode B harmony logic
 // ---------------------------------------------------------------------------
@@ -532,7 +545,7 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float osc_mix = (o1 + o2) * gain;
 
     float filtered = ladder.Process(osc_mix);
-    float wet = filtered * env_val * OSC_GAIN;
+    float wet = filtered * EnvExpand(env_val) * OSC_GAIN;
 
     const float m = MixCurve(smix_a(mix));  // smoothed mix → no K6 zipper
     float dry_gain = sqrtf(1.f - m);
@@ -1286,7 +1299,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       // K4 (fold_amt) is the timbre morph; YIN pitch quantized to semitones.
       const float f0 = MidiToFreq(tracker.GetMidiNote());
       const float osc_out = synth_c.Process(f0, fold_amt);
-      wet = osc_out * env_val * MODE_C_SYNTH_VCA_GAIN;
+      wet = osc_out * EnvExpand(env_val) * MODE_C_SYNTH_VCA_GAIN;
     }
 
     // Filter stage (SW2). Filter modulation reads env_c_filter (smoothed).

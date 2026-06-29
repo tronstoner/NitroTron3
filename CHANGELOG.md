@@ -4,6 +4,16 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+### Changed
+
+- **Env → VCA noise-floor handling.** The envelope VCAs (Mode A drone and the
+  Mode C SW1=DOWN synth voice) now pass the envelope through a static downward
+  expander: above a threshold the response is unchanged (full touch
+  sensitivity), below it the envelope is scaled toward zero. This stops a rig
+  with a higher noise floor from triggering the voice or smearing note-offs,
+  and it's deterministic — the pedal's behaviour does not drift over time.
+  Tunable via `ENV_VCA_EXP_THRESH` / `ENV_VCA_EXP_RATIO` (ratio = 1 → off).
+
 ## v0.2 — 2026-06-27 — Pre-release
 
 Focused on **SCHISM (Mode C)** — its drives, filters, and control feel — plus a
