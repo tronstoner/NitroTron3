@@ -1,5 +1,9 @@
 # NitroTron3
 
+<p align="center">
+  <img src="docs/NitroTron3.jpg" alt="NitroTron3 — illustration of the pedal" width="300">
+</p>
+
 A DIY digital bass effects pedal built on the [Electro-Smith Daisy Seed](https://electro-smith.com/products/daisy-seed) and [Cleveland Music Co. Hothouse DSP kit](https://shop.clevelandmusicco.com/products/hothouse-digital-signal-processing-platform-kit). Licensed under [GPL v3](LICENSE).
 
 ## Overview

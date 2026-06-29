@@ -3,7 +3,7 @@ title: NitroTron3 — User Manual
 subtitle: DIY digital bass pedal — Daisy Seed + Hothouse
 ---
 
-# NitroTron3
+![NitroTron3](NitroTron3.jpg){.cover}
 
 A project of [Nitro Mahalia](https://nitromahalia.net). This pedal
 packages several of their signature bass-through-synth sounds into a
