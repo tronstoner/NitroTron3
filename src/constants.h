@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>  // size_t
 
 // --- Oscillator (Tuning Page 1) ---
 constexpr float OSC_K            = 0.480f;  // parabolic curve: 0=linear saw, 0.5+=very round
@@ -376,3 +377,46 @@ constexpr float REVERB_TIME        = 0.70f;  // reverb decay (krt in Clouds)
 constexpr float REVERB_MAX_FEEDBACK = 0.95f; // CW side: existing ring-buffer feedback ceiling
 constexpr float REVERB_AMT_SMOOTH_COEF = 0.002f; // one-pole on K5 reverb amount, ~10 ms tc
 constexpr float PARAM_SMOOTH_COEF      = 0.002f; // generic control smoother (Smoother), ~10 ms tc — de-zipper audio-rate knob gains
+
+// --- Mode B bipolar K2 (buffer / direction) ---
+// K2 is bipolar around noon. |K2-0.5| (past the deadzone) = buffer length +
+// timescale, as the old unipolar K2 did. Sign = global grain playback
+// direction: CW = forward, CCW = backward. Noon deadzone = direct-texture
+// passthrough (grain engine bypassed). See docs/MODE_B_DISCOVERY.md.
+constexpr float GRAIN_K2_DEADZONE = 0.06f;  // ±6% around noon → passthrough
+// Bias of the CW-character random reverse (SW2-independent). On the forward
+// (CW) K2 side a grain reverses with P = k3·this; on the backward (CCW) side
+// the bias flips (grains mostly reverse, occasionally play forward).
+constexpr float GRAIN_REVERSE_BIAS = 0.6f;
+
+// --- Mode B bipolar K3 (character / Clouds density) ---
+// K3 is bipolar around noon. Noon deadzone = neutral single coherent stream;
+// CW = character/glitch, CCW = MI-Clouds-style deterministic density. Both
+// sides are one continuous grain axis through the noon origin (see below).
+// See docs/MODE_B_DISCOVERY.md.
+constexpr float GRAIN_K3_DEADZONE  = 0.06f; // ±6% around noon → neutral stream
+// K3 is a single grain axis through the noon origin: the longest, coherent-
+// stream grains. Both sides depart from that same anchor (GRAIN_NEUTRAL_LEN,
+// GRAIN_NEUTRAL_OVERLAP) so crossing noon is seamless:
+//  CCW  — shorten cleanly: k3mag² lerps length neutral→CLOUD_LEN_MIN, overlap
+//         held at neutral so the emission RATE rises as grains shorten (cloud).
+//  CW   — shorten with chaos: gc_sq lerps length neutral→GRAIN_MIN_LEN, overlap
+//         thins neutral→1×, scatter/jitter/loops/reverse rise (glitch).
+// grain_len = k2_scale · length, so K2's timescale is an overall size zoom.
+constexpr float GRAIN_NEUTRAL_LEN     = 14400.f; // noon base grain length (300 ms, ×k2_scale)
+constexpr float GRAIN_NEUTRAL_OVERLAP = 3.0f;    // noon overlap — shared anchor, both sides
+constexpr float CLOUD_LEN_MIN         = 480.f;   // full-CCW base length (10 ms, ×k2_scale)
+
+// Hard floor on grain length (safety clamp). The character sweep's own short
+// end is 480 samples (≈10 ms), set in the grain_len formula.
+constexpr size_t GRAIN_MIN_LEN = 64;
+
+// --- Mode B direct-texture metronomic granulation (K2 noon, K3 CCW) ---
+// Deterministic mirror of the buffer-engaged Clouds mode, on the live ~200 ms
+// capture buffer, re-triggered on a regular timer. Direction = K2 sign. Same
+// size↔rate morph as the cloud grains: k3mag² lerps slice length long→short,
+// overlap held constant so the rate rises as slices shorten. Slice max stays
+// under the buffer size; overlap ≤2 for the two-voice engine.
+constexpr float METRO_LEN_MAX = 7200.f; // slow edge slice length (150 ms)
+constexpr float METRO_LEN_MIN = 480.f;  // full-CCW slice length (10 ms)
+constexpr float METRO_OVERLAP = 1.8f;   // constant overlap (2-voice ceiling)
