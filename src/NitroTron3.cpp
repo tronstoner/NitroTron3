@@ -798,9 +798,13 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // edge: env jumps a factor above a slow baseline, gated above the noise
     // floor, with a refractory lock so one pluck = one trigger. The burst grains
     // read the newest content (see the scheduler's burst branch below).
+    // Gated to the CW glitch side only (glitch_amount > 0 ⇒ K3 past the neutral
+    // pad on the CW half): the CCW cloud and the K3-neutral passthrough stay a
+    // clean free-running wash, untriggered. Baseline/refractory keep updating
+    // regardless so state never goes stale when re-entering the glitch zone.
     trans_slow += TRANSIENT_SLOW_COEF * (grain_env - trans_slow);
     if (trans_refractory > 0) trans_refractory--;
-    if (trans_refractory == 0 && grain_env > TRANSIENT_GATE
+    if (glitch_amount > 0.01f && trans_refractory == 0 && grain_env > TRANSIENT_GATE
         && grain_env > trans_slow * TRANSIENT_RISE) {
       grain_burst_left = TRANSIENT_BURST;
       grain_timer = 0;                 // fire on the next scheduler tick

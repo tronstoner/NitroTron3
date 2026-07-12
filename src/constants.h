@@ -437,10 +437,12 @@ constexpr float GRAIN_STUTTER_REACH_GAMMA = 3.0f; // knob→reach curve: >1 keep
 constexpr float GRAIN_LEN_VAR_SKEW      = 1.5f;   // >1 → short/buzzing grains stay rare (raises ceiling not floor)
 constexpr int   GRAIN_STUTTER_MAX_LOOPS = 200;    // cap on length-coupled repeats (lets a short grain sustain a tone)
 
-// Transient-responsive triggering (Mode B grain engine). A note-on — a rising
-// edge on the input envelope — fires an extra grain burst anchored to the
-// freshly-played note, so the glitch engine answers our playing (env-mode
-// feel). Burst grains read the newest ring content (delay 0 → the per-grain
+// Transient-responsive triggering (Mode B grain engine, K3-CW glitch side only
+// — off on the CCW cloud and the K3-neutral passthrough, which stay a clean
+// free-running wash). A note-on — a rising edge on the input envelope — fires an
+// extra grain burst anchored to the freshly-played note, so the glitch engine
+// answers our playing (env-mode feel). Burst grains read the newest ring
+// content (delay 0 → the per-grain
 // safety floor sets the physical minimum), so they are grains of the note just
 // played, pitched by SW2/K1 and shaped by K3 like any grain. Detector thresholds
 // are relative to the passive-bass env scale (env_val ≈ 0.02–0.1) — ear-tune.
