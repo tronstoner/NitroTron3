@@ -57,6 +57,8 @@ int          grain_next_voice = 0;
 int          grain_timer = 0;        // samples until next event
 int          grain_burst_left = 0;   // grains remaining in current burst
 float        grain_env = 0.f;        // envelope value for grain amplitude
+float        trans_slow = 0.f;       // slow envelope baseline for note-on detection
+int          trans_refractory = 0;   // samples until another attack can trigger
 int          harmony_hold_counter = 0;  // grains remaining before re-rolling pitch
 float        harmony_cached_ratio = 1.f; // cached pitch ratio for held harmony
 int          harmony_cached_k1_semi = 999; // cached K1 target; force re-roll on change
@@ -791,6 +793,20 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // Envelope follower (feeds pitch tracker gating)
     grain_env = env.Process(dry);
 
+    // Note-on detection → fire a grain burst anchored to the freshly-played
+    // note, so the glitch engine answers our playing (env-mode feel). Rising
+    // edge: env jumps a factor above a slow baseline, gated above the noise
+    // floor, with a refractory lock so one pluck = one trigger. The burst grains
+    // read the newest content (see the scheduler's burst branch below).
+    trans_slow += TRANSIENT_SLOW_COEF * (grain_env - trans_slow);
+    if (trans_refractory > 0) trans_refractory--;
+    if (trans_refractory == 0 && grain_env > TRANSIENT_GATE
+        && grain_env > trans_slow * TRANSIENT_RISE) {
+      grain_burst_left = TRANSIENT_BURST;
+      grain_timer = 0;                 // fire on the next scheduler tick
+      trans_refractory = TRANSIENT_REFRACTORY;
+    }
+
     // Feed pitch tracker
     tracker.Feed(dry, grain_env);
 
@@ -957,11 +973,20 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       // K3 CCW). Continuous stream; K3-CW adds chaos, K3-CCW is the clean cloud.
       grain_timer--;
       if (grain_timer <= 0) {
-        // Delay: base offset + scatter within K5 range
-        size_t scatter_range = max_range - base_delay;
-        size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
-        size_t delay = base_delay + pos_offset;
-        if (delay > max_range) delay = max_range;
+        // Delay: base offset + scatter within K5 range. Burst grains (fired by a
+        // note-on) anchor to delay 0 instead — the overrun safety below floors
+        // that to the physical minimum, so they read the FRESHEST content (the
+        // note just played) regardless of the K5 read-back depth.
+        bool burst = (grain_burst_left > 0);
+        size_t delay;
+        if (burst) {
+          delay = 0;
+        } else {
+          size_t scatter_range = max_range - base_delay;
+          size_t pos_offset = static_cast<size_t>(RandFloat() * glitch_amount * static_cast<float>(scatter_range));
+          delay = base_delay + pos_offset;
+          if (delay > max_range) delay = max_range;
+        }
 
         // Direction: K2 sign sets the base (CW forward / CCW backward). K3
         // character adds occasional flips against that base — so a forward K2
@@ -1057,10 +1082,16 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
               grain_ring, delay, this_len, reverse, pitch_ratio, comp, loops, grain_alpha);
         }
 
-        float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;
-        grain_timer = static_cast<int>(
-            static_cast<float>(base_interval) * (1.f + jitter));
-        if (grain_timer < 32) grain_timer = 32;
+        if (burst) {
+          // Space the burst grains closely, then resume the metronomic stream.
+          grain_burst_left--;
+          grain_timer = TRANSIENT_BURST_SPACING;
+        } else {
+          float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;
+          grain_timer = static_cast<int>(
+              static_cast<float>(base_interval) * (1.f + jitter));
+          if (grain_timer < 32) grain_timer = 32;
+        }
       }
 
       // Sum all active voices

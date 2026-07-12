@@ -437,6 +437,20 @@ constexpr float GRAIN_STUTTER_REACH_GAMMA = 3.0f; // knob→reach curve: >1 keep
 constexpr float GRAIN_LEN_VAR_SKEW      = 1.5f;   // >1 → short/buzzing grains stay rare (raises ceiling not floor)
 constexpr int   GRAIN_STUTTER_MAX_LOOPS = 200;    // cap on length-coupled repeats (lets a short grain sustain a tone)
 
+// Transient-responsive triggering (Mode B grain engine). A note-on — a rising
+// edge on the input envelope — fires an extra grain burst anchored to the
+// freshly-played note, so the glitch engine answers our playing (env-mode
+// feel). Burst grains read the newest ring content (delay 0 → the per-grain
+// safety floor sets the physical minimum), so they are grains of the note just
+// played, pitched by SW2/K1 and shaped by K3 like any grain. Detector thresholds
+// are relative to the passive-bass env scale (env_val ≈ 0.02–0.1) — ear-tune.
+constexpr float TRANSIENT_SLOW_COEF     = 0.0006f; // baseline follower speed (lower = slower reference level)
+constexpr float TRANSIENT_RISE          = 1.8f;    // env must exceed baseline × this to count as an attack
+constexpr float TRANSIENT_GATE          = 0.02f;   // min env to trigger (noise-floor guard)
+constexpr int   TRANSIENT_REFRACTORY    = 2400;    // re-trigger lockout in samples (~50 ms @ 48k)
+constexpr int   TRANSIENT_BURST         = 2;       // grains fired per attack
+constexpr int   TRANSIENT_BURST_SPACING = 1600;    // samples between burst grains (~33 ms)
+
 // Hard floor on grain length (safety clamp). The character sweep's own short
 // end is 480 samples (≈10 ms), set in the grain_len formula.
 constexpr size_t GRAIN_MIN_LEN = 64;
