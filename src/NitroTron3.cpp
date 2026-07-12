@@ -499,7 +499,8 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     int base_note = 12 + octave * 12;
     midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + pitch_class + semi_offset);
   } else {
-    float tracked = tracker.GetMidiNote();
+    // DRONE_TRACK_DIRECT — continuous pitch so the drone follows bends/slides.
+    float tracked = tracker.GetMidiNoteContinuous();
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
     int oct_offset = Quantize(RemapKnob(eb.knobs[1]), 7) - 3;
@@ -1459,8 +1460,8 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       }
     } else if (drive_mode == 2) {
       // Pitch-tracked synth osc → raw-env VCA (Mode A style) → SW2 filter.
-      // K4 (fold_amt) is the timbre morph; YIN pitch quantized to semitones.
-      const float f0 = MidiToFreq(tracker.GetMidiNote());
+      // K4 (fold_amt) is the timbre morph; continuous pitch (follows bends).
+      const float f0 = MidiToFreq(tracker.GetMidiNoteContinuous());
       const float osc_out = synth_c.Process(f0, fold_amt);
       wet = osc_out * EnvExpand(env_val) * MODE_C_SYNTH_VCA_GAIN;
     }

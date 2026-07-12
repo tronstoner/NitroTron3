@@ -1,12 +1,15 @@
 #pragma once
 
 #include <cmath>
+#include "constants.h"
 
 // YIN pitch tracker for bass guitar.
 // Split into Feed() (audio callback, cheap) and Update() (main loop, heavy).
 // Input is decimated 4x (48kHz → 12kHz) with proper anti-aliasing.
 // YIN difference function with cumulative mean normalization.
-// Output quantized to nearest MIDI semitone.
+// Two outputs from the same YIN result: GetMidiNote() (quantized to the nearest
+// semitone, for octave-locked mode) and GetMidiNoteContinuous() (unrounded,
+// slew-limited — follows bends/microtonal, for direct tracking + the synth).
 class PitchTracker {
  public:
   void Init(float sample_rate) {
@@ -25,6 +28,7 @@ class PitchTracker {
     hop_count_    = 0;
     needs_update_ = false;
     midi_note_    = 36.f;
+    cont_midi_    = 36.f;
   }
 
   // Called every sample in the audio callback. Cheap — just filters and buffers.
@@ -70,7 +74,10 @@ class PitchTracker {
     RunYin();
   }
 
+  // Quantized to nearest semitone — octave-locked mode.
   float GetMidiNote() const { return midi_note_; }
+  // Unrounded, slew-limited — follows bends/slides/vibrato and any tuning.
+  float GetMidiNoteContinuous() const { return cont_midi_; }
 
  private:
   static constexpr int DEC      = 4;
@@ -94,7 +101,8 @@ class PitchTracker {
   float hp_[2]         = {};
   float aa_coeff_      = 0.f;
   float aa_[4]         = {};
-  float midi_note_     = 36.f;
+  float midi_note_     = 36.f;   // quantized (octave-locked)
+  float cont_midi_     = 36.f;   // continuous, slew-limited (direct track / synth)
 
   float Buf(int offset) const {
     return buf_[(write_pos_ - 1 - offset + BUF_SIZE) & BUF_MASK];
@@ -134,7 +142,8 @@ class PitchTracker {
     if (best_tau > 0) {
       float freq = dec_sr_ / static_cast<float>(best_tau);
       float midi = 69.f + 12.f * log2f(freq / 440.f);
-      midi_note_ = roundf(midi);
+      midi_note_ = roundf(midi);   // quantized path — unchanged
+      cont_midi_ = midi;           // continuous path — raw, unrounded, no smoothing
     }
   }
 };
