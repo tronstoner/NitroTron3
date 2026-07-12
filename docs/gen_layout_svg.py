@@ -166,20 +166,24 @@ def knob(cx: int, cy: int, kid: str, entry: dict, indicator_deg: float = -135.0)
     return "".join(parts)
 
 
-def switch(cx: int, cy: int, sw_label: str, positions: list) -> str:
-    """Toggle switch icon + per-position labels stacked below."""
+def switch(cx: int, cy: int, sw_label: str, positions: list, pos: str = "MID") -> str:
+    """3-position toggle icon + per-position labels stacked below. `pos`
+    (UP / MID / DOWN) sets where the actuator sits, so SW3 shows the mode this
+    diagram documents; SW1/SW2 rest at centre (the player picks those)."""
     if " · " in sw_label:
         sw_id, sw_fn = sw_label.split(" · ", 1)
     else:
         sw_id, sw_fn = sw_label, ""
 
+    act_y = {"UP": -29, "MID": -10, "DOWN": 9}.get(pos, -10)
     base = f"""
   <g transform="translate({cx},{cy})">
-    <rect x="-16" y="-26" width="32" height="52" rx="4"
-          fill="#9aa0a4" stroke="#333" stroke-width="1.5"/>
-    <rect x="-6" y="-34" width="12" height="22" rx="2"
-          fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>
-    <circle cx="0" cy="-36" r="5" fill="#888" stroke="#222" stroke-width="1"/>
+    <rect x="-15" y="-30" width="30" height="60" rx="7"
+          fill="#8f9498" stroke="#333" stroke-width="1.5"/>
+    <rect x="-13" y="{act_y}" width="26" height="20" rx="5"
+          fill="#e4e6e8" stroke="#222" stroke-width="1.3"/>
+    <line x1="-7" y1="{act_y + 7}" x2="7" y2="{act_y + 7}" stroke="#9aa0a4" stroke-width="1.4"/>
+    <line x1="-7" y1="{act_y + 13}" x2="7" y2="{act_y + 13}" stroke="#9aa0a4" stroke-width="1.4"/>
   </g>
   <text x="{cx}" y="{SWITCH_LABEL_Y}" text-anchor="middle"
         font-size="{FS_SWITCH_LABEL}" font-weight="700" fill="#111">{sw_id}</text>
@@ -250,12 +254,13 @@ def build_svg(mode_key: str) -> str:
     for i in range(3):
         parts.append(knob(COLS_X[i], KNOB_ROW2_Y, f"K{i + 4}", m["knobs"][i + 3], angles[i + 3]))
 
+    sw3_pos = {"a": "UP", "b": "MID", "c": "DOWN"}[mode_key]
     sw_label, sw_positions = m["sw1"]
-    parts.append(switch(COLS_X[0], SWITCH_Y, sw_label, sw_positions))
+    parts.append(switch(COLS_X[0], SWITCH_Y, sw_label, sw_positions, "MID"))
     sw_label, sw_positions = m["sw2"]
-    parts.append(switch(COLS_X[1], SWITCH_Y, sw_label, sw_positions))
+    parts.append(switch(COLS_X[1], SWITCH_Y, sw_label, sw_positions, "MID"))
     sw_label, sw_positions = m["sw3"]
-    parts.append(switch(COLS_X[2], SWITCH_Y, sw_label, sw_positions))
+    parts.append(switch(COLS_X[2], SWITCH_Y, sw_label, sw_positions, sw3_pos))
 
     parts.append(led(195, LED_Y, "Preset"))
     parts.append(led(395, LED_Y, "State"))
