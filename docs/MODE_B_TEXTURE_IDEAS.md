@@ -3,11 +3,12 @@
 ## Decided design for SW1 MIDDLE — Event-Driven Digital Glitch
 
 K4 is bipolar with noon = clean. Glitching is **event-driven** rather
-than continuous: random triggers fire at a rate proportional to K4
-magnitude, and each event picks random payload parameters. K4 alone
-controls density and intensity — no envelope coupling. Buchla
-Source-of-Uncertainty model: timing randomness in *when* things happen,
-not white noise in *what* comes out.
+than continuous: events fire on note-on transients (so the glitch tracks
+your playing) and, above a reserved onset, at a stochastic rate that ramps
+with K4 magnitude; each event picks random payload parameters. The
+envelope is used only as a noise gate and to detect note-ons — it does not
+scale the wet mix. Buchla Source-of-Uncertainty model: timing randomness
+in *when* things happen, not white noise in *what* comes out.
 
 Replaces the prior stateless per-sample XOR/rotate zone design, which
 was inaudible on the CCW (XOR) side and decoupled-from-input on the CW
@@ -45,24 +46,29 @@ Selection is uniform-random per event.
 
 ### Trigger generator
 
-Per-sample probability check, side-specific max rate (CW timing
-events feel faster than CCW bit-flips at the same knob position):
+Two sources. A **note-on** detected upstream (rising envelope edge) forces
+an event immediately whenever K4 is off zero, so the glitch answers your
+playing. Auto events are stochastic, but only above a reserved onset —
+below `GLITCH_AUTO_ONSET` the early travel is note-on-triggered only:
 ```
+auto_pos = (effect_pos > GLITCH_AUTO_ONSET)
+           ? ((effect_pos - GLITCH_AUTO_ONSET) / (1 - GLITCH_AUTO_ONSET))²
+           : 0
 rate_max = (side == CW) ? GLITCH_EVENT_RATE_HZ_MAX_CW : GLITCH_EVENT_RATE_HZ_MAX
-rate_hz  = effect_pos × rate_max
+rate_hz  = auto_pos × rate_max
 p        = rate_hz / 48000
 fire     = (env > GLITCH_ENV_GATE) && rand() < p
 ```
 
-When `state == IDLE`, the gate is open, and a trigger fires,
-`StartEvent()` picks the payload and event duration. Event duration's
-lower bound also scales with `effect_pos` so each event is longer at
-the extreme.
+When `state == IDLE`, the gate is open, and a trigger fires (or a note-on
+forces one), `StartEvent()` picks the payload and event duration. Duration's
+lower bound scales with `effect_pos`, and event params always use the real
+`effect_pos`, so triggered-only events near noon are still strong.
 
-When an event ends, the processor chains into another event with
-probability `effect_pos²` — also gated by env, so silence ends the
-run cleanly. At full K4 this is ~1.0 so events fire back-to-back;
-near the deadzone it is near zero so each event is isolated.
+When an event ends, the processor chains into another with probability
+`auto_pos` — zero in the triggered-only zone (a note-on event plays once
+and stops), approaching ~1 at the extreme (events fire back-to-back). Also
+gated by env, so silence ends the run.
 
 ### Noise gate
 
@@ -108,7 +114,8 @@ The deadzone (±5%) still snaps to clean / no triggers.
 ```
 GLITCH_DEADZONE              = 0.05f   // ±5% around noon → clean
 GLITCH_XOR_MAX_BIT           = 13      // bit-flip ceiling (±0.25 fs)
-GLITCH_EVENT_RATE_HZ_MAX     = 25.0f   // CCW: events/sec at full effect_pos
+GLITCH_AUTO_ONSET            = 0.15f   // travel below this = note-on-triggered only
+GLITCH_EVENT_RATE_HZ_MAX     = 25.0f   // CCW: events/sec at full auto_pos
 GLITCH_EVENT_RATE_HZ_MAX_CW  = 50.0f   // CW: 2× CCW at full deflection
 GLITCH_EVENT_DUR_MIN_SAMPLES = 240     // 5 ms (effect_pos raises this floor)
 GLITCH_EVENT_DUR_MAX_SAMPLES = 2400    // 50 ms

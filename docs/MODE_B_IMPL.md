@@ -1,5 +1,12 @@
 # Mode B — Sprawl — Implementation Plan
 
+> **Historical staging plan — do not read as current behaviour.** This tracked
+> the original pre-redesign build; several stages shipped differently or were
+> superseded (K2/K3 are now bipolar; SW2 MID = resonance pick and DOWN = Bode SSB
+> shifter, not scale/cloud modes; feedback is K5-CW into a tanh saturator, not a
+> MoogLadder chain; voices never steal). See `MODE_B_GRANULAR.md`,
+> `src/constants.h`, and `ProcessGranular` for shipped behaviour.
+
 Staged implementation of Mode B per `MODE_B_GRANULAR.md`. Each stage produces a flashable, testable build.
 
 ---

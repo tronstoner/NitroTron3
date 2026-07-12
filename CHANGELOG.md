@@ -15,10 +15,12 @@ env → VCA noise-floor fix.
 ### Added
 
 - **SPRAWL — bipolar K2 and K3.** Both granular-shape knobs now work around a
-  padded neutral noon. K2: magnitude = buffer length + timescale, sign = global
-  playback direction (CW forward / CCW backward); fully CCW still drops into
-  direct-texture mode. K3: a clean coherent stream at noon, with a distinct
-  granular personality on each side (below).
+  padded neutral noon. K2: noon is the direct-texture path (grain engine
+  bypassed, K3 = micro-stutter); off noon, magnitude = buffer length +
+  timescale and sign = global playback direction (CW forward / CCW backward).
+  (Previously the direct-texture path lived at fully-CCW; it now sits at noon.)
+  K3: a clean coherent stream at noon, with a distinct granular personality on
+  each side (below).
 - **SPRAWL — K3-CCW "cloud": long, slow smear.** Turning K3 counter-clockwise
   stretches the grains (~0.3 → 2 s, scaled by K2's timescale) while holding the
   overlap, so the emission rate falls and the grains form a slow granular

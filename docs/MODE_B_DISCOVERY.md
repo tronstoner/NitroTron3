@@ -1,8 +1,14 @@
 # Mode B — Sprawl — Bipolar K2/K3 Redesign (Discovery / Implementation Plan)
 
-Status: **planned, not yet implemented.** Source code is the source of truth for
-current behavior; this doc plans a change on top of it. Inspired by fresh
-listening to Chase Bliss **Mood 2** demos.
+Status: **historical plan — shipped, with divergences.** The bipolar K2/K3
+redesign below was implemented, but the shipped result differs from this plan in
+important ways: K3-CCW became a *grow-length, rate-falls* smear cloud (not the
+fixed-length sparse→dense density planned here); the very-short-grain stage and
+the `StutterVoice` pitch upgrade were **not** adopted (the K2-noon zone runs the
+main grain engine on the live ring, and `StutterVoice` is retired); and some
+constants named here (`CLOUD_OVERLAP_MAX`, `GRAIN_MIN_LEN = 48`) never shipped.
+Kept for design context only — **`src/constants.h` (Mode B block) and
+`ProcessGranular` are the source of truth for current behavior.**
 
 This redesign turns Mode B's two granular-shape knobs (K2 buffer, K3
 character) into **bipolar** controls with a padded neutral zone at noon, and

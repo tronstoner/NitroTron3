@@ -35,7 +35,7 @@ These improvements apply regardless of which detection algorithm is used. Signal
 - Hold last detected note during silence (already implemented)
 
 ### Lower the LP cutoff
-- Current: 150 Hz. Consider 100–120 Hz for better harmonic rejection.
+- Current: 400 Hz (`pitch_tracker.h`). Consider 100–120 Hz for better harmonic rejection.
 - At 120 Hz with 4 poles (24 dB/oct), the 2nd harmonic of low E (82 Hz) passes, 3rd harmonic (123 Hz) is at -3 dB, higher harmonics well attenuated.
 
 ### Consider Bessel filter instead of cascaded one-pole

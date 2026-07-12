@@ -1,5 +1,9 @@
 # Stutter / Glitch Mode — Implementation Guidance
 
+> **Retired / historical.** The `StutterVoice` engine these notes describe is
+> gated off in Mode B (`if (false)` in `ProcessGranular`); the live grain engine
+> handles the K2-noon micro-stutter now. Kept for reference.
+
 Quick reference for debugging crackles and building a click-free stutter engine.
 
 ## Diagnosis First
@@ -71,7 +75,8 @@ Do **not** gate stutter on/off. Scale three continuous parameters off the intens
 2. **Randomization depth** — range of length jitter, speed jitter, reverse probability all scale from 0 to full at intensity 1.
 3. **Per-voice wet/dry blend** — even at probability 1, blend the stutter voice with live signal for "gentle intrusion" territory.
 
-This mirrors Mode B's Scatter (K3) semantics. Probably reuse that pattern.
+(This mirrored the original unipolar "Scatter" K3; Mode B's K3 is now a bipolar
+character axis — coherent at noon, smear cloud CCW, glitch CW.)
 
 ### Intensity parameter smoothing
 - Slew-limit the intensity scalar (~20 ms) so parameter sweeps don't step mid-block.

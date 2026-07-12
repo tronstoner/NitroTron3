@@ -30,7 +30,7 @@ non-linearly, drift, scatter, and stutter — built to fill the void
 around the bass, intended for improvisation and experimental
 performance. Functionally a multi-mode effect on its own: all colouring
 and texturing stages (decimator/fold, event-driven glitch, ringmod,
-frequency shifter) are reachable in a non-delay path too (K2 fully CCW).
+frequency shifter) are reachable in a non-delay path too (K2 at noon).
 High feedback with the tanh saturator pushes the loop into harmonic
 cloud blooms; the Bode SSB shifter inside the feedback loop cascades
 each pass and rapidly grows beyond pitched material.
@@ -99,9 +99,11 @@ tracking, or direct tracking.
 texture shaper (SW1) and harmony source (SW2). K5 is bipolar — CCW
 routes the wet bus through a Clouds reverb, CW drives a tanh-saturated
 feedback loop with build-up and on-play duckers that keep the loop
-musical. K2 fully CCW bypasses the grain engine and routes the dry
-through the texture shaper directly, with K3 becoming a micro-stutter
-control. SW2 DOWN replaces grain pitch-shifting with a Bode SSB
+musical. K2 is bipolar around noon: noon bypasses the grain engine and
+routes the dry through the texture shaper directly (K3 becomes a
+micro-stutter control), and off noon the sign sets grain playback
+direction (CW forward, CCW backward). SW2 DOWN replaces grain
+pitch-shifting with a Bode SSB
 frequency shifter living inside the feedback loop.
 
 ![Mode B pedal layout](pedal-mode-b.svg){.pedal-layout}
@@ -111,10 +113,10 @@ frequency shifter living inside the feedback loop.
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
 | KNOB 1 | Harmony / shift | Meaning follows SW2. **SW2=UP**: fixed interval, K1 = ±12 semitones. **SW2=MID**: resonance pick, K1 spans the ±36-semitone scan. **SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar with ±2 % deadzone — CCW = down-shift (bass), CW = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison |
-| KNOB 2 | Buffer range | CCW = tight (100 ms). CW = deep (full 8 s). **Fully CCW** enters direct-texture mode (grain engine bypassed) |
+| KNOB 2 | Buffer range (bipolar) | **Noon (±6 %)** = direct-texture (grain engine bypassed, K3 = micro-stutter). Off noon either way = buffer depth 100 ms → 8 s + timescale; sign = playback direction (CW forward, CCW backward). Fully CCW = deepest buffer, played backward |
 | KNOB 3 | Character / Glitch | **Grain mode**: CCW = long, slow smear (grains stretch ~0.3 → 2 s, overlap held so the rate falls — a granular multi-tap that leans on the deep buffer), CW = short/sharp/chaotic glitch. **Direct-texture mode**: micro-stutter — CCW = clean, CW = frequent choppy repeats |
 | KNOB 4 | Texture amount | Depends on SW1 position — see below |
-| KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0 → 1). **Center (±5 %)** = off. **CW** = ring-buffer feedback (0 → 0.95) into the tanh saturator. Reverb tail does not feed the ring buffer |
+| KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0 → 1). **Center (±5 %)** = off. **CW** = ring-buffer feedback (0 → full) into the tanh saturator — ducked and self-limiting into a controlled drone, not a runaway. Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
 | SWITCH 1 | Texture mode | **UP** — Decimator / Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Event-driven digital glitch (bipolar K4: noon = clean ±5 %, CCW = random bit-flip events, CW = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining) • **DOWN** — Ringmod (K4 0 – 30 % = tremolo 1 – 15 Hz, 30 – 100 % = bell partials, pitch-tracked with keytracked LPF) |
 | SWITCH 2 | Harmony / shift | **UP** — Fixed interval (K1 = ±12 semitones above tracked note) • **MIDDLE** — Resonance (grains lock onto nearby harmonics; K1 spans ±36-semi scan) • **DOWN** — Bode SSB frequency shifter on the wet bus (inside the feedback loop). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential |
