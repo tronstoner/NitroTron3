@@ -150,7 +150,6 @@ bool   stutter_is_cutout = false;  // true = silence event (rhythmic gating)
 size_t stutter_cutout_phase = 0;   // current sample within cut-out
 size_t stutter_cutout_len = 0;     // total cut-out duration in samples
 size_t stutter_fresh = 0;          // samples written since last event ended
-int    stutter_metro_timer = 0;    // samples until next metronomic-granulation trigger (K3-CCW)
 
 // Texture shaper state
 float decim_hold = 0.f;       // decimator sample-and-hold value
@@ -582,7 +581,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // passthrough (grain engine bypassed). See docs/MODE_B_DISCOVERY.md.
   float k2c = RemapKnob(eb.knobs[1]) - 0.5f;         // [-0.5, +0.5]
   bool  direct_texture = (fabsf(k2c) < GRAIN_K2_DEADZONE);
-  bool  buf_reverse    = (k2c < 0.f);                // CCW = backward
+  bool  buf_reverse    = (k2c < -GRAIN_K2_DEADZONE); // backward only past the CCW deadzone; live/deadzone stays forward
   float k2 = (fabsf(k2c) - GRAIN_K2_DEADZONE) / (0.5f - GRAIN_K2_DEADZONE);
   if (k2 < 0.f) k2 = 0.f;
   if (k2 > 1.f) k2 = 1.f;
@@ -638,6 +637,11 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   size_t base_interval = static_cast<size_t>(
       static_cast<float>(grain_len) / overlap);
   if (base_interval < 32) base_interval = 32;
+
+  // Grain window: smooth grains (cloud + neutral, glitch_amount≈0) use a full
+  // Hann window so the constant-overlap sum is flat (no tremolo at unison).
+  // CW character grains keep the length-based Tukey (flatter = more present).
+  float grain_alpha = (glitch_amount < 0.01f) ? 1.0f : -1.0f;
 
   // Stutter params (direct-texture CW probabilistic path). Driven by k3mag so
   // noon = clean and the probabilistic micro-stutter lives on the CW half only.
@@ -732,9 +736,24 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     feedback_amt *= FixedIntervalFeedbackScale(closest_semi);
   }
 
-  // Base delay scales with range, floored at grain length
-  size_t base_delay = max_range / 8;
-  if (base_delay < grain_len) base_delay = grain_len;
+  // Live-grain mode: the whole K2-noon zone (direct-texture) runs the grain
+  // engine on the live ring for a near-zero-latency granular texture. K3 then
+  // behaves identically to buffer mode (neutral / cloud-CCW / character-CW) —
+  // K2 only sets read-back depth (live here → deep trails when engaged). HPF
+  // stays off here (gated on !direct_texture below) for the full-range live feel.
+  bool live_grain = direct_texture;
+  // Read-back depth (how far behind the write head grains read). Buffer
+  // engaged: scales with K2 range, floored at grain length (trails). Live: 0 —
+  // grains follow the write head; the per-grain safety floor at trigger adds
+  // only the minimum a reverse/pitch-up grain physically needs, so a
+  // forward-unison grain stays ~0 latency (dry passthrough at the neutral).
+  size_t base_delay;
+  if (live_grain) {
+    base_delay = 0;
+  } else {
+    base_delay = max_range / 8;
+    if (base_delay < grain_len) base_delay = grain_len;
+  }
 
   // K6: dry/wet mix
   float mix = RemapKnob(eb.knobs[5]);
@@ -798,16 +817,15 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
     float wet;
 
-    if (direct_texture) {
-      // Bipolar micro-stutter. Noon = clean. CW = probabilistic events (below).
-      // CCW (cloud_mode) = metronomic granulation of the live capture buffer:
-      // a fixed short slice re-triggered on a regular timer whose rate rises
-      // sparse→dense with k3mag, direction from the K2 sign. Both paths reuse
-      // the two-voice Tukey crossfade below. Pitch: SW2 UP/MID scale playback
-      // by GrainPitchRatio (sampled per slice), SW2 DOWN stays unison.
+    // Stutter engine RETIRED: all of K2-noon now flows through the live grain
+    // engine (see live_grain), so K3-CW is the same grain character/glitch as
+    // buffer mode, just live. This block is kept dormant for one test pass and
+    // will be deleted once the live CW glitch is confirmed by ear.
+    if (false) {
+      // (dormant) former probabilistic micro-stutter — reuses the two-voice
+      // Tukey crossfade; pitch via GrainPitchRatio, SW2 DOWN unison.
 
-      // Write to capture buffer. Frozen only during CW repeat events; the
-      // metronomic path never sets stutter_engaged, so the buffer stays live.
+      // Write to capture buffer. Frozen only during CW repeat events.
       if (!stutter_engaged || stutter_is_cutout) {
         stutter_buf[stutter_write_pos] = dry;
         stutter_write_pos++;
@@ -816,72 +834,44 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         stutter_fresh++;
       }
 
-      if (cloud_mode) {
-        // --- Metronomic granulation (K3-CCW) ---
-        // Same size↔rate morph as the cloud grains: k3mag² lerps slice length
-        // long→short, overlap held constant so the rate rises as slices shorten.
-        stutter_metro_timer--;
-        if (k3mag > 0.001f && stutter_metro_timer <= 0) {
-          float t = k3mag * k3mag;
-          size_t slice = static_cast<size_t>(METRO_LEN_MAX + t * (METRO_LEN_MIN - METRO_LEN_MAX));
-          if (slice < GRAIN_MIN_LEN) slice = GRAIN_MIN_LEN;
+      // --- Probability-based event trigger ---
+      // Require enough fresh audio to fill the chunk — prevents stale/fresh
+      // seam in the capture region when events fire in quick succession.
+      size_t min_fresh = static_cast<size_t>(stutter_base_chunk * 1.4f);  // worst-case chunk
+      if (min_fresh > STUTTER_BUF_SIZE) min_fresh = STUTTER_BUF_SIZE;
+      bool any_active = stutter_voices[0].active || stutter_voices[1].active;
+      if (k3mag > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
+          && !stutter_engaged && !any_active && !stutter_is_cutout
+          && stutter_fresh >= min_fresh
+          && RandFloat() < stutter_prob) {
+
+        if (RandFloat() < cutout_chance) {
+          // Cut-out: dedicated cosine envelope, no voice triggered
+          stutter_is_cutout = true;
+          stutter_cutout_len = 480 + static_cast<size_t>(RandFloat() * 1920.f);
+          stutter_cutout_phase = 0;
+          stutter_engaged = true;
+        } else {
+          // Repeat: randomize chunk length ±40%
+          stutter_is_cutout = false;
+          float rand_scale = 0.6f + RandFloat() * 0.8f;
+          size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
+          if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
+          if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
+          stutter_snap_len = chunk;
+          stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
+                               % STUTTER_BUF_SIZE;
           float pitch = freq_shift_active ? 1.f : GrainPitchRatio(harmony, k1);
-          // Read the whole source span from behind the write head so a
-          // pitched-up slice never overtakes the live write position.
-          size_t span = static_cast<size_t>(pitch * static_cast<float>(slice) + 0.5f);
-          if (span < slice)            span = slice;
-          if (span > STUTTER_BUF_SIZE) span = STUTTER_BUF_SIZE;
-          int vi = !stutter_voices[0].active ? 0
-                 : (!stutter_voices[1].active ? 1 : -1);
-          if (vi >= 0 && stutter_buf_filled >= span) {
-            size_t start = (stutter_write_pos + STUTTER_BUF_SIZE - span) % STUTTER_BUF_SIZE;
-            float rate = buf_reverse ? -pitch : pitch;
-            stutter_voices[vi].Trigger(start, slice, rate);
-          }
-          stutter_metro_timer = static_cast<int>(
-              static_cast<float>(slice) / METRO_OVERLAP);
-          if (stutter_metro_timer < 32) stutter_metro_timer = 32;
-        }
-      } else {
-        // --- Probability-based event trigger (K3-CW) ---
-        // Require enough fresh audio to fill the chunk — prevents stale/fresh
-        // seam in the capture region when events fire in quick succession.
-        size_t min_fresh = static_cast<size_t>(stutter_base_chunk * 1.4f);  // worst-case chunk
-        if (min_fresh > STUTTER_BUF_SIZE) min_fresh = STUTTER_BUF_SIZE;
-        bool any_active = stutter_voices[0].active || stutter_voices[1].active;
-        if (k3mag > 0.01f && stutter_buf_filled >= STUTTER_BUF_SIZE
-            && !stutter_engaged && !any_active && !stutter_is_cutout
-            && stutter_fresh >= min_fresh
-            && RandFloat() < stutter_prob) {
+          stutter_snap_rate = (RandFloat() < reverse_chance) ? -pitch : pitch;
+          stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3mag * 4.f));
 
-          if (RandFloat() < cutout_chance) {
-            // Cut-out: dedicated cosine envelope, no voice triggered
-            stutter_is_cutout = true;
-            stutter_cutout_len = 480 + static_cast<size_t>(RandFloat() * 1920.f);
-            stutter_cutout_phase = 0;
-            stutter_engaged = true;
-          } else {
-            // Repeat: randomize chunk length ±40%
-            stutter_is_cutout = false;
-            float rand_scale = 0.6f + RandFloat() * 0.8f;
-            size_t chunk = static_cast<size_t>(stutter_base_chunk * rand_scale);
-            if (chunk > STUTTER_BUF_SIZE) chunk = STUTTER_BUF_SIZE;
-            if (chunk < STUTTER_MIN_LOOP) chunk = STUTTER_MIN_LOOP;
-            stutter_snap_len = chunk;
-            stutter_snap_start = (stutter_write_pos + STUTTER_BUF_SIZE - stutter_snap_len)
-                                 % STUTTER_BUF_SIZE;
-            float pitch = freq_shift_active ? 1.f : GrainPitchRatio(harmony, k1);
-            stutter_snap_rate = (RandFloat() < reverse_chance) ? -pitch : pitch;
-            stutter_reps_left = 1 + static_cast<int>(RandFloat() * (1.f + k3mag * 4.f));
-
-            stutter_active_idx = 0;
-            stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rate);
-            stutter_reps_left--;
-            stutter_next_armed = true;
-            stutter_engaged = true;
-          }
-          stutter_fresh = 0;  // reset fresh counter on any event start
+          stutter_active_idx = 0;
+          stutter_voices[0].Trigger(stutter_snap_start, stutter_snap_len, stutter_snap_rate);
+          stutter_reps_left--;
+          stutter_next_armed = true;
+          stutter_engaged = true;
         }
+        stutter_fresh = 0;  // reset fresh counter on any event start
       }
 
       if (stutter_is_cutout && stutter_engaged) {
@@ -951,7 +941,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
     } else {
 
-      // Scheduler: continuous stream, K3 adds chaos
+      // Grain scheduler — runs for buffer mode AND live-grain mode (K2 noon +
+      // K3 CCW). Continuous stream; K3-CW adds chaos, K3-CCW is the clean cloud.
       grain_timer--;
       if (grain_timer <= 0) {
         // Delay: base offset + scatter within K5 range
@@ -990,6 +981,20 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
         if (loops > max_loops) loops = max_loops;
 
+        // Live-grain safety: with base_delay≈0 a grain would read past the
+        // write head unless it starts far enough back. Forward + unison/down
+        // needs ~0 (stays live); pitch-up needs grain_len·(ratio−1); reverse
+        // needs a full grain_len (the chunk must exist to play it backwards).
+        // Physical minimum — forward-unison therefore stays a dry passthrough.
+        if (live_grain) {
+          size_t safety = reverse
+              ? (grain_len + 64)
+              : (pitch_ratio > 1.f
+                    ? static_cast<size_t>(grain_len * (pitch_ratio - 1.f)) + 64
+                    : 64);
+          if (delay < safety) delay = safety;
+        }
+
         // Find an inactive voice — never steal mid-playback
         int voice = -1;
         for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
@@ -1002,7 +1007,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         }
         if (voice >= 0) {
           grain_voices[voice].Trigger(
-              grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops);
+              grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops, grain_alpha);
         }
 
         float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;

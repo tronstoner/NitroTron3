@@ -411,12 +411,6 @@ constexpr float CLOUD_LEN_MIN         = 480.f;   // full-CCW base length (10 ms,
 // end is 480 samples (≈10 ms), set in the grain_len formula.
 constexpr size_t GRAIN_MIN_LEN = 64;
 
-// --- Mode B direct-texture metronomic granulation (K2 noon, K3 CCW) ---
-// Deterministic mirror of the buffer-engaged Clouds mode, on the live ~200 ms
-// capture buffer, re-triggered on a regular timer. Direction = K2 sign. Same
-// size↔rate morph as the cloud grains: k3mag² lerps slice length long→short,
-// overlap held constant so the rate rises as slices shorten. Slice max stays
-// under the buffer size; overlap ≤2 for the two-voice engine.
-constexpr float METRO_LEN_MAX = 7200.f; // slow edge slice length (150 ms)
-constexpr float METRO_LEN_MIN = 480.f;  // full-CCW slice length (10 ms)
-constexpr float METRO_OVERLAP = 1.8f;   // constant overlap (2-voice ceiling)
+// Note: K2-noon + K3-CCW (the old "metronomic granulation") is now handled by
+// the main grain engine on the live ring with ~0 read delay — see live_grain
+// in ProcessGranular. No separate metro constants needed.
