@@ -491,13 +491,21 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     int base_note = 12 + octave * 12;
     midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + semi_offset);
   } else if (drone_mode == DRONE_TRACK) {
-    int tracked = static_cast<int>(tracker.GetMidiNote());
-    int pitch_class = ((tracked - TRACKING_WRAP_NOTE) % 12 + 12) % 12;
+    // Octave-locked, CONTINUOUS: fold the tracked pitch class into K2's octave
+    // without quantizing to a semitone, so a detuned / microtonal bass is
+    // preserved. Hysteresis on the octave-wrap boundary (drone_fold_k) keeps a
+    // pitch hovering at the edge from flipping octaves.
+    static int drone_fold_k = 0;
+    float cont = tracker.GetMidiNoteContinuous();
+    float folded = (cont - static_cast<float>(TRACKING_WRAP_NOTE))
+                   - 12.f * static_cast<float>(drone_fold_k);
+    while (folded >= 12.f + PITCH_FOLD_HYSTERESIS_SEMI) { drone_fold_k++; folded -= 12.f; }
+    while (folded <  0.f  - PITCH_FOLD_HYSTERESIS_SEMI) { drone_fold_k--; folded += 12.f; }
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
     int octave = Quantize(RemapKnob(eb.knobs[1]), 7);
     int base_note = 12 + octave * 12;
-    midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + pitch_class + semi_offset);
+    midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + semi_offset) + folded;
   } else {
     // DRONE_TRACK_DIRECT — continuous pitch so the drone follows bends/slides.
     float tracked = tracker.GetMidiNoteContinuous();

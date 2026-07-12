@@ -75,6 +75,10 @@ constexpr float KNOB_DIRTY_THRESHOLD   = 0.02f; // 2% travel to trigger dirty
 
 // Pitch tracking
 constexpr int TRACKING_WRAP_NOTE       = 9;     // octave-locked wrap point (9 = A)
+// Octave-locked tracking (Mode A SW2 MID) folds the CONTINUOUS pitch into K2's
+// octave (microtonal — no semitone quantizing). Dead-band (semitones) at the
+// octave-wrap boundary so a pitch hovering there doesn't flip octaves.
+constexpr float PITCH_FOLD_HYSTERESIS_SEMI = 0.6f;
 
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
