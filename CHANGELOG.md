@@ -34,7 +34,7 @@ env → VCA noise-floor fix.
   grain burst anchored to the freshly-played note on the K3-CW glitch side, and
   fires an event in the SW1-MIDDLE standalone glitch, so the texture engine
   answers your playing. Inspired by Chase Bliss Mood's env mode.
-- **SPRAWL — SW2-MIDDLE per-grain pitch shimmer.** In the resonance-pick harmony
+- **SPRAWL — SW2-MIDDLE per-grain pitch shimmer.** In the Harmonic cloud harmony
   mode the random pitch re-rolls every grain across the CW / neutral range,
   settling onto longer-held, tonal pitches as you push into the CCW cloud.
 

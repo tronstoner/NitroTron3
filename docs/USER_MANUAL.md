@@ -82,14 +82,14 @@ tracking, or direct tracking.
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Semitone / Interval | ±12 semitone offset, centered with deadzone. **Fixed**: center = A, also sets the wrap point for tracking. **Track**: center = tracked note, wraps at the note set in fixed mode |
+| KNOB 1 | Pitch | ±12 semitone offset, centered with deadzone. **Fixed**: center = A, also sets the wrap point for tracking. **Track**: center = tracked note, wraps at the note set in fixed mode |
 | KNOB 2 | Octave | 7 positions (C-1 – C5). **Octave-locked**: sets target octave. **Direct**: ±3 octave offset from tracked pitch |
 | KNOB 3 | Fine tune | ±50 cents continuous (osc 1 only — creates beating with osc 2) |
-| KNOB 4 | Tone / Wavefold | SAW/SQ: full ladder cutoff (80 Hz – 8 kHz). TRI: CCW → noon = cutoff, noon → CW = wavefolding (filter stays fully open) |
-| KNOB 5 | Osc 2 detune | Center = off (deadzone). Outside center = ±1–12 semitone steps. Not affected by fine tune |
+| KNOB 4 | Tone | SAW/SQ: full ladder cutoff (80 Hz – 8 kHz). TRI: CCW → noon = cutoff, noon → CW = wavefolding (filter stays fully open) |
+| KNOB 5 | Detune | Center = off (deadzone). Outside center = ±1–12 semitone steps. Not affected by fine tune |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** — Saw • **MIDDLE** — Triangle • **DOWN** — Square |
-| SWITCH 2 | Drone mode | **UP** — Fixed pitch (K1 sets note, K2 sets octave) • **MIDDLE** — Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval) • **DOWN** — Direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
+| SWITCH 2 | Drone mode | **UP** — Fixed pitch (K1 sets note, K2 sets octave) • **MIDDLE** — Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval) • **DOWN** — Follow / direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
 
 ---
 
@@ -112,14 +112,14 @@ frequency shifter living inside the feedback loop.
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Harmony / shift | Meaning follows SW2. **SW2=UP**: fixed interval, K1 = ±12 semitones. **SW2=MID**: resonance pick, K1 spans the ±36-semitone scan. **SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar with ±2 % deadzone — CCW = down-shift (bass), CW = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison |
-| KNOB 2 | Buffer range (bipolar) | **Noon (±6 %)** = direct-texture (grain engine bypassed, K3 = micro-stutter). Off noon either way = buffer depth 100 ms → 8 s + timescale; sign = playback direction (CW forward, CCW backward). Fully CCW = deepest buffer, played backward |
-| KNOB 3 | Character / Glitch | **Grain mode**: CCW = long, slow smear (grains stretch ~0.3 → 2 s, overlap held so the rate falls — a granular multi-tap that leans on the deep buffer), CW = short/sharp/chaotic glitch. **Direct-texture mode**: micro-stutter — CCW = clean, CW = frequent choppy repeats |
-| KNOB 4 | Texture amount | Depends on SW1 position — see below |
-| KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0 → 1). **Center (±5 %)** = off. **CW** = ring-buffer feedback (0 → full) into the tanh saturator — ducked and self-limiting into a controlled drone, not a runaway. Reverb tail does not feed the ring buffer |
+| KNOB 1 | Pitch | Meaning follows SW2. **SW2=UP**: fixed interval, K1 = ±12 semitones. **SW2=MID**: harmonic-cloud pick, K1 spans the ±36-semitone scan. **SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar with ±2 % deadzone — CCW = down-shift (bass), CW = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison |
+| KNOB 2 | Buffer | **Noon (±6 %)** = direct-texture (grain engine bypassed, K3 = micro-stutter). Off noon either way = buffer depth 100 ms → 8 s + timescale; sign = playback direction (CW forward, CCW backward). Fully CCW = deepest buffer, played backward |
+| KNOB 3 | Character | **Grain mode**: CCW = long, slow smear (grains stretch ~0.3 → 2 s, overlap held so the rate falls — a granular multi-tap that leans on the deep buffer), CW = short/sharp/chaotic glitch. **Direct-texture mode**: micro-stutter — CCW = clean, CW = frequent choppy repeats |
+| KNOB 4 | Texture | Depends on SW1 position — see below |
+| KNOB 5 | Reverb / Feedback | **CCW** = Clouds reverb amount (0 → 1). **Center (±5 %)** = off. **CW** = ring-buffer feedback (0 → full) into the tanh saturator — ducked and self-limiting into a controlled drone, not a runaway. Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Texture mode | **UP** — Decimator / Wavefolder bipolar (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Event-driven digital glitch (bipolar K4: noon = clean ±5 %, CCW = random bit-flip events, CW = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining) • **DOWN** — Ringmod (K4 0 – 30 % = tremolo 1 – 15 Hz, 30 – 100 % = bell partials, pitch-tracked with keytracked LPF) |
-| SWITCH 2 | Harmony / shift | **UP** — Fixed interval (K1 = ±12 semitones above tracked note) • **MIDDLE** — Resonance (grains lock onto nearby harmonics; K1 spans ±36-semi scan) • **DOWN** — Bode SSB frequency shifter on the wet bus (inside the feedback loop). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential |
+| SWITCH 1 | Texture | **UP** — Crush / Fold — decimator/wavefolder (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Glitch — event-driven digital glitch (bipolar K4: noon = clean ±5 %, CCW = random bit-flip events, CW = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining) • **DOWN** — Ring mod (K4 0 – 30 % = tremolo 1 – 15 Hz, 30 – 100 % = bell partials, pitch-tracked with keytracked LPF) |
+| SWITCH 2 | Harmony | **UP** — Fixed — fixed interval (K1 = ±12 semitones above tracked note) • **MIDDLE** — Harmonic cloud (grains scatter across nearby harmonics; K1 spans ±36-semi scan) • **DOWN** — Shift — Bode SSB frequency shifter on the wet bus (inside the feedback loop). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential |
 
 ---
 
@@ -171,13 +171,13 @@ end is preserved so bass fundamentals don't duck under resonance peaks.
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Filter "where" | SW2=UP: Moog cutoff (20 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = oo dark/closed, CW = ee bright/open). SW2=DOWN: phaser notch centre |
-| KNOB 2 | Filter "how much" | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: phaser feedback (clean sweep → resonant bloom → controlled self-oscillation at full CW) |
-| KNOB 3 | Env / LFO modulation | Runs through a response curve (fine near noon, coarse toward the extremes). SW2=UP: bipolar env-to-cutoff (passive-bass scaled). SW2=MID: bipolar env on vowel path and size. SW2=DOWN: bipolar phaser LFO rate (sign selects shape — CCW triangle, CW sample-and-hold; magnitude = rate; centre = LFO off, static notch at K1). All with ±5 % centre deadzone |
-| KNOB 4 | Drive character | Bipolar around noon (noon = clean dry) for SW1=UP and SW1=MID. SW1=UP: CW = sine wavefold (0 → max, internal loudness comp), CCW = Chebyshev waveshaper (octave-up / metallic). SW1=MID: CW = gated bit-flipper (XOR bit position, env-gated), CCW = Tube-Screamer→tube-amp overdrive (staged master gain — pedal/TS drive builds first, amp drive enters over the top of the travel; clean via K6). SW1=DOWN: synth-osc timbre (full-range) — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
-| KNOB 5 | Filter drive (bipolar) | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and the phaser. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone. On the Moog ladder, K5 from just before noon up to full CW also fades in audio-rate cutoff self-FM (modulated by the filter input) for a gritty, vocal resonance |
+| KNOB 1 | Frequency | SW2=UP: Moog cutoff (20 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = oo dark/closed, CW = ee bright/open). SW2=DOWN: phaser notch centre |
+| KNOB 2 | Resonance | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: phaser feedback (clean sweep → resonant bloom → controlled self-oscillation at full CW) |
+| KNOB 3 | Movement | Runs through a response curve (fine near noon, coarse toward the extremes). SW2=UP: bipolar env-to-cutoff (passive-bass scaled). SW2=MID: bipolar env on vowel path and size. SW2=DOWN: bipolar phaser LFO rate (sign selects shape — CCW triangle, CW sample-and-hold; magnitude = rate; centre = LFO off, static notch at K1). All with ±5 % centre deadzone |
+| KNOB 4 | Drive | Bipolar around noon (noon = clean dry) for SW1=UP and SW1=MID. SW1=UP: CW = sine wavefold (0 → max, internal loudness comp), CCW = Chebyshev waveshaper (octave-up / metallic). SW1=MID: CW = gated bit-flipper (XOR bit position, env-gated), CCW = Tube-Screamer→tube-amp overdrive (staged master gain — pedal/TS drive builds first, amp drive enters over the top of the travel; clean via K6). SW1=DOWN: synth-osc timbre (full-range) — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
+| KNOB 5 | Filter drive | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and the phaser. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone. On the Moog ladder, K5 from just before noon up to full CW also fades in audio-rate cutoff self-FM (modulated by the filter input) for a gritty, vocal resonance |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Drive | **UP** — Sine wavefolder (K4 CW) / Chebyshev waveshaper (K4 CCW), noon = clean • **MIDDLE** — Gated bit-flipper (K4 CW, env-gated) / Tube-Screamer→tube-amp overdrive (K4 CCW), noon = clean • **DOWN** — Pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
+| SWITCH 1 | Drive | **UP** — Fold / Cheby — sine wavefolder (K4 CW) / Chebyshev waveshaper (K4 CCW), noon = clean • **MIDDLE** — Crush / Drive — gated bit-flipper (K4 CW, env-gated) / Tube-Screamer→tube-amp overdrive (K4 CCW), noon = clean • **DOWN** — Synth — pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
 | SWITCH 2 | Filter | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env) • **MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path) • **DOWN** — Phaser (K1 notch centre, K2 feedback, K3 LFO rate/shape) |
 
 ---

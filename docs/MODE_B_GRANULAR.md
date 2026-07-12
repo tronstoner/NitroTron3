@@ -69,8 +69,7 @@ length-coupled looping for the K3-CW stutter.
 Each grain's pitch ratio is computed at emission from the `PitchTracker` MIDI
 output plus the SW2 mode:
 - **UP — fixed interval**: every grain K1 semitones above the tracked note (±12).
-- **MIDDLE — resonance pick**: grains lock onto a randomly-picked nearby
-  resonance; K1 spans a ±36-semitone scan. The pick re-rolls every grain across
+- **MIDDLE — Harmonic cloud**: grains lock onto randomly-picked nearby harmonics; K1 spans a ±36-semitone scan. The pick re-rolls every grain across
   neutral + CW, holding longer as K3 goes CCW.
 - **DOWN — Bode SSB frequency shifter** on the wet bus, inside the feedback loop
   (each pass cascades the shift). Grain buffer-read pitch is forced to unison, so
@@ -116,14 +115,14 @@ Crossing out of the deadzone resumes normal buffered grain behaviour.
 
 | CONTROL | DESCRIPTION | NOTES |
 |---|---|---|
-| KNOB 1 | Harmony / shift | Meaning follows SW2. UP: fixed interval, ±12 semi. MID: resonance pick, K1 spans the ±36-semi scan. DOWN: Bode SSB shift, bipolar ±2 % deadzone, ±1 kHz exponential; grain pitch forced to unison |
-| KNOB 2 | Buffer range (bipolar) | Noon (±6 %) = direct-texture passthrough. Off noon = buffer depth 100 ms → 8 s + timescale (`k2_scale` 0.5×–2×); **sign = playback direction** (CW forward, CCW backward) |
-| KNOB 3 | Character / Glitch (bipolar) | Noon (±6 %) = single coherent stream. **CCW = cloud**: grains grow ~0.3 → 2 s (× K2 timescale), overlap held so the emission rate falls — a long slow granular multi-tap smear on the deep buffer; pitch re-rolls every grain (SW2 MID). **CW = glitch**: per-grain length variation (audio-rate stutter buzzes), scatter, jitter, random reverse, note-on bursts |
-| KNOB 4 | Texture amount | Bipolar (noon = clean) for SW1 UP/MID, unipolar for DOWN. Intensity of the SW1 texture mode |
-| KNOB 5 | Reverb / Feedback (bipolar) | CCW = Clouds reverb (0→1). Center (±5 %) = off. CW = ring-buffer feedback (0→`FEEDBACK_MAX`=2.0), tanh-saturated + ducked. Reverb tail does not enter the ring buffer |
+| KNOB 1 | Pitch | Meaning follows SW2. UP: fixed interval, ±12 semi. MID: harmonic-cloud pick, K1 spans the ±36-semi scan. DOWN: Bode SSB shift, bipolar ±2 % deadzone, ±1 kHz exponential; grain pitch forced to unison |
+| KNOB 2 | Buffer | Noon (±6 %) = direct-texture passthrough. Off noon = buffer depth 100 ms → 8 s + timescale (`k2_scale` 0.5×–2×); **sign = playback direction** (CW forward, CCW backward) |
+| KNOB 3 | Character | Noon (±6 %) = single coherent stream. **CCW = cloud**: grains grow ~0.3 → 2 s (× K2 timescale), overlap held so the emission rate falls — a long slow granular multi-tap smear on the deep buffer; pitch re-rolls every grain (SW2 MID). **CW = glitch**: per-grain length variation (audio-rate stutter buzzes), scatter, jitter, random reverse, note-on bursts |
+| KNOB 4 | Texture | Bipolar (noon = clean) for SW1 UP/MID, unipolar for DOWN. Intensity of the SW1 texture mode |
+| KNOB 5 | Reverb / Feedback | CCW = Clouds reverb (0→1). Center (±5 %) = off. CW = ring-buffer feedback (0→`FEEDBACK_MAX`=2.0), tanh-saturated + ducked. Reverb tail does not enter the ring buffer |
 | KNOB 6 | Mix | 0 = dry, 1 = wet. Equal-power curve |
-| SWITCH 1 | Texture mode | **UP** - Decimator (CCW) / Wavefolder (CW)<br/>**MIDDLE** - Event-driven digital glitch (XOR CCW / timing CW)<br/>**DOWN** - Ringmod |
-| SWITCH 2 | Harmony / shift | **UP** - Fixed interval<br/>**MIDDLE** - Resonance pick<br/>**DOWN** - Bode SSB frequency shifter |
+| SWITCH 1 | Texture | **UP** - Decimator (CCW) / Wavefolder (CW)<br/>**MIDDLE** - Event-driven digital glitch (XOR CCW / timing CW)<br/>**DOWN** - Ringmod |
+| SWITCH 2 | Harmony | **UP** - Fixed interval<br/>**MIDDLE** - Harmonic cloud<br/>**DOWN** - Bode SSB frequency shifter |
 | SWITCH 3 | Mode select | **UP** - Mode A (Bordun)<br/>**MIDDLE** - Mode B (Sprawl — this mode)<br/>**DOWN** - Mode C (Schism) |
 | FOOTSWITCH 1 | Preset | Short: cycle presets / reload if edited. Save mode: cycle target slot |
 | FOOTSWITCH 2 | Bypass / Save | Short: bypass. Long: save mode. See `PROJECT.md` Preset System |
