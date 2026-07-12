@@ -4,6 +4,14 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+## v0.3 — 2026-07-12 — Pre-release
+
+Focused on **SPRAWL (Mode B)** — a bipolar K2/K3 redesign that gives the
+granular engine two personalities per knob (a long, slow smear cloud on K3-CCW
+vs an audio-rate glitch on K3-CW) and makes the texture engine answer your
+playing. Mode B is nearly feature-complete; Modes A and C carry a shared
+env → VCA noise-floor fix.
+
 ### Added
 
 - **SPRAWL — bipolar K2 and K3.** Both granular-shape knobs now work around a
