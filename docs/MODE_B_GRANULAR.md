@@ -139,7 +139,7 @@ The transition between direct-texture and grain mode is instantaneous. K2 slight
 |---|---|---|
 | KNOB 1 | Interval | **Centered.** Noon = unison. CCW → −24 semi, CW → +24 semi. Interpretation depends on Switch 2 (anchor for Fixed and Scale modes, cloud weighting for Cloud mode) |
 | KNOB 2 | Buffer range | Unipolar. CCW = tight (100 ms, recent audio only). CW = deep (full 8 s, long trails) |
-| KNOB 3 | Character / Glitch | Unipolar. CCW = soft, long, tight grains (200 ms, single pass, 6× overlap). CW = short, sharp, chaotic (20 ms, stutter loops, scatter, reverse probability). Currently merged from two conceptual parameters (grain character + glitch amount) — may split back to two knobs later |
+| KNOB 3 | Character / Glitch | Bipolar around noon (±6 % neutral pad = single coherent stream). **CCW = cloud**: grains grow ~0.3 → 2 s (× K2 timescale), overlap held so the emission rate falls — a long, slow granular multi-tap smear that leans on the deep buffer; pitch re-rolls every grain (SW2 MID). **CW = glitch**: short, sharp, chaotic — per-grain length variation (audio-rate stutter buzzes), scatter, jitter, random reverse, transient-triggered bursts |
 | KNOB 4 | Texture amount | Unipolar. 0 = clean, 1 = full effect. Intensity of whichever texture mode Switch 1 selects. Gesture-modulated (attack / amp / sustain depending on mode) |
 | KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb dry/wet (0→1). **Center (±5%)** = off. **CW** = ring-buffer feedback (0→0.95). Reverb runs in parallel with feedback path; reverb tail does not enter the ring buffer |
 | KNOB 6 | Mix | Unipolar. 0 = dry, 1 = wet. Equal-power curve |

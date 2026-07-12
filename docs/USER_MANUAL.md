@@ -112,7 +112,7 @@ frequency shifter living inside the feedback loop.
 |-|-|-|
 | KNOB 1 | Harmony / shift | Meaning follows SW2. **SW2=UP**: fixed interval, K1 = ±12 semitones. **SW2=MID**: resonance pick, K1 spans the ±36-semitone scan. **SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar with ±2 % deadzone — CCW = down-shift (bass), CW = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison |
 | KNOB 2 | Buffer range | CCW = tight (100 ms). CW = deep (full 8 s). **Fully CCW** enters direct-texture mode (grain engine bypassed) |
-| KNOB 3 | Character / Glitch | **Grain mode**: CCW = soft/long/tight, CW = short/sharp/chaotic. **Direct-texture mode**: micro-stutter — CCW = clean, CW = frequent choppy repeats |
+| KNOB 3 | Character / Glitch | **Grain mode**: CCW = long, slow smear (grains stretch ~0.3 → 2 s, overlap held so the rate falls — a granular multi-tap that leans on the deep buffer), CW = short/sharp/chaotic glitch. **Direct-texture mode**: micro-stutter — CCW = clean, CW = frequent choppy repeats |
 | KNOB 4 | Texture amount | Depends on SW1 position — see below |
 | KNOB 5 | Reverb / Feedback (bipolar) | **CCW** = Clouds reverb amount (0 → 1). **Center (±5 %)** = off. **CW** = ring-buffer feedback (0 → 0.95) into the tanh saturator. Reverb tail does not feed the ring buffer |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |

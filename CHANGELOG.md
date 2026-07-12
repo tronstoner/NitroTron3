@@ -4,8 +4,39 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+### Added
+
+- **SPRAWL — bipolar K2 and K3.** Both granular-shape knobs now work around a
+  padded neutral noon. K2: magnitude = buffer length + timescale, sign = global
+  playback direction (CW forward / CCW backward); fully CCW still drops into
+  direct-texture mode. K3: a clean coherent stream at noon, with a distinct
+  granular personality on each side (below).
+- **SPRAWL — K3-CCW "cloud": long, slow smear.** Turning K3 counter-clockwise
+  stretches the grains (~0.3 → 2 s, scaled by K2's timescale) while holding the
+  overlap, so the emission rate falls and the grains form a slow granular
+  multi-tap that leans on the deep 8 s buffer — a lush, time-smeared wash.
+- **SPRAWL — K3-CW "glitch": audio-rate stutter buzzes.** Clockwise, each
+  grain's length is varied per-grain with length-coupled repeats, so the stutter
+  rate is random grain-to-grain and, near full CW, climbs past ~20 Hz into
+  pitched buzzes (brrr → friii → kriii). The knob raises the ceiling — more and
+  higher buzzes — rather than uniformly speeding everything up.
+- **SPRAWL — plays back at you (env mode).** A note-on (attack) fires an extra
+  grain burst anchored to the freshly-played note on the K3-CW glitch side, and
+  fires an event in the SW1-MIDDLE standalone glitch, so the texture engine
+  answers your playing. Inspired by Chase Bliss Mood's env mode.
+- **SPRAWL — SW2-MIDDLE per-grain pitch shimmer.** In the resonance-pick harmony
+  mode the random pitch re-rolls every grain across the CW / neutral range,
+  settling onto longer-held, tonal pitches as you push into the CCW cloud.
+
 ### Changed
 
+- **SPRAWL — micro-stutter unified into the grain engine**, so K3 behaves
+  consistently whether the buffer is engaged or you are in direct-texture mode.
+- **SPRAWL — feedback path retuned**: the wet high-pass now sits in the feedback
+  path only, with reworked feedback gain staging.
+- **SPRAWL — fixed a pitched-up grain read overrun** that could pull stale
+  buffer content; grain overlap is now context-dependent (denser for the
+  SW2-MID echo bloom).
 - **Env → VCA noise-floor handling.** The envelope VCAs (Mode A drone and the
   Mode C SW1=DOWN synth voice) now pass the envelope through a static downward
   expander: above a threshold the response is unchanged (full touch
