@@ -12,6 +12,10 @@
 // During an event the wet/dry mix is scaled by the live envelope, so
 // the glitch only speaks while the bass is playing.
 //
+// Reactive triggering: a note-on detected upstream (rising edge on the input
+// envelope) can force an event on the attack, so the glitch answers our playing
+// on top of the stochastic timing. Passed in as `trigger` per sample.
+//
 // CCW (side=0) payload: bit-flip — XOR a random bit (0..max_bit, scaled
 // by effect_pos) for the event duration.
 //
@@ -38,8 +42,9 @@ class GlitchEvents {
   }
 
   // Per-sample process. effect_pos = 0..1 (already deadzone-mapped),
-  // side = 0 (CCW/XOR) or 1 (CW/timing), env = current envelope follower value.
-  float Process(float in, int side, float effect_pos, float env) {
+  // side = 0 (CCW/XOR) or 1 (CW/timing), env = current envelope follower value,
+  // trigger = note-on detected upstream (forces an event on the attack).
+  float Process(float in, int side, float effect_pos, float env, bool trigger) {
     // Always write input to the ring buffer (CW payload needs history)
     const int w = write_pos_;
     buffer_[w] = in;
@@ -49,12 +54,31 @@ class GlitchEvents {
     // In-flight events still play out to avoid gate-close clicks.
     const bool gate_open = env > GLITCH_ENV_GATE;
 
-    // Trigger probability: events/sec scaled by effect_pos, converted to per-sample.
-    // CW (timing events) runs at 2× CCW rate at full deflection.
-    if (state_ == State::IDLE && effect_pos > 0.f && gate_open) {
+    // Reactive trigger: a note-on forces an event immediately, so the glitch
+    // answers our playing on top of the stochastic timing. Gated by effect_pos
+    // so a clean/off K4 stays clean; (re)starts even mid-event for max response.
+    // StartEvent sets state_ = ACTIVE, so the stochastic roll below is skipped
+    // this sample.
+    if (trigger && effect_pos > 0.f) {
+      StartEvent(side, effect_pos, w);
+    }
+
+    // Auto-event amount: zero below GLITCH_AUTO_ONSET (that early travel is
+    // reserved for note-on triggered events only), then ramps in above it.
+    // Squared so the auto rate starts slow and builds toward the extreme.
+    float auto_pos = 0.f;
+    if (effect_pos > GLITCH_AUTO_ONSET) {
+      auto_pos = (effect_pos - GLITCH_AUTO_ONSET) / (1.f - GLITCH_AUTO_ONSET);
+      auto_pos *= auto_pos;
+    }
+
+    // Trigger probability: events/sec scaled by auto_pos, converted to per-sample.
+    // CW (timing events) runs at 2× CCW rate at full deflection. Event params
+    // still scale with the real effect_pos, so triggered-only events stay strong.
+    if (state_ == State::IDLE && auto_pos > 0.f && gate_open) {
       const float rate_max = (side == 1) ? GLITCH_EVENT_RATE_HZ_MAX_CW
                                          : GLITCH_EVENT_RATE_HZ_MAX;
-      const float rate_hz = effect_pos * rate_max;
+      const float rate_hz = auto_pos * rate_max;
       const float p = rate_hz * (1.f / 48000.f);
       if (NextRand() < p) {
         StartEvent(side, effect_pos, w);
@@ -67,11 +91,11 @@ class GlitchEvents {
       glitched = ApplyPayload(in);
       event_remaining_--;
       if (event_remaining_ <= 0) {
-        // Chain into next event with probability effect_pos². At the
-        // extreme this approaches 1, so glitches become continuous and
-        // the dry signal is no longer audible between events. Chain is
-        // also gated by env so silence ends the run.
-        const float chain_p = effect_pos * effect_pos;
+        // Chain into next event with probability auto_pos (the ramped auto
+        // amount). Zero in the triggered-only zone, so a note-on event plays
+        // once and stops — clean, no self-chaining. Approaches 1 at the extreme
+        // so glitches become continuous. Also gated by env so silence ends run.
+        const float chain_p = auto_pos;
         if (gate_open && NextRand() < chain_p) {
           StartEvent(active_side_, effect_pos, write_pos_);
         } else {

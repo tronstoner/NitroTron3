@@ -359,6 +359,12 @@ constexpr int   GLITCH_EVENT_DUR_MAX_SAMPLES = 2400; // 50 ms at 48 kHz
 constexpr int   GLITCH_BUFFER_SAMPLES       = 2400;  // 50 ms ring buffer for CW timing payload
 constexpr int   GLITCH_RAMP_SAMPLES         = 48;    // 1 ms click-free wet/dry ramp
 constexpr float GLITCH_ENV_GATE             = 0.01f; // raw env_val noise gate — below this, no new events arm (passive bass ≈0.02–0.1 while played)
+// Auto (stochastic) event onset along K4 travel. Below this fraction of
+// effect_pos, NO auto events fire — that early travel is reserved for note-on
+// triggered events only. Above it, the auto amount ramps in (squared curve, so
+// it starts slow) up to full rate at the extreme. Reactive triggering is
+// unaffected: it fires from the moment K4 leaves the deadzone.
+constexpr float GLITCH_AUTO_ONSET           = 0.15f; // fraction of travel reserved for triggered-only events
 
 // --- Mode B SW2 DOWN — Bode frequency shifter (K1 bipolar, unison at noon) ---
 // K1 ranges ±1 kHz with an exponential taper around unison: fine sub-Hz

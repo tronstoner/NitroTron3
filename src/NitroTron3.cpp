@@ -793,22 +793,22 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // Envelope follower (feeds pitch tracker gating)
     grain_env = env.Process(dry);
 
-    // Note-on detection → fire a grain burst anchored to the freshly-played
-    // note, so the glitch engine answers our playing (env-mode feel). Rising
-    // edge: env jumps a factor above a slow baseline, gated above the noise
-    // floor, with a refractory lock so one pluck = one trigger. The burst grains
-    // read the newest content (see the scheduler's burst branch below).
-    // Gated to the CW glitch side only (glitch_amount > 0 ⇒ K3 past the neutral
-    // pad on the CW half): the CCW cloud and the K3-neutral passthrough stay a
-    // clean free-running wash, untriggered. Baseline/refractory keep updating
-    // regardless so state never goes stale when re-entering the glitch zone.
+    // Note-on detection (shared): rising edge — env jumps a factor above a slow
+    // baseline, gated above the noise floor, with a refractory lock so one pluck
+    // = one trigger. Drives two reactive features off the SAME detected attack:
+    //   • grain engine — seeds a burst (K3-CW glitch side only; see scheduler);
+    //   • SW1-MID glitch effect — forces an event (passed into GlitchEvents).
+    // Baseline/refractory update every sample so state never goes stale.
     trans_slow += TRANSIENT_SLOW_COEF * (grain_env - trans_slow);
     if (trans_refractory > 0) trans_refractory--;
-    if (glitch_amount > 0.01f && trans_refractory == 0 && grain_env > TRANSIENT_GATE
-        && grain_env > trans_slow * TRANSIENT_RISE) {
+    bool note_on = (trans_refractory == 0 && grain_env > TRANSIENT_GATE
+                    && grain_env > trans_slow * TRANSIENT_RISE);
+    if (note_on) trans_refractory = TRANSIENT_REFRACTORY;
+    // Grain burst only on the CW glitch side (glitch_amount > 0 ⇒ K3 past the
+    // neutral pad): the CCW cloud and K3-neutral passthrough stay untriggered.
+    if (note_on && glitch_amount > 0.01f) {
       grain_burst_left = TRANSIENT_BURST;
       grain_timer = 0;                 // fire on the next scheduler tick
-      trans_refractory = TRANSIENT_REFRACTORY;
     }
 
     // Feed pitch tracker
@@ -1126,7 +1126,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     }
     case 1: {
       // Event-driven digital glitch: stochastic triggers, K4 alone controls density.
-      wet = glitch_events.Process(wet, glitch_side, glitch_effect_pos, grain_env);
+      wet = glitch_events.Process(wet, glitch_side, glitch_effect_pos, grain_env, note_on);
       break;
     }
     case 2: {
