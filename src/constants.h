@@ -409,6 +409,16 @@ constexpr float GRAIN_NEUTRAL_OVERLAP = 2.0f;    // default overlap anchor — s
 constexpr float GRAIN_OVERLAP_MID_ECHO = 6.0f;   // richer anchor for echo (K2 engaged) + SW2 MID — lets that mode bloom
 constexpr float CLOUD_LEN_MIN         = 480.f;   // full-CCW base length (10 ms, ×k2_scale)
 
+// SW2 MID pitch re-roll: how many grains share a random pitch before a new one
+// is rolled from the ±1 resonance window. Held this long at K3 noon (tonal),
+// scaling down to 1 (re-roll every grain, chaotic shimmer) as k3mag reaches the
+// per-side threshold below. Asymmetric: CW (glitch) hits full change just off
+// noon (~1:00); CCW (cloud) reaches it further out (~10:00), keeping a longer
+// tonal region across the cloud sweep.
+constexpr int   GRAIN_PITCH_HOLD_MAX   = 6;
+constexpr float PITCH_REROLL_FULL_CW   = 0.09f; // k3mag for full change on CW  (~1:00)
+constexpr float PITCH_REROLL_FULL_CCW  = 0.32f; // k3mag for full change on CCW (~10:00)
+
 // Hard floor on grain length (safety clamp). The character sweep's own short
 // end is 480 samples (≈10 ms), set in the grain_len formula.
 constexpr size_t GRAIN_MIN_LEN = 64;

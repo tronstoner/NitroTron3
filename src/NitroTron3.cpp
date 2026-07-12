@@ -971,22 +971,28 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         bool flip = (glitch_amount > 0.1f) && (RandFloat() < glitch_amount * GRAIN_REVERSE_BIAS);
         bool reverse = buf_reverse ? !flip : flip;
 
-        // Pitch: UP holds a stable interval until K1 moves; MID re-rolls every
-        // grain within its ±1 RESONANCES window. Change detection uses the
-        // mode's effective K1 range so spurious re-rolls don't fire when K1
-        // moves above +12 in UP mode (where the value clamps).
+        // Pitch re-roll. UP holds a fixed interval (only changes when K1
+        // moves — deterministic, so no per-grain re-roll). MID/DOWN roll a new
+        // random pick from the ±1 RESONANCES window every `reroll` grains: held
+        // GRAIN_PITCH_HOLD_MAX grains at K3 noon (tonal), scaling to 1 (every
+        // grain) at the K3 extremes. Coupled to k3mag so both the CCW cloud and
+        // CW glitch shimmer faster as you push out. K1-range for change
+        // detection uses the mode's effective span so UP doesn't spuriously
+        // re-roll when K1 clamps above +12.
         int k1_semi_now = (harmony == 0) ? K1ToSemi(k1, 12) : K1ToSemi(k1, 36);
-        bool force_reroll = (k1_semi_now != harmony_cached_k1_semi);
-        if (harmony == 0) {
-          if (force_reroll || harmony_hold_counter <= 0) {
-            harmony_cached_ratio = GrainPitchRatio(harmony, k1);
-            harmony_cached_k1_semi = k1_semi_now;
-            harmony_hold_counter = 1;
-          }
-        } else {
+        bool k1_changed = (k1_semi_now != harmony_cached_k1_semi);
+        // Re-roll interval ramps MAX (held, at noon) → 1 (every grain) as k3mag
+        // reaches the per-side full-change threshold (CW earlier than CCW).
+        float reroll_full = cloud_mode ? PITCH_REROLL_FULL_CCW : PITCH_REROLL_FULL_CW;
+        float reroll_t = (k3mag < reroll_full) ? (k3mag / reroll_full) : 1.f;
+        int reroll_interval = 1 + static_cast<int>(
+            (1.f - reroll_t) * static_cast<float>(GRAIN_PITCH_HOLD_MAX - 1));
+        if (k1_changed || (harmony != 0 && harmony_hold_counter <= 0)) {
           harmony_cached_ratio = GrainPitchRatio(harmony, k1);
           harmony_cached_k1_semi = k1_semi_now;
+          harmony_hold_counter = (harmony == 0) ? 1 : reroll_interval;
         }
+        if (harmony != 0 && harmony_hold_counter > 0) harmony_hold_counter--;
         float pitch_ratio = harmony_cached_ratio;
         if (freq_shift_active) pitch_ratio = 1.f;  // SW2 DOWN: buffer pitch held at unison
         float comp = 1.f / sqrtf(pitch_ratio);
