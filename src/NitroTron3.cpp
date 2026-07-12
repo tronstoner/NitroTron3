@@ -408,15 +408,15 @@ static int K1ToSemi(float k1, int max_up) {
 
 // Per-semitone feedback scale (SW2 UP / fixed-interval only).
 // Unison piles up because each loop pass replays at the same pitch; pitch-down
-// loses energy to the 150 Hz wet HPF each pass and needs compensation.
-// Curve: unison cut to 0.45, up-side ramps back to 1.0 by +3 semi, down-side
-// boosts +0.12 per semitone for a saturated growl, capped at 1.9.
+// loses energy to the wet HPF each pass and needs compensation.
+// Curve: unison cut to FB_UNISON_SCALE, up-side ramps back to 1.0 by +3 semi,
+// down-side boosts +0.12 per semitone for a saturated growl, capped at 1.9.
 static float FixedIntervalFeedbackScale(int k1_semi) {
-  if (k1_semi == 0) return 0.45f;
+  if (k1_semi == 0) return FB_UNISON_SCALE;
   if (k1_semi > 0) {
     float t = static_cast<float>(k1_semi) / 3.f;
     if (t > 1.f) t = 1.f;
-    return 0.45f + 0.55f * t;
+    return FB_UNISON_SCALE + (1.f - FB_UNISON_SCALE) * t;
   }
   float scale = 1.f + 0.12f * static_cast<float>(-k1_semi);
   if (scale > 1.9f) scale = 1.9f;
@@ -711,7 +711,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     reverb_amt = (0.5f - dead - k5) / (0.5f - dead);  // 0 at edge of deadzone, 1 at full CCW
     feedback_amt = 0.f;
   } else if (k5 > 0.5f + dead) {
-    feedback_amt = ((k5 - 0.5f - dead) / (0.5f - dead)) * REVERB_MAX_FEEDBACK;
+    feedback_amt = ((k5 - 0.5f - dead) / (0.5f - dead)) * FEEDBACK_MAX;
     reverb_amt = 0.f;
   } else {
     reverb_amt = 0.f;
@@ -812,8 +812,16 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     if (on_play_norm > 1.f) on_play_norm = 1.f;
     float on_play_gain = 1.f - on_play_norm * ON_PLAY_AMOUNT;
 
+    // 2-pole HPF on the feedback return ONLY (always on) — blocks sub/DC from
+    // accumulating in the loop. Kept off the wet output so there's no gated-
+    // filter click at the K2 noon boundary and the wet keeps its full range.
+    wet_hp_state[0] += (1.f - wet_hp_coeff) * (prev_wet - wet_hp_state[0]);
+    float fb_hp1 = prev_wet - wet_hp_state[0];
+    wet_hp_state[1] += (1.f - wet_hp_coeff) * (fb_hp1 - wet_hp_state[1]);
+    float fb_hp = fb_hp1 - wet_hp_state[1];
+
     float fb_amt_eff = feedback_amt * duck_gain * on_play_gain;
-    grain_ring.Write(dry + tanhf(prev_wet * fb_amt_eff * FB_SAT_DRIVE) / FB_SAT_DRIVE);
+    grain_ring.Write(dry + tanhf(fb_hp * fb_amt_eff * FB_SAT_DRIVE) / FB_SAT_DRIVE);
 
     float wet;
 
@@ -1074,18 +1082,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
       wet = b_shifter.Process(wet);
     }
 
-    // Wet HPF: 2-pole at 60 Hz to block DC/sub accumulation in the feedback
-    // loop without touching bass fundamentals. Skipped in direct-texture
-    // mode since the wet there is essentially a passthrough of the dry.
-    if (!direct_texture) {
-      wet_hp_state[0] += (1.f - wet_hp_coeff) * (wet - wet_hp_state[0]);
-      float hp1 = wet - wet_hp_state[0];
-      wet_hp_state[1] += (1.f - wet_hp_coeff) * (hp1 - wet_hp_state[1]);
-      wet = hp1 - wet_hp_state[1];
-    }
+    // Wet output is full-range now — the HPF moved to the feedback return only
+    // (see the injection above), so there's no gated-filter click at the K2
+    // noon boundary and the live/wet signal keeps its lows.
 
-    // Store post-HPF wet for next sample's feedback injection (pre-reverb,
-    // so reverb does not feed the ring buffer — per spec).
+    // Store wet for next sample's feedback injection (pre-reverb, so reverb
+    // does not feed the ring buffer).
     prev_wet = wet;
 
     // Capture mono wet for the block-based reverb pipeline.

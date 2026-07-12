@@ -374,7 +374,8 @@ constexpr float FREQ_SHIFT_CURVE     = 6.0f;   // taper exponent (higher = more 
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
 constexpr float REVERB_TIME        = 0.70f;  // reverb decay (krt in Clouds)
-constexpr float REVERB_MAX_FEEDBACK = 0.95f; // CW side: existing ring-buffer feedback ceiling
+constexpr float FEEDBACK_MAX = 2.0f;  // K5-CW ring-buffer feedback ceiling (tanh limiter + duckers keep it a controlled drone)
+constexpr float FB_UNISON_SCALE     = 0.60f; // feedback scale at unison (K1=0). Unison piles up coherently, so it's cut vs intervals; ramps to 1.0 by +3 semi. Raise toward 1.0 for stronger unison feedback.
 constexpr float REVERB_AMT_SMOOTH_COEF = 0.002f; // one-pole on K5 reverb amount, ~10 ms tc
 constexpr float PARAM_SMOOTH_COEF      = 0.002f; // generic control smoother (Smoother), ~10 ms tc — de-zipper audio-rate knob gains
 
