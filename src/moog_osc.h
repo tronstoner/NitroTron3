@@ -23,7 +23,10 @@ class MoogOsc {
   float Process(float freq) {
     float inc = freq / sr_;
     phase_ += inc;
+    // Bidirectional wrap: through-zero FM (Mode A K5-CW) drives freq negative,
+    // running the phase backward. No-op for the normal freq > 0 path.
     if (phase_ >= 1.f) phase_ -= 1.f;
+    else if (phase_ < 0.f) phase_ += 1.f;
 
     float out = 0.f;
 
@@ -70,6 +73,7 @@ class MoogOsc {
   float phase_ = 0.f;
 
   static float PolyBlep(float t, float dt) {
+    dt = fabsf(dt);  // through-zero FM can pass a negative increment
     if (t < dt) {
       t /= dt;
       return t + t - t * t - 1.f;

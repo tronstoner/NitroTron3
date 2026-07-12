@@ -18,6 +18,7 @@
 #include "glitch_zones.h"
 #include "bitcrush.h"
 #include "synth_osc_c.h"
+#include "synth_osc_a.h"
 #include "freq_shifter.h"
 
 using clevelandmusicco::Hothouse;
@@ -31,8 +32,7 @@ Hothouse hw;
 // ---------------------------------------------------------------------------
 // DSP — Mode A (Drone)
 // ---------------------------------------------------------------------------
-MoogOsc      osc1;
-MoogOsc      osc2;
+DroneOsc     drone_osc;  // Mode A — unison cloud (K5 CCW) + audio-rate FM (K5 CW)
 MoogLadder   ladder;     // Mode A
 MoogLadderV2 ladder_c_v2; // Mode C — SW2=UP, our tuned Moog (A/B winner)
 Phaser       phaser_c;    // Mode C — SW2=DOWN (3-band parallel BPF, internal LFO)
@@ -468,8 +468,7 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     case 2: wf = MoogOsc::SQUARE; break;  // DOWN
     default: break;
   }
-  osc1.waveform = wf;
-  osc2.waveform = wf;
+  drone_osc.SetWaveform(wf);
 
   // Drone sub-mode — from edit buffer SW2
   DroneMode drone_mode = DRONE_FIXED;
@@ -534,11 +533,8 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   ladder.SetCutoff(mod_cutoff + LADDER_CUTOFF_OFFSET);
   ladder.SetDrive(LADDER_DRIVE);
 
-  // K5: osc2 detune
+  // K5: bipolar — CCW = detuned unison cloud, noon = single osc, CW = audio-rate FM
   float k5 = RemapKnob(eb.knobs[4]);
-  int osc2_semi = MapDetuneKnob(k5, 12);
-  float osc2_level = (osc2_semi == 0 && k5 >= 0.46f && k5 <= 0.54f) ? 0.f : 1.f;
-  float freq2 = MidiToFreq(midi_note + static_cast<float>(osc2_semi));
 
   // K6: mix
   float mix = RemapKnob(eb.knobs[5]);
@@ -550,20 +546,14 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
     if (drone_mode != DRONE_FIXED) tracker.Feed(dry, env_val);
 
-    float o1 = osc1.Process(freq1);
-    float o2 = osc2.Process(freq2);
+    float osc_mix = drone_osc.Process(freq1, k5, dry, env_val);
     if (wf == MoogOsc::TRI) {
       float dyn_fold = fold_amount + env_val * ENV_FOLD_MOD * 5.f;
       if (dyn_fold > 1.f) dyn_fold = 1.f;
-      o1 = Wavefold(o1, dyn_fold);
-      o2 = Wavefold(o2, dyn_fold);
+      osc_mix = Wavefold(osc_mix, dyn_fold);
     }
-    o2 *= osc2_level;
 
     last_env += 0.1f * (env_val - last_env);
-
-    float gain = 1.f / sqrtf(1.f + osc2_level * osc2_level);
-    float osc_mix = (o1 + o2) * gain;
 
     float filtered = ladder.Process(osc_mix);
     float wet = filtered * EnvExpand(env_val) * OSC_GAIN;
@@ -1550,8 +1540,7 @@ int main() {
   hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
 
   float sr = hw.AudioSampleRate();
-  osc1.Init(sr);
-  osc2.Init(sr);
+  drone_osc.Init(sr);
   ladder.Init(sr);
   ladder_c_v2.Init(sr);
   phaser_c.Init(sr);

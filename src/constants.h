@@ -86,6 +86,40 @@ constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain (higher = more
 constexpr float LADDER_CUTOFF_OFFSET = 0.000f; // tone knob trim
 constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
 
+// --- Mode A bipolar K5 — unison cloud (CCW) + audio-rate FM (CW) ---
+// K5 CCW→noon: detuned unison "cloud" thickens toward full CCW, collapses to a
+// single clean osc at noon. Same staged fade-in as the Mode C hypersaw, but for
+// whatever waveform SW1 selects (saw / tri / square). Noon±deadzone = single osc.
+// K5 noon→CW: the input frequency-modulates the osc (exponential / through-zero
+// safe). Values are gentler than Mode C's lead ensemble — this is a bass drone.
+constexpr int   MODE_A_UNISON_VOICES = 7;      // 1 center + 3 symmetric pairs
+constexpr float MODE_A_UNISON_DETUNE_CENTS_MIN = 6.f;   // detune at cloud onset (just past noon)
+constexpr float MODE_A_UNISON_DETUNE_CENTS_MAX = 22.f;  // detune at K5 full CCW
+constexpr float MODE_A_UNISON_V3_END = 0.30f;  // innermost pair (v=2,4) fully in — "dual detuned"
+constexpr float MODE_A_UNISON_V5_END = 0.60f;  // middle pair (v=1,5) fully in — 5-voice
+constexpr float MODE_A_UNISON_V7_END = 0.85f;  // outermost pair (v=0,6) fully in — full 7-voice
+constexpr float MODE_A_UNISON_SPREAD[MODE_A_UNISON_VOICES] = {
+    -1.000f, -0.500f, -0.234f, 0.000f, 0.234f, 0.500f, 1.000f,  // JP-8000-style non-uniform ratios
+};
+constexpr float MODE_A_K5_DEADZONE   = 0.04f;  // ± around noon that holds a single clean osc
+
+// FM modulator conditioning: input → fundamental-isolation LP (→ near-sine) →
+// partial normalization → tanh soft-clip → DC block. Then LINEAR THROUGH-ZERO
+// FM: freq = f0 · (1 + depth · mod). Pitch-stable because the DC block forces a
+// zero-mean modulator (the ±Hz deviations average back to f0). With DEPTH_MAX>1
+// the multiplier can go negative — the oscillator phase runs backward through
+// zero rather than rectifying, which is the clean, violent, in-tune form of FM.
+constexpr float MODE_A_FM_LP_HZ     = 200.f;   // fundamental-round LP cutoff (2-pole)
+constexpr float MODE_A_FM_DRIVE     = 1.5f;    // tanh pre-gain (bound + sine-round + grit when slammed)
+constexpr float MODE_A_FM_DEPTH_MAX = 3.0f;    // max frequency swing at K5 full CW (±300%, through-zero)
+// Partial normalization of the modulator so FM intensity tracks how hard you
+// play. divisor = FLOOR + NORM·env:  NORM=0 → amplitude follows playing level
+// (loud = more FM); NORM=1 → constant AGC (level-independent). FLOOR sets the
+// quiet-end scale (smaller = more FM on soft notes).
+constexpr float MODE_A_FM_NORM      = 0.35f;   // 0 = full level-tracking, 1 = full AGC
+constexpr float MODE_A_FM_FLOOR     = 0.05f;   // divisor floor (quiet-playing modulator scale)
+constexpr float MODE_A_FM_DC_HZ     = 8.0f;    // modulator DC-block cutoff → zero-mean → stable pitch
+
 // --- Mode C — Schism ---
 // SW1=UP drive — K4 bipolar around noon. NOON = clean.
 //   CW  half: sine wavefolder (fold amount 0 → max).
