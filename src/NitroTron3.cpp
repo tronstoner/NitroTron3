@@ -531,7 +531,12 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float mod_cutoff = base_cutoff * (1.f + last_env * ENV_FILTER_MOD * 20.f);
   if (mod_cutoff > 10000.f) mod_cutoff = 10000.f;
   ladder.SetCutoff(mod_cutoff + LADDER_CUTOFF_OFFSET);
-  ladder.SetDrive(LADDER_DRIVE);
+  // Drive the ladder harder across the CCW half so closed settings are fat and
+  // saturated rather than just dampened. Baseline drive from noon (k4=0.5) up.
+  float ladder_drive = LADDER_DRIVE;
+  if (k4 < 0.5f)
+    ladder_drive += (0.5f - k4) * 2.f * (MODE_A_LADDER_DRIVE_CCW_MAX - LADDER_DRIVE);
+  ladder.SetDrive(ladder_drive);
 
   // K5: bipolar — CCW = detuned unison cloud, noon = single osc, CW = audio-rate FM
   float k5 = RemapKnob(eb.knobs[4]);

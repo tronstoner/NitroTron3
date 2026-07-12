@@ -82,7 +82,8 @@ constexpr float PITCH_FOLD_HYSTERESIS_SEMI = 0.6f;
 
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
-constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain (higher = more tanh warmth)
+constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain at noon..CW (higher = more tanh warmth)
+constexpr float MODE_A_LADDER_DRIVE_CCW_MAX = 8.000f; // K4 full-CCW ladder drive; ramps up from LADDER_DRIVE at noon so closed settings are fat/saturated, not just muffled
 constexpr float LADDER_CUTOFF_OFFSET = 0.000f; // tone knob trim
 constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
 
