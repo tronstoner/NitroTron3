@@ -15,9 +15,12 @@ public:
 
     // Start a grain. `loops` = number of times to play the fragment
     // (1 = once, >1 = stutter repeat).
+    // alpha_override < 0 → length-based Tukey (default). >= 0 → forced Tukey
+    // alpha (use 1.0 = full Hann for smooth grains so a 2× overlap sums to
+    // constant amplitude — no overlap-add tremolo).
     void Trigger(const RingBuffer& buf, size_t delay, size_t length,
                  bool reverse = false, float rate = 1.f, float gain = 1.f,
-                 int loops = 1) {
+                 int loops = 1, float alpha_override = -1.f) {
         size_t wp = buf.GetWritePos();
         size_t bl = buf.GetLength();
         float start;
@@ -37,11 +40,16 @@ public:
         loops_left_ = loops - 1;
         active_ = true;
 
-        // Tukey alpha: long grains → full Hann, short grains → mostly flat
+        // Tukey alpha: forced override (smooth grains → full Hann), else
+        // length-based (long grains → full Hann, short grains → mostly flat).
         float len_f = static_cast<float>(length);
-        alpha_ = 0.2f + (len_f - 960.f) / (9600.f - 960.f) * 0.8f;
-        if (alpha_ < 0.2f) alpha_ = 0.2f;
-        if (alpha_ > 1.0f) alpha_ = 1.0f;
+        if (alpha_override >= 0.f) {
+            alpha_ = alpha_override;
+        } else {
+            alpha_ = 0.2f + (len_f - 960.f) / (9600.f - 960.f) * 0.8f;
+            if (alpha_ < 0.2f) alpha_ = 0.2f;
+            if (alpha_ > 1.0f) alpha_ = 1.0f;
+        }
         taper_samples_ = static_cast<size_t>(alpha_ * len_f * 0.5f);
         // Looping grains need enough taper to fade cleanly at the loop point
         size_t min_taper = (loops > 1) ? 240 : 1;  // 5 ms minimum for loops

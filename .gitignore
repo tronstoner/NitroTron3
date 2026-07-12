@@ -3,4 +3,3 @@ build/
 .DS_Store
 .claude/*
 !.claude/skills
-docs/USER_MANUAL.pdf

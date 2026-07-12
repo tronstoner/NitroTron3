@@ -1,5 +1,10 @@
 # Task — Add Clouds Wet-Path Reverb to Mode B
 
+> **Completed — historical task doc.** The reverb shipped and matches the
+> behaviour described here; it lives vendored at `src/clouds/reverb.h` /
+> `fx_engine.h` (not the `src/reverb.h` path this plan proposed). Kept for
+> context.
+
 ## Goal
 
 Add the Mutable Instruments Clouds wet-path reverb (the small one used inside the granular processor, not the alt-mode reverb) to Mode B's wet bus. K5 becomes bipolar: CCW = reverb, center = off, CW = feedback (existing behavior preserved).

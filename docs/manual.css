@@ -142,6 +142,18 @@ p img.pedal-layout {
   page-break-inside: avoid;
 }
 
+/* Cover logo: the pedal illustration on the manual's front page. Centered,
+   sized as a logo rather than full-bleed so the intro text shares page 1. */
+img.cover,
+figure img.cover,
+p img.cover {
+  display: block;
+  margin: 0.4em auto 1.2em auto;
+  width: 78mm;
+  height: auto;
+  page-break-inside: avoid;
+}
+
 /* Pandoc wraps a standalone image-with-attributes in a <figure>. Style
    that wrapper too so spacing stays tight. */
 figure {

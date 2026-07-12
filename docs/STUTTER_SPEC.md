@@ -1,5 +1,10 @@
 # Stutter Mode — Behavioral Spec & Implementation Plan
 
+> **Retired / historical.** This `StutterVoice` engine is no longer active in
+> Mode B — the K2-noon direct-texture path now runs the main grain engine on the
+> live ring, and the stutter block is gated off (`if (false)` in
+> `ProcessGranular`). Kept for reference.
+
 ## Purpose
 
 Recreate the stutter behavior from commit `62a0971` (the "good sound") using the
