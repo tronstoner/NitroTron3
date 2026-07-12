@@ -621,17 +621,22 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   //    neutral so the rate rises as grains shorten (slow rate ⇔ long grains).
   //  CW/neutral: gc_sq shortens length neutral→480 (~10 ms); overlap thins
   //    neutral→1× as chaos rises.
+  // Overlap anchor is context-dependent. Echo (K2 engaged) + SW2 MID blooms
+  // (dense); everything else — including the whole K2-noon live/glitch zone —
+  // stays sparse. The K3-CW side still thins the anchor toward 1× for glitch.
+  float ovl_anchor = (!direct_texture && eb.sw2 == 1) ? GRAIN_OVERLAP_MID_ECHO
+                                                      : GRAIN_NEUTRAL_OVERLAP;
   size_t grain_len;
   float  overlap;
   if (cloud_mode) {
     float t = k3mag * k3mag;  // long/slow across most travel, short/fast near full CCW
     grain_len = static_cast<size_t>(
         (GRAIN_NEUTRAL_LEN + t * (CLOUD_LEN_MIN - GRAIN_NEUTRAL_LEN)) * k2_scale);
-    overlap = GRAIN_NEUTRAL_OVERLAP;
+    overlap = ovl_anchor;
   } else {
     grain_len = static_cast<size_t>(
         (GRAIN_NEUTRAL_LEN - gc_sq * (GRAIN_NEUTRAL_LEN - 480.f)) * k2_scale);
-    overlap = GRAIN_NEUTRAL_OVERLAP - glitch_amount * (GRAIN_NEUTRAL_OVERLAP - 1.f);
+    overlap = ovl_anchor - glitch_amount * (ovl_anchor - 1.f);
   }
   if (grain_len < GRAIN_MIN_LEN) grain_len = GRAIN_MIN_LEN;
   size_t base_interval = static_cast<size_t>(
@@ -989,12 +994,16 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
         if (loops > max_loops) loops = max_loops;
 
-        // Live-grain safety: with base_delay≈0 a grain would read past the
-        // write head unless it starts far enough back. Forward + unison/down
-        // needs ~0 (stays live); pitch-up needs grain_len·(ratio−1); reverse
-        // needs a full grain_len (the chunk must exist to play it backwards).
-        // Physical minimum — forward-unison therefore stays a dry passthrough.
-        if (live_grain) {
+        // Read-overrun safety (ALL grains). A forward grain consumes
+        // rate·grain_len source samples; a reverse grain starts a full
+        // grain_len ahead of its delay point. Either can read PAST the moving
+        // write head into stale 8 s-old ring content unless it starts far
+        // enough back: forward pitch-up needs delay ≥ grain_len·(ratio−1),
+        // reverse needs ≥ grain_len. Egregious in SW2 MID (RESONANCES reach
+        // +36 semi = 8× rate). Applied after the max_range clamp, so a
+        // pitched-up grain reaches into valid recent history rather than
+        // wrapping. Forward+unison/down needs ~0, so live stays a passthrough.
+        {
           size_t safety = reverse
               ? (grain_len + 64)
               : (pitch_ratio > 1.f

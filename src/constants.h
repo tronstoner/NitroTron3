@@ -405,7 +405,8 @@ constexpr float GRAIN_K3_DEADZONE  = 0.06f; // ±6% around noon → neutral stre
 //         thins neutral→1×, scatter/jitter/loops/reverse rise (glitch).
 // grain_len = k2_scale · length, so K2's timescale is an overall size zoom.
 constexpr float GRAIN_NEUTRAL_LEN     = 14400.f; // noon base grain length (300 ms, ×k2_scale)
-constexpr float GRAIN_NEUTRAL_OVERLAP = 2.0f;    // noon overlap — smooth minimum for Hann grains; shared anchor, both sides
+constexpr float GRAIN_NEUTRAL_OVERLAP = 2.0f;    // default overlap anchor — smooth minimum for Hann grains; sparse/glitch-friendly
+constexpr float GRAIN_OVERLAP_MID_ECHO = 6.0f;   // richer anchor for echo (K2 engaged) + SW2 MID — lets that mode bloom
 constexpr float CLOUD_LEN_MIN         = 480.f;   // full-CCW base length (10 ms, ×k2_scale)
 
 // Hard floor on grain length (safety clamp). The character sweep's own short
