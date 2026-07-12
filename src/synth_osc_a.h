@@ -11,9 +11,10 @@
 //
 //   CCW half   saw       : detuned unison "cloud" (Mode C hypersaw staging) —
 //                          voices fade in by pair, then detune widens
-//              triangle  : same cloud, but FM deepens along the CCW travel too
-//                          and is applied to EVERY voice — an FM'd ensemble
-//                          (triangle is the cleanest FM carrier)
+//              triangle  : Haible ensemble just-intonation stack — the 7 voices
+//                          play 1:1, 5:4, 4:3, 3:2, 5:3, 7:4, 2:1 × f0 within one
+//                          octave, upper voices gating in toward full CCW. No FM
+//                          here; FM is CW-only.
 //              square    : PWM (duty-cycle modulation) — same behaviour as the
 //                          Mode C rect voice, reusing the MODE_C_SYNTH_PWM_*
 //                          constants (depth ramps in first, then LFO rate)
@@ -38,6 +39,9 @@ class DroneOsc {
     fm_lp1_ = fm_lp2_ = 0.f;
     mod_dc_ = 0.f;
     lfo_phase_ = 0.f;
+    gate_coeff_ = 1.f - expf(-1.f / (MODE_A_HARM_GATE_MS * 0.001f * sr_));
+    gain_[0] = 1.f;   // root always on
+    for (int v = 1; v < MODE_A_UNISON_VOICES; v++) gain_[v] = 0.f;
     const int N = MODE_A_UNISON_VOICES;
     for (int v = 0; v < N; v++) {
       voices_[v].Init(sr);
@@ -67,28 +71,29 @@ class DroneOsc {
     mod_dc_ += dc_coeff_ * (raw - mod_dc_);
     const float mod = raw - mod_dc_;
 
-    // ----- K5 → CCW amount (cloud / PWM) or FM depth (CW half) -----
-    // Triangle (the cleanest FM carrier) also gets FM on its CCW side, applied
-    // to the whole cloud: going CCW thickens the ensemble AND deepens FM at once.
-    const bool  fm_all = (wf_ == MoogOsc::TRI);
+    // ----- K5 → CCW amount (cloud / harmonics / PWM) or FM depth (CW half) -----
+    // FM is CW-only. Triangle CCW is the harmonic stack alone (FM there buried
+    // the harmonics), so nothing sets fm_depth off the CCW side.
     float ccw_t    = 0.f;   // 0 at dead-zone edge → 1 at full CCW
     float fm_depth = 0.f;
     const float dz = MODE_A_K5_DEADZONE;
     if (k5 < 0.5f - dz) {
       const float lo = 0.5f - dz;
       ccw_t = (lo - k5) / lo;
-      if (fm_all) fm_depth = ccw_t * MODE_A_FM_DEPTH_MAX;
     } else if (k5 > 0.5f + dz) {
       const float hi = 0.5f + dz;
-      fm_depth = ((k5 - hi) / (1.f - hi)) * MODE_A_FM_DEPTH_MAX;
+      const float t  = (k5 - hi) / (1.f - hi);
+      // Power-curve the FM depth so subtle amounts get fine control near noon.
+      fm_depth = powf(t, MODE_A_FM_DEPTH_CURVE) * MODE_A_FM_DEPTH_MAX;
     }
 
     const int   N      = MODE_A_UNISON_VOICES;
     const int   center = N / 2;
-    // Linear through-zero FM. fm_mult applies to the center voice always, and to
-    // every cloud voice when fm_all (triangle). Pitch-stable: the modulator is
-    // zero-mean, so ±Hz swings average back to each voice's base frequency. At
-    // depth > 1 the multiplier goes negative and the phase runs backward.
+    // Linear through-zero FM (CW half only, so fm_depth = 0 elsewhere → fm_mult =
+    // 1). Applied to the saw/square center voice and, coherently, to every voice
+    // of the triangle harmonic stack. Pitch-stable: the modulator is zero-mean,
+    // so ±Hz swings average back to each voice's base frequency. At depth > 1 the
+    // multiplier goes negative and the phase runs backward.
     const float fm_mult    = 1.f + fm_depth * mod;
     const float center_frq = f0 * fm_mult;
 
@@ -117,7 +122,31 @@ class DroneOsc {
       return PulsePwm(phase, inc, duty) * OSC_SQR_GAIN;
     }
 
-    // ----- Saw / Tri: detuned unison cloud (+ FM on the center) -----
+    if (wf_ == MoogOsc::TRI) {
+      // ----- Triangle: Haible ensemble just-intonation stack -----
+      // Voice v plays MODE_A_HARM_RATIO[v]·f0 (a just-intoned chord). Root (v=0)
+      // always on; upper chord tones fade in staged along the CCW travel. fm_mult
+      // is ~1 here (FM is CW-only) but still scales every voice coherently.
+      const float f0h = f0 * exp2f(MODE_A_HARM_OCTAVE);   // whole series octave shift
+      float sum = 0.f, energy = 0.f;
+      for (int v = 0; v < N; v++) {
+        const float ratio = MODE_A_HARM_RATIO[v];
+        const float amp   = 1.f / powf(ratio, MODE_A_HARM_ROLLOFF);
+        // Hard on/off at an evenly-spaced knob threshold (stepped, not a slow
+        // fade); the gain is slewed a few ms so it's click-free but instant.
+        const float target = (v == 0 ||
+                              ccw_t >= static_cast<float>(v) / static_cast<float>(N))
+                                 ? amp : 0.f;
+        gain_[v] += gate_coeff_ * (target - gain_[v]);
+        const float g  = gain_[v];
+        const float vf = ratio * f0h * fm_mult;
+        sum    += voices_[v].Process(vf) * g;
+        energy += g * g;
+      }
+      return (energy > 0.f) ? sum / sqrtf(energy) : sum;
+    }
+
+    // ----- Saw: detuned unison cloud (+ FM on the center) -----
     float pair_amt[3] = {0.f, 0.f, 0.f};
     float detune      = MODE_A_UNISON_DETUNE_CENTS_MAX;  // only matters when a pair is audible
     if (ccw_t > 0.f) {
@@ -132,14 +161,10 @@ class DroneOsc {
 
     float sum = 0.f;
     for (int v = 0; v < N; v++) {
-      const int dist = (v < center) ? (center - v) : (v - center);
-      float vf;
-      if (v == center) {
-        vf = center_frq;
-      } else {
-        vf = f0 * exp2f(MODE_A_UNISON_SPREAD[v] * detune / 1200.f);
-        if (fm_all) vf *= fm_mult;   // FM the whole triangle ensemble
-      }
+      const int   dist = (v < center) ? (center - v) : (v - center);
+      const float vf   = (v == center)
+                             ? center_frq
+                             : f0 * exp2f(MODE_A_UNISON_SPREAD[v] * detune / 1200.f);
       const float s = voices_[v].Process(vf);
       const float w = (dist == 0) ? 1.f : pair_amt[dist - 1];
       sum += s * w;
@@ -158,6 +183,8 @@ class DroneOsc {
   float             fm_lp2_   = 0.f;
   float             mod_dc_   = 0.f;
   float             lfo_phase_ = 0.f;
+  float             gate_coeff_ = 0.f;
+  float             gain_[MODE_A_UNISON_VOICES] = {};   // triangle ensemble per-voice gate gains
   MoogOsc::Waveform wf_       = MoogOsc::SAW;
   MoogOsc           voices_[MODE_A_UNISON_VOICES];
 

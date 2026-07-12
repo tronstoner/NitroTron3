@@ -19,6 +19,7 @@
 #include "bitcrush.h"
 #include "synth_osc_c.h"
 #include "synth_osc_a.h"
+#include "mode_a_hpf.h"
 #include "freq_shifter.h"
 
 using clevelandmusicco::Hothouse;
@@ -34,6 +35,7 @@ Hothouse hw;
 // ---------------------------------------------------------------------------
 DroneOsc     drone_osc;  // Mode A — unison cloud (K5 CCW) + audio-rate FM (K5 CW)
 MoogLadder   ladder;     // Mode A
+ModeAHpf     mode_a_hpf; // Mode A — K4-CW high-pass (saw/square)
 MoogLadderV2 ladder_c_v2; // Mode C — SW2=UP, our tuned Moog (A/B winner)
 Phaser       phaser_c;    // Mode C — SW2=DOWN (3-band parallel BPF, internal LFO)
 Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
@@ -492,51 +494,63 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   } else if (drone_mode == DRONE_TRACK) {
     // Octave-locked, CONTINUOUS: fold the tracked pitch class into K2's octave
     // without quantizing to a semitone, so a detuned / microtonal bass is
-    // preserved. Hysteresis on the octave-wrap boundary (drone_fold_k) keeps a
-    // pitch hovering at the edge from flipping octaves.
+    // preserved. Fold boundary is G# (TRACKING_FOLD_NOTE), one semitone below A,
+    // so a played A sits mid-octave and doesn't flip when it drifts flat/sharp.
     static int drone_fold_k = 0;
     float cont = tracker.GetMidiNoteContinuous();
-    float folded = (cont - static_cast<float>(TRACKING_WRAP_NOTE))
+    float folded = (cont - static_cast<float>(TRACKING_FOLD_NOTE))
                    - 12.f * static_cast<float>(drone_fold_k);
     while (folded >= 12.f + PITCH_FOLD_HYSTERESIS_SEMI) { drone_fold_k++; folded -= 12.f; }
     while (folded <  0.f  - PITCH_FOLD_HYSTERESIS_SEMI) { drone_fold_k--; folded += 12.f; }
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
     int octave = Quantize(RemapKnob(eb.knobs[1]), 7);
-    int base_note = 12 + octave * 12;
-    midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + semi_offset) + folded;
+    int base_note = 12 + (octave + TRACKING_OCTAVE_SHIFT) * 12;
+    midi_note = static_cast<float>(base_note + TRACKING_FOLD_NOTE + semi_offset) + folded;
   } else {
     // DRONE_TRACK_DIRECT — continuous pitch so the drone follows bends/slides.
     float tracked = tracker.GetMidiNoteContinuous();
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
-    int oct_offset = Quantize(RemapKnob(eb.knobs[1]), 7) - 3;
+    // -1: K2 noon = A3 for a played A, matching the fixed drone and octave-locked.
+    int oct_offset = Quantize(RemapKnob(eb.knobs[1]), 7) - 1;
     midi_note = tracked + static_cast<float>(semi_offset + oct_offset * 12);
   }
 
   float freq1 = MidiToFreq(midi_note + fine);
 
-  // K4: tone / wavefold
+  // K4: bipolar filter (saw/square) or LP-sweep + wavefold (triangle)
   float k4 = RemapKnob(eb.knobs[3]);
   float fold_amount = 0.f;
-
   float base_cutoff;
+  float hpf_cutoff = MODE_A_HPF_MIN_HZ;   // transparent unless K4 is on the CW/HPF side
+
   if (wf == MoogOsc::TRI) {
+    // Triangle path unchanged: CCW LP sweep + CW wavefold; HPF stays transparent.
     float cutoff_knob = (k4 < 0.5f) ? (k4 * 2.f) : 1.f;
     base_cutoff = MapCutoff(cutoff_knob);
     if (k4 > 0.5f) fold_amount = (k4 - 0.5f) * 2.f;
+  } else if (k4 <= 0.5f) {
+    // Saw/square CCW: ladder LP from wide open (noon) down to a raised floor.
+    float t = k4 / 0.5f;   // 0 at full CCW, 1 at noon
+    base_cutoff = MODE_A_LP_FLOOR_HZ * powf(MODE_A_LP_MAX_HZ / MODE_A_LP_FLOOR_HZ, t);
   } else {
-    base_cutoff = MapCutoff(k4);
+    // Saw/square CW: ladder held wide open, HPF fades in to thin the low end.
+    base_cutoff = MODE_A_LP_MAX_HZ;
+    float t = (k4 - 0.5f) / 0.5f;   // 0 at noon, 1 at full CW
+    hpf_cutoff = MODE_A_HPF_MIN_HZ * powf(MODE_A_HPF_MAX_HZ / MODE_A_HPF_MIN_HZ, t);
   }
+
   float mod_cutoff = base_cutoff * (1.f + last_env * ENV_FILTER_MOD * 20.f);
   if (mod_cutoff > 10000.f) mod_cutoff = 10000.f;
   ladder.SetCutoff(mod_cutoff + LADDER_CUTOFF_OFFSET);
-  // Drive the ladder harder across the CCW half so closed settings are fat and
-  // saturated rather than just dampened. Baseline drive from noon (k4=0.5) up.
+  // Drive the ladder harder as the LP closes (noon → full CCW) so closed settings
+  // are fat/saturated rather than muffled. Not applied on the HPF (CW) side.
   float ladder_drive = LADDER_DRIVE;
   if (k4 < 0.5f)
     ladder_drive += (0.5f - k4) * 2.f * (MODE_A_LADDER_DRIVE_CCW_MAX - LADDER_DRIVE);
   ladder.SetDrive(ladder_drive);
+  mode_a_hpf.SetCutoff(hpf_cutoff);
 
   // K5: bipolar — CCW = detuned unison cloud, noon = single osc, CW = audio-rate FM
   float k5 = RemapKnob(eb.knobs[4]);
@@ -561,6 +575,7 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     last_env += 0.1f * (env_val - last_env);
 
     float filtered = ladder.Process(osc_mix);
+    filtered = mode_a_hpf.Process(filtered);   // K4-CW high-pass (transparent otherwise)
     float wet = filtered * EnvExpand(env_val) * OSC_GAIN;
 
     const float m = MixCurve(smix_a(mix));  // smoothed mix → no K6 zipper
@@ -1547,6 +1562,7 @@ int main() {
   float sr = hw.AudioSampleRate();
   drone_osc.Init(sr);
   ladder.Init(sr);
+  mode_a_hpf.Init(sr);
   ladder_c_v2.Init(sr);
   phaser_c.Init(sr);
   grendel_c.Init(sr);

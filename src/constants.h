@@ -74,11 +74,20 @@ constexpr uint32_t FS_BOOT_HOLD_MS     = 2000;  // both-FS hold → DFU bootload
 constexpr float KNOB_DIRTY_THRESHOLD   = 0.02f; // 2% travel to trigger dirty
 
 // Pitch tracking
-constexpr int TRACKING_WRAP_NOTE       = 9;     // octave-locked wrap point (9 = A)
+constexpr int TRACKING_WRAP_NOTE       = 9;     // base A reference (9 = A) for fixed-mode octave
 // Octave-locked tracking (Mode A SW2 MID) folds the CONTINUOUS pitch into K2's
-// octave (microtonal — no semitone quantizing). Dead-band (semitones) at the
-// octave-wrap boundary so a pitch hovering there doesn't flip octaves.
-constexpr float PITCH_FOLD_HYSTERESIS_SEMI = 0.6f;
+// octave (microtonal — no semitone quantizing). The fold boundary is placed one
+// semitone BELOW A (G# = 8), not on A: A is a note you actually play, and a note
+// sitting on the boundary flips octaves when it drifts slightly flat/sharp.
+// Referencing the fold to G# keeps a played A a semitone inside the octave (folds
+// to +1), so it's stable — while still landing A → A3 at K2 noon (matching fixed).
+constexpr int TRACKING_FOLD_NOTE       = 8;     // G#, one semitone below A
+// 0 = stateless fold: the octave is a pure function of the played pitch. A
+// non-zero dead-band (semitones) would add hysteresis at the boundary, but that
+// makes the octave direction-dependent.
+constexpr float PITCH_FOLD_HYSTERESIS_SEMI = 0.0f;
+// Octave-locked register shift (octaves), on top of the fold. 0 = A3 at K2 noon.
+constexpr int TRACKING_OCTAVE_SHIFT    = 0;
 
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
@@ -86,6 +95,20 @@ constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain at noon..CW (h
 constexpr float MODE_A_LADDER_DRIVE_CCW_MAX = 8.000f; // K4 full-CCW ladder drive; ramps up from LADDER_DRIVE at noon so closed settings are fat/saturated, not just muffled
 constexpr float LADDER_CUTOFF_OFFSET = 0.000f; // tone knob trim
 constexpr float DRY_TRIM         = 1.000f;   // dry path level trim
+
+// --- Mode A K4 bipolar filter (saw / square) ---
+// noon → CCW: Moog ladder low-pass, cutoff LP_MAX (open, at noon) → LP_FLOOR
+//   (full CCW). FLOOR is raised well above the old 80 Hz — the fully-closed
+//   quarter was never used. Drive still ramps up toward CCW (see above).
+// noon → CW : ladder held wide open + a 2-pole HPF fades in HPF_MIN (transparent,
+//   at noon) → HPF_MAX (full CW), thinning the low end. No drive/loudness comp.
+// Triangle keeps its own path (CCW LP sweep + CW wavefold); its HPF stays at
+// HPF_MIN (below bass range → transparent), so the serial LP→HPF chain is shared.
+constexpr float MODE_A_LP_FLOOR_HZ = 250.f;   // ladder cutoff at K4 full CCW (saw/square)
+constexpr float MODE_A_LP_MAX_HZ   = 8000.f;  // ladder cutoff at noon (wide open)
+constexpr float MODE_A_HPF_MIN_HZ  = 20.f;    // HPF cutoff at noon (transparent, low end intact)
+constexpr float MODE_A_HPF_MAX_HZ  = 2000.f;  // HPF cutoff at K4 full CW (thin)
+constexpr float MODE_A_HPF_SMOOTH  = 0.25f;   // per-block cutoff slew (click-free travel)
 
 // --- Mode A bipolar K5 — unison cloud (CCW) + audio-rate FM (CW) ---
 // K5 CCW→noon: detuned unison "cloud" thickens toward full CCW, collapses to a
@@ -104,6 +127,19 @@ constexpr float MODE_A_UNISON_SPREAD[MODE_A_UNISON_VOICES] = {
 };
 constexpr float MODE_A_K5_DEADZONE   = 0.04f;  // ± around noon that holds a single clean osc
 
+// Triangle K5 CCW is NOT the unison cloud — the 7 voices become a Haible
+// ensemble-style just-intonation stack (voice v = MODE_A_HARM_RATIO[v] × f0).
+// "Second just ratio scale" — 7 just ratios within one octave, one per voice:
+// 1:1, 5:4, 4:3, 3:2, 5:3, 7:4, 2:1 (root, maj3, 4th, 5th, maj6, harm-7th, oct).
+// Ascending, played note the bottom. Upper voices gate in toward full CCW;
+// amplitude = 1/ratio^ROLLOFF (1.0 = gentle rolloff up the stack; 0 = equal-level).
+constexpr float MODE_A_HARM_RATIO[MODE_A_UNISON_VOICES] = {
+    1.0f, 1.25f, 1.3333333f, 1.5f, 1.6666667f, 1.75f, 2.0f,
+};
+constexpr float MODE_A_HARM_ROLLOFF  = 1.0f;
+constexpr float MODE_A_HARM_GATE_MS  = 3.0f;   // ensemble voice on/off slew (ms): stepped, near-instant, click-free
+constexpr float MODE_A_HARM_OCTAVE   = 1.0f;   // shift the whole triangle series up N octaves (1 = one octave)
+
 // FM modulator conditioning: input → fundamental-isolation LP (→ near-sine) →
 // partial normalization → tanh soft-clip → DC block. Then LINEAR THROUGH-ZERO
 // FM: freq = f0 · (1 + depth · mod). Pitch-stable because the DC block forces a
@@ -113,6 +149,7 @@ constexpr float MODE_A_K5_DEADZONE   = 0.04f;  // ± around noon that holds a si
 constexpr float MODE_A_FM_LP_HZ     = 200.f;   // fundamental-round LP cutoff (2-pole)
 constexpr float MODE_A_FM_DRIVE     = 1.5f;    // tanh pre-gain (bound + sine-round + grit when slammed)
 constexpr float MODE_A_FM_DEPTH_MAX = 3.0f;    // max frequency swing at K5 full CW (±300%, through-zero)
+constexpr float MODE_A_FM_DEPTH_CURVE = 3.0f;  // depth = MAX·travel^curve; >1 = finer control near noon, intensity builds toward CW
 // Partial normalization of the modulator so FM intensity tracks how hard you
 // play. divisor = FLOOR + NORM·env:  NORM=0 → amplitude follows playing level
 // (loud = more FM); NORM=1 → constant AGC (level-independent). FLOOR sets the
