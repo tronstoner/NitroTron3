@@ -175,15 +175,23 @@ def switch(cx: int, cy: int, sw_label: str, positions: list, pos: str = "MID") -
     else:
         sw_id, sw_fn = sw_label, ""
 
-    act_y = {"UP": -29, "MID": -10, "DOWN": 9}.get(pos, -10)
+    # Metal lever toggle: fixed body + a bat handle that points UP / DOWN, or is
+    # seen end-on (centred) for MID — so SW3 reads the mode this diagram covers.
+    if pos == "UP":
+        bat = ('<rect x="-5" y="-40" width="10" height="24" rx="4" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
+               '<circle cx="0" cy="-42" r="6" fill="#b7bbbf" stroke="#222" stroke-width="1"/>')
+    elif pos == "DOWN":
+        bat = ('<rect x="-5" y="16" width="10" height="24" rx="4" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
+               '<circle cx="0" cy="42" r="6" fill="#b7bbbf" stroke="#222" stroke-width="1"/>')
+    else:  # MID — bat pointing at the viewer (centre detent)
+        bat = ('<circle cx="0" cy="0" r="8" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
+               '<circle cx="0" cy="0" r="3.5" fill="#b7bbbf" stroke="#222" stroke-width="0.8"/>')
     base = f"""
   <g transform="translate({cx},{cy})">
-    <rect x="-15" y="-30" width="30" height="60" rx="7"
-          fill="#8f9498" stroke="#333" stroke-width="1.5"/>
-    <rect x="-13" y="{act_y}" width="26" height="20" rx="5"
-          fill="#e4e6e8" stroke="#222" stroke-width="1.3"/>
-    <line x1="-7" y1="{act_y + 7}" x2="7" y2="{act_y + 7}" stroke="#9aa0a4" stroke-width="1.4"/>
-    <line x1="-7" y1="{act_y + 13}" x2="7" y2="{act_y + 13}" stroke="#9aa0a4" stroke-width="1.4"/>
+    <rect x="-14" y="-22" width="28" height="44" rx="6"
+          fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
+    <rect x="-14" y="-6" width="28" height="12" fill="#868c90" stroke="#333" stroke-width="0.8"/>
+    {bat}
   </g>
   <text x="{cx}" y="{SWITCH_LABEL_Y}" text-anchor="middle"
         font-size="{FS_SWITCH_LABEL}" font-weight="700" fill="#111">{sw_id}</text>
