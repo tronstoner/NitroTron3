@@ -9,8 +9,8 @@
 // Buchla Source-of-Uncertainty model: random trigger timing, randomised
 // per-event parameters. Trigger rate is gated by input envelope so a
 // silent input produces silence (no events fire, dry passes through).
-// During an event the wet/dry mix is scaled by the live envelope, so
-// the glitch only speaks while the bass is playing.
+// During an event the mix ramps to full wet and back (GLITCH_RAMP_SAMPLES);
+// the envelope is only a gate for arming events, not a wet-mix scaler.
 //
 // Reactive triggering: a note-on detected upstream (rising edge on the input
 // envelope) can force an event on the attack, so the glitch answers our playing
