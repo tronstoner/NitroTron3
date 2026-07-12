@@ -609,17 +609,16 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // K2 timescale factor: CCW = 0.5× (shorter/faster), CW = 2× (longer/slower)
   float k2_scale = 0.5f + k2 * 1.5f;
 
-  // Sqrt curve: repeats kick in early — 2 loops by K3≈0.05, 3 by K3≈0.10.
   float gc_sq = grain_character * grain_character;
-  float gc_sqrt = sqrtf(grain_character);
-  int max_loops = 1 + static_cast<int>(gc_sqrt * 7.f);  // 1 to 8
 
   // Grain length + emission density — one K3 axis through the noon origin
   // (GRAIN_NEUTRAL_LEN / GRAIN_NEUTRAL_OVERLAP). At k3mag=0 both branches equal
   // the origin, so crossing noon is seamless in either direction.
   //  Cloud (CCW): k3mag² shortens length neutral→CLOUD_LEN_MIN; overlap held at
   //    neutral so the rate rises as grains shorten (slow rate ⇔ long grains).
-  //  CW/neutral: gc_sq shortens length neutral→480 (~10 ms); overlap thins
+  //  CW/neutral: gc_sq shortens the *block base* only to a coarse floor
+  //    (GRAIN_CW_LEN_FLOOR) — the short fast-stutter grains come from per-grain
+  //    variation at trigger, not from collapsing the base. Overlap thins
   //    neutral→1× as chaos rises.
   // Overlap anchor is context-dependent. Echo (K2 engaged) + SW2 MID blooms
   // (dense); everything else — including the whole K2-noon live/glitch zone —
@@ -635,7 +634,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     overlap = ovl_anchor;
   } else {
     grain_len = static_cast<size_t>(
-        (GRAIN_NEUTRAL_LEN - gc_sq * (GRAIN_NEUTRAL_LEN - 480.f)) * k2_scale);
+        (GRAIN_NEUTRAL_LEN - gc_sq * (GRAIN_NEUTRAL_LEN - GRAIN_CW_LEN_FLOOR)) * k2_scale);
     overlap = ovl_anchor - glitch_amount * (ovl_anchor - 1.f);
   }
   if (grain_len < GRAIN_MIN_LEN) grain_len = GRAIN_MIN_LEN;
@@ -997,8 +996,33 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         if (freq_shift_active) pitch_ratio = 1.f;  // SW2 DOWN: buffer pitch held at unison
         float comp = 1.f / sqrtf(pitch_ratio);
 
-        int loops = 1 + static_cast<int>(RandFloat() * static_cast<float>(max_loops));
-        if (loops > max_loops) loops = max_loops;
+        // Per-grain length variation → randomized stutter frequency. Scatter
+        // THIS grain below the coarse block base by a skewed factor whose depth
+        // grows with glitch_amount: most grains stay near base, but occasionally
+        // one is dramatically short (a fast CD-hang). Repeats are COUPLED to the
+        // result — repeats ≈ base_len / this_len — so a short grain gets many
+        // reps (sustained fast hang) and a long grain gets one; the footprint
+        // stays ≈ one block base length while the rate varies grain-to-grain.
+        // Geometric shortening toward an ABSOLUTE audio-rate length (LEN_MIN),
+        // not a fraction of base — that is what turns a slow CD-hang into a
+        // pitched buzz (brrr→friii→kriii) as the repeat cycle climbs past ~20 Hz.
+        // t is skewed toward 0 (most grains near base) and its reach grows with
+        // glitch_amount, so the buzzes get higher/more frequent as K3 opens.
+        float len_var = powf(RandFloat(), GRAIN_LEN_VAR_SKEW);   // 0..1, mostly small
+        // Reach curve: glitch_amount^gamma keeps mid-CW percussive and bends into
+        // audio-rate only near full CW (gamma>1). DEPTH scales the full extent.
+        float reach = powf(glitch_amount, GRAIN_STUTTER_REACH_GAMMA);
+        float t = reach * GRAIN_LEN_VAR_DEPTH * len_var;         // 0..1 shorten strength
+        float base_f = static_cast<float>(grain_len);
+        float min_f = GRAIN_STUTTER_LEN_MIN < base_f ? GRAIN_STUTTER_LEN_MIN : base_f;
+        size_t this_len = static_cast<size_t>(base_f * powf(min_f / base_f, t));
+        if (this_len < static_cast<size_t>(GRAIN_STUTTER_LEN_MIN))
+            this_len = static_cast<size_t>(GRAIN_STUTTER_LEN_MIN);
+        // Repeats fill ≈ one block-base footprint: short grain → many reps
+        // (sustained buzz), long grain → one. Rate varies grain-to-grain.
+        int loops = static_cast<int>(base_f / static_cast<float>(this_len) + 0.5f);
+        if (loops < 1) loops = 1;
+        if (loops > GRAIN_STUTTER_MAX_LOOPS) loops = GRAIN_STUTTER_MAX_LOOPS;
 
         // Read-overrun safety (ALL grains). A forward grain consumes
         // rate·grain_len source samples; a reverse grain starts a full
@@ -1011,9 +1035,9 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         // wrapping. Forward+unison/down needs ~0, so live stays a passthrough.
         {
           size_t safety = reverse
-              ? (grain_len + 64)
+              ? (this_len + 64)
               : (pitch_ratio > 1.f
-                    ? static_cast<size_t>(grain_len * (pitch_ratio - 1.f)) + 64
+                    ? static_cast<size_t>(this_len * (pitch_ratio - 1.f)) + 64
                     : 64);
           if (delay < safety) delay = safety;
         }
@@ -1030,7 +1054,7 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
         }
         if (voice >= 0) {
           grain_voices[voice].Trigger(
-              grain_ring, delay, grain_len, reverse, pitch_ratio, comp, loops, grain_alpha);
+              grain_ring, delay, this_len, reverse, pitch_ratio, comp, loops, grain_alpha);
         }
 
         float jitter = (RandFloat() * 2.f - 1.f) * glitch_amount * 0.8f;

@@ -419,6 +419,24 @@ constexpr int   GRAIN_PITCH_HOLD_MAX   = 6;
 constexpr float PITCH_REROLL_FULL_CW   = 0.09f; // k3mag for full change on CW  (~1:00)
 constexpr float PITCH_REROLL_FULL_CCW  = 0.32f; // k3mag for full change on CCW (~10:00)
 
+// Per-grain length variation (K3-CW character). Each grain's length is scattered
+// BELOW the coarse block base by a skewed random factor, so the loop/stutter
+// FREQUENCY (≈ 1/length) feels random instead of locking to the knob value. The
+// shortening is GEOMETRIC toward an absolute audio-rate floor (LEN_MIN), so as a
+// grain gets short its repeat cycle crosses ~20 Hz into the audio range and the
+// CD-hang becomes a pitched buzz (brrr ≈ 100 Hz → kriii ≈ 1 kHz). Skew keeps
+// these rare at low K3; DEPTH·glitch_amount sets how far toward LEN_MIN the
+// knob reaches — so the knob raises the CEILING (higher, more frequent buzzes)
+// while the typical grain stays coarse — contrast, not a uniform speed-up.
+//  Repeats are COUPLED to the length: repeats ≈ base_len / this_len, so a short
+//  grain gets many reps (sustains the buzz), a long grain gets one.
+constexpr float GRAIN_CW_LEN_FLOOR      = 4800.f; // coarse block-base short-end (~100 ms) — the typical grain
+constexpr float GRAIN_STUTTER_LEN_MIN   = 32.f;   // shortest per-grain length (~1.5 kHz repeat) — audio-rate buzz
+constexpr float GRAIN_LEN_VAR_DEPTH     = 1.0f;   // how far toward LEN_MIN full CW reaches (1 = all the way)
+constexpr float GRAIN_STUTTER_REACH_GAMMA = 3.0f; // knob→reach curve: >1 keeps mid-CW percussive, bends to audio-rate only near full CW
+constexpr float GRAIN_LEN_VAR_SKEW      = 1.5f;   // >1 → short/buzzing grains stay rare (raises ceiling not floor)
+constexpr int   GRAIN_STUTTER_MAX_LOOPS = 200;    // cap on length-coupled repeats (lets a short grain sustain a tone)
+
 // Hard floor on grain length (safety clamp). The character sweep's own short
 // end is 480 samples (≈10 ms), set in the grain_len formula.
 constexpr size_t GRAIN_MIN_LEN = 64;
