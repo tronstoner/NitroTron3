@@ -402,28 +402,28 @@ constexpr float GRAIN_REVERSE_BIAS = 0.6f;
 // sides are one continuous grain axis through the noon origin (see below).
 // See docs/MODE_B_DISCOVERY.md.
 constexpr float GRAIN_K3_DEADZONE  = 0.06f; // ±6% around noon → neutral stream
-// K3 is a single grain axis through the noon origin: the longest, coherent-
-// stream grains. Both sides depart from that same anchor (GRAIN_NEUTRAL_LEN,
-// GRAIN_NEUTRAL_OVERLAP) so crossing noon is seamless:
-//  CCW  — shorten cleanly: k3mag² lerps length neutral→CLOUD_LEN_MIN, overlap
-//         held at neutral so the emission RATE rises as grains shorten (cloud).
+// K3 is a single grain axis through the noon origin (GRAIN_NEUTRAL_LEN,
+// GRAIN_NEUTRAL_OVERLAP). Both sides depart from that same anchor so crossing
+// noon is seamless:
+//  CCW  — lengthen/slow: k3mag lerps length neutral→CLOUD_LEN_MAX, overlap held
+//         at neutral so the emission RATE falls as grains grow — a long, slow
+//         smear that leans on the deep buffer (cloud).
 //  CW   — shorten with chaos: gc_sq lerps length neutral→GRAIN_MIN_LEN, overlap
 //         thins neutral→1×, scatter/jitter/loops/reverse rise (glitch).
 // grain_len = k2_scale · length, so K2's timescale is an overall size zoom.
 constexpr float GRAIN_NEUTRAL_LEN     = 14400.f; // noon base grain length (300 ms, ×k2_scale)
 constexpr float GRAIN_NEUTRAL_OVERLAP = 2.0f;    // default overlap anchor — smooth minimum for Hann grains; sparse/glitch-friendly
 constexpr float GRAIN_OVERLAP_MID_ECHO = 6.0f;   // richer anchor for echo (K2 engaged) + SW2 MID — lets that mode bloom
-constexpr float CLOUD_LEN_MIN         = 480.f;   // full-CCW base length (10 ms, ×k2_scale)
+constexpr float CLOUD_LEN_MAX         = 96000.f; // full-CCW base length (2 s, ×k2_scale) — long slow smear
 
 // SW2 MID pitch re-roll: how many grains share a random pitch before a new one
-// is rolled from the ±1 resonance window. Held this long at K3 noon (tonal),
-// scaling down to 1 (re-roll every grain, chaotic shimmer) as k3mag reaches the
-// per-side threshold below. Asymmetric: CW (glitch) hits full change just off
-// noon (~1:00); CCW (cloud) reaches it further out (~10:00), keeping a longer
-// tonal region across the cloud sweep.
-constexpr int   GRAIN_PITCH_HOLD_MAX   = 6;
-constexpr float PITCH_REROLL_FULL_CW   = 0.09f; // k3mag for full change on CW  (~1:00)
-constexpr float PITCH_REROLL_FULL_CCW  = 0.32f; // k3mag for full change on CCW (~10:00)
+// is rolled from the ±1 resonance window. Baseline is change-EVERY-grain
+// (interval 1), which holds across all of neutral + the CW glitch half — the
+// shimmer re-rolls every grain there. Going CCW (cloud) the pitch is HELD longer
+// and longer, interval ramping 1 → GRAIN_PITCH_HOLD_MAX at full CCW, so the slow
+// smear settles onto stable, tonal pitches. (=1 disables the hold: change
+// every grain across the whole range, CCW cloud included.)
+constexpr int   GRAIN_PITCH_HOLD_MAX   = 1;
 
 // Per-grain length variation (K3-CW character). Each grain's length is scattered
 // BELOW the coarse block base by a skewed random factor, so the loop/stutter

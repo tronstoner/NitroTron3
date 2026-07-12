@@ -616,8 +616,8 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // Grain length + emission density — one K3 axis through the noon origin
   // (GRAIN_NEUTRAL_LEN / GRAIN_NEUTRAL_OVERLAP). At k3mag=0 both branches equal
   // the origin, so crossing noon is seamless in either direction.
-  //  Cloud (CCW): k3mag² shortens length neutral→CLOUD_LEN_MIN; overlap held at
-  //    neutral so the rate rises as grains shorten (slow rate ⇔ long grains).
+  //  Cloud (CCW): k3mag lengthens neutral→CLOUD_LEN_MAX; overlap held at neutral
+  //    so the emission rate falls as grains grow — a long, slow smear.
   //  CW/neutral: gc_sq shortens the *block base* only to a coarse floor
   //    (GRAIN_CW_LEN_FLOOR) — the short fast-stutter grains come from per-grain
   //    variation at trigger, not from collapsing the base. Overlap thins
@@ -630,9 +630,12 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   size_t grain_len;
   float  overlap;
   if (cloud_mode) {
-    float t = k3mag * k3mag;  // long/slow across most travel, short/fast near full CCW
+    // CCW lengthens grains neutral→CLOUD_LEN_MAX (linear, felt across the whole
+    // travel). Overlap held at neutral, so the emission RATE falls as grains
+    // grow — a long, slow smear that leans on the deep buffer.
+    float t = k3mag;
     grain_len = static_cast<size_t>(
-        (GRAIN_NEUTRAL_LEN + t * (CLOUD_LEN_MIN - GRAIN_NEUTRAL_LEN)) * k2_scale);
+        (GRAIN_NEUTRAL_LEN + t * (CLOUD_LEN_MAX - GRAIN_NEUTRAL_LEN)) * k2_scale);
     overlap = ovl_anchor;
   } else {
     grain_len = static_cast<size_t>(
@@ -1001,20 +1004,19 @@ void ProcessGranular(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
         // Pitch re-roll. UP holds a fixed interval (only changes when K1
         // moves — deterministic, so no per-grain re-roll). MID/DOWN roll a new
-        // random pick from the ±1 RESONANCES window every `reroll` grains: held
-        // GRAIN_PITCH_HOLD_MAX grains at K3 noon (tonal), scaling to 1 (every
-        // grain) at the K3 extremes. Coupled to k3mag so both the CCW cloud and
-        // CW glitch shimmer faster as you push out. K1-range for change
-        // detection uses the mode's effective span so UP doesn't spuriously
-        // re-roll when K1 clamps above +12.
+        // random pick from the ±1 RESONANCES window every `reroll` grains:
+        // change every grain (interval 1) across neutral + the CW glitch half,
+        // then HELD progressively longer down the CCW cloud (up to
+        // GRAIN_PITCH_HOLD_MAX) so the slow smear settles onto stable pitches.
+        // K1-range for change detection uses the mode's effective span so UP
+        // doesn't spuriously re-roll when K1 clamps above +12.
         int k1_semi_now = (harmony == 0) ? K1ToSemi(k1, 12) : K1ToSemi(k1, 36);
         bool k1_changed = (k1_semi_now != harmony_cached_k1_semi);
-        // Re-roll interval ramps MAX (held, at noon) → 1 (every grain) as k3mag
-        // reaches the per-side full-change threshold (CW earlier than CCW).
-        float reroll_full = cloud_mode ? PITCH_REROLL_FULL_CCW : PITCH_REROLL_FULL_CW;
-        float reroll_t = (k3mag < reroll_full) ? (k3mag / reroll_full) : 1.f;
-        int reroll_interval = 1 + static_cast<int>(
-            (1.f - reroll_t) * static_cast<float>(GRAIN_PITCH_HOLD_MAX - 1));
+        // Baseline change-every-grain; CCW ramps the hold interval 1 →
+        // GRAIN_PITCH_HOLD_MAX with k3mag (longer holds the further out you go).
+        int reroll_interval = cloud_mode
+            ? 1 + static_cast<int>(k3mag * static_cast<float>(GRAIN_PITCH_HOLD_MAX - 1))
+            : 1;
         if (k1_changed || (harmony != 0 && harmony_hold_counter <= 0)) {
           harmony_cached_ratio = GrainPitchRatio(harmony, k1);
           harmony_cached_k1_semi = k1_semi_now;
