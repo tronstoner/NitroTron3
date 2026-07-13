@@ -4,6 +4,36 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+## v0.3.1 — 2026-07-13 — Pre-release
+
+Focused on **BORDUN (Mode A)** — a rework of the oscillator character (K5) and
+tone (K4) knobs, plus pitch-tracking refinements shared with Mode C.
+
+### Added
+
+- **BORDUN — K5 is now a per-waveform "Voice" knob.** Center is a single clean
+  oscillator. Clockwise adds **audio-rate FM** — your input frequency-modulates
+  the oscillator (through-zero, so it stays in tune while getting clangorous);
+  intensity grows with the knob and with how hard you play. Counter-clockwise
+  thickens the oscillator differently per waveform: **saw** = detuned unison
+  cloud, **triangle** = just-intonation ensemble (a chord that builds up voice by
+  voice), **square** = PWM (duty-cycle modulation). Replaces the old second-
+  oscillator detune.
+- **BORDUN — K4 is now a bipolar filter.** Center = filter wide open. Toward CCW
+  the Moog ladder low-pass closes and drives harder (fat, saturated dark tones);
+  toward CW a high-pass fades in, thinning the low end. Triangle keeps its
+  cutoff-then-wavefold behaviour on this knob.
+
+### Changed
+
+- **Continuous pitch tracking.** Direct-track (Mode A) and the Mode C synth
+  oscillator now follow the played pitch continuously — bends, slides and
+  microtonal tuning come through instead of snapping to semitones.
+- **BORDUN — octave-locked tracking is steadier and octave-aligned.** The octave
+  fold boundary sits a semitone below A, so playing an A no longer flips octaves
+  when your bass drifts slightly out of tune; and all three drone modes (fixed /
+  octave-locked / direct) now agree on the octave at noon.
+
 ## v0.3 — 2026-07-12 — Pre-release
 
 Focused on **SPRAWL (Mode B)** — a bipolar K2/K3 redesign that gives the

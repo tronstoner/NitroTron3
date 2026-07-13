@@ -1,8 +1,16 @@
 # Mode A — Bordun — Implementation Spec
 
+> **Status:** original implementation spec, kept for the oscillator/ladder/env
+> DSP detail, which is still accurate. The **controls have moved on** since:
+> K4 is now a bipolar low-pass/high-pass filter, K5 is a per-waveform voice knob
+> (unison cloud / just-intonation ensemble / PWM) plus audio-rate FM, K6 is mix,
+> and there is no separate envelope-sensitivity knob. FM is now a core feature
+> (see below). The as-built K4/K5/tracking design lives in `MODE_A_DISCOVERY.md`;
+> the user-facing control tables are in `README.md` and `docs/USER_MANUAL.md`.
+
 Inspired by the Moog MoogerFooger FreqBox (MF-102). An internal oscillator, amplitude-controlled by an envelope follower tracking the bass input, filtered through a Moog-style ladder, mixed back with the dry signal.
 
-**Not** included: oscillator sync, FM modulation. The FreqBox's sync/FM features are intentionally dropped — this mode focuses on the drone/subharmonic character alone.
+**FM is included** (K5 clockwise — the FreqBox's audio-rate FM, reintroduced as a linear through-zero modulation from the conditioned input). Oscillator hard-sync is not modelled.
 
 ---
 
@@ -197,12 +205,12 @@ Mix knob (K5 in normal mode), continuous 0.0–1.0.
 
 | Control | Function | Notes |
 |---|---|---|
-| K1 | Semitone | C–C, 12 quantized steps. Physical knob range divided into 12 equal zones |
-| K2 | Octave | 5 positions, C1–C5, quantized |
+| K1 | Pitch / interval | ±12 semitone offset, center dead zone. Fixed: center = A. Track: adds an interval |
+| K2 | Octave | 7 steps. Fixed: base octave; octave-locked: target octave; direct: octave offset |
 | K3 | Fine tune | ±50 cents, continuous |
-| K4 | Tone | Ladder filter cutoff, continuous |
-| K5 | Mix | Dry / oscillator blend, continuous |
-| K6 | Envelope sensitivity | Input gain before follower, continuous |
+| K4 | Filter | Bipolar. CCW = ladder low-pass closing (with rising drive); CW = high-pass thinning. TRI: CW folds instead |
+| K5 | Voice | Bipolar. Center = single osc. CW = audio-rate FM. CCW = unison cloud (saw) / just ensemble (tri) / PWM (square) |
+| K6 | Mix | Dry / oscillator blend, continuous |
 | Toggle 1 | Waveform | Saw / Triangle / Square |
 | Toggle 2 | Drone mode | Fixed pitch / Octave-locked tracking / Direct tracking |
 | Toggle 3 | Mode | Drone (active) / Granular / Freq Shift |

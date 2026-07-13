@@ -70,10 +70,13 @@ documented in its own section below.
 
 # BORDUN (Mode A)
 
-A two-oscillator voice (waveform via SW1) tracks the bass input, gated
-by an envelope follower so the drone only sounds while you play. A Moog
-ladder filter shapes the tone; in triangle mode K4 crosses over into
-wavefolding past noon. SW2 picks the pitch source: fixed, octave-locked
+An oscillator voice (waveform via SW1) tracks the bass input, gated by
+an envelope follower so the drone only sounds while you play. K5 shapes
+the oscillator — clockwise adds audio-rate FM from your input, counter-
+clockwise thickens it per waveform (unison cloud, just-intonation
+ensemble, or PWM). K4 is a bipolar filter: a Moog ladder low-pass toward
+CCW and a high-pass toward CW (in triangle mode the CW side folds the
+waveform instead). SW2 picks the pitch source: fixed, octave-locked
 tracking, or direct tracking.
 
 ![Mode A pedal layout](pedal-mode-a.svg){.pedal-layout}
@@ -82,14 +85,14 @@ tracking, or direct tracking.
 
 | CONTROL | DESCRIPTION | NOTES |
 |-|-|-|
-| KNOB 1 | Pitch | ±12 semitone offset, centered with deadzone. **Fixed**: center = A, also sets the wrap point for tracking. **Track**: center = tracked note, wraps at the note set in fixed mode |
-| KNOB 2 | Octave | 7 positions (C-1 – C5). **Octave-locked**: sets target octave. **Direct**: ±3 octave offset from tracked pitch |
-| KNOB 3 | Fine tune | ±50 cents continuous (osc 1 only — creates beating with osc 2) |
-| KNOB 4 | Tone | SAW/SQ: full ladder cutoff (80 Hz – 8 kHz). TRI: CCW → noon = cutoff, noon → CW = wavefolding (filter stays fully open) |
-| KNOB 5 | Detune | Center = off (deadzone). Outside center = ±1–12 semitone steps. Not affected by fine tune |
+| KNOB 1 | Pitch / interval | ±12 semitone offset, centered with deadzone. **Fixed**: center = A (drone root). **Track**: adds an interval to the tracked pitch |
+| KNOB 2 | Octave | 7 steps. **Fixed**: base octave. **Octave-locked**: target octave the pitch folds into. **Direct**: octave offset from the played pitch. At noon all three modes sit ~2 octaves above a played note |
+| KNOB 3 | Fine tune | ±50 cents continuous |
+| KNOB 4 | Filter | Bipolar; center = ladder wide open. **SAW/SQR**: CCW = low-pass closing (8 kHz → 250 Hz) with rising drive/saturation; CW = high-pass opening (20 Hz → 2 kHz), thinning the low end. **TRI**: CCW = ladder cutoff sweep; CW = wavefolder (ladder stays open) |
+| KNOB 5 | Voice | Bipolar; center = single clean oscillator. **CW** = audio-rate FM (input frequency-modulates the osc, through-zero; grows with knob and playing level). **CCW** by waveform — **SAW**: detuned unison cloud; **TRI**: just-intonation ensemble (chord builds up, one octave up); **SQR**: PWM (duty-cycle modulation) |
 | KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
 | SWITCH 1 | Waveform | **UP** — Saw • **MIDDLE** — Triangle • **DOWN** — Square |
-| SWITCH 2 | Drone mode | **UP** — Fixed pitch (K1 sets note, K2 sets octave) • **MIDDLE** — Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval) • **DOWN** — Follow / direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
+| SWITCH 2 | Drone mode | **UP** — Fixed pitch (K1 sets note, K2 sets octave) • **MIDDLE** — Octave-locked tracking (played pitch class folds into K2's octave, K1 adds interval) • **DOWN** — Follow / direct tracking (osc follows the played pitch, transposed by K1 ±12 semi and K2 octave) |
 
 ---
 

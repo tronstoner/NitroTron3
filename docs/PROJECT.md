@@ -233,8 +233,9 @@ The FS1-alone bootloader path is dropped — it was too easy to trigger by accid
 - **Stage 1** — DONE. MoogOsc class (parabolic + PolyBLEP, saw/tri/square).
 - **Stage 2** — DONE. Huovilainen ladder filter with per-stage tanh saturation.
 - **Stage 3** — DONE. Pitch controls: K1=semitone (12 steps), K2=octave (C-1–C5), K3=fine tune (±50 cents).
-- **Stage 4** — DONE. Envelope follower (Moog topology, no gate) + VCA (with a static env→VCA downward expander, `ENV_VCA_EXP_THRESH`/`_RATIO`, so a rig's noise floor can't open the VCA or smear note-offs — shared with the Mode C synth voice) + equal-power dry/wet mix. Second oscillator on K5 (±12 semitone detune with center dead zone). All 6 knobs wired. Mode A is fully playable.
-- **Pitch tracking** — DONE. YIN algorithm with 4x decimation, anti-alias LP at 400 Hz. Three drone sub-modes on Switch 2: fixed pitch, octave-locked tracking (pitch class in target octave), direct tracking. Wrap point set by K1 in fixed mode (default A). See `PITCH_TRACKING.md` for research and improvement plan.
+- **Stage 4** — DONE. Envelope follower (Moog topology, no gate) + VCA (with a static env→VCA downward expander, `ENV_VCA_EXP_THRESH`/`_RATIO`, so a rig's noise floor can't open the VCA or smear note-offs — shared with the Mode C synth voice) + equal-power dry/wet mix. All 6 knobs wired. Mode A is fully playable. (K5 originally a second oscillator; reworked — see "K5 voice engine" below.)
+- **Pitch tracking** — DONE. YIN algorithm with 4x decimation, anti-alias LP at 400 Hz. Three drone sub-modes on Switch 2: fixed pitch, octave-locked tracking, direct tracking. Continuous/unrounded pitch output (follows bends/microtonal). Octave-locked fold boundary fixed at G# (one semitone below A, `TRACKING_FOLD_NOTE`) so a played A doesn't straddle the wrap; stateless fold; all three sub-modes octave-aligned (A3 at K1/K2 noon for a played A). See `PITCH_TRACKING.md`.
+- **K5 voice engine + K4 bipolar filter (v0.3.1)** — DONE. K5 retired the second oscillator for a bipolar per-waveform voice knob: CW = audio-rate through-zero FM from the input (`synth_osc_a.h` / `DroneOsc`), CCW = saw unison cloud / triangle just-intonation ensemble / square PWM. K4 became a bipolar filter: Moog ladder low-pass with rising drive toward CCW, a 2-pole high-pass (`mode_a_hpf.h`) thinning toward CW (triangle keeps CCW cutoff + CW wavefold). Full design in `MODE_A_DISCOVERY.md`.
 - **Wavefolding** — DONE. Triangle mode: K4 noon→CW applies wavefolding. Envelope subtly modulates fold amount and filter cutoff for dynamic response.
 - **Per-waveform gains** — DONE. Independent level trim for saw/tri/square in constants.h.
 - **Serial logging** — DONE. `StartLog(false)` + raw knob values printed every ~2 s from main loop using `FLT_FMT3` macros. Safe: no printing from audio callback.
@@ -259,13 +260,13 @@ Flash Hothouse blink example. Confirm clean audio passthrough with bass → Dais
 MoogOsc class (parabolic waveshaper + PolyBLEP). Fixed 110 Hz pitch, output to both channels. Knobs control oscillator character for ear-tuning. Waveform toggle wired.
 
 ### Stage 2 — Huovilainen ladder filter ✓
-Ladder filter on oscillator output. K5 controls cutoff (80 Hz – 8 kHz, exponential). Drive and cutoff offset from compile-time constants. Per-stage tanh saturation for Moog warmth.
+Ladder filter on oscillator output. K4 controls cutoff (exponential). Drive and cutoff offset from compile-time constants. Per-stage tanh saturation for Moog warmth. (Later reworked into the bipolar K4 low-pass/high-pass filter — see the staging log above.)
 
 ### Stage 3 — Pitch controls ✓
 K1=semitone (12 quantized steps, C–B), K2=octave (7 positions, C-1–C5), K3=fine tune (±50 cents continuous). Oscillator plays selectable pitches through the ladder filter.
 
 ### Stage 4 — Envelope follower + VCA + mix + tracking + wavefold ✓
-Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Second oscillator (K5 detune). Per-waveform gain constants. Octave-locked wrap point fixed to A (compile-time constant `TRACKING_WRAP_NOTE`). All 6 knobs + Switch 1/2 wired. Mode A is fully playable.
+Envelope follower (Moog topology, no gate) + VCA + equal-power mix. Three drone sub-modes (Switch 2): fixed pitch, octave-locked tracking, direct tracking. YIN pitch tracker with 4x decimation. Wavefolding on triangle (K4 noon→CW). Envelope modulates filter cutoff and fold amount. Per-waveform gain constants. All 6 knobs + Switch 1/2 wired. Mode A is fully playable. (K5 voice engine and the K4 bipolar filter / octave-fold refinements landed later — see the staging log above.)
 
 ### Stage 5 — Preset system ✓
 Original per-mode model first, then migrated to a global model: one edit buffer (knobs + sw1 + sw2 + mode), 3 banks × 8 slots (storage sized for 6), each slot carries its own mode. Audio callback reads from the edit buffer, not hardware. FS1 cycles slots within the active bank, FS2 toggles bypass / enters save mode, FS1+FS2 short tap cycles banks (Roman-numeral burst on both LEDs), FS1+FS2 held 2 s enters DFU. SW3 is a soft control — moves it on a saved preset mark dirty. Debounced auto-save (2 s after last edit) replaces the original 30 s interval. One-shot v2 → v3 migration preserves existing per-mode presets.

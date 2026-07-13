@@ -122,34 +122,34 @@ make program-dfu  # flash via DFU bootloader
 
 ### BORDUN (Mode A)
 
-PolyBLEP oscillator (waveform via SW1) → Huovilainen Moog ladder → env-controlled VCA → equal-power mix with the dry. SW2 selects the pitch source: fixed (K1 semitones, K2 octave), octave-locked tracking (pitch class follows the bass within K2's octave, K1 adds an interval), or direct tracking (osc follows the bass exactly, K1/K2 are relative offsets). K5 detunes a second oscillator against the first for beating. K4 sweeps ladder cutoff in SAW/SQR; in TRI it morphs cutoff → wavefolder past noon.
+PolyBLEP oscillator bank (waveform via SW1) → Huovilainen Moog ladder → high-pass → env-controlled VCA → equal-power mix with the dry. SW2 selects the pitch source: fixed (K1 semitones, K2 octave), octave-locked tracking (the played pitch class folds into K2's octave, K1 adds an interval), or direct tracking (osc follows the played pitch, transposed by K1/K2). K5 shapes the oscillator: CW adds audio-rate FM from the input, CCW thickens it per waveform (saw = detuned unison cloud, triangle = just-intonation ensemble, square = PWM). K4 is a bipolar filter: low-pass closing toward CCW (with rising drive), high-pass thinning toward CW — except TRI, which folds (wavefolder) past noon instead of high-passing.
 
 #### Signal Chain
 
 ```
-Input ──┬──────────────────────────────────────────► [Mix K6] ──► Output
-        │                                               ▲
-        └──► [EnvFollower] ──┬──► [VCA gain]            │
-                             │       │                  │
-                             │  [Osc1 K1-K3] + [Osc2 K5]
-                             │       │                  │
-                             ├──► [Wavefold] (TRI mode) │
-                             │       │                  │
-                             └──► [Ladder K4] ──────────┘
+Input ──┬──────────────────────────────────────────────────────► [Mix K6] ──► Output
+        │                                                            ▲
+        └──► [EnvFollower] ──► [VCA gain] ───────────────────────┐   │
+                                   │                             │   │
+               [DroneOsc K1–K3,K5] ┘                             ▼   │
+                cloud / ensemble / PWM + FM                   (VCA)   │
+                     │                                                │
+                     └──► [Ladder LP K4-CCW] ──► [HPF K4-CW] ─────────┘
+                          (TRI: wavefold past K4 noon)
 ```
 
 #### Controls
 
 | CONTROL           | DESCRIPTION         | NOTES                                                                                                                                                                                                                                                               |
 | ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| KNOB 1            | Pitch | ±12 semitone offset, center dead zone. **Fixed**: center = A, also sets wrap point for tracking. **Track**: center = tracked note, wraps at the note set in fixed mode                                                                                              |
-| KNOB 2            | Octave              | 7 positions (C-1–C5). **Octave-locked**: sets target octave. **Direct**: ±3 octave offset from tracked pitch                                                                                                                                                        |
-| KNOB 3            | Fine tune           | ±50 cents continuous (osc1 only — creates beating with osc2)                                                                                                                                                                                                        |
-| KNOB 4            | Tone     | SAW/SQ: full range ladder cutoff (80 Hz–8 kHz). TRI: CCW→noon = cutoff, noon→CW = wavefolding (filter stays fully open)                                                                                                                                             |
-| KNOB 5            | Detune        | Center = off (dead zone). Outside center = ±1–12 semitone steps. Not affected by fine tune                                                                                                                                                                          |
+| KNOB 1            | Pitch / interval | ±12 semitone offset, center dead zone. **Fixed**: center = A (drone root). **Track**: adds an interval to the tracked pitch                                                                                                                                          |
+| KNOB 2            | Octave              | 7 steps. **Fixed**: base octave. **Octave-locked**: target octave the pitch folds into. **Direct**: octave offset from the played pitch. At noon all three modes sit ~2 octaves above a played note                                                                 |
+| KNOB 3            | Fine tune           | ±50 cents continuous                                                                                                                                                                                                                                               |
+| KNOB 4            | Filter              | Bipolar; center = ladder wide open. **SAW/SQR**: CCW = low-pass closing (8 kHz→250 Hz) with rising drive/saturation; CW = high-pass opening (20 Hz→2 kHz), thinning the low end. **TRI**: CCW = ladder cutoff sweep; CW = wavefolder (ladder stays open)             |
+| KNOB 5            | Voice               | Bipolar; center = single clean oscillator. **CW** = audio-rate FM (input frequency-modulates the osc, through-zero; grows with knob and playing level). **CCW** by waveform — **SAW**: detuned unison cloud; **TRI**: just-intonation ensemble (chord builds up, one octave up); **SQR**: PWM (duty-cycle modulation) |
 | KNOB 6            | Mix                 | 0 = full dry, 1 = full wet (oscillator)                                                                                                                                                                                                                             |
 | SWITCH 1          | Waveform            | **UP** - Saw<br/>**MIDDLE** - Triangle<br/>**DOWN** - Square                                                                                                                                                                                                        |
-| SWITCH 2          | Drone mode          | **UP** - Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** - Octave-locked tracking (pitch class follows bass in K2's octave, K1 adds interval)<br/>**DOWN** - Follow / direct tracking (osc follows exact bass pitch, K1/K2 are relative offsets ±12 semi / ±3 oct) |
+| SWITCH 2          | Drone mode          | **UP** - Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** - Octave-locked tracking (played pitch class folds into K2's octave, K1 adds interval)<br/>**DOWN** - Follow / direct tracking (osc follows the played pitch, transposed by K1 ±12 semi and K2 octave) |
 | SWITCH 3          | Mode select         | **UP** - BORDUN (Mode A)<br/>**MIDDLE** - SPRAWL (Mode B)<br/>**DOWN** - SCHISM (Mode C)                                                                                                                                                                            |
 | FOOTSWITCH 1      | Preset              | **Short press**: cycle Manual→1→…→8→Manual (or reload preset if dirty). **Long press (700 ms)**: jump to Manual                                                                                                                                                     |
 | FOOTSWITCH 2      | Bypass / Save       | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode (or confirm save if already in save mode). **Short press in save mode**: cancel                                                                                                            |
