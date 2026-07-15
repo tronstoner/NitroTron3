@@ -3,7 +3,7 @@ title: NitroTron3 — User Manual
 subtitle: DIY digital bass pedal — Daisy Seed + Hothouse
 ---
 
-![NitroTron3](NitroTron3.jpg){.cover}
+![NitroTron3](assets/NitroTron3.jpg){.cover}
 
 A project of [Nitro Mahalia](https://nitromahalia.net). This pedal
 packages several of their signature bass-through-synth sounds into a
@@ -46,7 +46,7 @@ and likely to be replaced with a different effect in a future release.
 **Presets.** A global preset system recalls mode + full parameter state
 in one footswitch press. One global edit buffer, 3 banks × 8 slots = 24
 reachable presets. Each slot carries its own mode, so cycling presets
-can swap mode mid-set. See the *Footswitches and Presets* section
+can swap mode mid-set. See the _Footswitches and Presets_ section
 below.
 
 ## Hardware overview
@@ -66,6 +66,19 @@ below.
 The mode determines what every other knob and switch does. Each mode is
 documented in its own section below.
 
+## Reading the knob icons
+
+The control tables use these icons to show which way a knob is turned:
+
+|                       Icon                        | Meaning                                                            |
+| :-----------------------------------------------: | ------------------------------------------------------------------ |
+|     ![CCW](assets/icon-ccw.svg){.icon-legend}     | Turn **counter-clockwise** (left of centre)                        |
+|      ![CW](assets/icon-cw.svg){.icon-legend}      | Turn **clockwise** (right of centre)                               |
+|    ![noon](assets/icon-noon.svg){.icon-legend}    | **Centre** (noon) — bipolar knobs rest here                        |
+| ![bipolar](assets/icon-bipolar.svg){.icon-legend} | **Bipolar** — knob has a neutral centre and two opposite functions |
+|    ![sweep](assets/icon-uni.svg){.icon-legend}    | Full **sweep**, min → max (unipolar knobs)                         |
+|   ![steps](assets/icon-steps.svg){.icon-legend}   | **Stepped** — selects discrete values or presets                   |
+
 ---
 
 # BORDUN (Mode A)
@@ -79,20 +92,20 @@ CCW and a high-pass toward CW (in triangle mode the CW side folds the
 waveform instead). SW2 picks the pitch source: fixed, octave-locked
 tracking, or direct tracking.
 
-![Mode A pedal layout](pedal-mode-a.svg){.pedal-layout}
+![Mode A pedal layout](assets/pedal-mode-a.svg){.pedal-layout}
 
 ## Controls
 
-| CONTROL | DESCRIPTION | NOTES |
-|-|-|-|
-| KNOB 1 | Pitch / interval | ±12 semitone offset, centered with deadzone. **Fixed**: center = A (drone root). **Track**: adds an interval to the tracked pitch |
-| KNOB 2 | Octave | 7 steps. **Fixed**: base octave. **Octave-locked**: target octave the pitch folds into. **Direct**: octave offset from the played pitch. At noon all three modes sit ~2 octaves above a played note |
-| KNOB 3 | Fine tune | ±50 cents continuous |
-| KNOB 4 | Filter | Bipolar; center = ladder wide open. **SAW/SQR**: CCW = low-pass closing (8 kHz → 250 Hz) with rising drive/saturation; CW = high-pass opening (20 Hz → 2 kHz), thinning the low end. **TRI**: CCW = ladder cutoff sweep; CW = wavefolder (ladder stays open) |
-| KNOB 5 | Voice | Bipolar; center = single clean oscillator. **CW** = audio-rate FM (input frequency-modulates the osc, through-zero; grows with knob and playing level). **CCW** by waveform — **SAW**: detuned unison cloud; **TRI**: just-intonation ensemble (chord builds up, one octave up); **SQR**: PWM (duty-cycle modulation) |
-| KNOB 6 | Mix | 0 = full dry, 1 = full wet (oscillator) |
-| SWITCH 1 | Waveform | **UP** — Saw • **MIDDLE** — Triangle • **DOWN** — Square |
-| SWITCH 2 | Drone mode | **UP** — Fixed pitch (K1 sets note, K2 sets octave) • **MIDDLE** — Octave-locked tracking (played pitch class folds into K2's octave, K1 adds interval) • **DOWN** — Follow / direct tracking (osc follows the played pitch, transposed by K1 ±12 semi and K2 octave) |
+| CONTROL | NOTES |
+|-|-|
+| **Pitch / interval**<br/><span class="ctl-id">Knob 1</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} ![steps](assets/icon-steps.svg){.ctl-icon} ±12 semitone offset, centered with deadzone.<br/>**Fixed**: center = A (drone root).<br/>**Track**: adds an interval to the tracked pitch                                                                                                                                                                                                                                                    |
+| **Octave**<br/><span class="ctl-id">Knob 2</span> | ![steps](assets/icon-steps.svg){.ctl-icon} 7 steps.<br/>**Fixed**: base octave.<br/>**Octave-locked**: target octave the pitch folds into.<br/>**Direct**: octave offset from the played pitch. At noon all three modes sit ~2 octaves above a played note                                                                                                                                                                                                                             |
+| **Fine tune**<br/><span class="ctl-id">Knob 3</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} ±50 cents continuous                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Filter**<br/><span class="ctl-id">Knob 4</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} ![noon](assets/icon-noon.svg){.ctl-icon} = ladder wide open.<br/>**SAW/SQR**: ![CCW](assets/icon-ccw.svg){.ctl-icon} = low-pass closing (8 kHz → 250 Hz) with rising drive/saturation; ![CW](assets/icon-cw.svg){.ctl-icon} = high-pass opening (20 Hz → 2 kHz), thinning the low end.<br/>**TRI**: ![CCW](assets/icon-ccw.svg){.ctl-icon} = ladder cutoff sweep; ![CW](assets/icon-cw.svg){.ctl-icon} = wavefolder (ladder stays open) |
+| **Voice**<br/><span class="ctl-id">Knob 5</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} ![noon](assets/icon-noon.svg){.ctl-icon} = single clean oscillator. ![CW](assets/icon-cw.svg){.ctl-icon} = audio-rate FM (input frequency-modulates the osc, through-zero; grows with knob and playing level). ![CCW](assets/icon-ccw.svg){.ctl-icon} by waveform —<br/>**SAW**: detuned unison cloud;<br/>**TRI**: just-intonation ensemble (chord builds up, one octave up);<br/>**SQR**: PWM (duty-cycle modulation)                 |
+| **Mix**<br/><span class="ctl-id">Knob 6</span> | ![sweep](assets/icon-uni.svg){.ctl-icon} 0 = full dry, 1 = full wet (oscillator)                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Waveform**<br/><span class="ctl-id">Switch 1</span> | **UP** — Saw<br/>**MIDDLE** — Triangle<br/>**DOWN** — Square                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Drone mode**<br/><span class="ctl-id">Switch 2</span> | **UP** — Fixed pitch (K1 sets note, K2 sets octave)<br/>**MIDDLE** — Octave-locked tracking (played pitch class folds into K2's octave, K1 adds interval)<br/>**DOWN** — Follow / direct tracking (osc follows the played pitch, transposed by K1 ±12 semi and K2 octave)                                                                                                                                                                                                              |
 
 ---
 
@@ -109,20 +122,20 @@ direction (CW forward, CCW backward). SW2 DOWN replaces grain
 pitch-shifting with a Bode SSB
 frequency shifter living inside the feedback loop.
 
-![Mode B pedal layout](pedal-mode-b.svg){.pedal-layout}
+![Mode B pedal layout](assets/pedal-mode-b.svg){.pedal-layout}
 
 ## Controls
 
-| CONTROL | DESCRIPTION | NOTES |
-|-|-|-|
-| KNOB 1 | Pitch | Meaning follows SW2. **SW2=UP**: fixed interval, K1 = ±12 semitones. **SW2=MID**: harmonic-cloud pick, K1 spans the ±36-semitone scan. **SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar with ±2 % deadzone — CCW = down-shift (bass), CW = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison |
-| KNOB 2 | Buffer | **Noon (±6 %)** = direct-texture (grain engine bypassed, K3 = micro-stutter). Off noon either way = buffer depth 100 ms → 8 s + timescale; sign = playback direction (CW forward, CCW backward). Fully CCW = deepest buffer, played backward |
-| KNOB 3 | Character | **Grain mode**: CCW = long, slow smear (grains stretch ~0.3 → 2 s, overlap held so the rate falls — a granular multi-tap that leans on the deep buffer), CW = short/sharp/chaotic glitch. **Direct-texture mode**: micro-stutter — CCW = clean, CW = frequent choppy repeats |
-| KNOB 4 | Texture | Depends on SW1 position — see below |
-| KNOB 5 | Reverb / Feedback | **CCW** = Clouds reverb amount (0 → 1). **Center (±5 %)** = off. **CW** = ring-buffer feedback (0 → full) into the tanh saturator — ducked and self-limiting into a controlled drone, not a runaway. Reverb tail does not feed the ring buffer |
-| KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Texture | **UP** — Crush / Fold — decimator/wavefolder (K4 CCW = max crush, noon = clean, CW = wavefold) • **MIDDLE** — Glitch — event-driven digital glitch (bipolar K4: noon = clean ±5 %, CCW = random bit-flip events, CW = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining) • **DOWN** — Ring mod (K4 0 – 30 % = tremolo 1 – 15 Hz, 30 – 100 % = bell partials, pitch-tracked with keytracked LPF) |
-| SWITCH 2 | Harmony | **UP** — Fixed — fixed interval (K1 = ±12 semitones above tracked note) • **MIDDLE** — Harmonic cloud (grains scatter across nearby harmonics; K1 spans ±36-semi scan) • **DOWN** — Shift — Bode SSB frequency shifter on the wet bus (inside the feedback loop). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential |
+| CONTROL | NOTES |
+|-|-|
+| **Pitch**<br/><span class="ctl-id">Knob 1</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} ![steps](assets/icon-steps.svg){.ctl-icon} Meaning follows SW2.<br/>**SW2=UP**: fixed interval, K1 = ±12 semitones.<br/>**SW2=MID**: harmonic-cloud pick, K1 spans the ±36-semitone scan.<br/>**SW2=DOWN**: Bode SSB frequency shifter on the wet bus, bipolar with ±2 % deadzone — ![CCW](assets/icon-ccw.svg){.ctl-icon} = down-shift (bass), ![CW](assets/icon-cw.svg){.ctl-icon} = up-shift, exponential taper, ±1 kHz at full deflection. In SW2 DOWN the grain buffer-read pitch is forced to unison                                                                                                                               |
+| **Buffer**<br/><span class="ctl-id">Knob 2</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} ![noon](assets/icon-noon.svg){.ctl-icon} **(±6 %)** = direct-texture (grain engine bypassed, K3 = micro-stutter). Off noon either way = buffer depth 100 ms → 8 s + timescale; sign = playback direction (![CW](assets/icon-cw.svg){.ctl-icon} forward, ![CCW](assets/icon-ccw.svg){.ctl-icon} backward). Fully ![CCW](assets/icon-ccw.svg){.ctl-icon} = deepest buffer, played backward                                                                                                                                                                                                                                                 |
+| **Character**<br/><span class="ctl-id">Knob 3</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon}**Grain mode**: ![CCW](assets/icon-ccw.svg){.ctl-icon} = long, slow smear (grains stretch ~0.3 → 2 s, overlap held so the rate falls — a granular multi-tap that leans on the deep buffer), ![CW](assets/icon-cw.svg){.ctl-icon} = short/sharp/chaotic glitch.<br/>**Direct-texture mode**: micro-stutter — ![CCW](assets/icon-ccw.svg){.ctl-icon} = clean, ![CW](assets/icon-cw.svg){.ctl-icon} = frequent choppy repeats                                                                                                                                                                                                                |
+| **Texture**<br/><span class="ctl-id">Knob 4</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} Depends on SW1 position — see below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Reverb / Feedback**<br/><span class="ctl-id">Knob 5</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} **![CCW](assets/icon-ccw.svg){.ctl-icon}** = Clouds reverb amount (0 → 1). ![noon](assets/icon-noon.svg){.ctl-icon} **(±5 %)** = off. **![CW](assets/icon-cw.svg){.ctl-icon}** = ring-buffer feedback (0 → full) into the tanh saturator — ducked and self-limiting into a controlled drone, not a runaway. Reverb tail does not feed the ring buffer                                                                                                                                                                                                                                                                                    |
+| **Mix**<br/><span class="ctl-id">Knob 6</span> | ![sweep](assets/icon-uni.svg){.ctl-icon} 0 = full dry, 1 = full wet. Equal-power curve                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Texture**<br/><span class="ctl-id">Switch 1</span> | **UP** — Crush / Fold — decimator/wavefolder (K4 ![CCW](assets/icon-ccw.svg){.ctl-icon} = max crush, ![noon](assets/icon-noon.svg){.ctl-icon} = clean, ![CW](assets/icon-cw.svg){.ctl-icon} = wavefold)<br/>**MIDDLE** — Glitch — event-driven digital glitch (bipolar K4: ![noon](assets/icon-noon.svg){.ctl-icon} = clean ±5 %, ![CCW](assets/icon-ccw.svg){.ctl-icon} = random bit-flip events, ![CW](assets/icon-cw.svg){.ctl-icon} = random timing events — freeze / stutter / reverse; sparse near noon → continuous at the extremes via event chaining)<br/>**DOWN** — Ring mod (K4 0 – 30 % = tremolo 1 – 15 Hz, 30 – 100 % = bell partials, pitch-tracked with keytracked LPF) |
+| **Harmony**<br/><span class="ctl-id">Switch 2</span> | **UP** — Fixed — fixed interval (K1 = ±12 semitones above tracked note)<br/>**MIDDLE** — Harmonic cloud (grains scatter across nearby harmonics; K1 spans ±36-semi scan)<br/>**DOWN** — Shift — Bode SSB frequency shifter on the wet bus (inside the feedback loop). Grain buffer-read pitch forced to unison; K1 = ±1 kHz exponential                                                                                                                                                                                                                                                                                                                                                 |
 
 ---
 
@@ -168,20 +181,20 @@ rect just past noon, pulse-width modulated at full CW).
 The wet path runs through a 2-band post-filter peak limiter — the low
 end is preserved so bass fundamentals don't duck under resonance peaks.
 
-![Mode C pedal layout](pedal-mode-c.svg){.pedal-layout}
+![Mode C pedal layout](assets/pedal-mode-c.svg){.pedal-layout}
 
 ## Controls
 
-| CONTROL | DESCRIPTION | NOTES |
-|-|-|-|
-| KNOB 1 | Frequency | SW2=UP: Moog cutoff (20 Hz – 8 kHz, exponential). SW2=MID: Grendel vowel path (CCW = oo dark/closed, CW = ee bright/open). SW2=DOWN: phaser notch centre |
-| KNOB 2 | Resonance | SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible). SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6). SW2=DOWN: phaser feedback (clean sweep → resonant bloom → controlled self-oscillation at full CW) |
-| KNOB 3 | Movement | Runs through a response curve (fine near noon, coarse toward the extremes). SW2=UP: bipolar env-to-cutoff (passive-bass scaled). SW2=MID: bipolar env on vowel path and size. SW2=DOWN: bipolar phaser LFO rate (sign selects shape — CCW triangle, CW sample-and-hold; magnitude = rate; centre = LFO off, static notch at K1). All with ±5 % centre deadzone |
-| KNOB 4 | Drive | Bipolar around noon (noon = clean dry) for SW1=UP and SW1=MID. SW1=UP: CW = sine wavefold (0 → max, internal loudness comp), CCW = Chebyshev waveshaper (octave-up / metallic). SW1=MID: CW = gated bit-flipper (XOR bit position, env-gated), CCW = Tube-Screamer→tube-amp overdrive (staged master gain — pedal/TS drive builds first, amp drive enters over the top of the travel; clean via K6). SW1=DOWN: synth-osc timbre (full-range) — CCW half = saw (max hypersaw at fully CCW → single saw plateau just below noon), CW half = rect (single rect just past noon → max PWM at full CW; depth ramps in fast, then LFO rate) |
-| KNOB 5 | Filter drive | **CCW** attenuates (~−12 dB at full CCW). **Noon** is unity. **CW** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and the phaser. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone. On the Moog ladder, K5 from just before noon up to full CW also fades in audio-rate cutoff self-FM (modulated by the filter input) for a gritty, vocal resonance |
-| KNOB 6 | Mix | 0 = full dry, 1 = full wet. Equal-power curve |
-| SWITCH 1 | Drive | **UP** — Fold / Cheby — sine wavefolder (K4 CW) / Chebyshev waveshaper (K4 CCW), noon = clean • **MIDDLE** — Crush / Drive — gated bit-flipper (K4 CW, env-gated) / Tube-Screamer→tube-amp overdrive (K4 CCW), noon = clean • **DOWN** — Synth — pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph) |
-| SWITCH 2 | Filter | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env) • **MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path) • **DOWN** — Phaser (K1 notch centre, K2 feedback, K3 LFO rate/shape) |
+| CONTROL | NOTES |
+|-|-|
+| **Frequency**<br/><span class="ctl-id">Knob 1</span> | ![sweep](assets/icon-uni.svg){.ctl-icon}SW2=UP: Moog cutoff (20 Hz – 8 kHz, exponential).<br/>SW2=MID: Grendel vowel path (![CCW](assets/icon-ccw.svg){.ctl-icon} = oo dark/closed, ![CW](assets/icon-cw.svg){.ctl-icon} = ee bright/open).<br/>SW2=DOWN: phaser notch centre                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Resonance**<br/><span class="ctl-id">Knob 2</span> | ![sweep](assets/icon-uni.svg){.ctl-icon}SW2=UP: Moog resonance (0 → self-osc, sqrt curve so the lower half is audible).<br/>SW2=MID: Grendel size (mouth scale, ×0.5 → ×1.6).<br/>SW2=DOWN: phaser feedback (clean sweep → resonant bloom → controlled self-oscillation at full ![CW](assets/icon-cw.svg){.ctl-icon})                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Movement**<br/><span class="ctl-id">Knob 3</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} Runs through a response curve (fine near noon, coarse toward the extremes).<br/>SW2=UP: bipolar env-to-cutoff (passive-bass scaled).<br/>SW2=MID: bipolar env on vowel path and size.<br/>SW2=DOWN: bipolar phaser LFO rate (sign selects shape — ![CCW](assets/icon-ccw.svg){.ctl-icon} triangle, ![CW](assets/icon-cw.svg){.ctl-icon} sample-and-hold; magnitude = rate; centre = LFO off, static notch at K1). All with ±5 % centre deadzone                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Drive**<br/><span class="ctl-id">Knob 4</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} Bipolar around noon (![noon](assets/icon-noon.svg){.ctl-icon} = clean dry) for SW1=UP and SW1=MID.<br/>SW1=UP: ![CW](assets/icon-cw.svg){.ctl-icon} = sine wavefold (0 → max, internal loudness comp), ![CCW](assets/icon-ccw.svg){.ctl-icon} = Chebyshev waveshaper (octave-up / metallic).<br/>SW1=MID: ![CW](assets/icon-cw.svg){.ctl-icon} = gated bit-flipper (XOR bit position, env-gated), ![CCW](assets/icon-ccw.svg){.ctl-icon} = Tube-Screamer→tube-amp overdrive (staged master gain — pedal/TS drive builds first, amp drive enters over the top of the travel; clean via K6).<br/>SW1=DOWN: synth-osc timbre (full-range) — ![CCW](assets/icon-ccw.svg){.ctl-icon} half = saw (max hypersaw at fully ![CCW](assets/icon-ccw.svg){.ctl-icon} → single saw plateau just below noon), ![CW](assets/icon-cw.svg){.ctl-icon} half = rect (single rect just past noon → max PWM at full ![CW](assets/icon-cw.svg){.ctl-icon}; depth ramps in fast, then LFO rate) |
+| **Filter drive**<br/><span class="ctl-id">Knob 5</span> | ![bipolar](assets/icon-bipolar.svg){.ctl-icon} **![CCW](assets/icon-ccw.svg){.ctl-icon}** attenuates (~−12 dB at full ![CCW](assets/icon-ccw.svg){.ctl-icon}). **Noon** is unity. **![CW](assets/icon-cw.svg){.ctl-icon}** boosts up to 8× hot. Sets the Moog ladder's input drive; pre-tanh in front of Grendel and the phaser. Moog and Grendel have a fixed internal pad so noon sits in their clean sweet zone. On the Moog ladder, K5 from just before noon up to full ![CW](assets/icon-cw.svg){.ctl-icon} also fades in audio-rate cutoff self-FM (modulated by the filter input) for a gritty, vocal resonance                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Mix**<br/><span class="ctl-id">Knob 6</span> | ![sweep](assets/icon-uni.svg){.ctl-icon} 0 = full dry, 1 = full wet. Equal-power curve                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Drive**<br/><span class="ctl-id">Switch 1</span> | **UP** — Fold / Cheby — sine wavefolder (K4 ![CW](assets/icon-cw.svg){.ctl-icon}) / Chebyshev waveshaper (K4 ![CCW](assets/icon-ccw.svg){.ctl-icon}), ![noon](assets/icon-noon.svg){.ctl-icon} = clean<br/>**MIDDLE** — Crush / Drive — gated bit-flipper (K4 ![CW](assets/icon-cw.svg){.ctl-icon}, env-gated) / Tube-Screamer→tube-amp overdrive (K4 ![CCW](assets/icon-ccw.svg){.ctl-icon}), ![noon](assets/icon-noon.svg){.ctl-icon} = clean<br/>**DOWN** — Synth — pitch-tracked synth oscillator (K4 = saw ↔ rect timbre morph)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Filter**<br/><span class="ctl-id">Switch 2</span> | **UP** — Moog ladder (K1 cutoff, K2 resonance, K3 env)<br/>**MIDDLE** — Grendel formant (K1 vowel path, K2 size, K3 env on path)<br/>**DOWN** — Phaser (K1 notch centre, K2 feedback, K3 LFO rate/shape)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ---
 
@@ -191,20 +204,20 @@ The footswitches and the preset system work the same way in every mode.
 
 ## Footswitches
 
-| CONTROL | DESCRIPTION |
-|-|-|
-| FOOTSWITCH 1 | **Short press**: cycle Manual → 1 → … → 8 → Manual (or reload the current preset if dirty). **Long press (700 ms)**: jump to Manual |
-| FOOTSWITCH 2 | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode, or confirm save if already in save mode. **Short press in save mode**: cancel save |
+| CONTROL             | DESCRIPTION                                                                                                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FOOTSWITCH 1        | **Short press**: cycle Manual → 1 → … → 8 → Manual (or reload the current preset if dirty). **Long press (700 ms)**: jump to Manual                                     |
+| FOOTSWITCH 2        | **Short press**: toggle bypass. **Long press (700 ms)**: enter save mode, or confirm save if already in save mode. **Short press in save mode**: cancel save            |
 | FS1 + FS2 short tap | Cycle the active bank (1 → 2 → 3 → 1). Both LEDs play a Roman-numeral burst confirming the new bank. Also works inside save mode to retarget the save into another bank |
-| FS1 + FS2 held 2 s | Enter DFU bootloader for flashing new firmware (both LEDs alternate for 1.2 s before reset) |
+| FS1 + FS2 held 2 s  | Enter DFU bootloader for flashing new firmware (both LEDs alternate for 1.2 s before reset)                                                                             |
 
 ## Indicator LEDs
 
-| LED | DESCRIPTION |
-|-|-|
-| LED 1 (left) | **Preset indicator.** Off = Manual mode. Otherwise a Roman-numeral blink pattern shows the preset number (I = short, V = long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows the target slot |
-| LED 2 (right) | **State indicator.** Solid = active, off = bypassed, rapid flash = dirty (preset edited but not saved), fast blink = save mode armed, burst = save confirmed |
-| Both LEDs | **Bank-switch burst.** On bank change, both LEDs flash a Roman-numeral pattern of the new bank number (I / II / III, each pulse filled with deterministic fast flicker so it's visually distinct from a preset blink) for ~1.6 s, then return to their normal display |
+| LED           | DESCRIPTION                                                                                                                                                                                                                                                           |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LED 1 (left)  | **Preset indicator.** Off = Manual mode. Otherwise a Roman-numeral blink pattern shows the preset number (I = short, V = long: I, II, III, IV, V, VI, VII, VIII). In save mode, shows the target slot                                                                 |
+| LED 2 (right) | **State indicator.** Solid = active, off = bypassed, rapid flash = dirty (preset edited but not saved), fast blink = save mode armed, burst = save confirmed                                                                                                          |
+| Both LEDs     | **Bank-switch burst.** On bank change, both LEDs flash a Roman-numeral pattern of the new bank number (I / II / III, each pulse filled with deterministic fast flicker so it's visually distinct from a preset blink) for ~1.6 s, then return to their normal display |
 
 ## Preset behavior
 

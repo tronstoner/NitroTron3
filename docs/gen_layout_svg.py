@@ -4,7 +4,7 @@
 Run from repo root:
     python3 docs/gen_layout_svg.py
 
-Writes docs/pedal-mode-{a,b,c}.svg.
+Writes docs/assets/pedal-mode-{a,b,c}.svg.
 
 Each knob has a player-facing name and 1-2 short plain-language lines. Bipolar
 knobs are drawn centred at noon with a red centre-detent tick and read
@@ -94,10 +94,11 @@ FS_R = 52
 
 FS_TITLE = 30
 FS_SUBTITLE = 16
-FS_KNOB_NAME = 22
-FS_KNOB_FN = 18
+FS_KNOB_NAME = 22          # function name (prominent)
+FS_KNOB_ID = 14            # K1..K6 (secondary, below the name)
 FS_KNOB_DETAIL = 12
-FS_SWITCH_LABEL = 22
+FS_SWITCH_LABEL = 22       # switch function (prominent)
+FS_SWITCH_ID = 14          # SW1..SW3 (secondary)
 FS_SWITCH_FN = 17
 FS_SWITCH_POS = 15
 FS_LED = 16
@@ -114,8 +115,8 @@ def _polar(cx, cy, r, deg):
 def knob(cx: int, cy: int, kid: str, entry: dict, indicator_deg: float = -135.0) -> str:
     """A knob: dark body + white pointer, a 270° sweep track, and a tick marker.
     Bipolar knobs (`entry['bi']`) sit centred at noon with a red centre-detent
-    tick; unipolar knobs get a grey tick at the CCW start. Below: the K-id, the
-    name, and 1-2 short description lines."""
+    tick; unipolar knobs get a grey tick at the CCW start. Below: the function
+    name (prominent), then the K-id, then 1-2 short description lines."""
     bipolar = entry.get("bi", False)
     name = entry["l"]
     detail = entry.get("d", [])
@@ -151,13 +152,13 @@ def knob(cx: int, cy: int, kid: str, entry: dict, indicator_deg: float = -135.0)
         stroke="#9a9a9a" stroke-width="2" stroke-linecap="round"/>""")
 
     name_y = cy + KNOB_R + 24
-    fn_y = name_y + 20
+    id_y = name_y + 18
     parts.append(f"""
   <text x="{cx}" y="{name_y}" text-anchor="middle"
-        font-size="{FS_KNOB_NAME}" font-weight="700" fill="#111">{kid}</text>
-  <text x="{cx}" y="{fn_y}" text-anchor="middle"
-        font-size="{FS_KNOB_FN}" fill="#333">{name}</text>""")
-    dy = fn_y + 16
+        font-size="{FS_KNOB_NAME}" font-weight="700" fill="#111">{name}</text>
+  <text x="{cx}" y="{id_y}" text-anchor="middle"
+        font-size="{FS_KNOB_ID}" fill="#888">{kid}</text>""")
+    dy = id_y + 16
     for line in detail:
         parts.append(f"""
   <text x="{cx}" y="{dy}" text-anchor="middle"
@@ -175,40 +176,44 @@ def switch(cx: int, cy: int, sw_label: str, positions: list, pos: str = "MID") -
     else:
         sw_id, sw_fn = sw_label, ""
 
-    # Metal lever toggle: fixed body + a bat handle that points UP / DOWN, or is
-    # seen end-on (centred) for MID — so SW3 reads the mode this diagram covers.
+    # Metal lever toggle: round base + a bat handle pivoting from the centre,
+    # laid UP / DOWN, or seen end-on (centred) for MID — so SW3 reads the mode
+    # this diagram covers.
     if pos == "UP":
-        bat = ('<rect x="-5" y="-40" width="10" height="24" rx="4" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
-               '<circle cx="0" cy="-42" r="6" fill="#b7bbbf" stroke="#222" stroke-width="1"/>')
+        bat = '<rect x="-5" y="-25" width="10" height="30" rx="4" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
     elif pos == "DOWN":
-        bat = ('<rect x="-5" y="16" width="10" height="24" rx="4" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
-               '<circle cx="0" cy="42" r="6" fill="#b7bbbf" stroke="#222" stroke-width="1"/>')
+        bat = '<rect x="-5" y="-5" width="10" height="30" rx="4" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
     else:  # MID — bat pointing at the viewer (centre detent)
         bat = ('<circle cx="0" cy="0" r="8" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/>'
                '<circle cx="0" cy="0" r="3.5" fill="#b7bbbf" stroke="#222" stroke-width="0.8"/>')
     base = f"""
   <g transform="translate({cx},{cy})">
-    <rect x="-14" y="-22" width="28" height="44" rx="6"
-          fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
-    <rect x="-14" y="-6" width="28" height="12" fill="#868c90" stroke="#333" stroke-width="0.8"/>
+    <circle r="17" fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
+    <circle r="9.5" fill="#868c90" stroke="#333" stroke-width="0.8"/>
     {bat}
   </g>
   <text x="{cx}" y="{SWITCH_LABEL_Y}" text-anchor="middle"
-        font-size="{FS_SWITCH_LABEL}" font-weight="700" fill="#111">{sw_id}</text>
-  <text x="{cx}" y="{SWITCH_LABEL_Y + FS_SWITCH_FN + 6}" text-anchor="middle"
-        font-size="{FS_SWITCH_FN}" fill="#444">{sw_fn}</text>"""
+        font-size="{FS_SWITCH_LABEL}" font-weight="700" fill="#111">{sw_fn}</text>
+  <text x="{cx}" y="{SWITCH_LABEL_Y + FS_SWITCH_ID + 4}" text-anchor="middle"
+        font-size="{FS_SWITCH_ID}" fill="#888">{sw_id}</text>"""
 
+    # Rows are left-aligned (markers in one column, functions in another) and the
+    # whole block is centred under the switch. Column widths are estimated from
+    # the longest function label at this font size.
     markers = ["▲", "●", "▼"]
-    pos_names = ["UP", "MID", "DOWN"]
+    CHARW = 7.2                       # ~avg glyph advance at FS_SWITCH_POS
+    marker_col = 18                   # marker + gap before the function column
+    fn_w = max(len(b) for b in positions) * CHARW
+    left_x = cx - (marker_col + fn_w) / 2
     rows = []
     pos_y0 = SWITCH_LABEL_Y + FS_SWITCH_FN + FS_SWITCH_POS + 16
-    for i, (marker, pos_name, body) in enumerate(zip(markers, pos_names, positions)):
+    for i, (marker, body) in enumerate(zip(markers, positions)):
         y = pos_y0 + i * SWITCH_POS_STEP
         rows.append(
             f"""
-  <text x="{cx}" y="{y}" text-anchor="middle" font-size="{FS_SWITCH_POS}" fill="#222">
-    <tspan font-weight="700">{marker} {pos_name}</tspan>
-    <tspan dx="6" fill="#444">{body}</tspan>
+  <text y="{y}" font-size="{FS_SWITCH_POS}" fill="#111">
+    <tspan x="{left_x:.1f}" fill="#999">{marker}</tspan>
+    <tspan x="{left_x + marker_col:.1f}" font-weight="600">{body}</tspan>
   </text>"""
         )
     return base + "".join(rows)
@@ -244,6 +249,8 @@ ANGLES = {
 def build_svg(mode_key: str) -> str:
     m = MODES[mode_key]
     angles = ANGLES[mode_key]
+    # title "Mode A — Bordun" → big name "Bordun", subtitle tag "Mode A"
+    mode_tag, mode_name = (s.strip() for s in m["title"].split("—", 1))
 
     parts = [
         f'<?xml version="1.0" encoding="UTF-8"?>',
@@ -252,9 +259,9 @@ def build_svg(mode_key: str) -> str:
         f'  <rect x="14" y="14" width="{W - 28}" height="{H - 28}" rx="40" '
         f'fill="#f6f6f6" stroke="#444" stroke-width="2.5"/>',
         f'  <text x="{W // 2}" y="64" text-anchor="middle" '
-        f'font-size="{FS_TITLE}" font-weight="700" fill="#111">{m["title"]}</text>',
+        f'font-size="{FS_TITLE}" font-weight="700" fill="#111">{mode_name}</text>',
         f'  <text x="{W // 2}" y="92" text-anchor="middle" '
-        f'font-size="{FS_SUBTITLE}" fill="#666">NitroTron3 · Hothouse pedal layout</text>',
+        f'font-size="{FS_SUBTITLE}" fill="#666">NitroTron3 · {mode_tag}</text>',
     ]
 
     for i in range(3):
@@ -281,8 +288,10 @@ def build_svg(mode_key: str) -> str:
 
 
 def main() -> None:
+    assets = DOCS / "assets"
+    assets.mkdir(exist_ok=True)
     for key in MODES:
-        out = DOCS / f"pedal-mode-{key}.svg"
+        out = assets / f"pedal-mode-{key}.svg"
         out.write_text(build_svg(key), encoding="utf-8")
         print(f"wrote {out.relative_to(DOCS.parent)}")
 

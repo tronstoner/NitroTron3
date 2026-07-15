@@ -1,7 +1,7 @@
 # NitroTron3
 
 <p align="center">
-  <img src="docs/NitroTron3.jpg" alt="NitroTron3 — illustration of the pedal" width="300">
+  <img src="docs/assets/NitroTron3.jpg" alt="NitroTron3 — illustration of the pedal" width="300">
 </p>
 
 A DIY digital bass effects pedal built on the [Electro-Smith Daisy Seed](https://electro-smith.com/products/daisy-seed) and [Cleveland Music Co. Hothouse DSP kit](https://shop.clevelandmusicco.com/products/hothouse-digital-signal-processing-platform-kit). Licensed under [GPL v3](LICENSE).
@@ -76,7 +76,8 @@ NitroTron3/
 │   ├── USER_MANUAL.md          # end-user manual (with PDF render)
 │   ├── ux-demo.html            # interactive preset / bank UX demo
 │   ├── mode-b-engines.html     # interactive Mode B engine exploration
-│   └── pedal-mode-{a,b,c}.svg  # per-mode pedal layout diagrams
+│   └── assets/                 # manual images: pedal-mode-{a,b,c}.svg,
+│                               #   icon-{ccw,cw,noon,uni}.svg, NitroTron3.jpg
 │
 ├── lib/
 │   └── HothouseExamples/       # submodule

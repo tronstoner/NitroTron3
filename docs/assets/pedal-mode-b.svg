@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 1000" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
   <rect x="14" y="14" width="572" height="972" rx="40" fill="#f6f6f6" stroke="#444" stroke-width="2.5"/>
-  <text x="300" y="64" text-anchor="middle" font-size="30" font-weight="700" fill="#111">Mode B — Sprawl</text>
-  <text x="300" y="92" text-anchor="middle" font-size="16" fill="#666">NitroTron3 · Hothouse pedal layout</text>
+  <text x="300" y="64" text-anchor="middle" font-size="30" font-weight="700" fill="#111">Sprawl</text>
+  <text x="300" y="92" text-anchor="middle" font-size="16" fill="#666">NitroTron3 · Mode B</text>
 
   <g transform="translate(130,172)">
     <circle r="46" fill="#1d1d1d" stroke="#000" stroke-width="1.8"/>
@@ -15,12 +15,12 @@
   <line x1="130.0" y1="124.0" x2="130.0" y2="114.0"
         stroke="#c83232" stroke-width="3.5" stroke-linecap="round"/>
   <text x="130" y="242" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">K1</text>
-  <text x="130" y="262" text-anchor="middle"
-        font-size="18" fill="#333">Pitch</text>
-  <text x="130" y="278" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">Pitch</text>
+  <text x="130" y="260" text-anchor="middle"
+        font-size="14" fill="#888">K1</text>
+  <text x="130" y="276" text-anchor="middle"
         font-size="12" fill="#777">center = unison</text>
-  <text x="130" y="293" text-anchor="middle"
+  <text x="130" y="291" text-anchor="middle"
         font-size="12" fill="#777">harmony set by SW2</text>
 
   <g transform="translate(300,172)">
@@ -34,12 +34,12 @@
   <line x1="300.0" y1="124.0" x2="300.0" y2="114.0"
         stroke="#c83232" stroke-width="3.5" stroke-linecap="round"/>
   <text x="300" y="242" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">K2</text>
-  <text x="300" y="262" text-anchor="middle"
-        font-size="18" fill="#333">Buffer</text>
-  <text x="300" y="278" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">Buffer</text>
+  <text x="300" y="260" text-anchor="middle"
+        font-size="14" fill="#888">K2</text>
+  <text x="300" y="276" text-anchor="middle"
         font-size="12" fill="#777">center = live</text>
-  <text x="300" y="293" text-anchor="middle"
+  <text x="300" y="291" text-anchor="middle"
         font-size="12" fill="#777">◀ reverse · forward ▶</text>
 
   <g transform="translate(470,172)">
@@ -53,12 +53,12 @@
   <line x1="470.0" y1="124.0" x2="470.0" y2="114.0"
         stroke="#c83232" stroke-width="3.5" stroke-linecap="round"/>
   <text x="470" y="242" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">K3</text>
-  <text x="470" y="262" text-anchor="middle"
-        font-size="18" fill="#333">Character</text>
-  <text x="470" y="278" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">Character</text>
+  <text x="470" y="260" text-anchor="middle"
+        font-size="14" fill="#888">K3</text>
+  <text x="470" y="276" text-anchor="middle"
         font-size="12" fill="#777">center = clean</text>
-  <text x="470" y="293" text-anchor="middle"
+  <text x="470" y="291" text-anchor="middle"
         font-size="12" fill="#777">◀ smear cloud · glitch ▶</text>
 
   <g transform="translate(130,360)">
@@ -72,12 +72,12 @@
   <line x1="130.0" y1="312.0" x2="130.0" y2="302.0"
         stroke="#c83232" stroke-width="3.5" stroke-linecap="round"/>
   <text x="130" y="430" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">K4</text>
-  <text x="130" y="450" text-anchor="middle"
-        font-size="18" fill="#333">Texture</text>
-  <text x="130" y="466" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">Texture</text>
+  <text x="130" y="448" text-anchor="middle"
+        font-size="14" fill="#888">K4</text>
+  <text x="130" y="464" text-anchor="middle"
         font-size="12" fill="#777">center = clean</text>
-  <text x="130" y="481" text-anchor="middle"
+  <text x="130" y="479" text-anchor="middle"
         font-size="12" fill="#777">SW1 sets the effect</text>
 
   <g transform="translate(300,360)">
@@ -91,12 +91,12 @@
   <line x1="300.0" y1="312.0" x2="300.0" y2="302.0"
         stroke="#c83232" stroke-width="3.5" stroke-linecap="round"/>
   <text x="300" y="430" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">K5</text>
-  <text x="300" y="450" text-anchor="middle"
-        font-size="18" fill="#333">Reverb / Feedback</text>
-  <text x="300" y="466" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">Reverb / Feedback</text>
+  <text x="300" y="448" text-anchor="middle"
+        font-size="14" fill="#888">K5</text>
+  <text x="300" y="464" text-anchor="middle"
         font-size="12" fill="#777">center = off</text>
-  <text x="300" y="481" text-anchor="middle"
+  <text x="300" y="479" text-anchor="middle"
         font-size="12" fill="#777">◀ reverb · feedback ▶</text>
 
   <g transform="translate(470,360)">
@@ -110,79 +110,76 @@
   <line x1="436.1" y1="393.9" x2="430.4" y2="399.6"
         stroke="#9a9a9a" stroke-width="2" stroke-linecap="round"/>
   <text x="470" y="430" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">K6</text>
-  <text x="470" y="450" text-anchor="middle"
-        font-size="18" fill="#333">Mix</text>
-  <text x="470" y="466" text-anchor="middle"
+        font-size="22" font-weight="700" fill="#111">Mix</text>
+  <text x="470" y="448" text-anchor="middle"
+        font-size="14" fill="#888">K6</text>
+  <text x="470" y="464" text-anchor="middle"
         font-size="12" fill="#777">dry → wet</text>
 
   <g transform="translate(130,542)">
-    <rect x="-14" y="-22" width="28" height="44" rx="6"
-          fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
-    <rect x="-14" y="-6" width="28" height="12" fill="#868c90" stroke="#333" stroke-width="0.8"/>
+    <circle r="17" fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
+    <circle r="9.5" fill="#868c90" stroke="#333" stroke-width="0.8"/>
     <circle cx="0" cy="0" r="8" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/><circle cx="0" cy="0" r="3.5" fill="#b7bbbf" stroke="#222" stroke-width="0.8"/>
   </g>
   <text x="130" y="612" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">SW1</text>
-  <text x="130" y="635" text-anchor="middle"
-        font-size="17" fill="#444">Texture</text>
-  <text x="130" y="660" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">▲ UP</tspan>
-    <tspan dx="6" fill="#444">Crush / Fold</tspan>
+        font-size="22" font-weight="700" fill="#111">Texture</text>
+  <text x="130" y="630" text-anchor="middle"
+        font-size="14" fill="#888">SW1</text>
+  <text y="660" font-size="15" fill="#111">
+    <tspan x="77.8" fill="#999">▲</tspan>
+    <tspan x="95.8" font-weight="600">Crush / Fold</tspan>
   </text>
-  <text x="130" y="687" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">● MID</tspan>
-    <tspan dx="6" fill="#444">Glitch</tspan>
+  <text y="687" font-size="15" fill="#111">
+    <tspan x="77.8" fill="#999">●</tspan>
+    <tspan x="95.8" font-weight="600">Glitch</tspan>
   </text>
-  <text x="130" y="714" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">▼ DOWN</tspan>
-    <tspan dx="6" fill="#444">Ring mod</tspan>
+  <text y="714" font-size="15" fill="#111">
+    <tspan x="77.8" fill="#999">▼</tspan>
+    <tspan x="95.8" font-weight="600">Ring mod</tspan>
   </text>
 
   <g transform="translate(300,542)">
-    <rect x="-14" y="-22" width="28" height="44" rx="6"
-          fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
-    <rect x="-14" y="-6" width="28" height="12" fill="#868c90" stroke="#333" stroke-width="0.8"/>
+    <circle r="17" fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
+    <circle r="9.5" fill="#868c90" stroke="#333" stroke-width="0.8"/>
     <circle cx="0" cy="0" r="8" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/><circle cx="0" cy="0" r="3.5" fill="#b7bbbf" stroke="#222" stroke-width="0.8"/>
   </g>
   <text x="300" y="612" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">SW2</text>
-  <text x="300" y="635" text-anchor="middle"
-        font-size="17" fill="#444">Harmony</text>
-  <text x="300" y="660" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">▲ UP</tspan>
-    <tspan dx="6" fill="#444">Fixed</tspan>
+        font-size="22" font-weight="700" fill="#111">Harmony</text>
+  <text x="300" y="630" text-anchor="middle"
+        font-size="14" fill="#888">SW2</text>
+  <text y="660" font-size="15" fill="#111">
+    <tspan x="240.6" fill="#999">▲</tspan>
+    <tspan x="258.6" font-weight="600">Fixed</tspan>
   </text>
-  <text x="300" y="687" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">● MID</tspan>
-    <tspan dx="6" fill="#444">Harmonic cloud</tspan>
+  <text y="687" font-size="15" fill="#111">
+    <tspan x="240.6" fill="#999">●</tspan>
+    <tspan x="258.6" font-weight="600">Harmonic cloud</tspan>
   </text>
-  <text x="300" y="714" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">▼ DOWN</tspan>
-    <tspan dx="6" fill="#444">Shift</tspan>
+  <text y="714" font-size="15" fill="#111">
+    <tspan x="240.6" fill="#999">▼</tspan>
+    <tspan x="258.6" font-weight="600">Shift</tspan>
   </text>
 
   <g transform="translate(470,542)">
-    <rect x="-14" y="-22" width="28" height="44" rx="6"
-          fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
-    <rect x="-14" y="-6" width="28" height="12" fill="#868c90" stroke="#333" stroke-width="0.8"/>
+    <circle r="17" fill="#9aa0a4" stroke="#333" stroke-width="1.6"/>
+    <circle r="9.5" fill="#868c90" stroke="#333" stroke-width="0.8"/>
     <circle cx="0" cy="0" r="8" fill="#cfd2d5" stroke="#222" stroke-width="1.2"/><circle cx="0" cy="0" r="3.5" fill="#b7bbbf" stroke="#222" stroke-width="0.8"/>
   </g>
   <text x="470" y="612" text-anchor="middle"
-        font-size="22" font-weight="700" fill="#111">SW3</text>
-  <text x="470" y="635" text-anchor="middle"
-        font-size="17" fill="#444">Mode select</text>
-  <text x="470" y="660" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">▲ UP</tspan>
-    <tspan dx="6" fill="#444">Bordun</tspan>
+        font-size="22" font-weight="700" fill="#111">Mode select</text>
+  <text x="470" y="630" text-anchor="middle"
+        font-size="14" fill="#888">SW3</text>
+  <text y="660" font-size="15" fill="#111">
+    <tspan x="432.2" fill="#999">▲</tspan>
+    <tspan x="450.2" font-weight="600">Bordun</tspan>
   </text>
-  <text x="470" y="687" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">● MID</tspan>
-    <tspan dx="6" fill="#444">Sprawl ◀</tspan>
+  <text y="687" font-size="15" fill="#111">
+    <tspan x="432.2" fill="#999">●</tspan>
+    <tspan x="450.2" font-weight="600">Sprawl ◀</tspan>
   </text>
-  <text x="470" y="714" text-anchor="middle" font-size="15" fill="#222">
-    <tspan font-weight="700">▼ DOWN</tspan>
-    <tspan dx="6" fill="#444">Schism</tspan>
+  <text y="714" font-size="15" fill="#111">
+    <tspan x="432.2" fill="#999">▼</tspan>
+    <tspan x="450.2" font-weight="600">Schism</tspan>
   </text>
 
   <circle cx="195" cy="772" r="9" fill="#c83232" stroke="#5c1414" stroke-width="1"/>

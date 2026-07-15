@@ -36,15 +36,17 @@ Read off the FLASH usage. If the build fails, stop.
 
 ### 3. Build the user manual PDF
 
-The manual embeds the per-mode pedal-layout SVGs, which are **generated** from
-`docs/gen_layout_svg.py` (see the `update-controls` skill). **Regenerate them
-first and confirm the labels match the current controls** — the Makefile only
-rebuilds the SVGs when the *script* is newer, so stale labels baked into the
-script are NOT caught by `make` and will silently ship in the PDF.
+The manual embeds **generated** images from `docs/assets/`: the per-mode
+pedal-layout SVGs (`docs/gen_layout_svg.py`) and the knob-direction icons
+(`docs/gen_icons.py`). **Regenerate both first and confirm the labels/icons match
+the current controls** — the Makefile only rebuilds them when a *script* is
+newer, so stale artwork baked into a script is NOT caught by `make` and will
+silently ship in the PDF.
 
 ```sh
-python3 docs/gen_layout_svg.py        # regenerate from the source of truth
-git status --short docs/pedal-mode-*.svg   # did any labels change? eyeball them
+python3 docs/gen_layout_svg.py            # pedal layouts → docs/assets/
+python3 docs/gen_icons.py                 # direction icons → docs/assets/
+git status --short docs/assets/           # did any artwork change? eyeball it
 make manual
 ```
 

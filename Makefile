@@ -24,11 +24,18 @@ include $(SYSTEM_FILES_DIR)/Makefile
 .PHONY: manual
 manual: docs/USER_MANUAL.pdf
 
-docs/pedal-mode-a.svg docs/pedal-mode-b.svg docs/pedal-mode-c.svg &: docs/gen_layout_svg.py
+docs/assets/pedal-mode-a.svg docs/assets/pedal-mode-b.svg docs/assets/pedal-mode-c.svg &: docs/gen_layout_svg.py
 	python3 docs/gen_layout_svg.py
 
+ICON_SVGS = docs/assets/icon-ccw.svg docs/assets/icon-cw.svg docs/assets/icon-noon.svg \
+            docs/assets/icon-uni.svg docs/assets/icon-steps.svg docs/assets/icon-bipolar.svg
+
+$(ICON_SVGS) &: docs/gen_icons.py
+	python3 docs/gen_icons.py
+
 docs/USER_MANUAL.pdf: docs/USER_MANUAL.md docs/manual.css \
-                     docs/pedal-mode-a.svg docs/pedal-mode-b.svg docs/pedal-mode-c.svg
+                     docs/assets/pedal-mode-a.svg docs/assets/pedal-mode-b.svg docs/assets/pedal-mode-c.svg \
+                     $(ICON_SVGS)
 	pandoc $< \
 	  --from gfm+attributes \
 	  --pdf-engine=weasyprint \
