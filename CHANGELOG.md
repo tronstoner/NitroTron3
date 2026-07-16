@@ -4,6 +4,22 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+## v0.3.2 — 2026-07-16 — Pre-release
+
+Documentation-only release — the firmware is byte-identical to v0.3.1. The user
+manual got a readability overhaul.
+
+### Changed
+
+- **Manual — knob-direction icons.** The control tables use icons for each
+  knob's nature (bipolar / unipolar / stepped) and motion (counter-clockwise,
+  clockwise, at-centre), with a legend up front.
+- **Manual — clearer control tables.** Sub-modes, waveforms and switch positions
+  are broken onto their own lines, and each control's name is merged with its
+  function into one column (function first, `Knob N` / `Switch N` beneath).
+- **Manual — redrawn pedal layouts.** Mode-named titles, function-first knob and
+  switch labels, and cleaner toggle-switch graphics.
+
 ## v0.3.1 — 2026-07-13 — Pre-release
 
 Focused on **BORDUN (Mode A)** — a rework of the oscillator character (K5) and
