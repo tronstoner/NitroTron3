@@ -1,0 +1,14 @@
+{
+  "flash_address": "0x08000000",
+  "flash_size": 131072,
+  "firmware": [
+    {
+      "version": "v0.3.2",
+      "variant": "bass",
+      "file": "NitroTron3-v0.3.2.bin",
+      "sha256": "004ac75e6d95108dff2a59ac5fcba46cb48c78e22327831fd781dbe1b9fde0f4",
+      "released": "2026-07-16",
+      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.3.2"
+    }
+  ]
+}

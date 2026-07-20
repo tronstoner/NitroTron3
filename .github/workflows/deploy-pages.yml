@@ -1,0 +1,47 @@
+# Deploy docs/ to GitHub Pages — publishes the specs, manual, and the
+# firmware updater (docs/updater/ → https://<user>.github.io/NitroTron3/updater/).
+# Requires repo Settings → Pages → Source: "GitHub Actions".
+name: Deploy docs to Pages
+
+on:
+  # Deploy on pushes to main that touch the published content
+  push:
+    branches: ["main"]
+    paths: ["docs/**", ".github/workflows/deploy-pages.yml"]
+
+  # Allows running the workflow manually from the Actions tab
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the
+# in-progress run and the latest queued one. Do NOT cancel in-progress runs —
+# production deployments should complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Publish only docs/ — the updater page, firmware manifest, specs,
+          # and manual. Not the firmware source tree.
+          path: 'docs'
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

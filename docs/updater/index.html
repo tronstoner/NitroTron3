@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NitroTron3 — Firmware Updater</title>
+<link rel="stylesheet" href="updater.css">
+</head>
+<body>
+<div id="wrapall">
+  <div id="main">
+    <h1>NitroTron3</h1>
+    <div id="subnitro">firmware updater</div>
+
+    <div id="nosupport" hidden>
+      this browser has no webusb — use chrome, edge or opera (desktop or android).
+      safari and firefox cannot flash hardware.
+    </div>
+    <noscript><div id="nosupport" style="display:block">javascript is required to flash firmware.</div></noscript>
+
+    <h2>1 &mdash; enter dfu mode</h2>
+    <ol>
+      <li>connect the pedal to this computer via usb</li>
+      <li>power the pedal</li>
+      <li>hold both footswitches for 2 seconds &mdash; the leds alternate, then the pedal waits in dfu mode</li>
+    </ol>
+
+    <h2>2 &mdash; connect</h2>
+    <p>
+      <button id="connect" class="cta">connect</button>
+      <span id="devinfo" class="statusline"></span>
+    </p>
+
+    <h2>3 &mdash; choose firmware</h2>
+    <div id="fwlist">loading firmware list&hellip;</div>
+    <p class="small">or flash a local file: <input type="file" id="localfile" accept=".bin"></p>
+
+    <h2>4 &mdash; flash</h2>
+    <p>
+      <button id="flash" class="cta" disabled>flash</button>
+      <span id="leds" hidden><span class="led" id="led1"></span><span class="led" id="led2"></span></span>
+      <span id="flashstate" class="statusline"></span>
+    </p>
+    <div id="progress"><div id="progressfill"></div></div>
+    <pre id="log" aria-live="polite"></pre>
+
+    <div class="small" id="foot">
+      works in chrome / edge / opera (webusb) &mdash; safari and firefox do not support webusb.<br>
+      windows: if no device shows up, bind the winusb driver to &laquo;stm32 bootloader&raquo; with
+      <a href="https://zadig.akeo.ie/">zadig</a>.<br>
+      flashing cannot brick the pedal &mdash; the dfu bootloader lives in rom and the 2-second
+      footswitch hold always reaches it.<br>
+      dfu over webusb by <a href="https://github.com/devanlai/webdfu">devanlai/webdfu</a> (isc) &middot;
+      source &amp; manual: <a href="https://github.com/tronstoner/NitroTron3">github [dot] com/tronstoner/NitroTron3</a>
+    </div>
+  </div>
+</div>
+<script src="dfu.js"></script>
+<script src="dfuse.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

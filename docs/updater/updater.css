@@ -1,0 +1,174 @@
+/* NitroTron3 firmware updater — styled after nitromahalia.net (nitro5.css):
+   black page, white 900px sheet, uppercase Arial, red #E00 with the yellow
+   #EE0 double-print text-shadow, dotted rules, red CTA pills. */
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 120%;
+  background: #000;
+  color: #E00;
+  text-shadow: 1px 0px 0px #ee0;
+  text-transform: uppercase;
+  margin: 0;
+  padding: 0;
+}
+
+#wrapall {
+  background: #FFF;
+  margin: 0 auto;
+  width: 900px;
+  max-width: 100%;
+  padding: 0 0 2em 0;
+  box-sizing: border-box;
+}
+
+#main {
+  width: 800px;
+  max-width: calc(100% - 2em);
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 80px;
+  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  width: auto;
+}
+
+#subnitro {
+  font-size: 11px;
+  letter-spacing: 6px;
+  margin-bottom: 30px;
+  margin-left: 6px;
+  margin-top: -6px;
+  color: #000;
+  text-shadow: none;
+}
+
+h2 {
+  margin-left: 0em;
+  border-bottom: 4px dotted #000;
+  color: #000;
+  text-shadow: none;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+a {
+  color: #E00;
+  text-decoration: none;
+  font-weight: bold;
+  border-bottom: 2px dotted #EE0;
+}
+a:hover { color: #000; text-decoration: none; font-weight: bold; }
+
+ol li { margin-left: 1em; margin-bottom: 0.35em; }
+
+.small { font-size: 12px; }
+
+/* CTA buttons — a.cta from the mothership, as <button> */
+button.cta {
+  font: inherit;
+  text-transform: uppercase;
+  font-weight: bold;
+  background: #E00;
+  color: #FFF;
+  text-shadow: none;
+  padding: 2px 12px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+button.cta:hover:not(:disabled) { background: #000; }
+button.cta:disabled { background: #bbb; cursor: default; }
+
+/* status text next to buttons */
+.statusline { color: #000; text-shadow: none; font-size: 88%; }
+
+/* warning strip (no WebUSB) */
+#nosupport {
+  background: #E00;
+  color: #FFF;
+  text-shadow: none;
+  padding: 0.5em 0.75em;
+  margin: 1em 0;
+  font-weight: bold;
+}
+
+/* firmware rows — like the #dates listing */
+#fwlist { color: #000; text-shadow: none; }
+#fwlist label.fwrow {
+  display: block;
+  border-bottom: 1px dotted #666;
+  padding: 0.35em 0;
+  cursor: pointer;
+}
+#fwlist label.fwrow:first-child { border-top: 1px dotted #666; }
+#fwlist input[type="radio"] { accent-color: #E00; margin-right: 0.6em; }
+#fwlist .fwver { font-weight: bold; color: #E00; text-shadow: 1px 0px 0px #ee0; }
+#fwlist .fwmeta { font-size: 12px; color: #666; margin-left: 0.6em; }
+
+input[type="file"] { font: inherit; font-size: 12px; text-transform: none; }
+
+/* progress bar — dotted track, red fill */
+#progress {
+  border: 2px dotted #666;
+  height: 18px;
+  margin: 0.75em 0;
+  background: #FFF;
+}
+#progressfill {
+  height: 100%;
+  width: 0%;
+  background: #E00;
+}
+
+/* the two DFU LEDs — alternate like the pedal's bootloader confirm burst */
+#leds { margin-left: 0.75em; }
+.led {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #000;
+  background: #ddd;
+  margin: 0 3px;
+  vertical-align: middle;
+}
+#leds.blinking #led1 { animation: led-a 0.3s steps(1) infinite; }
+#leds.blinking #led2 { animation: led-b 0.3s steps(1) infinite; }
+@keyframes led-a { 0% { background: #E00; } 50% { background: #ddd; } }
+@keyframes led-b { 0% { background: #ddd; } 50% { background: #EE0; } }
+@media (prefers-reduced-motion: reduce) {
+  #leds.blinking #led1, #leds.blinking #led2 { animation: none; background: #E00; }
+}
+
+/* log console — technical zone, no uppercase */
+#log {
+  border: 1px dotted #666;
+  color: #000;
+  text-shadow: none;
+  text-transform: none;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 0.5em;
+  min-height: 5em;
+  max-height: 16em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#log .err { color: #E00; font-weight: bold; }
+
+#foot {
+  margin-top: 2.5em;
+  border-top: 4px dotted #000;
+  padding-top: 0.75em;
+  color: #000;
+  text-shadow: none;
+}
+
+@media (max-width: 600px) {
+  h1 { font-size: 44px; }
+  #subnitro { letter-spacing: 3px; }
+  body { font-size: 100%; }
+}
