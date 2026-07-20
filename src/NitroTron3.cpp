@@ -35,6 +35,9 @@ Hothouse hw;
 // DSP — Mode A (Drone)
 // ---------------------------------------------------------------------------
 DroneOsc     drone_osc;  // Mode A — unison cloud (K5 CCW) + audio-rate FM (K5 CW)
+#if NT3_TRACK_POLY
+DroneOsc     drone_osc_poly[TRACK_POLY_VOICES - 1];  // poly voices 2..N (voice 1 = drone_osc)
+#endif
 MoogLadder   ladder;     // Mode A
 ModeAHpf     mode_a_hpf; // Mode A — K4-CW high-pass (saw/square)
 MoogLadderV2 ladder_c_v2; // Mode C — SW2=UP, our tuned Moog (A/B winner)
@@ -43,6 +46,10 @@ Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
 PeakLimiter  limiter_c;   // Mode C — post-filter peak limiter (2-band, fundamentals preserved)
 BitCrush     bitcrush_c;  // Mode C — SW1=MID drive flavor (gated bit crusher)
 ModeCSynth   synth_c;     // Mode C — SW1=DOWN pitch-tracked synth oscillator
+#if NT3_TRACK_POLY
+PolyVoices   poly_voices;                            // multi-dip voice matcher
+ModeCSynth   synth_c_poly[TRACK_POLY_VOICES - 1];    // poly voices 2..N (voice 1 = synth_c)
+#endif
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -472,6 +479,9 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     default: break;
   }
   drone_osc.SetWaveform(wf);
+#if NT3_TRACK_POLY
+  for (int v = 0; v < TRACK_POLY_VOICES - 1; v++) drone_osc_poly[v].SetWaveform(wf);
+#endif
 
   // Drone sub-mode — from edit buffer SW2
   DroneMode drone_mode = DRONE_FIXED;
@@ -485,6 +495,14 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // --- Pitch controls (from edit buffer knobs, remapped) ---
   float midi_note = 0.f;
   float fine = Mapf(RemapKnob(eb.knobs[2]), -0.5f, 0.5f);  // K3
+
+#if NT3_TRACK_POLY
+  // Multi-dip poly drone: per-voice pitches, filled by the tracked branches
+  // below. Fixed pitch stays mono; octave-locked joins only when
+  // TRACK_POLY_OCTLOCK is on (needs hardware judgment — see the doc).
+  bool  drone_poly = false;
+  float poly_midi[TRACK_POLY_VOICES] = {};
+#endif
 
   if (drone_mode == DRONE_FIXED) {
     float k1 = RemapKnob(eb.knobs[0]);
@@ -508,6 +526,20 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     int octave = Quantize(RemapKnob(eb.knobs[1]), 7);
     int base_note = 12 + (octave + TRACKING_OCTAVE_SHIFT) * 12;
     midi_note = static_cast<float>(base_note + TRACKING_FOLD_NOTE + semi_offset) + folded;
+#if NT3_TRACK_POLY
+    if (TRACK_POLY_OCTLOCK) {
+      // Per-voice stateless fold (PITCH_FOLD_HYSTERESIS_SEMI is 0, so the
+      // fold is a pure function of pitch — no per-voice fold state needed).
+      drone_poly = true;
+      for (int v = 0; v < TRACK_POLY_VOICES; v++) {
+        float folded_v = fmodf(poly_voices.Midi(v) -
+                               static_cast<float>(TRACKING_FOLD_NOTE), 12.f);
+        if (folded_v < 0.f) folded_v += 12.f;
+        poly_midi[v] = static_cast<float>(base_note + TRACKING_FOLD_NOTE +
+                                          semi_offset) + folded_v;
+      }
+    }
+#endif
   } else {
     // DRONE_TRACK_DIRECT — continuous pitch so the drone follows bends/slides.
     float tracked = tracker.GetMidiNoteContinuous();
@@ -516,9 +548,21 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     // -1: K2 noon = A3 for a played A, matching the fixed drone and octave-locked.
     int oct_offset = Quantize(RemapKnob(eb.knobs[1]), 7) - 1;
     midi_note = tracked + static_cast<float>(semi_offset + oct_offset * 12);
+#if NT3_TRACK_POLY
+    drone_poly = true;
+    for (int v = 0; v < TRACK_POLY_VOICES; v++)
+      poly_midi[v] = poly_voices.Midi(v) +
+                     static_cast<float>(semi_offset + oct_offset * 12);
+#endif
   }
 
   float freq1 = MidiToFreq(midi_note + fine);
+#if NT3_TRACK_POLY
+  float poly_freq[TRACK_POLY_VOICES] = {};
+  if (drone_poly)
+    for (int v = 0; v < TRACK_POLY_VOICES; v++)
+      poly_freq[v] = MidiToFreq(poly_midi[v] + fine);
+#endif
 
   // K4: bipolar filter (saw/square) or LP-sweep + wavefold (triangle)
   float k4 = RemapKnob(eb.knobs[3]);
@@ -566,7 +610,24 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
     if (drone_mode != DRONE_FIXED) tracker.Feed(dry, env_val);
 
+#if NT3_TRACK_POLY
+    float osc_mix = 0.f;
+    if (drone_poly) {
+      // Up to TRACK_POLY_VOICES tracked voices, each on its own engine, gain
+      // = matcher salience gain. Env VCA stays global (below), as in mono.
+      poly_voices.TickGains();
+      for (int v = 0; v < TRACK_POLY_VOICES; v++) {
+        if (!poly_voices.Audible(v)) continue;
+        DroneOsc& eng = (v == 0) ? drone_osc : drone_osc_poly[v - 1];
+        osc_mix += eng.Process(poly_freq[v], k5, dry, env_val) *
+                   poly_voices.Gain(v);
+      }
+    } else {
+      osc_mix = drone_osc.Process(freq1, k5, dry, env_val);
+    }
+#else
     float osc_mix = drone_osc.Process(freq1, k5, dry, env_val);
+#endif
     if (wf == MoogOsc::TRI) {
       float dyn_fold = fold_amount + env_val * ENV_FOLD_MOD * 5.f;
       if (dyn_fold > 1.f) dyn_fold = 1.f;
@@ -1478,11 +1539,27 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
         wet = driven * odc;
       }
     } else if (drive_mode == 2) {
+#if NT3_TRACK_POLY
+      // Multi-dip poly synth: up to TRACK_POLY_VOICES tracked voices, each on
+      // its own engine. Per-voice gain = matcher salience gain (LP-smoothed,
+      // attack/release faded); the shared raw-env VCA stays on top for the
+      // playing dynamics, same stage as mono. Silent voices skip their engine.
+      poly_voices.TickGains();
+      float osc_out = 0.f;
+      for (int v = 0; v < TRACK_POLY_VOICES; v++) {
+        if (!poly_voices.Audible(v)) continue;
+        ModeCSynth& eng = (v == 0) ? synth_c : synth_c_poly[v - 1];
+        osc_out += eng.Process(MidiToFreq(poly_voices.Midi(v)), fold_amt) *
+                   poly_voices.Gain(v);
+      }
+      wet = osc_out * EnvExpand(env_val) * MODE_C_SYNTH_VCA_GAIN;
+#else
       // Pitch-tracked synth osc → raw-env VCA (Mode A style) → SW2 filter.
       // K4 (fold_amt) is the timbre morph; continuous pitch (follows bends).
       const float f0 = MidiToFreq(tracker.GetMidiNoteContinuous());
       const float osc_out = synth_c.Process(f0, fold_amt);
       wet = osc_out * EnvExpand(env_val) * MODE_C_SYNTH_VCA_GAIN;
+#endif
     }
 
     // Filter stage (SW2). Filter modulation reads env_c_filter (smoothed).
@@ -1570,6 +1647,13 @@ int main() {
   limiter_c.Init(sr);
   bitcrush_c.Init();
   synth_c.Init(sr);
+#if NT3_TRACK_POLY
+  poly_voices.Init(sr);
+  for (int v = 0; v < TRACK_POLY_VOICES - 1; v++) {
+    synth_c_poly[v].Init(sr);
+    drone_osc_poly[v].Init(sr);
+  }
+#endif
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
 
@@ -1624,6 +1708,9 @@ int main() {
 
     // Pitch tracker: run YIN in main loop (Mode A, Mode B, Mode C SW1=DOWN).
     tracker.Update();
+#if NT3_TRACK_POLY
+    poly_voices.Update(tracker);  // runs once per YIN hop (ConsumeYinRan)
+#endif
 
     // Bootloader: both footswitches held 2 s. FS1-alone path is dropped —
     // it's too easy to trigger while preset-cycling. PresetSystem flags the
