@@ -20,6 +20,8 @@ NitroTron3 is a project of [Nitro Mahalia](https://nitromahalia.net) — This pe
 
 ## Get the firmware
 
+**Easiest way: the [web updater](https://tronstoner.github.io/NitroTron3/updater/)** — flash the pedal straight from Chrome/Edge over USB, no tools to install. Hold both footswitches 2 s to enter DFU, connect, pick a version, flash.
+
 Pre-built binaries (`.bin` for DFU, `.hex` for ST-Link / Daisy Web Programmer), the user manual PDF, and the licence bundle are attached to every tagged release: [github.com/tronstoner/NitroTron3/releases](https://github.com/tronstoner/NitroTron3/releases). Flashing steps live in [`INSTALL.md`](INSTALL.md) — short version: hold both footswitches on the pedal for 2 s to enter DFU, then `dfu-util -a 0 -s 0x08000000:leave -D NitroTron3-vX.Y.bin`. (Other Hothouse pedals use FS1 alone — not this one.)
 
 Build from source instead if you want to modify the firmware — see *Repository setup* and *Getting started* below.

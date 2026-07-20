@@ -25,14 +25,23 @@ git log -1 --oneline  # show HEAD that will be tagged
 
 If dirty, stop. If on the wrong branch, stop. Confirm with the user before continuing.
 
-### 2. Build the firmware fresh
+### 2. Build the firmware fresh — both instrument variants
+
+Since v0.4 every release ships a **bass** (default) and a **guitar** build
+(see "Instrument profile" in `src/constants.h`). The instrument stamp
+(`build/.instrument`) forces the full rebuild on each switch; the two builds
+share one `build/` dir, so **stage each variant's artifacts before building
+the next** (step 4).
 
 ```sh
 make clean
-make 2>&1 | tail -10
+make 2>&1 | tail -10                      # bass
+# → stage bass artifacts (step 4), then:
+make INSTRUMENT=guitar 2>&1 | tail -10    # guitar
+# → stage guitar artifacts (step 4)
 ```
 
-Read off the FLASH usage. If the build fails, stop.
+Read off the FLASH usage of both. If either build fails, stop.
 
 ### 3. Build the user manual PDF
 
@@ -59,8 +68,12 @@ shipping.
 
 ```sh
 mkdir -p release/<version>
+# after the bass build:
 cp build/NitroTron3.bin  release/<version>/NitroTron3-<version>.bin
 cp build/NitroTron3.hex  release/<version>/NitroTron3-<version>.hex
+# after the guitar build:
+cp build/NitroTron3.bin  release/<version>/NitroTron3-<version>-guitar.bin
+cp build/NitroTron3.hex  release/<version>/NitroTron3-<version>-guitar.hex
 cp docs/USER_MANUAL.pdf  release/<version>/USER_MANUAL.pdf
 cp INSTALL.md            release/<version>/INSTALL.md
 cp LICENSE               release/<version>/LICENSE
@@ -83,8 +96,10 @@ Header for each section: which component it covers and which part of the firmwar
 
 ```sh
 cd release/<version>
-shasum -a 256 NitroTron3-<version>.bin > NitroTron3-<version>.bin.sha256
-shasum -a 256 NitroTron3-<version>.hex > NitroTron3-<version>.hex.sha256
+for f in NitroTron3-<version>.bin NitroTron3-<version>.hex \
+         NitroTron3-<version>-guitar.bin NitroTron3-<version>-guitar.hex; do
+  shasum -a 256 "$f" > "$f.sha256"
+done
 cd -
 ```
 
@@ -104,9 +119,14 @@ pedal to enter DFU, then `dfu-util -a 0 -s 0x08000000:leave -D
 NitroTron3-<version>.bin`. (Other Hothouse pedals use FS1 alone — not
 this one.)
 
+## How to install (browser)
+Or flash straight from Chrome/Edge — no tools needed:
+https://tronstoner.github.io/NitroTron3/updater/
+
 ## What's in this release
-- `NitroTron3-<version>.bin` — DFU-flashable firmware image
-- `NitroTron3-<version>.hex` — Intel HEX (for ST-Link / Daisy Web Programmer)
+- `NitroTron3-<version>.bin` — DFU-flashable firmware image (bass)
+- `NitroTron3-<version>-guitar.bin` — guitar-voiced variant (same controls, tracker + voicings retuned for guitar)
+- `NitroTron3-<version>.hex` / `-guitar.hex` — Intel HEX (for ST-Link / Daisy Web Programmer)
 - `USER_MANUAL.pdf` — pedal reference
 - `INSTALL.md` — flashing instructions
 - `LICENSE` — GPL v3
@@ -125,6 +145,18 @@ this one.)
 ```
 
 Show the draft to the user. Edit until they're satisfied.
+
+### 7b. Update CHANGELOG.md and the web-updater manifest (committed, part of the tag)
+
+Two repo changes belong to the release and should be committed (with user
+confirmation) *before* tagging, so the tag contains them:
+
+1. **CHANGELOG.md** — prepend a `<version>` section (existing format).
+2. **Web updater firmware** (`docs/WEB_UPDATER.md`): copy both `.bin`s into
+   `docs/updater/firmware/` and prepend matching entries (version, variant
+   `bass`/`guitar`, file, sha256, released date, release-notes URL) to
+   `docs/updater/firmware/manifest.json` — newest first, bass above guitar.
+   The GitHub Pages workflow redeploys the updater when this lands on `main`.
 
 ### 8. Tag and push (after explicit user confirmation)
 
@@ -147,6 +179,10 @@ gh release create <version> \
   release/<version>/NitroTron3-<version>.hex \
   release/<version>/NitroTron3-<version>.bin.sha256 \
   release/<version>/NitroTron3-<version>.hex.sha256 \
+  release/<version>/NitroTron3-<version>-guitar.bin \
+  release/<version>/NitroTron3-<version>-guitar.hex \
+  release/<version>/NitroTron3-<version>-guitar.bin.sha256 \
+  release/<version>/NitroTron3-<version>-guitar.hex.sha256 \
   release/<version>/USER_MANUAL.pdf \
   release/<version>/INSTALL.md \
   release/<version>/LICENSE \
