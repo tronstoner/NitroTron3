@@ -32,6 +32,7 @@ let manifest = null;
 let device = null;                    // dfuse.Device
 let transferSize = DEFAULT_XFER_SIZE;
 let flashing = false;
+let manifesting = false;              // final phase: reboot-errors are OK
 
 function log(msg, isError) {
   const line = document.createElement('div');
@@ -202,9 +203,21 @@ async function connect() {
 
     device = new dfuse.Device(usbDevice, setting);
     device.logDebug = function() {};
-    device.logInfo = function(m) { log(m); };
+    device.logInfo = function(m) {
+      // dfuse emits this right before the final status poll, during which
+      // the pedal reboots into the new firmware — the poll then fails with
+      // a scary-looking transfer error that actually means success.
+      if (String(m).indexOf('Manifesting') >= 0) manifesting = true;
+      log(m);
+    };
     device.logWarning = function(m) { log('warning: ' + m); };
-    device.logError = function(m) { log(m, true); };
+    device.logError = function(m) {
+      if (manifesting) {
+        log('(pedal disconnected during manifest — that is the reboot, all good)');
+      } else {
+        log(m, true);
+      }
+    };
     device.logProgress = function(done, total) {
       if (total) setProgress(done / total);
     };
@@ -239,6 +252,7 @@ async function connect() {
 async function flash() {
   if (!device || flashing) return;
   flashing = true;
+  manifesting = false;
   updateButtons();
   ui.connect.disabled = true;
   ui.leds.hidden = false;
