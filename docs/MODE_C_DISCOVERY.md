@@ -330,3 +330,32 @@ Replace this discovery doc with `docs/MODE_C.md` following the `MODE_A_DRONE.md`
 - `PitchTracker` (YIN, semitone-quantized) — Mode A direct mode, Mode B harmony tracking. Powers the SW1=DOWN synth osc.
 - `MoogOsc` — Mode A oscillator class, reused as the unison saw voices in `synth_osc_c.h` (extended with `SetPhase()` / `GetPhase()` for boot decorrelation and saw↔rect phase-lock).
 - `ModePresetData` storage pattern — `PRESET_IMPL.md`.
+
+---
+
+## Post-v0.4 exploration notes (2026-07-20)
+
+Parked ideas from the guitar-mode discovery session — not scheduled, noted so
+they aren't lost.
+
+### SW1=MIDDLE redesign candidates
+
+Verdict after living with v0.4: SW1=UP (Chebyshev folder) is the keeper;
+the Tube Screamer→amp chain (K4 CCW) and the XOR bit-flipper (K4 CW) don't
+live up to it. Candidates for the slot:
+
+1. **POG-style tracking-free multiband engine.** Split into 8–12 half-octave
+   bands; per band: envelope follow → divide env out (normalize to ≈ unit
+   sine) → waveshape → multiply env back in → sum. Shapers per band, all
+   tracking-free: `|x|` (octave-up), comparator with LFO-modulated bias
+   (signal-locked PWM square), fixed Chebyshev polynomial (saw-ish recipe);
+   cross-band ring mod for FM-like clang. The normalize→shape→re-apply-env
+   structure preserves the attack *by construction* — the original POG's
+   punch, which the tracked modes can't fully deliver. Polyphonic by
+   construction; notes < ~6 semitones apart intermodulate inside a band
+   (reproducible glitch, in character). This is a new engine, not a drop-in.
+
+2. **XOR → fuzz/rectifier chain.** The XOR bit-flipper sounds good *into* a
+   fuzz/rectifier. Wire one in directly after the XOR stage and fine-tune the
+   knob travel across the combined parameters (XOR bit/gate vs fuzz drive).
+   Cheaper than (1), keeps the XOR character instead of replacing it.
