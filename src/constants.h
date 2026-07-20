@@ -152,7 +152,7 @@ constexpr float TRACK_POLY_ATTACK_MS  = 15.f;   // voice gain fade-in
 constexpr float TRACK_POLY_RELEASE_MS = NT3_GUITAR ? 80.f : 120.f;  // voice gain fade-out
 constexpr float TRACK_POLY_SAL_LP_MS  = 50.f;   // salience smoothing (kills beat-rate tremolo of close dyads)
 constexpr float TRACK_POLY_GAIN_EXP   = 1.0f;   // gain = salience^X (1 linear, 0.5 sqrt, 0 off)
-constexpr bool  TRACK_POLY_OCTLOCK    = false;  // poly in Mode A octave-locked drone — needs hardware judgment
+constexpr bool  TRACK_POLY_OCTLOCK    = true;   // poly in Mode A octave-locked drone — ON for the audition (mono = shipping behaviour)
 
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
