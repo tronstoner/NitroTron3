@@ -4,6 +4,22 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+## v0.4 — 2026-07-20 — Pre-release
+
+The bass firmware is byte-identical to v0.3.2 — this release is about how
+you get firmware onto the pedal, and about guitars.
+
+### Added
+
+- **Guitar build.** Releases now ship a second firmware variant voiced for
+  electric guitar (`-guitar.bin`): pitch tracking opened up to ~1 kHz with
+  finer resolution, plus retuned envelope and filter voicings. Build from
+  source with `make INSTRUMENT=guitar`. First cut — ear-tuning pending.
+- **Web updater.** Flash the pedal from Chrome / Edge over USB — no tools
+  to install: <https://tronstoner.github.io/NitroTron3/updater/>. Firmware
+  versions are listed on the page, checksums verified before flashing, and
+  a local `.bin` can be flashed too.
+
 ## v0.3.2 — 2026-07-16 — Pre-release
 
 Documentation-only release — the firmware is byte-identical to v0.3.1. The user

@@ -3,6 +3,22 @@
   "flash_size": 131072,
   "firmware": [
     {
+      "version": "v0.4",
+      "variant": "bass",
+      "file": "NitroTron3-v0.4.bin",
+      "sha256": "004ac75e6d95108dff2a59ac5fcba46cb48c78e22327831fd781dbe1b9fde0f4",
+      "released": "2026-07-20",
+      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.4"
+    },
+    {
+      "version": "v0.4",
+      "variant": "guitar",
+      "file": "NitroTron3-v0.4-guitar.bin",
+      "sha256": "6e19e3b7a21ce9898e82352dbf9ebcd9e2caed9a3d5a37f1c27de16fa29edfcd",
+      "released": "2026-07-20",
+      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.4"
+    },
+    {
       "version": "v0.3.2",
       "variant": "bass",
       "file": "NitroTron3-v0.3.2.bin",
