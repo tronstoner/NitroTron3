@@ -246,3 +246,14 @@ The footswitches and the preset system work the same way in every mode.
   are migrated on first boot of the new firmware: Mode A's slots →
   Bank 1, Mode B's slots → Bank 2, Mode C's slots → Bank 3, with each
   slot tagged with its source mode. No data loss.
+
+---
+
+# Guitar build
+
+NitroTron3 is voiced for bass — pitch tracking, envelope response, and
+several filter voicings assume bass range. For electric guitar there is a
+separate firmware variant, built from source with `make INSTRUMENT=guitar`,
+that shifts the pitch tracker and those voicings up into guitar range.
+Controls, modes, and presets are identical. One firmware serves one
+instrument — reflash to switch.

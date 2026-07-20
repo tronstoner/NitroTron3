@@ -161,8 +161,8 @@ float decim_count = 0.f;      // decimator sample counter
 float ringmod_phase = 0.f;    // ringmod carrier oscillator phase
 float ringmod_lp_state = 0.f; // one-pole LPF after ringmod
 
-// Wet HPF: 2-pole high-pass to keep wet out of bass sub range
-static constexpr float WET_HPF_FREQ = 120.f;
+// Wet HPF: 2-pole high-pass keeping the wet bus above the dry instrument's
+// low range — cutoff WET_HPF_FREQ in constants.h (instrument-profiled).
 
 // Feedback saturation drive: pre-multiplies the tanh input so distortion
 // kicks in earlier and the loop self-limits at lower volume.

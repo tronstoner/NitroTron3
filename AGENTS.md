@@ -66,6 +66,7 @@ NitroTron3/
 - The Hothouse hardware proxy (`hothouse.h` / `hothouse.cpp`) is compiled from `lib/HothouseExamples/src/` — it is not copied into this repo.
 - The Makefile references all libraries via `lib/HothouseExamples/` relative paths. No sibling-directory dependencies.
 - After cloning, build libraries once: `make -C lib/HothouseExamples/libDaisy && make -C lib/HothouseExamples/DaisySP`.
+- `make INSTRUMENT=guitar` builds a guitar-voiced variant (see the "Instrument profile" block in `src/constants.h`). Default = bass. Profile switches rebuild automatically via a stamp file (`build/.instrument`).
 
 ## Hardware reference
 

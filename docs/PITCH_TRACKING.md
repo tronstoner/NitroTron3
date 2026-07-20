@@ -2,18 +2,30 @@
 
 ## Current Implementation
 
-YIN pitch tracker (`pitch_tracker.h`):
-- 4x decimation (48 kHz → 12 kHz) with 4-pole anti-alias LP at 400 Hz (`aa_coeff_`)
+YIN pitch tracker (`pitch_tracker.h`), voiced per instrument by the `TRACK_*`
+profile block in `src/constants.h`. BASS is the default; GUITAR is selected at
+build time with `make INSTRUMENT=guitar` (defines `NT3_INSTRUMENT_GUITAR`).
+The default (bass) build is byte-identical to the pre-profile firmware.
+
+| | BASS (default) | GUITAR |
+|---|---|---|
+| Decimation `TRACK_DEC` | 4x (48 → 12 kHz) | 2x (48 → 24 kHz) |
+| Anti-alias / fundamental-isolation LP `TRACK_AA_LP_HZ` (4-pole) | 400 Hz | 1.2 kHz |
+| Lag range `TRACK_MIN_LAG…MAX_LAG` | 24…400 → ≈ **30–500 Hz** | 23…360 → ≈ **67–1043 Hz** |
+| Window `TRACK_WINDOW` | 400 (~33 ms) | 640 (~27 ms) |
+| Hop `TRACK_HOP` | 64 (~5.3 ms) | 128 (~5.3 ms) |
+| Parabolic sub-lag refine `TRACK_PARABOLIC` | **off** (output unchanged) | **on** (integer-lag steps are ~40 cents at 1 kHz) |
+
+Shared machinery (both profiles):
 - 2-pole HP at 25 Hz for DC blocking (`hp_coeff_`)
-- YIN difference function with cumulative mean normalization (`THRESHOLD = 0.15`)
+- YIN difference function with cumulative mean normalization (`TRACK_THRESHOLD = 0.15`)
 - Early termination on first dip below threshold (the lowest-fundamental lock)
-- Ring buffer 1024 samples, analysis window `W = 400`, hop `HOP = 64` (~5.3 ms updates)
-- Lag range `MIN_LAG = 24` … `MAX_LAG = 400` → tracked range ≈ **30 Hz – 500 Hz**
+- Ring buffer 1024 samples (a `static_assert` guards the `W + MAX_LAG` lookback)
 - Envelope gating in `Feed()` — skips tracking when `env_level < 0.001`
 - Heavy computation (`RunYin`) runs in main loop, not audio callback
-- **Output quantized to nearest MIDI semitone** (`midi_note_ = roundf(midi)`), single getter `GetMidiNote()`
-- No parabolic interpolation (skipped — was unnecessary while output was quantized)
-- Phases 1–2 complete.
+- **Output quantized to nearest MIDI semitone** (`midi_note_ = roundf(midi)`) via `GetMidiNote()`, plus unrounded `GetMidiNoteContinuous()`
+- Parabolic interpolation around the YIN minimum refines only the already-chosen `best_tau` — the tau search and first-dip rule are untouched
+- Phases 1–2 complete. GUITAR profile wired but untuned — values are starting brackets, to be ear-tuned with a guitar on hand.
 
 ### Consumers (who reads the tracker today)
 
@@ -129,6 +141,9 @@ are back to today.
   neighbours' `d'` values) for sub-sample period → smooth continuous frequency.
 - Does **not** change the tau search; it only refines the frequency estimate from the
   already-chosen minimum.
+- **Status: the machinery landed with the guitar profile** (gated on
+  `TRACK_PARABOLIC` — on for GUITAR, off for BASS so the bass output is
+  unchanged). Enabling it for BASS is a one-constant flip in `constants.h`.
 - Removes integer-lag stepping, which is finest at low pitch and gets coarser as pitch
   rises (and when a whammy pushes pitch up), so it matters most for the bend case.
 
@@ -151,10 +166,11 @@ separate, opt-in passes, never bundled into the increments above.
   Trade-off: a higher LP leaks more harmonic energy on low notes → more octave-error
   risk. Per principle #2, **stability wins by default** — only revisit if reach is
   demanded in practice.
-- **Guitar profile.** A compile-time `TRACK_INSTRUMENT` switch selecting a profile
-  block `{ anti_alias_hz, decimation, min_lag, max_lag, threshold }`. `BASS` = today's
-  values exactly (no-op); `GUITAR` = higher LP (~1.2 kHz), `DEC = 2`, rescaled lags.
-  Design/wire when convenient; tune only when a guitar is on hand.
+- **Guitar profile — IMPLEMENTED** (no longer deferred). The `TRACK_*` profile
+  block in `src/constants.h`, selected by `make INSTRUMENT=guitar`. `BASS` =
+  today's values exactly (default build byte-identical); `GUITAR` = 1.2 kHz LP,
+  `DEC = 2`, lag range ≈67–1043 Hz, parabolic refine on. Tuning still pending —
+  needs a guitar on hand.
 - **Onset / latency (Phase 3).** See below.
 
 ### Window-smear caveat (physics, not the smoother)
@@ -172,7 +188,7 @@ and that belongs with the deferred onset/window work, not this feature.
 | `PITCH_SLEW_MAX_CENTS_PER_MS` | 1 | ~30 | Max continuous-pitch travel rate (core stabiliser) |
 | `PITCH_CONF_THRESH` | 3 | loose | Reject only clearly-garbage frames; hold otherwise |
 | `PITCH_SMOOTH` | 3 | light | Fixed one-pole for residual held-note jitter |
-| `TRACK_INSTRUMENT` + profile block | deferred | `BASS` | Bass/guitar signal-conditioning profile |
+| `TRACK_*` profile block | **done** | `BASS` default | Bass/guitar tracker profile (`make INSTRUMENT=guitar`), incl. `TRACK_PARABOLIC` |
 
 ---
 
@@ -190,13 +206,13 @@ These improvements apply regardless of which detection algorithm is used. Signal
 - Hold last detected note during silence (already implemented)
 
 ### Anti-alias / fundamental-isolation LP cutoff
-- **Current: 400 Hz, 4-pole** (`aa_coeff_` in `pitch_tracker.h`). Doubles as the
-  decimation anti-alias filter and as harmonic rejection that isolates the fundamental.
+- **Current: `TRACK_AA_LP_HZ`, 4-pole — 400 Hz BASS / 1.2 kHz GUITAR.** Doubles as
+  the decimation anti-alias filter and as harmonic rejection that isolates the fundamental.
 - Lowering it (e.g. 120 Hz) sharpens low-note harmonic rejection but caps trackable
   range and kills any high-register / whammy-up content. Per the stability-over-reach
   principle this stays at 400 Hz for the BASS profile.
-- The **GUITAR** profile (deferred) raises this toward ~1.2 kHz so guitar fundamentals
-  pass — see the `TRACK_INSTRUMENT` profile block in the Continuous Pitch plan above.
+- The **GUITAR** profile (implemented, `make INSTRUMENT=guitar`) raises this to
+  1.2 kHz so guitar fundamentals pass.
 
 ### Consider Bessel filter instead of cascaded one-pole
 - Bessel has linear phase — preserves zero-crossing locations better
@@ -287,7 +303,9 @@ Independent of algorithm choice. Detects envelope attack and uses the first clea
 - [x] Early termination on first dip
 - [x] Move heavy computation to main loop (fixes audio glitches)
 - [x] Quantize output to semitones
-- [ ] Parabolic interpolation for sub-sample accuracy (skipped — not needed for semitone quantization)
+- [x] Parabolic interpolation for sub-sample accuracy — implemented with the
+      instrument profile, gated on `TRACK_PARABOLIC` (GUITAR on; BASS off, so the
+      bass build's output is unchanged)
 
 ### Phase 4 — Continuous Pitch Tracking (ACTIVE — next feature)
 
@@ -311,11 +329,15 @@ in small ear-checked increments; stop and listen between each.
 - Note: this is also where the window-smear limit on very fast bends/whammy is
   addressed (window length / latency trade-off).
 
-### Deferred — Instrument profiles & whammy reach
-- [ ] `TRACK_INSTRUMENT` compile-time profile block (`BASS` = current values exactly,
-      `GUITAR` = higher LP / `DEC = 2` / rescaled lags). Tune GUITAR with a guitar on hand.
-- [ ] Optional whammy top-end reach (raise LP + lower `MIN_LAG`) — only if reach is
-      demanded in practice; stability wins by default.
+### Instrument profile & whammy reach
+- [x] `TRACK_*` compile-time profile block (`BASS` = current values exactly, default
+      build byte-identical; `GUITAR` via `make INSTRUMENT=guitar` = 1.2 kHz LP /
+      `DEC = 2` / lag range ≈67–1043 Hz / parabolic refine on).
+- [ ] Ear-tune the GUITAR profile values (tracker + the six profiled voicing
+      constants — see the "Instrument profile" block in `src/constants.h`) with a
+      guitar on hand.
+- [ ] Optional whammy top-end reach for BASS (raise LP + lower `MIN_LAG`) — only if
+      reach is demanded in practice; stability wins by default.
 
 ---
 

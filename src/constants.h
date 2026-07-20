@@ -2,6 +2,20 @@
 #include <cstdint>
 #include <cstddef>  // size_t
 
+// --- Instrument profile (bass / guitar) ---
+// The pedal is voiced for BASS by default. `make INSTRUMENT=guitar` defines
+// NT3_INSTRUMENT_GUITAR, which retunes the pitch tracker (TRACK_* block below)
+// and the frequency constants marked with a `NT3_GUITAR ? guitar : bass`
+// ternary. The default (bass) build keeps today's ear-validated values
+// exactly. Switching profiles rebuilds automatically (instrument stamp file
+// in the Makefile). All GUITAR values are starting brackets, to be ear-tuned
+// with a guitar plugged in.
+#ifdef NT3_INSTRUMENT_GUITAR
+constexpr bool NT3_GUITAR = true;
+#else
+constexpr bool NT3_GUITAR = false;
+#endif
+
 // --- Oscillator (Tuning Page 1) ---
 constexpr float OSC_K            = 0.480f;  // parabolic curve: 0=linear saw, 0.5+=very round
 constexpr float OSC_DC_TRIM      = 0.000f;  // fine DC offset after shaping
@@ -12,7 +26,10 @@ constexpr float OSC_TRI_GAIN     = 1.400f;  // reference level
 constexpr float OSC_SQR_GAIN     = 1.400f;
 
 // --- Envelope follower (Tuning Page 2) --- (Stage 3)
-constexpr float ENV_LP_CUTOFF_HZ = 50.0f;   // envelope LP cutoff (higher = faster tracking)
+// Envelope LP cutoff (higher = faster tracking). The LP must smooth rectifier
+// ripple at 2× the fundamental; guitar's ripple starts an octave above bass's,
+// so the guitar profile tracks snappier without added wobble.
+constexpr float ENV_LP_CUTOFF_HZ = NT3_GUITAR ? 80.0f : 50.0f;
 constexpr float ENV_PRE_GAIN     = 1.000f;   // input gain before rectifier
 constexpr float ENV_ATTACK_BIAS  = 1.000f;   // filter asymmetry, attack
 constexpr float ENV_RELEASE_BIAS = 1.000f;   // filter asymmetry, release
@@ -89,6 +106,24 @@ constexpr float PITCH_FOLD_HYSTERESIS_SEMI = 0.0f;
 // Octave-locked register shift (octaves), on top of the fold. 0 = A3 at K2 noon.
 constexpr int TRACKING_OCTAVE_SHIFT    = 0;
 
+// Pitch tracker instrument profile (consumed by pitch_tracker.h).
+// BASS — today's values exactly: 4x decimation (12 kHz analysis rate), 4-pole
+//   fundamental-isolation LP at 400 Hz, lag range ≈30–500 Hz, ~33 ms window.
+// GUITAR — range opened upward: 2x decimation (24 kHz analysis rate) for
+//   finer lag resolution up high, LP at 1.2 kHz so guitar fundamentals pass,
+//   lag range ≈67 Hz (below drop-D) – 1043 Hz (high-E fret 20), ~27 ms window
+//   (≈2 periods of the lowest note), hop doubled to keep the same ~5.3 ms
+//   update cadence. Parabolic interpolation ON — integer-lag stepping is
+//   ~40 cents at 1 kHz, inaudible on bass but out-of-tune on guitar.
+constexpr int   TRACK_DEC       = NT3_GUITAR ? 2      : 4;      // decimation 48 kHz → analysis rate
+constexpr float TRACK_AA_LP_HZ  = NT3_GUITAR ? 1200.f : 400.f;  // 4-pole anti-alias + fundamental-isolation LP
+constexpr int   TRACK_MIN_LAG   = NT3_GUITAR ? 23     : 24;     // shortest period → highest trackable pitch
+constexpr int   TRACK_MAX_LAG   = NT3_GUITAR ? 360    : 400;    // longest period → lowest trackable pitch
+constexpr int   TRACK_WINDOW    = NT3_GUITAR ? 640    : 400;    // YIN analysis window (samples at analysis rate)
+constexpr int   TRACK_HOP       = NT3_GUITAR ? 128    : 64;     // samples between YIN runs (~5.3 ms both profiles)
+constexpr float TRACK_THRESHOLD = 0.15f;                        // YIN first-dip threshold (shared)
+constexpr bool  TRACK_PARABOLIC = NT3_GUITAR;                   // sub-lag parabolic refine (BASS off = today's output)
+
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
 constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain at noon..CW (higher = more tanh warmth)
@@ -146,7 +181,7 @@ constexpr float MODE_A_HARM_OCTAVE   = 1.0f;   // shift the whole triangle serie
 // zero-mean modulator (the ±Hz deviations average back to f0). With DEPTH_MAX>1
 // the multiplier can go negative — the oscillator phase runs backward through
 // zero rather than rectifying, which is the clean, violent, in-tune form of FM.
-constexpr float MODE_A_FM_LP_HZ     = 200.f;   // fundamental-round LP cutoff (2-pole)
+constexpr float MODE_A_FM_LP_HZ     = NT3_GUITAR ? 500.f : 200.f;  // fundamental-round LP cutoff (2-pole; guitar fundamentals sit higher)
 constexpr float MODE_A_FM_DRIVE     = 1.5f;    // tanh pre-gain (bound + sine-round + grit when slammed)
 constexpr float MODE_A_FM_DEPTH_MAX = 3.0f;    // max frequency swing at K5 full CW (±300%, through-zero)
 constexpr float MODE_A_FM_DEPTH_CURVE = 3.0f;  // depth = MAX·travel^curve; >1 = finer control near noon, intensity builds toward CW
@@ -180,7 +215,9 @@ constexpr float MODE_C_CHEBY_H5        = 0.2f;  // 5th harmonic weight
 // produces a clean octave instead of intermod mush from the bass's own
 // harmonics (the Octavia trick). Lower = cleaner/stronger octave but darker;
 // raise toward 600+ to let more of the bass's brightness/metallic content in.
-constexpr float MODE_C_CHEBY_LP_HZ     = 250.0f;
+// Guitar: fundamentals above the bass value would be filtered out before the
+// octave generator (effect dies up the neck), so the LP rises with the range.
+constexpr float MODE_C_CHEBY_LP_HZ     = NT3_GUITAR ? 600.0f : 250.0f;
 
 // Moog ladder (SW2=UP, K1 cutoff / K2 resonance / K3 env amount).
 constexpr float MODE_C_LADDER_RES_MAX = 1.2f;  // pushed past ~1.0 self-osc threshold; in-loop tanh bounds it
@@ -349,7 +386,7 @@ constexpr float MODE_C_WRAP_COMP      = 0.50f; // post-wrap gain (output is full
 // primitive Saturate(x) = x/(1+|x|); asymmetry comes ONLY from a bias offset
 // (Saturate(x+bias) − Saturate(bias), DC removed — never baked into the curve).
 // Gain staging is reset vs the old single-stage tanh — all values ear-tunable.
-constexpr float MODE_C_OD_HP_HZ       = 180.0f; // pre-clip high-pass into the pedal stage (anti-mud). Higher = crunchier/more mid-focused; lower = fuller into the clip
+constexpr float MODE_C_OD_HP_HZ       = NT3_GUITAR ? 350.0f : 180.0f; // pre-clip high-pass into the pedal stage (anti-mud). Higher = crunchier/more mid-focused; lower = fuller into the clip (a real TS corner is ~720 Hz — guitar can sit tighter)
 constexpr float MODE_C_OD_DRIVE_MAX   = 60.0f;  // pedal-stage drive at K4 full CCW (1× at noon)
 constexpr float MODE_C_OD_BIAS        = 0.6f;   // pedal-stage asymmetry (bias offset only). 0 = symmetric; higher = more lopsided
 constexpr float MODE_C_OD_CLEAN_MIX   = 0.4f;   // low-passed clean summed in before the amp stage (TS body/character)
@@ -370,7 +407,7 @@ constexpr float MODE_C_OD_AMP_KNEE    = 0.72f;  // K4-CCW position where the AMP
 // don't duck when resonance peaks fire the limiter. HF is soft-knee limited.
 // "Warmth-when-working" — gain reduction modulates a touch of tanh saturation,
 // so peaks gain mild character without harmonics on quiet/clean signals.
-constexpr float MODE_C_LIMIT_SPLIT_HZ  = 160.f; // 2-band crossover (one-pole)
+constexpr float MODE_C_LIMIT_SPLIT_HZ  = NT3_GUITAR ? 250.f : 160.f; // 2-band crossover (one-pole; sits just under the instrument's fundamental range)
 constexpr float MODE_C_LIMIT_THR       = 0.6f;  // amplitude threshold (linear)
 constexpr float MODE_C_LIMIT_RATIO_INV = 0.5f;  // 1/ratio — 0.5 ≈ 2:1 soft slope
 constexpr float MODE_C_LIMIT_ATK_MS    = 2.0f;  // catches resonance transients
@@ -453,6 +490,10 @@ constexpr float FREQ_SHIFT_DEADZONE  = 0.02f;  // |k1_norm| < this → 0 Hz
 constexpr float FREQ_SHIFT_CURVE     = 6.0f;   // taper exponent (higher = more weighted near unison)
 
 // --- Mode B reverb + bipolar K5 ---
+// Wet high-pass (2-pole) — keeps the wet bus above the dry instrument's low
+// range so the wet sits on top instead of fighting the fundamentals. Guitar's
+// dry range starts an octave up, so the shelf rises with it.
+constexpr float WET_HPF_FREQ = NT3_GUITAR ? 200.f : 120.f;
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
 constexpr float REVERB_TIME        = 0.70f;  // reverb decay (krt in Clouds)

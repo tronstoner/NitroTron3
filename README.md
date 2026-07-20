@@ -119,6 +119,10 @@ make program    # flash via OpenOCD / ST-Link
 make program-dfu  # flash via DFU bootloader
 ```
 
+### Guitar build
+
+NitroTron3 is voiced for bass by default. `make INSTRUMENT=guitar` builds a guitar-voiced variant instead: the pitch-tracking range shifts up (≈67 Hz – 1 kHz, with finer pitch resolution), and a handful of frequency constants (envelope speed, octave-generator / FM low-passes, overdrive voicing, Mode B wet high-pass) move up to match guitar range. Controls, modes, and presets are identical. One firmware serves one instrument — reflash to switch. Switching the build profile triggers a full rebuild automatically.
+
 ## Modes in detail
 
 ### BORDUN (Mode A)

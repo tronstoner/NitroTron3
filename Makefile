@@ -12,6 +12,26 @@ C_INCLUDES = -Isrc -Ilib/HothouseExamples/src
 LIBDAISY_DIR = lib/HothouseExamples/libDaisy
 DAISYSP_DIR = lib/HothouseExamples/DaisySP
 
+# Instrument voicing: default = bass. `make INSTRUMENT=guitar` retunes the
+# pitch tracker + frequency voicing constants for electric guitar (see the
+# "Instrument profile" block in src/constants.h). Make does not track -D
+# define changes, so a stamp file records the profile of the objects in
+# build/; on mismatch the build dir is dropped at parse time (deterministic,
+# safe under -j — a rule-based stamp races on make 3.81) and everything
+# recompiles with the right defines. No manual `make clean` needed.
+INSTRUMENT ?= bass
+ifeq ($(INSTRUMENT),guitar)
+C_DEFS += -DNT3_INSTRUMENT_GUITAR
+endif
+INSTRUMENT_STAMP := build/.instrument
+LAST_INSTRUMENT := $(strip $(shell cat $(INSTRUMENT_STAMP) 2>/dev/null))
+ifneq ($(LAST_INSTRUMENT),$(INSTRUMENT))
+ifneq ($(LAST_INSTRUMENT),)
+$(info Instrument profile changed ($(LAST_INSTRUMENT) -> $(INSTRUMENT)) - full rebuild)
+endif
+_ := $(shell rm -rf build && mkdir -p build && printf '%s\n' '$(INSTRUMENT)' > $(INSTRUMENT_STAMP))
+endif
+
 # Core location, and generic Makefile.
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
 include $(SYSTEM_FILES_DIR)/Makefile
