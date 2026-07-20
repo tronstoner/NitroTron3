@@ -136,9 +136,11 @@ All ear-tunable; values above are educated first guesses.
 - **FLASH — the tight one.** 97.4/97.5% used (see PROJECT.md). Picker +
   matcher is small (~1–2 KB) but headroom is ~3 KB. If it doesn't fit:
   the documented one-line linker swap to `STM32H750IB_qspi.lds`.
-- **Bass build byte-identity**: gate everything on a constexpr so that with
-  the poly path disabled the binary is byte-for-byte today's — same
-  discipline as `TRACK_PARABOLIC`.
+- **Bass build byte-identity**: gate everything on the `NT3_TRACK_POLY`
+  preprocessor flag so that with the poly path disabled the binary is
+  byte-for-byte today's (verified against v0.4). A constexpr alone is not
+  enough — the tracker's poly members shift the object in `.data` even when
+  all poly *code* folds away; the OFF build must drop the members too.
 
 ## Staged plan
 

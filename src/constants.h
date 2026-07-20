@@ -124,6 +124,22 @@ constexpr int   TRACK_HOP       = NT3_GUITAR ? 128    : 64;     // samples betwe
 constexpr float TRACK_THRESHOLD = 0.15f;                        // YIN first-dip threshold (shared)
 constexpr bool  TRACK_PARABOLIC = NT3_GUITAR;                   // sub-lag parabolic refine (BASS off = today's output)
 
+// Multi-dip pseudo-polyphonic tracking (docs/MULTI_DIP_TRACKING.md). The
+// tracker scans the full lag range and exposes up to TRACK_POLY_VOICES raw dip
+// candidates (deepest-first, deduped) via GetPoly*(); the mono outputs keep
+// the first-dip semantics exactly. The master switch is a preprocessor flag —
+// not just a constexpr — because the OFF build must also drop the tracker's
+// poly members (the object lives in .data; extra members alone shift the
+// binary). NT3_TRACK_POLY 0 = byte-identical to the mono-only build (verified
+// against v0.4).
+#define NT3_TRACK_POLY 1
+constexpr bool  TRACK_POLY_ENABLE      = NT3_TRACK_POLY != 0;  // poly = always-on, no user control
+constexpr int   TRACK_POLY_VOICES      = 3;      // voice cap — dips drown beyond 3 equal-loud notes
+constexpr float TRACK_POLY_DIP_MAX     = 0.75f;  // acceptance ceiling for candidate dips
+constexpr float TRACK_POLY_DUP_TOL     = 0.03f;  // near-duplicate lag rejection (ratio tolerance)
+constexpr bool  TRACK_POLY_HARM_DEDUPE = true;   // reject sub-octave aliases (defeat = experiment lever)
+constexpr float TRACK_POLY_HARM_TOL    = 0.035f; // integer-multiple rejection tolerance (relative)
+
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
 constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain at noon..CW (higher = more tanh warmth)
