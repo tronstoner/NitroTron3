@@ -95,8 +95,8 @@ First targets, in order:
    the sound the multi-dip idea came from.
 2. **Mode A drone** (direct-track; saw unison / triangle-JI+FM / square-PWM).
 
-How poly is exposed (always-on in these sub-modes vs a control) is an open
-question — decide by ear after M.3.
+Poly is **always-on** in these sub-modes (no user control) — gated by a
+compile-time constant per path (see Decisions).
 
 ## Tuning constants (proposed starting values)
 
@@ -118,6 +118,10 @@ per-instrument candidate at this point.
 | `TRACK_POLY_ATTACK_MS` | 15 | 15 | voice fade-in |
 | `TRACK_POLY_RELEASE_MS` | 120 | 80 | voice fade-out — **per-instrument**: bass rings longer, slap gaps need carrying |
 | `TRACK_POLY_SAL_LP_MS` | 50 | 50 | salience smoothing (kills beat-rate tremolo) |
+| `TRACK_POLY_ENABLE` | true | true | master switch — false = byte-identical mono build |
+| `TRACK_POLY_HARM_DEDUPE` | true | true | sub-octave dedupe defeat lever (experiment) |
+| `TRACK_POLY_GAIN_EXP` | 1.0 | 1.0 | gain = salience^X (1 linear, 0.5 sqrt, 0 off) |
+| `TRACK_POLY_OCTLOCK` | false | false | poly in octave-locked drone — to be tested |
 
 All ear-tunable; values above are educated first guesses.
 
@@ -149,13 +153,17 @@ All ear-tunable; values above are educated first guesses.
 - **M.6** — docs + README controls (on explicit request), fold findings back
   into PITCH_TRACKING.md.
 
-## Open questions
+## Decisions (interview, 2026-07-20)
 
-1. Expose poly as always-on in the synth sub-modes, a switch position, or a
-   knob zone? (decide by ear after M.3)
-2. Should the sub-octave dedupe ever be *disabled* as a feature (deliberate
-   implied-root / sub-octave voices)?
-3. Salience→gain law (linear vs sqrt) and how it stacks with the env VCA.
-4. Does octave-locked mode ever want poly, or is poly continuous-only?
-5. Interaction with presets: any new constant that becomes a control needs a
+1. **Exposure: always-on**, switchable per compile-time constant
+   (`TRACK_POLY_ENABLE`). No user control.
+2. **Sub-octave dedupe: tunable constant** (`TRACK_POLY_HARM_DEDUPE`) — an
+   ear-tuning experiment lever (deliberate implied-root / sub-octave voices),
+   not a user control. Default on.
+3. **Salience→gain law: power-law constant** — gain = salience^`X`
+   (`TRACK_POLY_GAIN_EXP`, start 1.0 = linear; 0.5 = sqrt, 0 = off). Bracket
+   by ear in M.5.
+4. **Octave-locked poly: switchable per constant** (`TRACK_POLY_OCTLOCK`,
+   default off) — needs hardware testing to judge.
+5. **Presets: moot** — everything above is a constant, no new control, no
    `ModePresetData` slot.
