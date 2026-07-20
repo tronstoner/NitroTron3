@@ -140,6 +140,19 @@ constexpr float TRACK_POLY_DUP_TOL     = 0.03f;  // near-duplicate lag rejection
 constexpr bool  TRACK_POLY_HARM_DEDUPE = true;   // reject sub-octave aliases (defeat = experiment lever)
 constexpr float TRACK_POLY_HARM_TOL    = 0.035f; // integer-multiple rejection tolerance (relative)
 
+// Voice matcher (poly_voices.h) — dip candidates → stable voices. Hop cadence
+// is identical on both instrument profiles (5.33 ms), so per-hop values are
+// shared; only the release differs (bass rings longer, slap gaps need
+// carrying through).
+constexpr float TRACK_POLY_SPAWN_SAL  = 0.30f;  // raw salience to birth a voice (hysteresis top)
+constexpr float TRACK_POLY_KILL_SAL   = 0.20f;  // smoothed-salience floor — voice releases below (hysteresis bottom)
+constexpr float TRACK_POLY_MATCH_ST   = 1.0f;   // semitone window for hop-to-hop voice matching
+constexpr float TRACK_POLY_SLEW_ST    = 0.25f;  // max pitch glide per hop (semitones) — unresolved-pair wander becomes slow drift
+constexpr float TRACK_POLY_ATTACK_MS  = 15.f;   // voice gain fade-in
+constexpr float TRACK_POLY_RELEASE_MS = NT3_GUITAR ? 80.f : 120.f;  // voice gain fade-out
+constexpr float TRACK_POLY_SAL_LP_MS  = 50.f;   // salience smoothing (kills beat-rate tremolo of close dyads)
+constexpr float TRACK_POLY_GAIN_EXP   = 1.0f;   // gain = salience^X (1 linear, 0.5 sqrt, 0 off)
+
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
 constexpr float OSC_GAIN         = 1.500f;   // final osc level into mix
 constexpr float LADDER_DRIVE     = 1.800f;   // ladder input gain at noon..CW (higher = more tanh warmth)

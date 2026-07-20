@@ -89,6 +89,13 @@ class PitchTracker {
   int   GetPolyCount() const { return poly_count_; }
   float GetPolyMidi(int i) const { return poly_midi_[i]; }      // unrounded MIDI
   float GetPolySalience(int i) const { return poly_sal_[i]; }   // 1 - d' (0..1)
+  // True once per completed YIN run — lets the voice matcher update exactly
+  // once per hop (Update() is polled every main-loop pass).
+  bool ConsumeYinRan() {
+    bool ran = yin_ran_;
+    yin_ran_ = false;
+    return ran;
+  }
 #endif
 
  private:
@@ -118,6 +125,7 @@ class PitchTracker {
   int   poly_count_    = 0;      // accepted multi-dip candidates this hop
   float poly_midi_[TRACK_POLY_VOICES] = {};
   float poly_sal_[TRACK_POLY_VOICES]  = {};
+  bool  yin_ran_       = false;  // set per RunYinPoly, cleared by ConsumeYinRan
 #endif
 
   float Buf(int offset) const {
@@ -279,6 +287,8 @@ class PitchTracker {
       pp_dp   = prev_dp;
       prev_dp = d_prime;
     }
+
+    yin_ran_ = true;  // hop signal for the voice matcher
 
     // Dedupe deepest-first candidates into <= TRACK_POLY_VOICES accepted dips.
     // Rejections: near-duplicate lags (DUP_TOL) and — gated on

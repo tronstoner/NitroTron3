@@ -8,6 +8,7 @@
 #include "peak_limiter.h"
 #include "env_follower.h"
 #include "pitch_tracker.h"
+#include "poly_voices.h"
 #include "preset_system.h"
 #include "ring_buffer.h"
 #include "grain_voice.h"
