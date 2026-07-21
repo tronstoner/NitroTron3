@@ -32,6 +32,13 @@ endif
 _ := $(shell rm -rf build && mkdir -p build && printf '%s\n' '$(INSTRUMENT)' > $(INSTRUMENT_STAMP))
 endif
 
+# Run the app from RAM via the Daisy bootloader: internal flash (128 KB) holds
+# only the bootloader; the app lives in QSPI and is copied to RAM at boot.
+# One-time setup per Seed: enter DFU mode, then `make program-boot`.
+# After that, `make program-dfu` flashes the app through the bootloader
+# (it must also be in DFU/bootloader state to receive the app).
+APP_TYPE = BOOT_SRAM
+
 # Core location, and generic Makefile.
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
 include $(SYSTEM_FILES_DIR)/Makefile

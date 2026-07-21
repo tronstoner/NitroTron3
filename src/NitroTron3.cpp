@@ -18,6 +18,7 @@
 #include "glitch_zones.h"
 #include "bitcrush.h"
 #include "synth_osc_c.h"
+#include "poly_octave.h"
 #include "synth_osc_a.h"
 #include "mode_a_hpf.h"
 #include "freq_shifter.h"
@@ -42,6 +43,11 @@ Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
 PeakLimiter  limiter_c;   // Mode C — post-filter peak limiter (2-band, fundamentals preserved)
 BitCrush     bitcrush_c;  // Mode C — SW1=MID drive flavor (gated bit crusher)
 ModeCSynth   synth_c;     // Mode C — SW1=DOWN pitch-tracked synth oscillator
+// Mode C — SW1=MID K4-CCW POG octave stack (ERB-PS2 filterbank engine).
+// ProcessBlock fills the per-voice wet buffers once per audio block; the
+// per-sample loop mixes them with the smoothed staged gains.
+polyoct::PolyOctave polyoct_c;
+float polyoct_sub[256], polyoct_up1[256], polyoct_up2[256];  // >= max block size
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -229,6 +235,8 @@ Smoother sdrv_c;                          // C: K5 pre-filter drive_amt
 Smoother sfbl_c, sfdr_c, sfco_c;          // C: K4 sinefold blend/drive/comp
 Smoother scbl_c, schd_c;                  // C: K4 Chebyshev blend/drive
 Smoother sodd_c, soda_c, sodc_c;          // C: K4 overdrive drive/amp-drive/comp
+Smoother spdry_c, spsub_c, spup1_c, spup2_c;  // C: K4 POG staged voice gains (comp folded in)
+Smoother sfzt_c;                          // C: K4-CW XOR post-fuzz ramp (blend + drive)
 
 // Mode B SW1 MIDDLE: event-driven digital glitch processor (stateful)
 GlitchEvents glitch_events;
@@ -1263,6 +1271,8 @@ float cheby_lp_g = 0.f;
 // Mode C SW1=MID overdrive (TS → amp) one-pole filter states + coeffs.
 float od_hp_z = 0.f;        // pre-clip high-pass state (hp = x − lp)
 float od_hp_g = 0.f;
+float xorfuzz_hp_z = 0.f;   // XOR fuzz rectifier DC-block state (hp = x − lp)
+float xorfuzz_hp_g = 0.f;
 float od_clean_lp_z = 0.f;  // clean-blend low-pass state
 float od_clean_lp_g = 0.f;
 
@@ -1320,6 +1330,37 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float od_amp_drive = 1.f + od_amp_t * (MODE_C_OD_AMP_DRIVE - 1.f);
   const float od_comp      = MODE_C_OD_COMP_AT_NOON +
       od_blend * (MODE_C_OD_COMP_AT_MAX - MODE_C_OD_COMP_AT_NOON);
+
+  // SW1=MID CCW — POG octave stack (replaces the OD when MODE_C_POG_ENABLE).
+  // Staged travel: segment 1 crossfades clean → SUB (dry silent from SEG1_END
+  // on), segment 2 fades UP1 in on top, segment 3 fades UP2 in. Loudness comp
+  // interpolates across the travel and is folded into the four gain targets;
+  // the per-sample Smoothers de-zipper them. At noon (pog_a = 0) the targets
+  // are exactly dry-passthrough, so branch entry/exit is seamless.
+  const float pog_a  = (MODE_C_POG_ENABLE && drive_mode == 1) ? k4_ccw : 0.f;
+  const float pog_t1 = (pog_a >= MODE_C_POG_SEG1_END)
+      ? 1.f : pog_a / MODE_C_POG_SEG1_END;
+  const float pog_t2 = (pog_a <= MODE_C_POG_SEG1_END) ? 0.f
+      : ((pog_a >= MODE_C_POG_SEG2_END) ? 1.f
+         : (pog_a - MODE_C_POG_SEG1_END) /
+           (MODE_C_POG_SEG2_END - MODE_C_POG_SEG1_END));
+  const float pog_t3 = (pog_a <= MODE_C_POG_SEG2_END) ? 0.f
+      : (pog_a - MODE_C_POG_SEG2_END) / (1.f - MODE_C_POG_SEG2_END);
+  const float pog_comp = MODE_C_POG_COMP_AT_NOON +
+      pog_a * (MODE_C_POG_COMP_AT_MAX - MODE_C_POG_COMP_AT_NOON);
+  // Equal-power clean↔SUB crossfade (sqrt curves): a linear fade pair dips
+  // ~-6 dB at mid-travel, which read as "way too quiet" in the first audition.
+  const float pog_dry_t = sqrtf(1.f - pog_t1) * pog_comp;
+  const float pog_sub_t = sqrtf(pog_t1) * MODE_C_POG_SUB_LEVEL * pog_comp;
+  const float pog_up1_t = pog_t2 * MODE_C_POG_UP1_LEVEL * pog_comp;
+  const float pog_up2_t = pog_t3 * MODE_C_POG_UP2_LEVEL * pog_comp;
+
+  // SW1=MID CW — XOR post-fuzz ramp: full fuzz early (by RAMP_END), riding at
+  // max for the rest of the travel while K4 keeps sweeping the XOR bit.
+  const float xor_fuzz_t = (drive_mode == 1 && k4_cw > 0.f)
+      ? ((k4_cw >= MODE_C_XOR_FUZZ_RAMP_END)
+             ? 1.f : k4_cw / MODE_C_XOR_FUZZ_RAMP_END)
+      : 0.f;
 
   // K3 bipolar with center deadzone → signed env amount in [-1, +1].
   float k3_signed = (k3 - 0.5f) * 2.f;
@@ -1384,6 +1425,15 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const bool phaser_on = (filter_mode == 2);
   if (phaser_on) phaser_c.SetParams(k1, k2, k3_signed);
 
+  // POG pre-pass: fill the per-voice wet buffers for the whole block (the
+  // filterbank runs at 8 kHz internally, so it consumes 6-sample chunks —
+  // block size 48 divides evenly). Runs whenever the engine is compiled in,
+  // regardless of SW1/K4, so band filter states never go stale; the smoothed
+  // gains ramping from 0 mask branch entry.
+  if (MODE_C_POG_ENABLE) {
+    polyoct_c.ProcessBlock(in[0], polyoct_sub, polyoct_up1, polyoct_up2, size);
+  }
+
   float env_val = prev_block_env_c;
   for (size_t i = 0; i < size; i++) {
     const float dry = in[0][i];
@@ -1412,6 +1462,11 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     const float odd = sodd_c(od_drive);
     const float oda = soda_c(od_amp_drive);
     const float odc = sodc_c(od_comp);
+    const float pdry = spdry_c(pog_dry_t);
+    const float psub = spsub_c(pog_sub_t);
+    const float pup1 = spup1_c(pog_up1_t);
+    const float pup2 = spup2_c(pog_up2_t);
+    const float fzt  = sfzt_c(xor_fuzz_t);
 
     // Feed pitch tracker every sample so its filters stay warm regardless of
     // SW1 position; consumed only when drive_mode == 2 (SW1=DOWN synth osc).
@@ -1459,6 +1514,36 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       // K4 CW = gated bit-flipper, K4 CCW = tanh overdrive, noon = clean.
       if (k4_cw > 0.001f) {
         wet = bitcrush_c.Process(dry, k4_cw, env_val);
+        // Post-fuzz: the XOR output drives a hard Saturate stage. Blend and
+        // drive ride the same smoothed ramp (fzt); by RAMP_END it's all fuzz.
+        if (fzt > 0.001f) {
+          // Octave-fuzz chain: boost → full-wave rectifier blend (octave up)
+          // → DC-block HPF (the rectifier's level-dependent DC pedestal
+          // becomes a dynamic bias pump — sputter/breakup on decays) →
+          // crossover dead-zone (starved-CMOS glitch) → two cascaded clip
+          // stages. Both drives ride the fzt ramp so the whole thing stays
+          // near-linear close to noon and fades in gradually.
+          const float fdrive = 1.f + fzt * (MODE_C_XOR_FUZZ_DRIVE_MAX - 1.f);
+          const float sdrive = 1.f + fzt * (MODE_C_XOR_FUZZ_STAGE2_DRIVE - 1.f);
+          const float boosted = wet * fdrive;
+          const float pre = boosted +
+              MODE_C_XOR_FUZZ_RECT_MIX * (fabsf(boosted) - boosted);
+          xorfuzz_hp_z += xorfuzz_hp_g * (pre - xorfuzz_hp_z);
+          float fx = pre - xorfuzz_hp_z;
+          const float az = fabsf(fx) - MODE_C_XOR_FUZZ_DEADZONE;
+          fx = (az > 0.f) ? ((fx > 0.f) ? az : -az) : 0.f;
+          const float fuzz1 =
+              Saturate(fx + MODE_C_XOR_FUZZ_BIAS) -
+              Saturate(MODE_C_XOR_FUZZ_BIAS);
+          const float fuzz = Saturate(fuzz1 * sdrive);
+          wet = wet * (1.f - fzt) + fuzz * fzt * MODE_C_XOR_FUZZ_LEVEL;
+        }
+      } else if (MODE_C_POG_ENABLE && k4_ccw > 0.001f) {
+        // POG octave stack. The smoothed gains carry the whole staged travel
+        // (clean→SUB xfade, then UP1, then UP2) and the loudness comp — this
+        // branch just mixes the always-running voices.
+        wet = dry * pdry + polyoct_sub[i] * psub + polyoct_up1[i] * pup1 +
+              polyoct_up2[i] * pup2;
       } else if (od_blend > 0.001f) {
         // TS → tube amp. Pre-clip HPF keeps the lows out of the pedal stage
         // (anti-mud); a touch of low-passed clean is summed back before the amp
@@ -1569,6 +1654,7 @@ int main() {
   limiter_c.Init(sr);
   bitcrush_c.Init();
   synth_c.Init(sr);
+  polyoct_c.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
 
@@ -1592,6 +1678,7 @@ int main() {
   on_play_rel_g = 1.f - expf(-1.f / (ON_PLAY_RELEASE_MS * 0.001f * sr));
   cheby_lp_g = 1.f - expf(-2.f * 3.14159265f * MODE_C_CHEBY_LP_HZ / sr);
   od_hp_g       = 1.f - expf(-2.f * 3.14159265f * MODE_C_OD_HP_HZ / sr);
+  xorfuzz_hp_g  = 1.f - expf(-2.f * 3.14159265f * MODE_C_XOR_FUZZ_RECT_HP_HZ / sr);
   od_clean_lp_g = 1.f - expf(-2.f * 3.14159265f * MODE_C_OD_CLEAN_LP_HZ / sr);
 
   // Reverb resamplers + reverb engine
@@ -1645,7 +1732,13 @@ int main() {
         led_bypass.Update();
         daisy::System::Delay(75);
       }
-      daisy::System::ResetToBootloader();
+      // DAISY_INFINITE_TIMEOUT: jump into the installed Daisy bootloader and
+      // stay in DFU until flashed (no 2 s window). The default (STM) would
+      // land in the ROM bootloader, which can't write the app to QSPI
+      // (APP_TYPE = BOOT_SRAM). No physical BOOT/RESET access needed — the
+      // pedal is sealed.
+      daisy::System::ResetToBootloader(
+          daisy::System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
     }
   }
 
