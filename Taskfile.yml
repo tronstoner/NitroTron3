@@ -1,0 +1,49 @@
+version: '3'
+
+# Shortcuts for the INSTRUMENT-aware make invocations.
+# INSTRUMENT must be passed to EVERY make call (including the flash step),
+# otherwise the stamp logic switches the profile back to bass and wipes build/.
+
+tasks:
+  build:
+    desc: Build bass firmware (default profile)
+    cmds:
+      - make INSTRUMENT=bass
+
+  build-guitar:
+    desc: Build guitar firmware
+    cmds:
+      - make INSTRUMENT=guitar
+
+  flash:
+    desc: Build + flash bass firmware via DFU
+    cmds:
+      - make INSTRUMENT=bass
+      - make INSTRUMENT=bass program-dfu
+
+  flash-guitar:
+    desc: Build + flash guitar firmware via DFU
+    cmds:
+      - make INSTRUMENT=guitar
+      - make INSTRUMENT=guitar program-dfu
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - rm -rf build
+
+  bootloader:
+    desc: One-time flash of the Daisy bootloader (enter DFU mode first)
+    cmds:
+      - make program-boot
+
+  libs:
+    desc: One-time build of libDaisy + DaisySP (after clone/submodule update)
+    cmds:
+      - make -C lib/HothouseExamples/libDaisy
+      - make -C lib/HothouseExamples/DaisySP
+
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
