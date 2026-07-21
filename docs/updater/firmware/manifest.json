@@ -1,30 +1,22 @@
 {
-  "flash_address": "0x08000000",
-  "flash_size": 131072,
+  "flash_address": "0x90040000",
+  "flash_size": 8126464,
   "firmware": [
     {
-      "version": "v0.4",
+      "version": "v0.5",
       "variant": "bass",
-      "file": "NitroTron3-v0.4.bin",
-      "sha256": "004ac75e6d95108dff2a59ac5fcba46cb48c78e22327831fd781dbe1b9fde0f4",
-      "released": "2026-07-20",
-      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.4"
+      "file": "NitroTron3-v0.5.bin",
+      "sha256": "23786a4f5385a4b9186b5bf425905443e60dfb4bcfd30e5d19f3930ed13994ae",
+      "released": "2026-07-21",
+      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.5"
     },
     {
-      "version": "v0.4",
+      "version": "v0.5",
       "variant": "guitar",
-      "file": "NitroTron3-v0.4-guitar.bin",
-      "sha256": "6e19e3b7a21ce9898e82352dbf9ebcd9e2caed9a3d5a37f1c27de16fa29edfcd",
-      "released": "2026-07-20",
-      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.4"
-    },
-    {
-      "version": "v0.3.2",
-      "variant": "bass",
-      "file": "NitroTron3-v0.3.2.bin",
-      "sha256": "004ac75e6d95108dff2a59ac5fcba46cb48c78e22327831fd781dbe1b9fde0f4",
-      "released": "2026-07-16",
-      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.3.2"
+      "file": "NitroTron3-v0.5-guitar.bin",
+      "sha256": "bde8be13247cbf01e91506e6291d7ee083b2b7c7dbf970138b813ffbbbf6e27e",
+      "released": "2026-07-21",
+      "notes": "https://github.com/tronstoner/NitroTron3/releases/tag/v0.5"
     }
   ]
 }

@@ -2,6 +2,30 @@
 
 NitroTron3 ships as a `.bin` file that you flash to the Daisy Seed inside the Hothouse pedal over USB. Two flashing paths are supported: `dfu-util` from the command line, or the Electrosmith Web Programmer in a Chromium-based browser.
 
+## 0. One-time setup: the Daisy bootloader (required since v0.5)
+
+Since v0.5 the firmware is larger than the STM32's 128 KB internal flash and
+runs via the **Electro-Smith Daisy bootloader**: the bootloader lives in
+internal flash, the firmware lives in the Seed's QSPI flash and is loaded to
+RAM at boot. The flash address changed accordingly — `0x90040000` (QSPI), not
+`0x08000000`.
+
+Each pedal needs the Daisy bootloader installed **once**:
+
+1. Enter DFU mode. Coming from v0.4 or older: hold both footswitches 2 s
+   (that firmware enters the STM32 ROM bootloader). Fresh/blank Seed: use the
+   BOOT/RESET buttons (see Fallback below).
+2. Flash the bootloader — easiest via the
+   [Electrosmith Web Programmer](https://electro-smith.github.io/Programmer/):
+   **Connect**, then use its built-in **Flash Bootloader Image** option.
+   (From a source checkout, `make program-boot` does the same.)
+3. Power-cycle the pedal. With no app installed yet, the bootloader just
+   waits in DFU mode (Seed LED pulses) — continue with flashing below.
+
+From v0.5 firmware onward, the both-footswitch hold jumps straight into the
+Daisy bootloader, which waits in DFU indefinitely — the day-to-day flashing
+feel is unchanged.
+
 ## 1. Put the pedal into DFU bootloader mode
 
 **Hold both footswitches (FS1 + FS2) for 2 seconds.** The LEDs alternate rapidly for ~1.2 s as confirmation, then the pedal disconnects from audio and re-enumerates over USB as `STM Device in DFU Mode`.
@@ -20,6 +44,13 @@ If the firmware is unresponsive (bricked, never flashed, or you're flashing the 
 
 The pedal enumerates as `STM Device in DFU Mode`. This path works regardless of firmware state and is the standard Daisy recovery route — see the [Daisy Ecosystem Wiki](https://github.com/electro-smith/DaisyWiki/wiki) for context.
 
+> Note: BOOT/RESET lands you in the STM32 **ROM** bootloader, which can only
+> write internal flash — use it to (re)install the Daisy bootloader (section
+> 0), not to flash the firmware itself. After installing the bootloader,
+> power-cycle and flash the firmware at `0x90040000` while the bootloader
+> waits in DFU (it waits indefinitely when no app is installed; ~2 s after
+> power-on when one is).
+
 ## 2. Flash the binary
 
 ### Option A — `dfu-util` (command line)
@@ -34,10 +65,11 @@ brew install dfu-util
 sudo apt install dfu-util
 ```
 
-Flash:
+Flash (note the QSPI address — the pedal must be in the **Daisy** bootloader,
+see section 0):
 
 ```sh
-dfu-util -a 0 -s 0x08000000:leave -D NitroTron3-vX.Y.bin
+dfu-util -a 0 -s 0x90040000:leave -D NitroTron3-vX.Y.bin
 ```
 
 The pedal reboots into normal operation when flashing finishes.
@@ -45,8 +77,8 @@ The pedal reboots into normal operation when flashing finishes.
 ### Option B — Electrosmith Web Programmer
 
 1. Open [the Electrosmith Web Programmer](https://electro-smith.github.io/Programmer/) in Chrome or Edge.
-2. Click **Connect**, select the *STM Device in DFU Mode*.
-3. Set the start address to `0x08000000` (the default).
+2. Click **Connect**, select the DFU device.
+3. Set the start address to `0x90040000` (QSPI — required since v0.5).
 4. Choose the `NitroTron3-vX.Y.bin` file you downloaded.
 5. Click **Program**. Wait for "Done."
 

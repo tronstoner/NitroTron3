@@ -4,6 +4,42 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+## v0.5 — 2026-07-21 — Pre-release
+
+Mode C's SW1=MID slot got rebuilt around octaves, and the firmware moved to
+the Daisy bootloader.
+
+### Added
+
+- **POG octave stack (Mode C, SW1=MID, K4 CCW).** A polyphonic octave
+  generator in the spirit of the EHX POG — filterbank-based, fully
+  polyphonic, no pitch tracking. Turning K4 CCW from noon first crossfades
+  the clean signal into a sub-octave, then stacks in +1 and +2 octaves;
+  full CCW is the whole organ stack. Engine adapted from
+  [terrarium-poly-octave](https://github.com/schult/terrarium-poly-octave)
+  (MIT, Steven Schulteis), implementing Thuillier's ERB-PS2 algorithm.
+  Replaces the Tube-Screamer→amp overdrive in that slot (the OD remains in
+  the source behind a compile-time switch).
+- **Octave-fuzz after the XOR bit-flipper (Mode C, SW1=MID, K4 CW).** The
+  bit-flipper now drives a fuzz chain: full-wave-rectified octave-up into a
+  CMOS-style sputtering clip cascade. The fuzz maxes out early in the
+  travel; the rest of the sweep moves the XOR bit through it.
+- **Taskfile shortcuts.** `task flash` / `task flash-guitar` /
+  `task bootloader` / `task catch` wrap the instrument-aware make calls.
+
+### Changed
+
+- **Daisy bootloader (breaking flashing change).** The firmware outgrew the
+  STM32's 128 KB internal flash and now runs via the Electro-Smith Daisy
+  bootloader (app in QSPI, loaded to RAM at boot). One-time setup per pedal:
+  install the bootloader (see `INSTALL.md` § 0), and flash firmware to
+  `0x90040000` from now on. The both-footswitch DFU gesture now enters the
+  Daisy bootloader and waits indefinitely.
+- **Moog ladder self-FM (Mode C, K5 CW) disabled** for now — K5 CW is pure
+  filter drive again.
+- The web updater only offers v0.5+ (the pre-bootloader flashing path is no
+  longer supported by the tool).
+
 ## v0.4 — 2026-07-20 — Pre-release
 
 The bass firmware is byte-identical to v0.3.2 — this release is about how
