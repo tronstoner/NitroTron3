@@ -360,7 +360,7 @@ constexpr float MODE_C_POST_FILTER_GAIN = 1.3f;
 // square (loudest, least dynamic). Gate keys the wet/dry off the envelope so
 // silent input stays silent (passive bass env ≈0.02–0.1).
 constexpr int   MODE_C_BITCRUSH_MAX_BIT      = 15;      // K4 full CW → flip bit 15 (sign bit, full-scale square)
-constexpr float MODE_C_BITCRUSH_ENV_GATE     = 0.01f;   // raw env_val gate threshold
+constexpr float MODE_C_BITCRUSH_ENV_GATE     = 0.003f;  // raw env_val gate threshold (was 0.01 — too high for guitar high strings)
 constexpr int   MODE_C_BITCRUSH_RAMP_SAMPLES = 48;      // 1 ms click-free gate edge
 // Per-bit loudness comp table (index = flipped bit, 0..15). The flipper picks a
 // discrete bit, so the wet level jumps in discrete steps (and bit 15, the sign-
