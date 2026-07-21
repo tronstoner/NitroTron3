@@ -233,7 +233,7 @@ constexpr float MODE_C_K3_CURVE       = 2.0f;  // response curve on |k3| env amo
 // around the resonant peak so it reads gritty/vocal instead of a sterile sine.
 // Cutoff stays clamped to [MIN,MAX] Hz.
 constexpr float MODE_C_MOOG_FM_START  = 0.4f;  // K5 position where FM begins fading in (<0.5 = before noon)
-constexpr float MODE_C_MOOG_FM_DEPTH  = 1.5f;  // FM depth at K5 full CW (linear, ×filter input)
+constexpr float MODE_C_MOOG_FM_DEPTH  = 0.f;   // FM depth at K5 full CW (linear, ×filter input) — DISABLED for now (was 1.5, POG-era audition); 0 = off
 
 // Mode C filter drive (K5 — bipolar around noon, applies across all SW2 filter modes).
 // CCW → attenuate, NOON → unity (1.0), CW → boost. Piecewise linear in dB-ish space.
@@ -373,6 +373,25 @@ constexpr float MODE_C_BITCRUSH_COMP_TABLE[16] = {
     1.20f, 1.10f, 1.00f, 0.80f, 0.70f, 0.60f, 0.50f, 0.45f,  // bits 8–15 (audible → sign-flip square)
 };
 
+// --- XOR bit-flipper post-fuzz (SW1=MID, K4 CW) ---
+// A fuzz stage AFTER the bit-flipper — the XOR stages driving the fuzz are
+// what make it sing. The fuzz ramps in from noon but reaches MAX early on the
+// travel (RAMP_END), then rides at full fuzz while K4 keeps sweeping the XOR
+// bit position upward. Same Saturate() primitive as the OD; asymmetry only
+// via the bias offset (DC removed, silence stays silent).
+constexpr float MODE_C_XOR_FUZZ_RAMP_END  = 0.30f; // K4-CW travel fraction where fuzz reaches max
+constexpr float MODE_C_XOR_FUZZ_DRIVE_MAX = 48.f;  // stage-1 drive into Saturate at full fuzz
+constexpr float MODE_C_XOR_FUZZ_STAGE2_DRIVE = 8.f; // stage-2 (cascade) drive at full fuzz — squares the stage-1 output up further; 1 = stage 2 off
+// Octave-fuzz front end (Foxx Tone Machine / Superfuzz family + CMOS glitch):
+// full-wave rectifier |x| (octave up) → DC-block HPF (the rectifier's DC
+// pedestal becomes a dynamic bias pump = sputter/breakup on decays) →
+// crossover dead-zone (starved-CMOS glitch) → the cascaded clip stages.
+constexpr float MODE_C_XOR_FUZZ_RECT_MIX   = 1.0f;  // 0 = plain fuzz, 1 = full rectifier octave-up
+constexpr float MODE_C_XOR_FUZZ_RECT_HP_HZ = 150.f; // DC-block cutoff — THE breakup/sputter dial (low = tame, 100-300 = farty collapse)
+constexpr float MODE_C_XOR_FUZZ_DEADZONE   = 0.08f; // crossover dead-zone — the glitch dial (0 = off)
+constexpr float MODE_C_XOR_FUZZ_BIAS      = 0.20f; // static asymmetry bias — reduced now that the rectifier pumps the bias dynamically (0 = symmetric)
+constexpr float MODE_C_XOR_FUZZ_LEVEL     = 0.4f;  // fuzz makeup (clamped cubic tops at ±2/3)
+
 // Digital wraparound (CCW half — PARKED, tanh OD is active in the slot).
 // Overdriven signal wraps modulo [-1,1] like an overflowing DAC instead of
 // clamping — each rail crossing jumps to the opposite rail. Harsh buzzy
@@ -415,9 +434,9 @@ constexpr bool  MODE_C_POG_ENABLE     = true;
 // POG-style gain staging: plain voice sum, no loudness compensation (the
 // COMP_AT_* pair below stays inert at 1.0). Hierarchy by ear: SUB loudest,
 // UP1 below it, UP2 lowest.
-constexpr float MODE_C_POG_SUB_LEVEL  = 2.5f;   // per-voice balance at full fade-in
-constexpr float MODE_C_POG_UP1_LEVEL  = 1.8f;
-constexpr float MODE_C_POG_UP2_LEVEL  = 1.2f;
+constexpr float MODE_C_POG_SUB_LEVEL  = 5.5f;   // per-voice balance at full fade-in — sub carries the stack
+constexpr float MODE_C_POG_UP1_LEVEL  = 3.4f;
+constexpr float MODE_C_POG_UP2_LEVEL  = 2.2f;
 constexpr float MODE_C_POG_SEG1_END   = 0.40f;  // K4 travel fraction: clean→SUB xfade complete
 constexpr float MODE_C_POG_SEG2_END   = 0.70f;  // K4 travel fraction: UP1 fully in (UP2 ramps after)
 constexpr float MODE_C_POG_COMP_AT_NOON = 1.0f; // makeup at noon (dry passthrough — keep 1)

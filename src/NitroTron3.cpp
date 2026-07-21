@@ -236,6 +236,7 @@ Smoother sfbl_c, sfdr_c, sfco_c;          // C: K4 sinefold blend/drive/comp
 Smoother scbl_c, schd_c;                  // C: K4 Chebyshev blend/drive
 Smoother sodd_c, soda_c, sodc_c;          // C: K4 overdrive drive/amp-drive/comp
 Smoother spdry_c, spsub_c, spup1_c, spup2_c;  // C: K4 POG staged voice gains (comp folded in)
+Smoother sfzt_c;                          // C: K4-CW XOR post-fuzz ramp (blend + drive)
 
 // Mode B SW1 MIDDLE: event-driven digital glitch processor (stateful)
 GlitchEvents glitch_events;
@@ -1270,6 +1271,8 @@ float cheby_lp_g = 0.f;
 // Mode C SW1=MID overdrive (TS → amp) one-pole filter states + coeffs.
 float od_hp_z = 0.f;        // pre-clip high-pass state (hp = x − lp)
 float od_hp_g = 0.f;
+float xorfuzz_hp_z = 0.f;   // XOR fuzz rectifier DC-block state (hp = x − lp)
+float xorfuzz_hp_g = 0.f;
 float od_clean_lp_z = 0.f;  // clean-blend low-pass state
 float od_clean_lp_g = 0.f;
 
@@ -1351,6 +1354,13 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float pog_sub_t = sqrtf(pog_t1) * MODE_C_POG_SUB_LEVEL * pog_comp;
   const float pog_up1_t = pog_t2 * MODE_C_POG_UP1_LEVEL * pog_comp;
   const float pog_up2_t = pog_t3 * MODE_C_POG_UP2_LEVEL * pog_comp;
+
+  // SW1=MID CW — XOR post-fuzz ramp: full fuzz early (by RAMP_END), riding at
+  // max for the rest of the travel while K4 keeps sweeping the XOR bit.
+  const float xor_fuzz_t = (drive_mode == 1 && k4_cw > 0.f)
+      ? ((k4_cw >= MODE_C_XOR_FUZZ_RAMP_END)
+             ? 1.f : k4_cw / MODE_C_XOR_FUZZ_RAMP_END)
+      : 0.f;
 
   // K3 bipolar with center deadzone → signed env amount in [-1, +1].
   float k3_signed = (k3 - 0.5f) * 2.f;
@@ -1456,6 +1466,7 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     const float psub = spsub_c(pog_sub_t);
     const float pup1 = spup1_c(pog_up1_t);
     const float pup2 = spup2_c(pog_up2_t);
+    const float fzt  = sfzt_c(xor_fuzz_t);
 
     // Feed pitch tracker every sample so its filters stay warm regardless of
     // SW1 position; consumed only when drive_mode == 2 (SW1=DOWN synth osc).
@@ -1503,6 +1514,30 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       // K4 CW = gated bit-flipper, K4 CCW = tanh overdrive, noon = clean.
       if (k4_cw > 0.001f) {
         wet = bitcrush_c.Process(dry, k4_cw, env_val);
+        // Post-fuzz: the XOR output drives a hard Saturate stage. Blend and
+        // drive ride the same smoothed ramp (fzt); by RAMP_END it's all fuzz.
+        if (fzt > 0.001f) {
+          // Octave-fuzz chain: boost → full-wave rectifier blend (octave up)
+          // → DC-block HPF (the rectifier's level-dependent DC pedestal
+          // becomes a dynamic bias pump — sputter/breakup on decays) →
+          // crossover dead-zone (starved-CMOS glitch) → two cascaded clip
+          // stages. Both drives ride the fzt ramp so the whole thing stays
+          // near-linear close to noon and fades in gradually.
+          const float fdrive = 1.f + fzt * (MODE_C_XOR_FUZZ_DRIVE_MAX - 1.f);
+          const float sdrive = 1.f + fzt * (MODE_C_XOR_FUZZ_STAGE2_DRIVE - 1.f);
+          const float boosted = wet * fdrive;
+          const float pre = boosted +
+              MODE_C_XOR_FUZZ_RECT_MIX * (fabsf(boosted) - boosted);
+          xorfuzz_hp_z += xorfuzz_hp_g * (pre - xorfuzz_hp_z);
+          float fx = pre - xorfuzz_hp_z;
+          const float az = fabsf(fx) - MODE_C_XOR_FUZZ_DEADZONE;
+          fx = (az > 0.f) ? ((fx > 0.f) ? az : -az) : 0.f;
+          const float fuzz1 =
+              Saturate(fx + MODE_C_XOR_FUZZ_BIAS) -
+              Saturate(MODE_C_XOR_FUZZ_BIAS);
+          const float fuzz = Saturate(fuzz1 * sdrive);
+          wet = wet * (1.f - fzt) + fuzz * fzt * MODE_C_XOR_FUZZ_LEVEL;
+        }
       } else if (MODE_C_POG_ENABLE && k4_ccw > 0.001f) {
         // POG octave stack. The smoothed gains carry the whole staged travel
         // (clean→SUB xfade, then UP1, then UP2) and the loudness comp — this
@@ -1643,6 +1678,7 @@ int main() {
   on_play_rel_g = 1.f - expf(-1.f / (ON_PLAY_RELEASE_MS * 0.001f * sr));
   cheby_lp_g = 1.f - expf(-2.f * 3.14159265f * MODE_C_CHEBY_LP_HZ / sr);
   od_hp_g       = 1.f - expf(-2.f * 3.14159265f * MODE_C_OD_HP_HZ / sr);
+  xorfuzz_hp_g  = 1.f - expf(-2.f * 3.14159265f * MODE_C_XOR_FUZZ_RECT_HP_HZ / sr);
   od_clean_lp_g = 1.f - expf(-2.f * 3.14159265f * MODE_C_OD_CLEAN_LP_HZ / sr);
 
   // Reverb resamplers + reverb engine
