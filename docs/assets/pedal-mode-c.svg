@@ -122,16 +122,16 @@
   <text x="130" y="630" text-anchor="middle"
         font-size="14" fill="#888">SW1</text>
   <text y="660" font-size="15" fill="#111">
-    <tspan x="74.2" fill="#999">▲</tspan>
-    <tspan x="92.2" font-weight="600">Fold / Cheby</tspan>
+    <tspan x="77.8" fill="#999">▲</tspan>
+    <tspan x="95.8" font-weight="600">Fold / Cheby</tspan>
   </text>
   <text y="687" font-size="15" fill="#111">
-    <tspan x="74.2" fill="#999">●</tspan>
-    <tspan x="92.2" font-weight="600">Crush / Drive</tspan>
+    <tspan x="77.8" fill="#999">●</tspan>
+    <tspan x="95.8" font-weight="600">Fuzz / POG</tspan>
   </text>
   <text y="714" font-size="15" fill="#111">
-    <tspan x="74.2" fill="#999">▼</tspan>
-    <tspan x="92.2" font-weight="600">Synth</tspan>
+    <tspan x="77.8" fill="#999">▼</tspan>
+    <tspan x="95.8" font-weight="600">Synth</tspan>
   </text>
 
   <g transform="translate(300,542)">

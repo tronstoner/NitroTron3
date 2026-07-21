@@ -64,7 +64,7 @@ MODES = {
             {"l": "Filter drive", "d": ["center = unity", "◀ softer · hotter ▶"], "bi": True},
             {"l": "Mix", "d": ["dry → wet"]},
         ],
-        "sw1": ("SW1 · Drive", ["Fold / Cheby", "Crush / Drive", "Synth"]),
+        "sw1": ("SW1 · Drive", ["Fold / Cheby", "Fuzz / POG", "Synth"]),
         "sw2": ("SW2 · Filter", ["Moog ladder", "Grendel formant", "Phaser"]),
         "sw3": ("SW3 · Mode select", ["Bordun", "Sprawl", "Schism ◀"]),
         "fs1": "FS1 · Preset",
