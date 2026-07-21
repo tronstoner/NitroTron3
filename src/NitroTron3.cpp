@@ -1645,7 +1645,13 @@ int main() {
         led_bypass.Update();
         daisy::System::Delay(75);
       }
-      daisy::System::ResetToBootloader();
+      // DAISY_INFINITE_TIMEOUT: jump into the installed Daisy bootloader and
+      // stay in DFU until flashed (no 2 s window). The default (STM) would
+      // land in the ROM bootloader, which can't write the app to QSPI
+      // (APP_TYPE = BOOT_SRAM). No physical BOOT/RESET access needed — the
+      // pedal is sealed.
+      daisy::System::ResetToBootloader(
+          daisy::System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
     }
   }
 

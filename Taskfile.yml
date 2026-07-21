@@ -32,6 +32,16 @@ tasks:
     cmds:
       - rm -rf build
 
+  catch:
+    desc: Retry-flash the already-built binary — start this, then power-cycle the pedal to catch the bootloader window
+    cmds:
+      - |
+        echo "Waiting for the Daisy bootloader... power-cycle the pedal now."
+        until dfu-util -a 0 -s 0x90040000:leave -D build/NitroTron3.bin -d ,0483:df11 2>/dev/null; do
+          sleep 0.3
+        done
+        echo "Flashed."
+
   bootloader:
     desc: One-time flash of the Daisy bootloader (enter DFU mode first)
     cmds:
