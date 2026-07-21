@@ -257,6 +257,7 @@ Two-stage chain: drive (SW1) → filter (SW2). SW1 picks the drive, with K4 bipo
 - **Steven Schulteis** — the Mode C POG octave engine (`src/poly_octave.h`) is adapted from his excellent [terrarium-poly-octave](https://github.com/schult/terrarium-poly-octave) (MIT), the closest public analysis-based recreation of the EHX POG. Thank you!
 - **Étienne Thuillier** — the underlying ERB-PS2 phase-scaling algorithm ([*Real-Time Polyphonic Octave Doubling for the Guitar*](https://core.ac.uk/download/pdf/80719011.pdf)).
 - **Émilie Gillet / Mutable Instruments** — the Clouds reverb (`src/clouds/`, MIT) in Mode B's wet path.
+- **Fredrik Lyxzén / [Parasit Studio](https://parasitstudio.com/)** — Mode C's CMOS octave-fuzz voicing is inspired by his [Eagle Claw](https://parasitstudio.com/pedals/eagleclaw/) fuzz (and his [Ray Gun Youth](https://parasitstudio.com/pedals/raygunyouth/) PLL is the reference for a planned mode). Great DIY circuits — go build one.
 - **Cleveland Music Co.** (Hothouse) and **Electro-Smith** (Daisy Seed, libDaisy, DaisySP) — the platform this pedal exists on.
 
 ## Trademarks
