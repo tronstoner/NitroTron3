@@ -252,6 +252,13 @@ Two-stage chain: drive (SW1) → filter (SW2). SW1 picks the drive, with K4 bipo
 | LED 1 (left)  | Preset indicator: off = Manual, Roman numeral blink pattern for presets 1–8. In save mode, shows target slot.                        |
 | LED 2 (right) | State indicator: solid = active, off = bypassed, rapid flash = dirty (preset edited), fast blink = save mode, burst = save confirmed |
 
+## Acknowledgments
+
+- **Steven Schulteis** — the Mode C POG octave engine (`src/poly_octave.h`) is adapted from his excellent [terrarium-poly-octave](https://github.com/schult/terrarium-poly-octave) (MIT), the closest public analysis-based recreation of the EHX POG. Thank you!
+- **Étienne Thuillier** — the underlying ERB-PS2 phase-scaling algorithm ([*Real-Time Polyphonic Octave Doubling for the Guitar*](https://core.ac.uk/download/pdf/80719011.pdf)).
+- **Émilie Gillet / Mutable Instruments** — the Clouds reverb (`src/clouds/`, MIT) in Mode B's wet path.
+- **Cleveland Music Co.** (Hothouse) and **Electro-Smith** (Daisy Seed, libDaisy, DaisySP) — the platform this pedal exists on.
+
 ## Trademarks
 
 All product names, trademarks, and registered trademarks are property of their respective owners. References are for descriptive and educational purposes only — this project is not affiliated with or endorsed by any mentioned company.

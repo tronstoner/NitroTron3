@@ -173,7 +173,10 @@ fuzz. K4 CCW is a **POG octave stack** (polyphonic octave generator —
 filterbank-based, fully polyphonic, no pitch tracking): the travel
 first crossfades the clean signal against a sub-octave, then a +1
 octave and a +2 octave stack in; full CCW is the whole organ stack,
-with no dry left in the stage (K6 re-adds global dry). **SW1=DOWN**
+with no dry left in the stage (K6 re-adds global dry). The octave
+engine is adapted from Steven Schulteis'
+[terrarium-poly-octave](https://github.com/schult/terrarium-poly-octave)
+(MIT). **SW1=DOWN**
 is a pitch-tracked
 synth oscillator: the bass note is tracked (YIN, semitone-quantized) and
 an oscillator engine replaces the dry path, amplitude-gated by the env
