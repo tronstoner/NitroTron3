@@ -402,6 +402,27 @@ constexpr float MODE_C_OD_COMP_AT_MAX  = 0.65f; // makeup at K4 full CCW — cut
 constexpr float MODE_C_OD_K4_CURVE    = 3.0f;   // taper on K4-CCW → PEDAL drive: >1 = finer near noon + max packs into less travel at the top (full CCW max unchanged). 1 = linear
 constexpr float MODE_C_OD_AMP_KNEE    = 0.72f;  // K4-CCW position where the AMP stage starts ramping in (below = unity, so pedal/TS gain builds first; amp only enters over the top of the travel)
 
+// --- Mode C POG simulation (SW1=MID, K4 CCW) — docs/MODE_C_POG_DISCOVERY.md ---
+// ERB-PS2 quadrature-filterbank octave engine (src/poly_octave.h, adapted
+// from schult/terrarium-poly-octave, MIT): 80 analytic bandpass filters at
+// 8 kHz, per-band phase scaling for -1/+1/+2 oct voices. Staged along the K4
+// CCW travel: segment 1 crossfades clean out against SUB (in-stage dry path,
+// deliberate exception to the OD-era clean-is-K6's-job rule), then UP1, then
+// UP2 stack in. Full CCW = the whole organ stack, no dry. ENABLE=false
+// restores the TS→amp overdrive on the same travel (kept in the tree until
+// the POG wins).
+constexpr bool  MODE_C_POG_ENABLE     = true;
+// POG-style gain staging: plain voice sum, no loudness compensation (the
+// COMP_AT_* pair below stays inert at 1.0). Hierarchy by ear: SUB loudest,
+// UP1 below it, UP2 lowest.
+constexpr float MODE_C_POG_SUB_LEVEL  = 2.5f;   // per-voice balance at full fade-in
+constexpr float MODE_C_POG_UP1_LEVEL  = 1.8f;
+constexpr float MODE_C_POG_UP2_LEVEL  = 1.2f;
+constexpr float MODE_C_POG_SEG1_END   = 0.40f;  // K4 travel fraction: clean→SUB xfade complete
+constexpr float MODE_C_POG_SEG2_END   = 0.70f;  // K4 travel fraction: UP1 fully in (UP2 ramps after)
+constexpr float MODE_C_POG_COMP_AT_NOON = 1.0f; // makeup at noon (dry passthrough — keep 1)
+constexpr float MODE_C_POG_COMP_AT_MAX  = 1.0f; // makeup at full CCW (trim below 1 once the stack sits too hot vs clean)
+
 // Post-filter peak limiter (Mode C only, all SW2 modes).
 // 2-band split: LF (≤ SPLIT_HZ) passes through untouched so bass fundamentals
 // don't duck when resonance peaks fire the limiter. HF is soft-knee limited.

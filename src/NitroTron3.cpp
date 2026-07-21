@@ -18,6 +18,7 @@
 #include "glitch_zones.h"
 #include "bitcrush.h"
 #include "synth_osc_c.h"
+#include "poly_octave.h"
 #include "synth_osc_a.h"
 #include "mode_a_hpf.h"
 #include "freq_shifter.h"
@@ -42,6 +43,11 @@ Grendel      grendel_c;   // Mode C — SW2=MID Grendel formant filter
 PeakLimiter  limiter_c;   // Mode C — post-filter peak limiter (2-band, fundamentals preserved)
 BitCrush     bitcrush_c;  // Mode C — SW1=MID drive flavor (gated bit crusher)
 ModeCSynth   synth_c;     // Mode C — SW1=DOWN pitch-tracked synth oscillator
+// Mode C — SW1=MID K4-CCW POG octave stack (ERB-PS2 filterbank engine).
+// ProcessBlock fills the per-voice wet buffers once per audio block; the
+// per-sample loop mixes them with the smoothed staged gains.
+polyoct::PolyOctave polyoct_c;
+float polyoct_sub[256], polyoct_up1[256], polyoct_up2[256];  // >= max block size
 EnvFollower  env;        // shared between Mode A and Mode C (only one mode active at a time)
 PitchTracker tracker;
 
@@ -229,6 +235,7 @@ Smoother sdrv_c;                          // C: K5 pre-filter drive_amt
 Smoother sfbl_c, sfdr_c, sfco_c;          // C: K4 sinefold blend/drive/comp
 Smoother scbl_c, schd_c;                  // C: K4 Chebyshev blend/drive
 Smoother sodd_c, soda_c, sodc_c;          // C: K4 overdrive drive/amp-drive/comp
+Smoother spdry_c, spsub_c, spup1_c, spup2_c;  // C: K4 POG staged voice gains (comp folded in)
 
 // Mode B SW1 MIDDLE: event-driven digital glitch processor (stateful)
 GlitchEvents glitch_events;
@@ -1321,6 +1328,30 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const float od_comp      = MODE_C_OD_COMP_AT_NOON +
       od_blend * (MODE_C_OD_COMP_AT_MAX - MODE_C_OD_COMP_AT_NOON);
 
+  // SW1=MID CCW — POG octave stack (replaces the OD when MODE_C_POG_ENABLE).
+  // Staged travel: segment 1 crossfades clean → SUB (dry silent from SEG1_END
+  // on), segment 2 fades UP1 in on top, segment 3 fades UP2 in. Loudness comp
+  // interpolates across the travel and is folded into the four gain targets;
+  // the per-sample Smoothers de-zipper them. At noon (pog_a = 0) the targets
+  // are exactly dry-passthrough, so branch entry/exit is seamless.
+  const float pog_a  = (MODE_C_POG_ENABLE && drive_mode == 1) ? k4_ccw : 0.f;
+  const float pog_t1 = (pog_a >= MODE_C_POG_SEG1_END)
+      ? 1.f : pog_a / MODE_C_POG_SEG1_END;
+  const float pog_t2 = (pog_a <= MODE_C_POG_SEG1_END) ? 0.f
+      : ((pog_a >= MODE_C_POG_SEG2_END) ? 1.f
+         : (pog_a - MODE_C_POG_SEG1_END) /
+           (MODE_C_POG_SEG2_END - MODE_C_POG_SEG1_END));
+  const float pog_t3 = (pog_a <= MODE_C_POG_SEG2_END) ? 0.f
+      : (pog_a - MODE_C_POG_SEG2_END) / (1.f - MODE_C_POG_SEG2_END);
+  const float pog_comp = MODE_C_POG_COMP_AT_NOON +
+      pog_a * (MODE_C_POG_COMP_AT_MAX - MODE_C_POG_COMP_AT_NOON);
+  // Equal-power clean↔SUB crossfade (sqrt curves): a linear fade pair dips
+  // ~-6 dB at mid-travel, which read as "way too quiet" in the first audition.
+  const float pog_dry_t = sqrtf(1.f - pog_t1) * pog_comp;
+  const float pog_sub_t = sqrtf(pog_t1) * MODE_C_POG_SUB_LEVEL * pog_comp;
+  const float pog_up1_t = pog_t2 * MODE_C_POG_UP1_LEVEL * pog_comp;
+  const float pog_up2_t = pog_t3 * MODE_C_POG_UP2_LEVEL * pog_comp;
+
   // K3 bipolar with center deadzone → signed env amount in [-1, +1].
   float k3_signed = (k3 - 0.5f) * 2.f;
   if (k3_signed > -K3_DEADZONE && k3_signed < K3_DEADZONE) k3_signed = 0.f;
@@ -1384,6 +1415,15 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
   const bool phaser_on = (filter_mode == 2);
   if (phaser_on) phaser_c.SetParams(k1, k2, k3_signed);
 
+  // POG pre-pass: fill the per-voice wet buffers for the whole block (the
+  // filterbank runs at 8 kHz internally, so it consumes 6-sample chunks —
+  // block size 48 divides evenly). Runs whenever the engine is compiled in,
+  // regardless of SW1/K4, so band filter states never go stale; the smoothed
+  // gains ramping from 0 mask branch entry.
+  if (MODE_C_POG_ENABLE) {
+    polyoct_c.ProcessBlock(in[0], polyoct_sub, polyoct_up1, polyoct_up2, size);
+  }
+
   float env_val = prev_block_env_c;
   for (size_t i = 0; i < size; i++) {
     const float dry = in[0][i];
@@ -1412,6 +1452,10 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     const float odd = sodd_c(od_drive);
     const float oda = soda_c(od_amp_drive);
     const float odc = sodc_c(od_comp);
+    const float pdry = spdry_c(pog_dry_t);
+    const float psub = spsub_c(pog_sub_t);
+    const float pup1 = spup1_c(pog_up1_t);
+    const float pup2 = spup2_c(pog_up2_t);
 
     // Feed pitch tracker every sample so its filters stay warm regardless of
     // SW1 position; consumed only when drive_mode == 2 (SW1=DOWN synth osc).
@@ -1459,6 +1503,12 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
       // K4 CW = gated bit-flipper, K4 CCW = tanh overdrive, noon = clean.
       if (k4_cw > 0.001f) {
         wet = bitcrush_c.Process(dry, k4_cw, env_val);
+      } else if (MODE_C_POG_ENABLE && k4_ccw > 0.001f) {
+        // POG octave stack. The smoothed gains carry the whole staged travel
+        // (clean→SUB xfade, then UP1, then UP2) and the loudness comp — this
+        // branch just mixes the always-running voices.
+        wet = dry * pdry + polyoct_sub[i] * psub + polyoct_up1[i] * pup1 +
+              polyoct_up2[i] * pup2;
       } else if (od_blend > 0.001f) {
         // TS → tube amp. Pre-clip HPF keeps the lows out of the pedal stage
         // (anti-mud); a touch of low-passed clean is summed back before the amp
@@ -1569,6 +1619,7 @@ int main() {
   limiter_c.Init(sr);
   bitcrush_c.Init();
   synth_c.Init(sr);
+  polyoct_c.Init(sr);
   env.Init(sr);
   env.SetCutoff(ENV_LP_CUTOFF_HZ);
 
