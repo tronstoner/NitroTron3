@@ -15,7 +15,8 @@
 // K2 = feedback (Color analog): tap from end of allpass chain back into
 // stage 0's input. Off (K2=0) = clean dry-flat-with-notches sweep; up =
 // deeper, narrower notches with a hint of resonance, classic Small Stone
-// "Color ON" feel. Clamped below self-oscillation by PHASER_FB_MAX.
+// "Color ON" feel. Feedback is coupled to the K2 character morph
+// (PHASER_FB_AT_NOTCH … PHASER_FB_AT_PEAK), no longer on its own knob.
 //
 // K3 bipolar: CCW = triangle LFO, CW = sample-and-hold. Sign selects
 // shape, magnitude (after the caller's deadzone snap-to-zero) sets LFO
@@ -58,7 +59,12 @@ class Phaser {
     fc_center_ = PHASER_F1_HZ_MIN *
                  powf(PHASER_F1_HZ_MAX / PHASER_F1_HZ_MIN, k1);
 
-    fb_amt_ = k2 * PHASER_FB_MAX;
+    // K2 = character morph: wet-leg gain g sweeps +1 (CCW, notch phaser)
+    // → 0 (noon, flat) → −1 (CW, peaks / bandpass-stack character). Feedback
+    // is coupled to the morph — peaks want resonance, the notch sweep stays
+    // clean — via the ear-tunable endpoint pair.
+    wet_g_  = 1.f - 2.f * k2;
+    fb_amt_ = PHASER_FB_AT_NOTCH + k2 * (PHASER_FB_AT_PEAK - PHASER_FB_AT_NOTCH);
 
     if (k3_signed == 0.f) {
       lfo_active_ = false;
@@ -125,9 +131,10 @@ class Phaser {
     }
     fb_state_ = x;
 
-    // Internal dry + wet sum at unity 0.5/0.5. THIS is what creates the
-    // two moving notches; bypassing or relocating it loses phaser character.
-    return 0.5f * (in + x);
+    // Internal dry + wet mixing node — THIS creates the response. Wet-leg
+    // gain wet_g_ morphs it: +1 = notches (classic phaser), 0 = flat,
+    // −1 = peaks at the same frequencies (bandpass-stack character).
+    return 0.5f * (in + wet_g_ * x);
   }
 
  private:
@@ -140,6 +147,7 @@ class Phaser {
   float fc_center_;
   float a_;
   float fb_amt_;
+  float wet_g_ = 1.f;  // mixing-node wet gain: +1 notch … −1 peak (K2 morph)
   float fb_state_;
   float ap_state_[kStages];
   float stage_offset_[kStages];

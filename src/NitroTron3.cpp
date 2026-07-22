@@ -496,7 +496,7 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   if (drone_mode == DRONE_FIXED) {
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
-    int octave = Quantize(RemapKnob(eb.knobs[1]), 7);  // K2
+    int octave = Quantize(RemapKnob(eb.knobs[1]), 7) + MODE_A_K2_OCTAVE_SHIFT;  // K2
     int base_note = 12 + octave * 12;
     midi_note = static_cast<float>(base_note + TRACKING_WRAP_NOTE + semi_offset);
   } else if (drone_mode == DRONE_TRACK) {
@@ -512,7 +512,7 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     while (folded <  0.f  - PITCH_FOLD_HYSTERESIS_SEMI) { drone_fold_k--; folded += 12.f; }
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
-    int octave = Quantize(RemapKnob(eb.knobs[1]), 7);
+    int octave = Quantize(RemapKnob(eb.knobs[1]), 7) + MODE_A_K2_OCTAVE_SHIFT;
     int base_note = 12 + (octave + TRACKING_OCTAVE_SHIFT) * 12;
     midi_note = static_cast<float>(base_note + TRACKING_FOLD_NOTE + semi_offset) + folded;
   } else {
@@ -521,7 +521,7 @@ void ProcessDrone(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     float k1 = RemapKnob(eb.knobs[0]);
     int semi_offset = MapDetuneKnob(k1, 12);
     // -1: K2 noon = A3 for a played A, matching the fixed drone and octave-locked.
-    int oct_offset = Quantize(RemapKnob(eb.knobs[1]), 7) - 1;
+    int oct_offset = Quantize(RemapKnob(eb.knobs[1]), 7) - 1 + MODE_A_K2_OCTAVE_SHIFT;
     midi_note = tracked + static_cast<float>(semi_offset + oct_offset * 12);
   }
 
@@ -1427,10 +1427,12 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
 
   // POG pre-pass: fill the per-voice wet buffers for the whole block (the
   // filterbank runs at 8 kHz internally, so it consumes 6-sample chunks —
-  // block size 48 divides evenly). Runs whenever the engine is compiled in,
-  // regardless of SW1/K4, so band filter states never go stale; the smoothed
-  // gains ramping from 0 mask branch entry.
-  if (MODE_C_POG_ENABLE) {
+  // block size 48 divides evenly). Gated on SW1=MID + K4 on the CCW side:
+  // the 80-band bank is the biggest CPU block in Mode C, and running it
+  // unconditionally starved the main-loop YIN on the guitar profile (late
+  // hops → glitchy, octave-hopping tracking). Entry staleness (~ms of filter
+  // warmup) is masked by the voice gains smoothing up from 0.
+  if (MODE_C_POG_ENABLE && drive_mode == 1 && k4_ccw > 0.001f) {
     polyoct_c.ProcessBlock(in[0], polyoct_sub, polyoct_up1, polyoct_up2, size);
   }
 

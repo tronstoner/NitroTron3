@@ -47,7 +47,7 @@ constexpr float ENV_FOLD_MOD     = 0.250f;   // envelope → wavefold amount (×
 // over time. THRESH is on the raw env scale (passive bass plays ~0.02–0.1).
 // RATIO = 1 → off (linear, prior behaviour, for A/B); higher = more decisive
 // pull-down of the floor region (steeper expansion below THRESH).
-constexpr float ENV_VCA_EXP_THRESH = 0.020f;
+constexpr float ENV_VCA_EXP_THRESH = NT3_GUITAR ? 0.008f : 0.020f;  // guitar env runs weaker — 0.020 crushed its whole dynamic range
 constexpr float ENV_VCA_EXP_RATIO  = 2.0f;
 
 // --- Preset system timing (from ux-demo.html) ---
@@ -105,6 +105,9 @@ constexpr int TRACKING_FOLD_NOTE       = 8;     // G#, one semitone below A
 constexpr float PITCH_FOLD_HYSTERESIS_SEMI = 0.0f;
 // Octave-locked register shift (octaves), on top of the fold. 0 = A3 at K2 noon.
 constexpr int TRACKING_OCTAVE_SHIFT    = 0;
+// Mode A K2 octave register per instrument: guitar sits an octave above bass,
+// so its whole K2 range shifts one octave down (applies to all SW2 modes).
+constexpr int MODE_A_K2_OCTAVE_SHIFT   = NT3_GUITAR ? -1 : 0;
 
 // Pitch tracker instrument profile (consumed by pitch_tracker.h).
 // BASS — today's values exactly: 4x decimation (12 kHz analysis rate), 4-pole
@@ -116,12 +119,15 @@ constexpr int TRACKING_OCTAVE_SHIFT    = 0;
 //   update cadence. Parabolic interpolation ON — integer-lag stepping is
 //   ~40 cents at 1 kHz, inaudible on bass but out-of-tune on guitar.
 constexpr int   TRACK_DEC       = NT3_GUITAR ? 2      : 4;      // decimation 48 kHz → analysis rate
-constexpr float TRACK_AA_LP_HZ  = NT3_GUITAR ? 1200.f : 400.f;  // 4-pole anti-alias + fundamental-isolation LP
+constexpr float TRACK_AA_LP_HZ  = NT3_GUITAR ? 700.f : 400.f;   // 4-pole anti-alias + fundamental-isolation LP (guitar 1200→700: at 1200 the 2nd harmonic passed and caused octave errors; bass-profile-on-guitar proved harder isolation tracks stably)
 constexpr int   TRACK_MIN_LAG   = NT3_GUITAR ? 23     : 24;     // shortest period → highest trackable pitch
 constexpr int   TRACK_MAX_LAG   = NT3_GUITAR ? 360    : 400;    // longest period → lowest trackable pitch
 constexpr int   TRACK_WINDOW    = NT3_GUITAR ? 640    : 400;    // YIN analysis window (samples at analysis rate)
 constexpr int   TRACK_HOP       = NT3_GUITAR ? 128    : 64;     // samples between YIN runs (~5.3 ms both profiles)
-constexpr float TRACK_THRESHOLD = 0.15f;                        // YIN first-dip threshold (shared)
+constexpr float TRACK_THRESHOLD = 0.15f;                        // YIN first-dip threshold (shared). Guitar additionally falls back to the global-minimum dip when nothing passes (see TRACK_FALLBACK_MIN) — without it, shallow low-string dips (short window in periods) meant "no dip → hold last note" = stuck tracking
+// Guitar: when no dip passes TRACK_THRESHOLD, accept the global minimum of
+// d' if it is at least this good (sanity ceiling — above it, hold as before).
+constexpr float TRACK_FALLBACK_MIN = 0.5f;
 constexpr bool  TRACK_PARABOLIC = NT3_GUITAR;                   // sub-lag parabolic refine (BASS off = today's output)
 
 // --- Stage / mix / ladder (Tuning Page 3) --- (Stage 2–3)
@@ -495,7 +501,14 @@ constexpr float PHASER_LFO_TRI_HZ_MAX  = 80.f;    // near sub-audio
 // S&H character lives well below the triangle's top end.
 constexpr float PHASER_LFO_SH_HZ_MIN   = 0.5f;
 constexpr float PHASER_LFO_SH_HZ_MAX   = 40.f;
-constexpr float PHASER_FB_MAX          = 0.98f;   // feedback ceiling — wide open; tanh-in-loop bounds runaway and detune keeps it from going sterile, so K2 full CW reaches into bounded self-oscillation
+// K2 = character morph (v1 roadmap item 1). The final mixing node creates the
+// response: 0.5·(in + g·chain). g=+1 (K2 CCW) = today's notch phaser; g=0
+// (noon) = flat/no filter; g=−1 (full CW) = peaks at the notch frequencies —
+// a bandpass-stack character from the same allpass chain. Feedback no longer
+// sits on a knob: it's coupled to the morph position (peaks want resonance,
+// clean notch sweep doesn't) via the two ear-tunable endpoints below.
+constexpr float PHASER_FB_AT_NOTCH     = 0.15f;  // feedback at K2 full CCW (clean-ish notch sweep)
+constexpr float PHASER_FB_AT_PEAK      = 0.80f;  // feedback at K2 full CW (resonant bandpass character; tanh-in-loop bounds runaway)
 constexpr float PHASER_STAGE_SPREAD    = 0.04f;   // per-stage allpass coeff detune; breaks perfect notch alignment (organic, less "digital"). 0 = all stages identical
 
 // --- Mode B SW1 MIDDLE — Event-Driven Digital Glitch ---
@@ -533,7 +546,7 @@ constexpr float FREQ_SHIFT_CURVE     = 6.0f;   // taper exponent (higher = more 
 // Wet high-pass (2-pole) — keeps the wet bus above the dry instrument's low
 // range so the wet sits on top instead of fighting the fundamentals. Guitar's
 // dry range starts an octave up, so the shelf rises with it.
-constexpr float WET_HPF_FREQ = NT3_GUITAR ? 200.f : 120.f;
+constexpr float WET_HPF_FREQ = 120.f;  // feedback-return HPF, both profiles — guitar's 200 made the loop go harsh/bright too soon
 constexpr float K5_CENTER_DEADZONE = 0.05f;  // ±5% deadzone around center
 constexpr float REVERB_INPUT_GAIN  = 0.40f;  // gain into the Clouds reverb
 constexpr float REVERB_TIME        = 0.70f;  // reverb decay (krt in Clouds)

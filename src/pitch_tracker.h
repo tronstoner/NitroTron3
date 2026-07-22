@@ -120,6 +120,15 @@ class PitchTracker {
     float prev_dp      = 1.f;   // d'(tau - 1)
     float best_dp_prev = 1.f;   // d'(best_tau - 1)
     float best_dp_next = -1.f;  // d'(best_tau + 1); < 0 = not yet captured
+    // GUITAR fallback bookkeeping: global minimum of d' across the full lag
+    // range. Low strings put only ~2 periods in the window, so their dip can
+    // hover above TRACK_THRESHOLD every hop — the threshold path then never
+    // fires and the tracker holds the last note ("stuck", open E worst).
+    // Compile-time gated; folds away entirely in the BASS build.
+    int   min_tau     = -1;
+    float min_dp      = 1.f;
+    float min_dp_prev = 1.f;
+    float min_dp_next = -1.f;
 
     for (int tau = 1; tau <= TRACK_MAX_LAG; tau++) {
       float d = 0.f;
@@ -134,6 +143,15 @@ class PitchTracker {
                         : 1.f;
 
       if (TRACK_PARABOLIC && best_tau == tau - 1) best_dp_next = d_prime;
+      if (NT3_GUITAR && TRACK_PARABOLIC && min_tau == tau - 1)
+        min_dp_next = d_prime;
+
+      if (NT3_GUITAR && tau >= TRACK_MIN_LAG && d_prime < min_dp) {
+        min_dp      = d_prime;
+        min_tau     = tau;
+        min_dp_prev = prev_dp;
+        min_dp_next = -1.f;
+      }
 
       if (tau >= TRACK_MIN_LAG) {
         if (d_prime < TRACK_THRESHOLD) {
@@ -151,6 +169,18 @@ class PitchTracker {
         }
       }
       prev_dp = d_prime;
+    }
+
+    // GUITAR fallback: nothing under the threshold this hop → accept the
+    // global-minimum dip if it clears the sanity ceiling, instead of holding
+    // the stale note. Picks up shallow-dip low strings (open E) that the
+    // threshold path structurally misses.
+    if (NT3_GUITAR && best_tau < 0 && min_tau > 0 &&
+        min_dp <= TRACK_FALLBACK_MIN) {
+      best_tau     = min_tau;
+      best_dp      = min_dp;
+      best_dp_prev = min_dp_prev;
+      best_dp_next = min_dp_next;
     }
 
     if (best_tau > 0) {
