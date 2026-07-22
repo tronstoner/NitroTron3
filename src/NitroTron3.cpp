@@ -1273,6 +1273,7 @@ float od_hp_z = 0.f;        // pre-clip high-pass state (hp = x − lp)
 float od_hp_g = 0.f;
 float xorfuzz_hp_z = 0.f;   // XOR fuzz rectifier DC-block state (hp = x − lp)
 float xorfuzz_hp_g = 0.f;
+bool  phaser_atk_armed = true;  // S&H attack-sync re-arm state (env hysteresis)
 float od_clean_lp_z = 0.f;  // clean-blend low-pass state
 float od_clean_lp_g = 0.f;
 
@@ -1448,6 +1449,17 @@ void ProcessFreqShift(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out
     // transient/click when K4 crosses into the CCW drive region.
     od_hp_z       += od_hp_g * (dry - od_hp_z);
     od_clean_lp_z += od_clean_lp_g * (dry - od_clean_lp_z);
+
+    // Phaser S&H attack sync: env onset (rising crossing with hysteresis
+    // re-arm) restarts the random LFO so each note gets a fresh step.
+    if (phaser_on) {
+      if (phaser_atk_armed && env_val > PHASER_SH_ATTACK_ON) {
+        phaser_c.NoteAttack();
+        phaser_atk_armed = false;
+      } else if (!phaser_atk_armed && env_val < PHASER_SH_ATTACK_OFF) {
+        phaser_atk_armed = true;
+      }
+    }
 
     // Per-sample control smoothing — de-zipper the block-rate knob gains for
     // K6 (mix), K5 (drive), and K4 (drive character). Smoothers run every

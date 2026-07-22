@@ -499,7 +499,7 @@ constexpr float PHASER_LFO_TRI_HZ_MIN  = 0.02f;   // 50-second cycle
 constexpr float PHASER_LFO_TRI_HZ_MAX  = 80.f;    // near sub-audio
 // S&H rate range: one event per 2 s → 40 events/sec. No audio-rate;
 // S&H character lives well below the triangle's top end.
-constexpr float PHASER_LFO_SH_HZ_MIN   = 0.5f;
+constexpr float PHASER_LFO_SH_HZ_MIN   = 0.01f;  // bottom of K3-CW travel ≈ hold: with attack sync, each note keeps its one random step (~100 s free-run period)
 constexpr float PHASER_LFO_SH_HZ_MAX   = 40.f;
 // K2 = character morph (v1 roadmap item 1). The final mixing node creates the
 // response: 0.5·(in + g·chain). g=+1 (K2 CCW) = today's notch phaser; g=0
@@ -507,9 +507,24 @@ constexpr float PHASER_LFO_SH_HZ_MAX   = 40.f;
 // a bandpass-stack character from the same allpass chain. Feedback no longer
 // sits on a knob: it's coupled to the morph position (peaks want resonance,
 // clean notch sweep doesn't) via the two ear-tunable endpoints below.
-constexpr float PHASER_FB_AT_NOTCH     = 0.15f;  // feedback at K2 full CCW (clean-ish notch sweep)
+constexpr float PHASER_FB_AT_NOTCH     = -0.4f;  // feedback at K2 full CCW — NEGATIVE widens/flattens the notches (vacuum-cleaner sweep); morph passes ~0 mid-travel on the way to the resonant peak end
 constexpr float PHASER_FB_AT_PEAK      = 0.80f;  // feedback at K2 full CW (resonant bandpass character; tanh-in-loop bounds runaway)
 constexpr float PHASER_STAGE_SPREAD    = 0.04f;   // per-stage allpass coeff detune; breaks perfect notch alignment (organic, less "digital"). 0 = all stages identical
+// 70s-swirl pass (Uni-Vibe/Schulte direction): stages stop moving in lockstep.
+constexpr float PHASER_STAGE_LFO_SPAN  = 0.5f;    // total per-stage LFO phase offset span (cycles); stages breathe against each other (LDR mismatch). 0 = lockstep (old behavior). Triangle LFO only
+constexpr float PHASER_SPREAD_PEAK_MULT = 4.0f;   // stage-detune multiplier at K2 full CW (notch end stays 1×) — spreads the loop resonance across several softer peaks instead of one sharp Q
+// K2 two-phase travel (per side, from noon): the character morph hits FULL
+// notch/peak at K2_FULL_AT of the half-travel; the remaining travel widens
+// the LFO sweep range instead (×1 at the knee → ×SWEEP_MAX_MULT at the end).
+// Feedback keeps its original full-travel mapping (unchanged resonance feel).
+constexpr float PHASER_K2_FULL_AT      = 0.5f;    // fraction of half-travel where morph saturates
+constexpr float PHASER_SWEEP_MAX_MULT  = 2.0f;    // sweep-depth multiplier at full travel (±1.5 oct → ±3 oct)
+// S&H attack sync: a rising env crossing (note attack) resets the random
+// LFO — new random value, phase restarted — so every note gets its own step
+// and free-running switches can't land rhythmically misaligned mid-note.
+// ON/OFF pair = hysteresis re-arm (raw env scale; guitar env runs weaker).
+constexpr float PHASER_SH_ATTACK_ON    = NT3_GUITAR ? 0.006f : 0.015f;  // rising past this = attack
+constexpr float PHASER_SH_ATTACK_OFF   = NT3_GUITAR ? 0.002f : 0.006f;  // fall below to re-arm
 
 // --- Mode B SW1 MIDDLE — Event-Driven Digital Glitch ---
 // Bipolar K4: noon = clean. CCW = bit-flip events, CW = timing events
