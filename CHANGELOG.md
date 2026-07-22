@@ -4,6 +4,30 @@ Notable changes to NitroTron3, intended for users. Format loosely follows [Keep 
 
 ## Unreleased
 
+## v0.5.1 — 2026-07-22 — Pre-release
+
+A phaser rework in Mode C, a guitar-build tracking fix, and a rewritten user
+manual.
+
+### Changed
+
+- **Phaser character rework (Mode C phaser sub-mode).** K2 is now a bipolar
+  character morph: notch phaser at one end, through flat at noon, to
+  resonant peaks/bandpass at the other; feedback follows the morph instead of
+  living on its own knob. Per-stage LFO offsets give a 70s Uni-Vibe/Schulte
+  swirl (the stages breathe against each other rather than sweeping in
+  lockstep), stage detune spreads the resonance across several softer peaks
+  toward the peak end, and the sample-&-hold LFO now re-arms on each note's
+  onset so every note gets a fresh step.
+- **Guitar build: pitch-tracking fix.** The guitar variant's tracker could get
+  stuck on a stale note on the low strings (open E worst) — it now accepts the
+  best available candidate when nothing clears the strict threshold. Also
+  retuned the guitar anti-alias filtering and several Mode A/B voicing
+  constants for the guitar's envelope and register. The bass build is
+  unaffected.
+- **User manual rewritten.** Clearer, tighter prose across every mode and the
+  control tables; rebuilt PDF.
+
 ## v0.5 — 2026-07-21 — Pre-release
 
 Mode C's SW1=MID slot got rebuilt around octaves, and the firmware moved to
