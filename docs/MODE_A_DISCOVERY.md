@@ -165,7 +165,7 @@ Tuning reference (by ear): **fixed** mode (SW2 UP), K1/K2 noon, open A →
 
 ---
 
-## Constants added / changed (`src/constants.h`)
+## Constants added / changed (`pedals/nitrotron3/constants.h`)
 
 ```
 // Saw unison cloud (Mode A copy of the Mode C hypersaw staging, gentler)

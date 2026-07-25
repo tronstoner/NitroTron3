@@ -9,7 +9,7 @@ As-built voicing (ear-tuned):
 - **Feedback ceiling** `PHASER_FB_MAX = 0.98`: wide open — K2 reaches into bounded self-oscillation at full CW; the `tanh` is the safety, so no conservative pre-limit is needed.
 - K1 = notch centre (exp), K2 = feedback, K3 = bipolar LFO rate + shape (CCW triangle / CW sample-and-hold, centre = static). Internal dry+wet sum locked at 0.5/0.5. No env-follower routing.
 
-Live `PHASER_*` constants are in `src/constants.h`; this doc is not the source of truth for values.
+Live `PHASER_*` constants are in `pedals/nitrotron3/constants.h`; this doc is not the source of truth for values.
 
 ---
 

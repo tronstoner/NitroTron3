@@ -5,8 +5,8 @@ Granular texture/soundscape engine for bass, inspired by the Chase Bliss Mood's
 re-emitted as grains, pitch-shifted in harmony with the tracked bass note, and
 can be fed back into itself to sustain into drone territory.
 
-This doc reflects **shipped behaviour**. `src/constants.h` (Mode B block) and
-`ProcessGranular` in `src/NitroTron3.cpp` are the source of truth; the README
+This doc reflects **shipped behaviour**. `pedals/nitrotron3/constants.h` (Mode B block) and
+`ProcessGranular` in `pedals/nitrotron3/main.cpp` are the source of truth; the README
 and `docs/USER_MANUAL.md` carry the player-facing control tables.
 
 ---

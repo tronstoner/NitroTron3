@@ -1,6 +1,6 @@
 ---
 name: tune
-description: View or edit compile-time DSP constants in src/constants.h, then rebuild.
+description: View or edit compile-time DSP constants in pedals/nitrotron3/constants.h, then rebuild.
 disable-model-invocation: true
 argument-hint: [parameter value]
 allowed-tools: Bash(make *) Read Edit
@@ -8,7 +8,7 @@ allowed-tools: Bash(make *) Read Edit
 
 # Tune Constants
 
-View or modify DSP constants in `src/constants.h` and rebuild.
+View or modify DSP constants in `pedals/nitrotron3/constants.h` and rebuild.
 
 ## Usage
 
@@ -18,14 +18,14 @@ View or modify DSP constants in `src/constants.h` and rebuild.
 
 ## Steps
 
-1. Read `src/constants.h`
+1. Read `pedals/nitrotron3/constants.h`
 2. If arguments provided: update the specified constant, rebuild
 3. If no arguments: display all constants grouped by section
 4. After any change: run `make` to verify it compiles
 
 ## Sections
 
-Groupings mirror `src/constants.h`. Use prefixes to grep when the user names a feature instead of a constant.
+Groupings mirror `pedals/nitrotron3/constants.h`. Use prefixes to grep when the user names a feature instead of a constant.
 
 ### Mode A — Bordun
 - **Oscillator**: `OSC_K`, `OSC_DC_TRIM`, `OSC_FOLD_AMT`, `OSC_PEAK_GAIN`, `OSC_SAW_GAIN`, `OSC_TRI_GAIN`, `OSC_SQR_GAIN`

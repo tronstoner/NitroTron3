@@ -161,9 +161,9 @@ Factory boot path (untouched): reads hardware into the (single) edit buffer.
 
 ## Files touched
 
-- `src/preset_system.h` — bulk of the work. Replace `ModeState modes[NUM_MODES]` with `GlobalState state` (including `banks[MAX_BANKS]` and `active_bank`). Rewrite `ProcessModeSwitchHardware()` so SW3 changes update `state.edit_buffer.mode` (manual) or trigger dirty (preset active). Update `LoadPreset()` to set `current_mode_` from the slot's `mode` field. Add both-FS gesture detection and `CycleBank()`. Add bank-burst LED routine. Update `MakeDefaults()`.
-- `src/NitroTron3.cpp` — no structural change; `preset.GetCurrentMode()` and `preset.GetEditBuffer()` still drive dispatch. Only behavioral side: the callback may see `current_mode_` change without a physical SW3 move. Already legal.
-- `src/constants.h` — add `LED_BANK_FLICKER_MS`, `LED_BANK_HOLD_MS`. `LED_REPEAT_GAP_MS` already bumped to 700 ms (independent change).
+- `pedals/nitrotron3/preset_system.h` — bulk of the work. Replace `ModeState modes[NUM_MODES]` with `GlobalState state` (including `banks[MAX_BANKS]` and `active_bank`). Rewrite `ProcessModeSwitchHardware()` so SW3 changes update `state.edit_buffer.mode` (manual) or trigger dirty (preset active). Update `LoadPreset()` to set `current_mode_` from the slot's `mode` field. Add both-FS gesture detection and `CycleBank()`. Add bank-burst LED routine. Update `MakeDefaults()`.
+- `pedals/nitrotron3/main.cpp` — no structural change; `preset.GetCurrentMode()` and `preset.GetEditBuffer()` still drive dispatch. Only behavioral side: the callback may see `current_mode_` change without a physical SW3 move. Already legal.
+- `pedals/nitrotron3/constants.h` — add `LED_BANK_FLICKER_MS`, `LED_BANK_HOLD_MS`. `LED_REPEAT_GAP_MS` already bumped to 700 ms (independent change).
 - `docs/PRESET_IMPL.md` — rewrite for the global + banks model. (Defer until code lands.)
 - `README.md` — controls table for FS1/FS2 unchanged; FS1+FS2 short-tap behaviour added; preset semantics description updates. (Defer.)
 

@@ -7,7 +7,7 @@ allowed-tools: Read Edit Grep Bash
 
 # Update Controls Documentation
 
-Parse `src/NitroTron3.cpp` and regenerate the controls and LEDs tables in `README.md`.
+Parse `pedals/nitrotron3/main.cpp` and regenerate the controls and LEDs tables in `README.md`.
 
 **Controls documentation lives in three places that must stay in lockstep:** the
 README tables, the per-mode prose/tables in `docs/USER_MANUAL.md`, and the
@@ -17,7 +17,7 @@ easily forgotten — see "Pedal-layout SVGs" below.
 
 ## Steps
 
-1. Read `src/NitroTron3.cpp`
+1. Read `pedals/nitrotron3/main.cpp`
 2. For each control (KNOB 1–6, SWITCH 1–3, FOOTSWITCH 1–2), identify:
    - What it does in each drone mode (FIXED, TRACK, TRACK_DIRECT)
    - Knob ranges and mapping

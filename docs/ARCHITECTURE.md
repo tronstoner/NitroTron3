@@ -1,9 +1,10 @@
 # Architecture — multi-pedal platform (proposal)
 
-> **Status: proposal / draft.** This describes a target structure for growing
-> the repo from one pedal (NitroTron3) into a *family* of pedals that share
-> groundwork. Nothing here is built yet. It is written to be reacted to — see
-> _Open questions_ at the end.
+> **Status: platform refactor done; module split next.** The shared `core/`
+> library + `pedals/nitrotron3/` + the `PEDAL=` selector (migration steps 1–4
+> below) are built and byte-identical to v0.5.1. Steps 5–6 — carving NitroTron3's
+> modes into modules and scaffolding the new pedal — are the remaining work, and
+> the Module interface may still shift as the new pedal's modes land.
 
 ## Why restructure
 
@@ -13,17 +14,22 @@ pedals on top of it without (a) starting from scratch, (b) forking the whole
 firmware per idea, or (c) being forced into NitroTron3's preset/footswitch
 scheme when a new pedal wants its footswitches for something else.
 
-Today two files carry everything and fuse concerns that want to be separate:
+Before this refactor two files carried everything and fused concerns that want
+to be separate (paths below are the pre-refactor locations; where each moved is
+noted):
 
-- **`src/NitroTron3.cpp`** — the pedal wiring (audio dispatch, mode routing)
-  **plus** reusable helpers trapped inside it (`Mapf`, `MapCutoff`,
-  `RemapKnob`, `Quantize`, `MixCurve`, `Wavefold`, knob smoothing).
-- **`src/preset_system.h`** — reads the Hothouse hardware (footswitches,
-  toggles, knobs, debounce/edge/hold) **and** decides what it all *does*
-  (banks, flash recall, LED policy, SW3 = mode, bootloader gesture).
-- **`src/*.h` DSP blocks** — already clean, swappable building blocks
-  (`env_follower`, `moog_ladder`, `phaser`, `grain_voice`, `poly_octave`,
-  `clouds/…`). This layer is in good shape and mostly just relocates.
+- **`NitroTron3.cpp`** (now `pedals/nitrotron3/main.cpp`) — the pedal wiring
+  (audio dispatch, mode routing) **plus** reusable knob/scalar helpers trapped
+  inside it (`Mapf`, `MapCutoff`, `Quantize`, `MixCurve`, …), since lifted to
+  `core/util/knob_map.h`.
+- **`preset_system.h`** (now under `pedals/nitrotron3/`) — reads the Hothouse
+  hardware (footswitches, toggles, knobs, debounce/edge/hold) **and** decides
+  what it all *does* (banks, flash recall, LED policy, SW3 = mode, bootloader
+  gesture). The read half now also exists as `core/io/control_surface.h` for the
+  new pedals; this file was left intact.
+- **DSP blocks** — already clean, swappable building blocks (`env_follower`,
+  `moog_ladder`, `phaser`, `grain_voice`, `poly_octave`, `clouds/…`), now
+  relocated to `core/blocks/`.
 
 The fix is to introduce two **seams**: one between the reusable *platform* and a
 specific *pedal*, and one between a *pedal* and the self-contained *modes* it
@@ -86,7 +92,7 @@ src/
   pedals/
     nitrotron3/
       main.cpp            # shell: init, mode routing, audio dispatch
-      preset_policy.h     # pedal-level footswitch policy (banks/flash/LEDs)
+      preset_system.h     # pedal-level footswitch policy (banks/flash/LEDs)
       modules/
         bordun.h  sprawl.h  schism.h
       constants.h         # config + INSTRUMENT profile
@@ -159,7 +165,7 @@ pedal-level policy installed?  ──yes (NitroTron3: presets)──▶ consumed
 active module .Controls(...)   ──▶ per-mode footswitch behavior
 ```
 
-- **NitroTron3** installs a **pedal-level policy** (`preset_policy.h`) that
+- **NitroTron3** installs a **pedal-level policy** (`preset_system.h`) that
   claims the footswitches across *all* its modes: FS1 cycles presets, banks,
   flash recall, Roman-numeral LEDs, SW3 = mode. Its three modules only supply
   controls + DSP; they don't touch the footswitches. Behavior stays identical.
@@ -197,29 +203,38 @@ composition**, the pattern already in use (`INSTRUMENT=guitar`,
 - **Module swap** is safe because a module is a leaf that depends only on
   `core/` — never on another module.
 
-## Migration path (staged, behavior-preserving)
+## Migration path — status
 
-Each stage leaves `make` green and NitroTron3 firmware **byte-identical** until
-we deliberately add the new pedal. Nothing is a big-bang rewrite.
+Each refactor stage kept NitroTron3 firmware **byte-identical** — both variants
+(bass `f000e225…`, guitar `5d56b77d…`), gated on a `.bin` checksum against the
+v0.5.1 release. Nothing was a big-bang rewrite.
 
-1. **Relocate DSP blocks** into `core/blocks/` (+ `clouds/`), fix includes.
-   Pure move; diff is paths only.
-2. **Extract `core/util/`** — lift `Mapf`, `MapCutoff`, `RemapKnob`,
-   `Quantize`, `MixCurve`, `Wavefold`, knob smoothing out of `NitroTron3.cpp`.
-   Mechanical; same code.
-3. **Extract `core/io/control_surface.h`** — pull the raw Hothouse read +
-   debounce/edge/hold out of `preset_system.h`; it now consumes a
-   `ControlSurface`. Checksum the `.bin` to prove no drift.
-4. **Move NitroTron3 into `pedals/nitrotron3/`** and add `PEDAL=` (default
-   `nitrotron3`). Two sub-steps:
-   - **4a** move as-is behind the shell; preset system → `preset_policy.h`.
-     Confirm byte-identical release.
-   - **4b** carve BORDUN / SPRAWL / SCHISM into `modules/` behind the Module
-     interface. Still byte-identical — this is where the seam earns its keep.
-5. **Scaffold `pedals/<new_pedal>/`** — its two defined modes as modules (each
-   owning its footswitches), plus a placeholder for the third. First new work.
+1. ✅ **Relocate DSP blocks** into `src/core/blocks/` (+ `clouds/`). Pure move;
+   one added `-I` path, no `#include` lines changed (bare includes resolve via
+   `-I` + the compiler's current-file-dir rule).
+2. ✅ **Extract `src/core/util/knob_map.h`** — the six pedal-agnostic helpers
+   (`Mapf`, `MapCutoff`, `MixCurve`, `Quantize`, `MidiToFreq`, `RemapKnob`).
+   Waveshapers (`Wavefold`, `Chebyshev`, …) depend on pedal constants, so they
+   stayed with the pedal.
+3. ✅ **Add `src/core/io/control_surface.h`** — reusable Hothouse read layer
+   (live knob/switch reads + footswitch edge/hold + `BothHeld`).
+   **Deviation from the original plan:** added as a *new* file for the new
+   pedals to build on; `preset_system.h` was left **untouched** rather than
+   retrofitted to consume it. Retrofitting is the highest byte-identical hazard
+   (a combo-timer entanglement — see the extraction dossier) for zero functional
+   gain, so it is deferred as optional cleanup. Verified by temp-including the
+   header (both variants stayed byte-identical → zero codegen).
+4. ✅ **Move NitroTron3 into `pedals/nitrotron3/`** (`main.cpp`, `constants.h`,
+   `preset_system.h`) + `PEDAL=` selector (default `nitrotron3`); the rebuild
+   stamp now tracks `PEDAL`+`INSTRUMENT`. The file kept the name
+   `preset_system.h` (renaming the file without the `PresetSystem` class it
+   holds buys nothing).
+5. ⬜ **Carve BORDUN / SPRAWL / SCHISM into `pedals/nitrotron3/modules/`** behind
+   the Module interface. Still byte-identical — where the seam earns its keep.
+6. ⬜ **Scaffold the new pedal** — its two defined modes as modules (each owning
+   its footswitches), plus a placeholder for the third. First new feature.
 
-Steps 1–4 are refactors with a checksum gate. Step 5 is the first new feature.
+Steps 1–4 are done (refactors, checksum-gated). Steps 5–6 are the next work.
 
 ## Decided
 
@@ -237,6 +252,8 @@ Steps 1–4 are refactors with a checksum gate. Step 5 is the first new feature.
 - **Cross-pedal platform constants** — sample rate, block size, peak limiter,
   DFU address: platform defaults in `core/`, per-pedal `constants.h` may
   override.
-- **Docs & skills** — `AGENTS.md`, `PROJECT.md`, and the `build`/`release`
-  skills assume `src/NitroTron3.cpp` and a single target; they update alongside
-  step 4, not before.
+- **Docs & skills** — path references (`tune`/`update-controls`/`release` skills,
+  `AGENTS.md`, `agents-instructions.md`, mode docs) were repointed to
+  `pedals/nitrotron3/` after step 4. A fuller structural pass on `PROJECT.md`
+  (staging timeline, multi-mode → multi-pedal framing) is still pending, best
+  done once the module split (step 5) lands.
