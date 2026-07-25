@@ -5,10 +5,10 @@ increments. Each item is written to be picked up standalone in a later
 session. Ear-tuning rules apply as everywhere in this project: implement the
 lever, tune by ear, one concern per iteration.
 
-Out of scope here: `docs/NEW/` holds early docs for the **next pedal
-platform** (3 modes, time-based — footswitches dedicated to tap tempo /
-looper instead of the preset system). It builds on this platform but is its
-own project; updated docs will land later. Ignore until then.
+Out of scope here: `docs/ChronoTron3/` (formerly `docs/NEW/`) holds the docs for
+the **next pedal** — ChronoTron3, 3 modes, time-based, footswitches dedicated to
+tap tempo / looper instead of the preset system. It builds on this platform but
+is its own project. Ignore it while working through this roadmap.
 
 ---
 

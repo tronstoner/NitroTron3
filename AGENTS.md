@@ -29,7 +29,19 @@ Do not jump into code or propose changes without first understanding the project
 - Discovery doc: `docs/MODE_C_DISCOVERY.md`. When implementation begins, this will be replaced by `docs/MODE_C.md` following MODE_A_DRONE.md structure.
 
 **Working on the preset system:**
-- `docs/PROJECT.md` § Preset System
+- `docs/PROJECT.md` § Preset System — behavioural spec.
+- `docs/PRESET_IMPL.md` — as-built reference. Timing constants come from `docs/ux-demo.html`.
+
+**Working on performance, CPU budget, or memory footprint:**
+- `docs/DSP_INVENTORY.md` — per-block code size, CPU cost, memory footprint, per-mode budget estimates, and how to re-measure them.
+
+**Working on repo layout, `core/` vs `pedals/`, or a new pedal:**
+- `docs/ARCHITECTURE.md` — the platform/pedal/module seams and the block/module/mode/shell vocabulary.
+- `docs/ChronoTron3/` — specs and plans for the ChronoTron3 bundle (in progress).
+
+**Any other topic:** `docs/PROJECT.md` § Document Map indexes every doc in the
+repo and marks each one current or historical. Check it before assuming a doc
+doesn't exist — and add an entry there whenever you add a doc.
 
 ## Skills
 
