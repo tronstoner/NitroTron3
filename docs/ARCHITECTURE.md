@@ -1,10 +1,11 @@
 # Architecture — multi-pedal platform (proposal)
 
-> **Status: platform refactor done; module split next.** The shared `core/`
-> library + `pedals/nitrotron3/` + the `PEDAL=` selector (migration steps 1–4
-> below) are built and byte-identical to v0.5.1. Steps 5–6 — carving NitroTron3's
-> modes into modules and scaffolding the new pedal — are the remaining work, and
-> the Module interface may still shift as the new pedal's modes land.
+> **Status: platform refactor done; module architecture explored next in
+> ChronoTron3.** The shared `core/` library + `pedals/nitrotron3/` + the `PEDAL=`
+> selector (migration steps 1–4 below) are built and byte-identical to v0.5.1 —
+> this is the stable point the branch merges to `main`. The Module interface is
+> then validated by building the **ChronoTron3** bundle; **NitroTron3 is left
+> untouched** to avoid regression risk (its module carve is deferred).
 
 ## Why restructure
 
@@ -205,9 +206,9 @@ composition**, the pattern already in use (`INSTRUMENT=guitar`,
 
 ## Migration path — status
 
-Each refactor stage kept NitroTron3 firmware **byte-identical** — both variants
-(bass `f000e225…`, guitar `5d56b77d…`), gated on a `.bin` checksum against the
-v0.5.1 release. Nothing was a big-bang rewrite.
+The completed refactor stages (1–4) kept NitroTron3 firmware **byte-identical** —
+both variants (bass `f000e225…`, guitar `5d56b77d…`), gated on a `.bin` checksum
+against the v0.5.1 release. Nothing was a big-bang rewrite.
 
 1. ✅ **Relocate DSP blocks** into `src/core/blocks/` (+ `clouds/`). Pure move;
    one added `-I` path, no `#include` lines changed (bare includes resolve via
@@ -229,12 +230,21 @@ v0.5.1 release. Nothing was a big-bang rewrite.
    stamp now tracks `PEDAL`+`INSTRUMENT`. The file kept the name
    `preset_system.h` (renaming the file without the `PresetSystem` class it
    holds buys nothing).
-5. ⬜ **Carve BORDUN / SPRAWL / SCHISM into `pedals/nitrotron3/modules/`** behind
-   the Module interface. Still byte-identical — where the seam earns its keep.
-6. ⬜ **Scaffold the new pedal** — its two defined modes as modules (each owning
-   its footswitches), plus a placeholder for the third. First new feature.
+5. ⬜ **Build ChronoTron3 as the module-architecture proving ground.** Scaffold
+   `pedals/chronotron3/` and implement its modules (`vestige`, `mnemonic`,
+   `ignis`) against the Module interface — designed clean here rather than
+   retrofitted. This is where the interface actually gets validated, and it is
+   the next work *after* this branch merges.
+6. ⬜ **(Deferred, optional) Carve NitroTron3 into modules.** Retrofitting
+   BORDUN / SPRAWL / SCHISM onto the Module interface is **not byte-identical**
+   (it changes storage layout + dispatch), and NitroTron3 already ships — so it
+   carries regression risk for no user-facing gain today. Leave it alone; do it
+   later only if/when true modular builds (OmniTron3) actually pay off, and
+   verify by flash-test, not checksum.
 
-Steps 1–4 are done (refactors, checksum-gated). Steps 5–6 are the next work.
+Steps 1–4 are done (byte-identical, checksum-gated) and are the **stable
+touchpoint** this branch merges to `main`. Step 5 (ChronoTron3) is the next
+work; step 6 is deferred.
 
 ## Decided
 
@@ -242,6 +252,21 @@ Steps 1–4 are done (refactors, checksum-gated). Steps 5–6 are the next work.
   is uniform across the family; only what the *footswitches* do varies (per
   module, or per pedal-level policy). This keeps the shell/module boundary
   fixed: the shell owns SW3, the active module owns the footswitches.
+
+- **Curated bundles, not dynamic builds (for now).** A "pedal" is a *curated
+  bundle* of modules that compiles to one firmware via `PEDAL=`. We ship a fixed
+  set of bundles; there is no dynamic/custom build service yet (that needs a
+  server or GitHub CI — deferred, and out of scope while we focus on the
+  effects). The repo is named NitroTron3 for historical reasons; conceptually
+  the repo is the *platform* and each bundle is one product built from it.
+  Planned bundles:
+  - **NitroTron3** — the original bundle (BORDUN / SPRAWL / SCHISM).
+  - **ChronoTron3** — `vestige` (looper/freeze) · `mnemonic` (tap-tempo delay) ·
+    `ignis` (impulse synth / resonator / drone). SW3 A/B/C = vestige / mnemonic /
+    ignis (working titles; order provisional). Specs live in
+    `docs/ChronoTron3/`.
+  - **OmniTron3** — the future *custom-build* offering (user-selected module
+    sets), once dynamic builds exist. Not scoped now.
 
 ## Open questions
 
@@ -255,5 +280,5 @@ Steps 1–4 are done (refactors, checksum-gated). Steps 5–6 are the next work.
 - **Docs & skills** — path references (`tune`/`update-controls`/`release` skills,
   `AGENTS.md`, `agents-instructions.md`, mode docs) were repointed to
   `pedals/nitrotron3/` after step 4. A fuller structural pass on `PROJECT.md`
-  (staging timeline, multi-mode → multi-pedal framing) is still pending, best
-  done once the module split (step 5) lands.
+  (staging timeline, multi-mode → multi-pedal/bundle framing) is still pending,
+  best folded in alongside the ChronoTron3 work.
