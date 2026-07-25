@@ -232,7 +232,7 @@ against the v0.5.1 release. Nothing was a big-bang rewrite.
    holds buys nothing).
 5. ⬜ **Build ChronoTron3 as the module-architecture proving ground.** Scaffold
    `pedals/chronotron3/` and implement its modules (`vestige`, `mnemonic`,
-   `ignis`) against the Module interface — designed clean here rather than
+   `armitage`) against the Module interface — designed clean here rather than
    retrofitted. This is where the interface actually gets validated, and it is
    the next work *after* this branch merges.
 6. ⬜ **(Deferred, optional) Carve NitroTron3 into modules.** Retrofitting
@@ -262,8 +262,8 @@ work; step 6 is deferred.
   Planned bundles:
   - **NitroTron3** — the original bundle (BORDUN / SPRAWL / SCHISM).
   - **ChronoTron3** — `vestige` (looper/freeze) · `mnemonic` (tap-tempo delay) ·
-    `ignis` (impulse synth / resonator / drone). SW3 A/B/C = vestige / mnemonic /
-    ignis (working titles; order provisional). Specs live in
+    `armitage` (impulse synth / resonator / drone). SW3 A/B/C = vestige /
+    mnemonic / armitage (working titles; order provisional). Specs live in
     `docs/ChronoTron3/`.
   - **OmniTron3** — the future *custom-build* offering (user-selected module
     sets), once dynamic builds exist. Not scoped now.

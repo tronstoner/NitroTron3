@@ -379,7 +379,7 @@ any of these as current behaviour.
 
 - `ChronoTron3/IMPLEMENTATION_PLAN.md` — stage-1 implementation plan for the ChronoTron3 bundle.
 - `ChronoTron3/dynamic-looper-concept.md` — working spec for the grain-based dynamic looper module (*vestige*).
-- `ChronoTron3/impulse resonator - ignis/IMPULSE_SYNTH_SPEC.md` — working spec for the impulse-resonator synth module (*ignis*), with `saturation.py` / `validate.py` alongside it.
+- `ChronoTron3/impulse resonator - armitage/IMPULSE_SYNTH_SPEC.md` — working spec for the impulse-resonator synth module (*armitage*), with `saturation.py` / `validate.py` alongside it.
 
 ### Generators, demos, assets
 

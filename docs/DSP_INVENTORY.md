@@ -6,11 +6,18 @@ cost. Written 2026-07-26 against branch `feature/ChronoTron3` at `a11dddb`.
 This is an *analysis* document, not a spec. Nothing here changes behaviour; it
 exists so the next "can we afford X?" question has numbers behind it.
 
-> **Scope.** Covers the `nitrotron3` pedal target (bass profile) — the only
-> target with real DSP today. `pedals/chronotron3/` is currently a shell +
-> `Module` interface with three stub modules (`vestige`/`mnemonic`/`ignis`,
-> 20–30 lines each, `Process()` compiles to 20 bytes); it is excluded from the
-> numbers below and was under active development while this was written.
+> **Scope.** Covers the `nitrotron3` pedal target (bass profile). At the
+> measurement commit (`a11dddb`) `pedals/chronotron3/` was a shell + `Module`
+> interface with three 20–30 line stubs, so it is **excluded from every number
+> below**.
+>
+> That is already out of date: the ChronoTron3 modules are under active
+> development and two of them now carry real DSP — `vestige` (574 lines,
+> grain looper/freeze) and `armitage` (312 lines + 127 of constants, impulse
+> resonator; note it allocates `MAX_VOICES × COMB_MAX_SAMPLES` of SDRAM comb
+> delay). `mnemonic` is still a stub. **ChronoTron3 needs its own measurement
+> pass once those modules settle** — re-run the recipe in §5 with
+> `-Ipedals/chronotron3` and `PEDAL=chronotron3`.
 
 ---
 
