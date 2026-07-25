@@ -2,6 +2,7 @@
 #include "daisysp.h"
 #include "hothouse.h"
 #include "constants.h"
+#include "knob_map.h"
 #include "moog_osc.h"
 #include "moog_ladder.h"
 #include "moog_ladder_v2.h"
@@ -271,55 +272,11 @@ float last_env = 0.f;   // smoothed envelope for per-block modulation
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-static float Mapf(float in, float min, float max) {
-  return min + in * (max - min);
-}
-
-// Exponential mapping for filter cutoff (80 Hz – 8 kHz). Mode A (signed off).
-static float MapCutoff(float knob) {
-  constexpr float MIN_HZ = 80.f;
-  constexpr float MAX_HZ = 8000.f;
-  return MIN_HZ * powf(MAX_HZ / MIN_HZ, knob);
-}
-
 // Mode C cutoff mapping — extended low end (30 Hz) for a deeper "shut" position.
 // Top end matches Mode A so env-mod headroom toward MODE_C_CUTOFF_MAX_HZ behaves the same.
 static float MapCutoffModeC(float knob) {
   return MODE_C_CUTOFF_MIN_HZ *
          powf(MODE_C_CUTOFF_K1_MAX_HZ / MODE_C_CUTOFF_MIN_HZ, knob);
-}
-
-// K6 mix pre-warp — smoothstep on top of the sqrt equal-power crossfade.
-// At noon: smoothstep(0.5) = 0.5, so sqrt(0.5) = 0.707 (−3 dB each), the
-// same point as plain sqrt. At the extremes the curve flattens: a knob
-// touch from full-dry pulls wet out of silence gently instead of jumping
-// straight to ~−10 dB, and the dry vanishes earlier on the wet side
-// instead of clinging on at ~−13 dB even at mix=0.95.
-static float MixCurve(float mix) {
-  return mix * mix * (3.f - 2.f * mix);
-}
-
-// Quantize knob (0–1) into N equal steps, returning 0..N-1
-static int Quantize(float knob, int steps) {
-  int val = static_cast<int>(knob * steps);
-  if (val >= steps) val = steps - 1;
-  return val;
-}
-
-// MIDI note to frequency: f = 440 * 2^((note - 69) / 12)
-static float MidiToFreq(float note) {
-  return 440.f * powf(2.f, (note - 69.f) / 12.f);
-}
-
-// Remap pot range — measured 0.000–0.968 at physical extremes
-constexpr float KNOB_MIN = 0.004f;
-constexpr float KNOB_MAX = 0.964f;
-
-static float RemapKnob(float raw) {
-  float v = (raw - KNOB_MIN) / (KNOB_MAX - KNOB_MIN);
-  if (v < 0.f) v = 0.f;
-  if (v > 1.f) v = 1.f;
-  return v;
 }
 
 // Map knob with center dead zone to ±N semitone steps.

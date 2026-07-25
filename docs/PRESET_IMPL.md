@@ -13,7 +13,7 @@ As-built reference for the preset system. Spec lineage: `docs/PROJECT.md` § Pre
 
 ---
 
-## Data structures (`src/preset_system.h`)
+## Data structures (`pedals/nitrotron3/preset_system.h`)
 
 ```cpp
 static constexpr int NUM_MODES   = 3;
@@ -106,7 +106,7 @@ Per tick (~10 ms):
 | Both short (released < `FS_LONG_PRESS_MS`) | Cycle bank: `active_bank = (active_bank+1) % NUM_BANKS`. Per context: manual → bank shifts, edit buffer preserved. On preset → load same slot in new bank. Save mode → bank shifts, save target unchanged. |
 | Both held ≥ `FS_BOOT_HOLD_MS` (2 s) | Arm bootloader request. Main loop calls `System::ResetToBootloader()` after a 1.2 s alternating LED1/LED2 burst (`75 ms` per phase × 8 pairs). |
 
-### Constants (in `src/constants.h`)
+### Constants (in `pedals/nitrotron3/constants.h`)
 
 | Constant | Value | Description |
 |---|---|---|
@@ -245,8 +245,8 @@ If `PersistentStorage::GetState() == FACTORY` (first ever boot or fully wiped fl
 
 | File | Purpose |
 |---|---|
-| `src/preset_system.h` | `PresetSystem` class — state machine, footswitch + knob handling, LED engine, flash storage, migration |
-| `src/constants.h` | All timing constants |
-| `src/NitroTron3.cpp` | `preset.Init()`, `preset.Tick(10)`, audio callback reads `preset.GetEditBuffer()`, polls `preset.ShouldEnterBootloader()` |
+| `pedals/nitrotron3/preset_system.h` | `PresetSystem` class — state machine, footswitch + knob handling, LED engine, flash storage, migration |
+| `pedals/nitrotron3/constants.h` | All timing constants |
+| `pedals/nitrotron3/main.cpp` | `preset.Init()`, `preset.Tick(10)`, audio callback reads `preset.GetEditBuffer()`, polls `preset.ShouldEnterBootloader()` |
 
 UI prototype: `docs/ux-demo.html` (browser playground mirroring the firmware behaviour for fast iteration on timing constants and gesture flow).

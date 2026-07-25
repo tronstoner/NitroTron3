@@ -52,7 +52,7 @@ Lives at the Mode B mix point. Going stereo = delete that line, route `wet_l`/`w
 - `src/resampler.h` — 48↔32 kHz polyphase (mono downsampler + stereo upsampler)
 
 **Modify:**
-- `src/constants.h` — add `REVERB_INTERNAL_SR_HZ`, `K5_CENTER_DEADZONE`
+- `pedals/nitrotron3/constants.h` — add `REVERB_INTERNAL_SR_HZ`, `K5_CENTER_DEADZONE`
 - Mode B process function — instantiate reverb + resampler, wire K5 bipolar
 - `docs/MODE_B_GRANULAR.md` — update signal chain diagram, K5 controls row, add reverb block description, add Clouds reference
 - `docs/PROJECT.md` — fold reverb work into Stage B.5

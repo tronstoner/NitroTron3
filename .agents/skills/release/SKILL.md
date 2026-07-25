@@ -28,8 +28,8 @@ If dirty, stop. If on the wrong branch, stop. Confirm with the user before conti
 ### 2. Build the firmware fresh — both instrument variants
 
 Since v0.4 every release ships a **bass** (default) and a **guitar** build
-(see "Instrument profile" in `src/constants.h`). The instrument stamp
-(`build/.instrument`) forces the full rebuild on each switch; the two builds
+(see "Instrument profile" in `pedals/nitrotron3/constants.h`). The instrument stamp
+(`build/.buildprofile`) forces the full rebuild on each switch; the two builds
 share one `build/` dir, so **stage each variant's artifacts before building
 the next** (step 4).
 

@@ -3,7 +3,7 @@
 ## Current Implementation
 
 YIN pitch tracker (`pitch_tracker.h`), voiced per instrument by the `TRACK_*`
-profile block in `src/constants.h`. BASS is the default; GUITAR is selected at
+profile block in `pedals/nitrotron3/constants.h`. BASS is the default; GUITAR is selected at
 build time with `make INSTRUMENT=guitar` (defines `NT3_INSTRUMENT_GUITAR`).
 The default (bass) build is byte-identical to the pre-profile firmware.
 
@@ -167,7 +167,7 @@ separate, opt-in passes, never bundled into the increments above.
   risk. Per principle #2, **stability wins by default** — only revisit if reach is
   demanded in practice.
 - **Guitar profile — IMPLEMENTED** (no longer deferred). The `TRACK_*` profile
-  block in `src/constants.h`, selected by `make INSTRUMENT=guitar`. `BASS` =
+  block in `pedals/nitrotron3/constants.h`, selected by `make INSTRUMENT=guitar`. `BASS` =
   today's values exactly (default build byte-identical); `GUITAR` = 1.2 kHz LP,
   `DEC = 2`, lag range ≈67–1043 Hz, parabolic refine on. Tuning still pending —
   needs a guitar on hand.
@@ -334,7 +334,7 @@ in small ear-checked increments; stop and listen between each.
       build byte-identical; `GUITAR` via `make INSTRUMENT=guitar` = 1.2 kHz LP /
       `DEC = 2` / lag range ≈67–1043 Hz / parabolic refine on).
 - [ ] Ear-tune the GUITAR profile values (tracker + the six profiled voicing
-      constants — see the "Instrument profile" block in `src/constants.h`) with a
+      constants — see the "Instrument profile" block in `pedals/nitrotron3/constants.h`) with a
       guitar on hand.
 - [ ] Optional whammy top-end reach for BASS (raise LP + lower `MIN_LAG`) — only if
       reach is demanded in practice; stability wins by default.

@@ -141,7 +141,7 @@ travel fractions). **Gain staging is POG-style: plain voice sum, no loudness
 compensation** — the `_COMP_AT_*` pair is inert at 1.0. Voice hierarchy by
 ear: SUB 2.5 > UP1 1.8 > UP2 1.2.
 
-## Constants (all ear-tuned, `src/constants.h`)
+## Constants (all ear-tuned, `pedals/nitrotron3/constants.h`)
 
 ```
 MODE_C_POG_ENABLE         // false = restore the TS→amp OD on this travel

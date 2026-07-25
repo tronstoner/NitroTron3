@@ -34,8 +34,8 @@ When writing an implementation plan from a prototype, add a **"Firmware translat
 
 ## Code conventions
 
-- All source code in `src/`, all documentation in `docs/`.
-- Compile-time DSP constants live in `src/constants.h`. Do not hand-edit values outside the tuning workflow unless explicitly asked.
+- Shared code in `src/core/`, per-pedal code in `pedals/<pedal>/`, all documentation in `docs/`. See `docs/ARCHITECTURE.md`.
+- Compile-time DSP constants live in `pedals/nitrotron3/constants.h`. Do not hand-edit values outside the tuning workflow unless explicitly asked.
 - DaisySP is the preferred DSP library. The Huovilainen ladder and parabolic oscillator shaper are implemented directly because DaisySP does not ship them.
 - Tuning mode is part of the main binary, not a separate build. No `#ifdef DEV_MODE` guards.
 - Stages are incremental. When working on Stage N, assume stages 0 through N-1 are complete and tested. If unclear, ask the user.

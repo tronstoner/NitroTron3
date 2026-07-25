@@ -46,7 +46,7 @@ Confirmed from MF-101 / MF-102 circuit analysis: full wave rectifier → 4-pole 
 
 **Implementation:**
 - Rectifier: `fabsf(in)`
-- 4-pole LP: cascade of two Daisy `OnePole` filters in biquad form, or a proper Butterworth 4-pole. Cutoff is tunable (default 33 Hz) via `ENV_LP_CUTOFF_HZ` in `src/constants.h`.
+- 4-pole LP: cascade of two Daisy `OnePole` filters in biquad form, or a proper Butterworth 4-pole. Cutoff is tunable (default 33 Hz) via `ENV_LP_CUTOFF_HZ` in `pedals/nitrotron3/constants.h`.
 - Threshold: if output < threshold, force VCA gain to 0. Tunable.
 
 ### 2. VCA
@@ -79,7 +79,7 @@ Apply a parabolic correction to a linear phase ramp. Approximates the capacitor-
 
 ```cpp
 // x = linear phase ramp, 0..1
-// k = curve amount (OSC_K in src/constants.h, default 0.35)
+// k = curve amount (OSC_K in pedals/nitrotron3/constants.h, default 0.35)
 float shapeRamp(float x, float k) {
     return x + k * (x - x * x);
     // x*x pulls energy toward the fundamental
@@ -98,7 +98,7 @@ public:
     float phase = 0.f;
     float sampleRate;
 
-    // Tunable via the OSC_* constants in src/constants.h
+    // Tunable via the OSC_* constants in pedals/nitrotron3/constants.h
     float k        = 0.35f;   // Waveshape curve: 0.0=linear saw, 0.5=strong fundamental
     float dcTrim   = 0.f;     // Fine DC offset trim if needed
     float peakGain = 1.0f;    // Pre-filter trim
@@ -185,7 +185,7 @@ Three waveforms selectable via Toggle 1: Saw, Triangle, Square.
 - No resonance needed for this use case (drone oscillator, not a traditional synth voice).
 - Cutoff controlled by Tone knob in normal mode (K4).
 - DaisySP does **not** ship this model — implement directly in C++ (~50 lines), Huovilainen / Stilson-Smith model.
-- Drive (input gain) and cutoff offset tunable via `LADDER_DRIVE` and `LADDER_CUTOFF_OFFSET` in `src/constants.h`.
+- Drive (input gain) and cutoff offset tunable via `LADDER_DRIVE` and `LADDER_CUTOFF_OFFSET` in `pedals/nitrotron3/constants.h`.
 
 This is the most important single DSP component for achieving the FreqBox character, after the oscillator shape itself.
 
@@ -239,7 +239,7 @@ struct DronePreset {
 
 ---
 
-## Compile-Time Constants (live in `src/constants.h`)
+## Compile-Time Constants (live in `pedals/nitrotron3/constants.h`)
 
 ```cpp
 // --- Oscillator (Page 1) ---
@@ -268,7 +268,7 @@ Defaults shown are starting points. Real values land after Stage 3 full tuning p
 
 ## Implementation Order (within Mode A)
 
-1. **Stage 1:** `MoogOsc` class (parabolic + PolyBLEP). Standalone testable — fixed pitch 110 Hz, output to both channels. `OSC_*` constants wired in `src/constants.h`.
+1. **Stage 1:** `MoogOsc` class (parabolic + PolyBLEP). Standalone testable — fixed pitch 110 Hz, output to both channels. `OSC_*` constants wired in `pedals/nitrotron3/constants.h`.
 2. **Stage 2:** Huovilainen ladder filter class. Wire between oscillator and output. `LADDER_*` constants wired.
 3. **Stage 3:** Envelope follower + VCA. Wire dry input → follower → VCA gain on oscillator. `ENV_*` constants wired. **Full re-tune pass of every group against bass.**
 4. **Stage 4:** Normal-mode control layer. Semitone/octave/fine tune/tone/mix/sensitivity applied from knobs. Waveform toggle wired.

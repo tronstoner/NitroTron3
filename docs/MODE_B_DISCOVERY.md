@@ -7,7 +7,7 @@ fixed-length sparse→dense density planned here); the very-short-grain stage an
 the `StutterVoice` pitch upgrade were **not** adopted (the K2-noon zone runs the
 main grain engine on the live ring, and `StutterVoice` is retired); and some
 constants named here (`CLOUD_OVERLAP_MAX`, `GRAIN_MIN_LEN = 48`) never shipped.
-Kept for design context only — **`src/constants.h` (Mode B block) and
+Kept for design context only — **`pedals/nitrotron3/constants.h` (Mode B block) and
 `ProcessGranular` are the source of truth for current behavior.**
 
 This redesign turns Mode B's two granular-shape knobs (K2 buffer, K3
@@ -82,7 +82,7 @@ K5 reverb/feedback + duckers, wet HPF, K6 mix, LEDs, presets.
 
 ---
 
-## New constants (`src/constants.h`, Mode B block ~L350–378)
+## New constants (`pedals/nitrotron3/constants.h`, Mode B block ~L350–378)
 
 | Constant | Value | Purpose |
 |---|---|---|

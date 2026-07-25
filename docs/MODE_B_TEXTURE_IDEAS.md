@@ -109,7 +109,7 @@ The deadzone (±5%) still snaps to clean / no triggers.
 - Always writes input to the ring buffer (regardless of side) so the
   CW snapshot can read recent history without ramp-up.
 
-### Constants (live in `src/constants.h`)
+### Constants (live in `pedals/nitrotron3/constants.h`)
 
 ```
 GLITCH_DEADZONE              = 0.05f   // ±5% around noon → clean

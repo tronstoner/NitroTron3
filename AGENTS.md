@@ -38,19 +38,26 @@ Reusable task recipes live in `.agents/skills/`. Each subdirectory contains a `S
 - **build** — compile the firmware and report success/failure
 - **commit-prep** — prepare a commit message and stage files
 - **release** — cut a tagged GitHub release (build, stage artifacts, assemble `THIRD_PARTY_LICENSES.md`, draft release notes, tag, push, `gh release create`); gates irreversible steps on explicit user confirmation
-- **tune** — view / edit compile-time DSP constants in `src/constants.h` and rebuild
+- **tune** — view / edit compile-time DSP constants in `pedals/nitrotron3/constants.h` and rebuild
 - **update-controls** — regenerate README control/LED tables from source
 
 ## Repository structure
 
 ```
 NitroTron3/
-├── src/                        # all source code (.cpp, .h)
-├── docs/                       # specs, plans, research
+├── src/core/                   # shared, pedal-agnostic library
+│   ├── blocks/                 #   DSP building blocks (header-only) + clouds/
+│   ├── util/                   #   knob mapping + math helpers
+│   └── io/                     #   control_surface (Hothouse read layer)
+├── pedals/<pedal>/             # one firmware target per pedal
+│   ├── main.cpp                #   shell: init, mode routing, audio dispatch
+│   ├── constants.h             #   compile-time config + INSTRUMENT profile
+│   └── preset_system.h         #   (nitrotron3) pedal-level footswitch policy
+├── docs/                       # specs, plans, research (see ARCHITECTURE.md)
 ├── .agents/skills/             # reusable agent task recipes
 ├── lib/HothouseExamples/       # submodule (libDaisy + DaisySP)
 ├── build/                      # compiled output (gitignored)
-├── Makefile                    # build system (root)
+├── Makefile                    # build system (root); `make PEDAL=<name>`
 ├── README.md                   # user-facing docs + control tables
 ├── agents-instructions.md      # hard rules for agent behavior
 ├── AGENTS.md                   # this file
@@ -58,7 +65,7 @@ NitroTron3/
 └── LICENSE                     # GPL v3
 ```
 
-**Convention:** Source code lives in `src/`. Documentation and specs live in `docs/`. The Makefile stays at the project root.
+**Convention:** Shared code lives in `src/core/`; per-pedal source lives in `pedals/<pedal>/`. Documentation and specs live in `docs/` — see `docs/ARCHITECTURE.md` for the multi-pedal layout. The Makefile stays at the project root.
 
 ## Build setup
 
@@ -66,7 +73,7 @@ NitroTron3/
 - The Hothouse hardware proxy (`hothouse.h` / `hothouse.cpp`) is compiled from `lib/HothouseExamples/src/` — it is not copied into this repo.
 - The Makefile references all libraries via `lib/HothouseExamples/` relative paths. No sibling-directory dependencies.
 - After cloning, build libraries once: `make -C lib/HothouseExamples/libDaisy && make -C lib/HothouseExamples/DaisySP`.
-- `make INSTRUMENT=guitar` builds a guitar-voiced variant (see the "Instrument profile" block in `src/constants.h`). Default = bass. Profile switches rebuild automatically via a stamp file (`build/.instrument`).
+- `make INSTRUMENT=guitar` builds a guitar-voiced variant (see the "Instrument profile" block in `pedals/nitrotron3/constants.h`). Default = bass. Profile switches rebuild automatically via a stamp file (`build/.buildprofile`).
 
 ## Hardware reference
 
