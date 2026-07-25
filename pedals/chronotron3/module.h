@@ -2,7 +2,7 @@
 //
 // ChronoTron3 — Module interface (the swappable unit).
 //
-// A module = one selectable mode (vestige / mnemonic / ignis). It owns its
+// A module = one selectable mode (vestige / mnemonic / armitage). It owns its
 // control mapping, its footswitch policy, and its DSP. The shell (main.cpp)
 // owns: SW3 mode selection, the K6 dry/wet mix (equal-power), and the reserved
 // both-footswitch bootloader gesture. Everything else on the surface is the

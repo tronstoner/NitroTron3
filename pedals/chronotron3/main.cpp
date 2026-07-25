@@ -1,6 +1,6 @@
 // ChronoTron3 — bundle shell.
 //
-// A curated bundle of three modules (vestige / mnemonic / ignis) on the shared
+// A curated bundle of three modules (vestige / mnemonic / armitage) on the shared
 // NitroTron3 platform (src/core/). The shell owns only: SW3 mode selection
 // (uniform across the family), the K6 dry/wet mix, and the reserved both-
 // footswitch bootloader gesture. Each active module owns everything else on the
@@ -17,7 +17,7 @@
 
 #include "modules/vestige.h"
 #include "modules/mnemonic.h"
-#include "modules/ignis.h"
+#include "modules/armitage.h"
 
 #include <math.h>
 
@@ -33,8 +33,8 @@ Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 
 Vestige  vestige;
 Mnemonic mnemonic;
-Ignis    ignis;
-Module*  modules[CT3_MODE_COUNT] = { &vestige, &mnemonic, &ignis };
+Armitage    armitage;
+Module*  modules[CT3_MODE_COUNT] = { &vestige, &mnemonic, &armitage };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
 volatile int g_active = CT3_MODE_VESTIGE;
@@ -76,7 +76,7 @@ int main() {
 
   for (int i = 0; i < CT3_MODE_COUNT; i++) modules[i]->Init(sr);
 
-  // SW3 (toggle index 2): 0=UP=vestige, 1=MIDDLE=mnemonic, 2=DOWN=ignis.
+  // SW3 (toggle index 2): 0=UP=vestige, 1=MIDDLE=mnemonic, 2=DOWN=armitage.
   int sel = cs.Switch(2);
   if (sel < 0 || sel >= CT3_MODE_COUNT) sel = 0;
   g_active = sel;

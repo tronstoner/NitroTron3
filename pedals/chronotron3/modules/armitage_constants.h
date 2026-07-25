@@ -1,19 +1,19 @@
 #pragma once
 //
-// ignis — tuning constants.  Impulse synth / resonator / drone.  SW3 DOWN.
+// armitage — tuning constants.  Impulse synth / resonator / drone.  SW3 DOWN.
 //
 // Design principle 3 (spec): anything not on a control is a NAMED constant here,
 // never a literal buried in the DSP. Values that the spec marks TBD are set at
 // stage 1 and flagged // STAGE-1 GUESS so the integrating engineer can find them.
 //
-// Spec: docs/ChronoTron3/impulse resonator - ignis/IMPULSE_SYNTH_SPEC.md
+// Spec: docs/ChronoTron3/impulse resonator - armitage/IMPULSE_SYNTH_SPEC.md
 // Reference math: saturation.py / validate.py (same directory).
 //
-// Included from ignis.h. Requires <cmath> / <cstdint> (pulled in by ignis.h).
+// Included from armitage.h. Requires <cmath> / <cstdint> (pulled in by armitage.h).
 
 #include <cstdint>
 
-namespace ignis_k {
+namespace armitage_k {
 
 // ---------------------------------------------------------------------------
 // Input conditioning — asymmetric saturation  (Findings F3)
@@ -109,7 +109,7 @@ static constexpr float OUTFILT_RANGE_HZ = 6000.0f;// added at env = 1
 // ---------------------------------------------------------------------------
 // Output limiter (in-spec). Simple mono soft-asymptote peak limiter; the
 // NitroTron3 peak_limiter.h is unavailable here (it pulls MODE_C_* constants),
-// so ignis carries its own. LF corner "tracks the lowest active voice" is a
+// so armitage carries its own. LF corner "tracks the lowest active voice" is a
 // stage-4 item — fixed here.
 // ---------------------------------------------------------------------------
 static constexpr float LIMIT_THR       = 0.9f;
@@ -124,4 +124,4 @@ static constexpr float LIMIT_REL_MS    = 120.0f;
 // ---------------------------------------------------------------------------
 static constexpr float PARAM_SMOOTH = 0.05f;
 
-}  // namespace ignis_k
+}  // namespace armitage_k

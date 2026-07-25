@@ -3,7 +3,7 @@
 Working plan for the first testable drafts of the ChronoTron3 bundle. Goal:
 **testable starting points that explore range**, not an end-user-safe pedal. We
 build the extremes and revisit safeguards/musicality later. This plan does not
-override the module specs (`impulse resonator - ignis/IMPULSE_SYNTH_SPEC.md`,
+override the module specs (`impulse resonator - armitage/IMPULSE_SYNTH_SPEC.md`,
 `dynamic-looper-concept.md`) — where it guesses, that's flagged under _Decisions
 to collect_.
 
@@ -15,12 +15,12 @@ to collect_.
   `Init(sr)` · `Activate/Deactivate` · `Controls(cs, led1, led2)` (control-rate,
   main loop ~10 ms) · `Process(in, wet, size)` (audio-rate, mono wet).
 - **`main.cpp` (shell)** owns only: SW3 mode select (**A=vestige · B=mnemonic ·
-  C=ignis**), K6 equal-power dry/wet mix (smoothed), and the reserved both-FS
+  C=Armitage**), K6 equal-power dry/wet mix (smoothed), and the reserved both-FS
   bootloader gesture. Each active module owns everything else — including both
   footswitches.
 - **`mnemonic`** = unspecced placeholder (passthrough) until it gets a spec.
 
-## ignis — stage 1 (agent-implemented)
+## Armitage — stage 1 (agent-implemented)
 
 Per spec Staging: conditioning + both resonator cores at **fixed tuning**, played
 into directly, **no analysis**. Chain: input → asymmetric-saturation conditioning
@@ -40,7 +40,7 @@ texture (tape degrade ↔ digital glitch). ~8 s SDRAM buffer.
 
 ## Decisions taken (liberties — flag if wrong)
 
-- **SW3 order** A/B/C = vestige/mnemonic/ignis (per your call, provisional).
+- **SW3 order** A/B/C = vestige/mnemonic/Armitage (per your call, provisional).
 - **Bypass:** ChronoTron3 has **no dedicated bypass footswitch** (both are
   module-owned). For now the effect is always active; only both-FS-held = DFU.
   Revisit if you want a true-bypass gesture.
@@ -48,14 +48,14 @@ texture (tape degrade ↔ digital glitch). ~8 s SDRAM buffer.
   NitroTron3 "K6 always mix" convention). Modules output pure wet.
 - **Module interface = virtual base class** (dispatch once per block; negligible
   cost). This is the architecture proving ground; may be refined after stage 1.
-- **No INSTRUMENT profile** for ChronoTron3 (ignis: "one control set for all
+- **No INSTRUMENT profile** for ChronoTron3 (Armitage: "one control set for all
   instruments").
 - Per-module constants files (`modules/<name>_constants.h`); bundle-global only
   in `pedals/chronotron3/constants.h`.
 
 ## Decisions to collect (revisit together)
 
-**ignis** (spec Open items): register stepped-vs-continuous + default stacking;
+**Armitage** (spec Open items): register stepped-vs-continuous + default stacking;
 whether structure (K3) and asymmetry (K4) are one perceptual axis; SW2
 assignment (note-set policy) once a core is chosen; voice count (CPU); which
 resonator core wins the A/B. Plus: the fixed default chord used as the stub, and
@@ -68,7 +68,7 @@ LED blink-state mapping; continuous-auto capture depth.
 
 ### Concrete stage-1 choices in the drafts (tune/confirm by ear)
 
-**ignis:** 6 voices allocated / 3 active = a **minor triad on A2** (MIDI 45,
+**Armitage:** 6 voices allocated / 3 active = a **minor triad on A2** (MIDI 45,
 one-line constant); register continuous ±1 oct, **no stacking**; K3 = allpass
 dispersion (comb) / inharmonic partial stretch (modal); K5 = fast-atk·slow-rel
 (CCW) ↔ slow-atk·fast-rel (CW); custom inline limiter; level-match makeup
@@ -92,7 +92,7 @@ decay; continuous-auto capture implemented; SW1-DOWN → manual; SW2 unused.
   ~15–20% worst case. `EnterFrippertronics()` copies up to a full 8 s loop inside
   one 10 ms control tick → may stutter; chunk later if so. Record-write (ISR) vs
   commit (control) isn't lock-clean — glitch-tolerant, flag if you want it tight.
-- **ignis:** whether K3 (structure) and K4 (asymmetry) are one perceptual axis;
+- **Armitage:** whether K3 (structure) and K4 (asymmetry) are one perceptual axis;
   register stepped-vs-continuous + default stacking; the default chord identity.
 
 ## Ethos
