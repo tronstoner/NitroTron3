@@ -27,6 +27,17 @@ tasks:
       - make INSTRUMENT=guitar
       - make INSTRUMENT=guitar program-dfu
 
+  build-chronotron3:
+    desc: Build the ChronoTron3 bundle
+    cmds:
+      - make PEDAL=chronotron3
+
+  flash-chronotron3:
+    desc: Build + flash the ChronoTron3 bundle via DFU
+    cmds:
+      - make PEDAL=chronotron3
+      - make PEDAL=chronotron3 program-dfu
+
   clean:
     desc: Remove build output
     cmds:
