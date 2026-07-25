@@ -6,7 +6,7 @@ TARGET = NitroTron3
 
 # Sources and Hothouse header files
 CPP_SOURCES = src/NitroTron3.cpp lib/HothouseExamples/src/hothouse.cpp
-C_INCLUDES = -Isrc -Isrc/core/blocks -Ilib/HothouseExamples/src
+C_INCLUDES = -Isrc -Isrc/core/blocks -Isrc/core/util -Ilib/HothouseExamples/src
 
 # Library Locations
 LIBDAISY_DIR = lib/HothouseExamples/libDaisy
