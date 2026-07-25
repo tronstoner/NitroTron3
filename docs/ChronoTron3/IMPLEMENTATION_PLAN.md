@@ -66,7 +66,34 @@ frippertronics sits); voiced↔frippertronics selection; gain summation law
 (1/N vs 1/√N vs soft-limit); K5 role split; K2 assignment; SW1-down and SW2;
 LED blink-state mapping; continuous-auto capture depth.
 
-_(Agents append their concrete liberties/opens here at integration.)_
+### Concrete stage-1 choices in the drafts (tune/confirm by ear)
+
+**ignis:** 6 voices allocated / 3 active = a **minor triad on A2** (MIDI 45,
+one-line constant); register continuous ±1 oct, **no stacking**; K3 = allpass
+dispersion (comb) / inharmonic partial stretch (modal); K5 = fast-atk·slow-rel
+(CCW) ↔ slow-atk·fast-rel (CW); custom inline limiter; level-match makeup
+`COMB=0.35 / MODAL=1.0` (guesses). K1/K2 coeff changes are **unsmoothed** →
+fast sweeps may click (fine for discovery). SW1-MID → comb. Footswitches unused.
+
+**vestige:** voices 1–6, frippertronics at **K1 > 0.86**; tap ≤350 ms / clear-hold
+≥700 ms / min loop 10 ms; grains 400→30 ms, overlap 2→3, 16-grain shared pool;
+K4 tape drive→45 / decimate hold→96 / crush→2.5 bits; **gain law 1/√N**, oldest
+voice fades quietest; K2 = auto-capture threshold; K5 = age-fade slope / fripp
+decay; continuous-auto capture implemented; SW1-DOWN → manual; SW2 unused.
+
+### Flags needing a ruling / attention
+
+- **vestige spec conflict:** the spec says "overlap = 0 at the looper end" *and*
+  "overlap ≥ 1 for continuous output." The draft chose **≥1 everywhere**
+  (click-free continuity). Needs your ruling.
+- **vestige age-gain direction** (`(N−r)/N` "r-th-oldest") was ambiguous — draft
+  makes the **oldest quietest**. Confirm.
+- **vestige memory/CPU:** SDRAM ≈ **11.3 MB** (7 × 8 s slabs; tunable), CPU
+  ~15–20% worst case. `EnterFrippertronics()` copies up to a full 8 s loop inside
+  one 10 ms control tick → may stutter; chunk later if so. Record-write (ISR) vs
+  commit (control) isn't lock-clean — glitch-tolerant, flag if you want it tight.
+- **ignis:** whether K3 (structure) and K4 (asymmetry) are one perceptual axis;
+  register stepped-vs-continuous + default stacking; the default chord identity.
 
 ## Ethos
 
