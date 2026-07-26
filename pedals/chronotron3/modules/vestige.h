@@ -82,6 +82,7 @@ class Vestige : public Module {
     freeze_pos_frac_ = 0.f;
     k3_amt_          = 0.f;
     target_voices_ = 1;
+    frip_head_ = 0.f;
   }
 
   void Activate() override {
@@ -93,6 +94,7 @@ class Vestige : public Module {
     rec_full_  = false;
     commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
     frip_od_gain_ = 0.f; frip_od_target_ = 0.f; frip_stop_pending_ = false;
+    frip_head_ = 0.f;
   }
 
   // -------------------------------------------------------------------------
@@ -268,6 +270,10 @@ class Vestige : public Module {
     for (size_t i = 0; i < size; i++) {
       const float x = in[i];
 
+      // ---- Frippertronics loop head (single per-sample head) --------------
+      // Advance it before record/playback so both reference the same position.
+      if (fripp_mode_ && frip_len_ > 0) AdvanceFripHead();
+
       // ---- Input envelope (drives continuous-auto gate) -------------------
       float a = fabsf(x);
       env_ += VESTIGE_ENV_COEF * (a - env_);
@@ -276,16 +282,16 @@ class Vestige : public Module {
       if (recording_) {
         float* m = vestige_slab[rec_slot_];
         if (fripp_mode_ && frip_len_ > 0) {
-          // Overdub (sound-on-sound): decay existing, add ramped input, wrap at
-          // loop len. The input ramp (frip_od_gain_) declicks record in/out.
-          // The decay is ramped WITH it (eff_decay: 1.0 when the input is faded
-          // out → matches the untouched loop, real decay at full overdub), so
-          // auto-record's partial ducking has no amplitude step at its seams.
+          // Overdub (sound-on-sound) writes at the loop head, so the phrase
+          // lands where it's played. Decay existing, add ramped input. The
+          // input ramp (frip_od_gain_) declicks record in/out; the decay is
+          // ramped WITH it (eff_decay: 1.0 when faded out → matches the
+          // untouched loop, real decay at full overdub) so auto-record's
+          // partial ducking has no amplitude step at its seams.
+          size_t idx = (size_t)frip_head_;
           frip_od_gain_ += frip_od_coef_ * (frip_od_target_ - frip_od_gain_);
           float eff_decay = 1.f + (frip_decay_ - 1.f) * frip_od_gain_;
-          m[rec_idx_] = m[rec_idx_] * eff_decay + x * frip_od_gain_;
-          rec_idx_++;
-          if (rec_idx_ >= frip_len_) rec_idx_ = 0;
+          m[idx] = m[idx] * eff_decay + x * frip_od_gain_;
           if (frip_stop_pending_ && frip_od_gain_ < 1e-3f) {
             frip_stop_pending_ = false;
             commit_pending_    = true;   // faded out → Controls commits (WriteGuard)
@@ -371,32 +377,42 @@ class Vestige : public Module {
     return glen;
   }
 
+  // Advance the single frippertronics loop head one sample. K3 sets its motion:
+  // forward (looper), backward (scrub), or pinned to the live freeze point.
+  // Grains read from it and recording writes to it → one head, phrases land
+  // where played. Phase-locked forward grains COLA-sum to a clean tape stream,
+  // so CCW is a seamless loop with no straight-head special case.
+  void AdvanceFripHead() {
+    const int    s = VESTIGE_FRIP_SLOT;
+    const size_t L = frip_len_;
+    if (k3_mode_ == kFreeze) {
+      size_t glen = SlotGrainLen(L);
+      float end_anchor = (float)L - ((float)glen + spray_);
+      if (end_anchor < 0.f) end_anchor = 0.f;
+      frip_head_ = end_anchor * freeze_pos_frac_;          // pinned freeze point
+    } else {
+      float rate = (k3_mode_ == kLooper) ? 1.f : -scrub_back_frac_;
+      frip_head_ += rate;
+      while (frip_head_ >= (float)L) frip_head_ -= (float)L;
+      while (frip_head_ < 0.f)      frip_head_ += (float)L;
+    }
+    play_pos_[s] = (size_t)frip_head_;
+  }
+
   void ServiceSlot(int s) {
     const size_t L = loop_len_[s];
     if (!active_[s] || L < VESTIGE_GRAIN_MIN_LEN) return;
     if (--timer_[s] > 0) return;
 
-    // --- Prototype: frippertronics straight-head playback at K3 fully CCW ----
-    // One grain spans the WHOLE loop with a near-rectangular window (only a
-    // short seam crossfade), so the body reproduces the buffer 1:1 like a tape
-    // head — no granular smear / time-shift. Re-emitted every (L - xf) samples
-    // so consecutive whole-loop grains overlap by xf at the wrap (COLA seam).
-    if (s == VESTIGE_FRIP_SLOT && k3_mode_ == kLooper) {
-      size_t xf = SeamXfadeLen(L);
-      play_pos_[s] = 0;                       // always from the top of the loop
-      EmitStraight(s, L, xf);
-      timer_[s] = (int)((L > xf) ? (L - xf) : L);
-      return;
-    }
-
     size_t glen = SlotGrainLen(L);
+    const bool is_frip = (s == VESTIGE_FRIP_SLOT);
 
-    // Freeze (noon→CW): pin the head to the LIVE freeze point (centre→end)
-    // before emitting, so the grain reads the current frozen position.
-    if (k3_mode_ == kFreeze) {
+    // Freeze (noon→CW): pin the head to the LIVE freeze point before emitting.
+    // Frip's head is pinned per-sample in AdvanceFripHead(); voiced slots pin
+    // here.
+    if (!is_frip && k3_mode_ == kFreeze) {
       float end_anchor = (float)L - ((float)glen + spray_);   // deepest safe point
       if (end_anchor < 0.f) end_anchor = 0.f;
-      // noon → CW sweeps the freeze point across the WHOLE buffer: 0 → end.
       play_pos_[s] = (size_t)(end_anchor * freeze_pos_frac_);
     }
 
@@ -406,45 +422,26 @@ class Vestige : public Module {
     size_t hop = (size_t)((float)glen / overlap_);
     if (hop < VESTIGE_MIN_INTERVAL) hop = VESTIGE_MIN_INTERVAL;
 
-    if (k3_mode_ == kScrub) {
-      // Backward auto-scrub (CCW→noon); speed per K3, 0 at noon. Live.
-      float ppos = (float)play_pos_[s] - scrub_back_frac_ * (float)hop;
-      ppos = fmodf(ppos, (float)L); if (ppos < 0.f) ppos += (float)L;
-      play_pos_[s] = (size_t)ppos;
-    } else if (k3_mode_ == kLooper) {
-      play_pos_[s] += hop;                                    // forward 1× loop
-      while (play_pos_[s] >= L) play_pos_[s] -= L;
+    // Head advance: voiced slots step play_pos per emit here; frip's head
+    // advances per-sample in AdvanceFripHead(), so skip it.
+    if (!is_frip) {
+      if (k3_mode_ == kScrub) {
+        // Backward auto-scrub (CCW→noon); speed per K3, 0 at noon. Live.
+        float ppos = (float)play_pos_[s] - scrub_back_frac_ * (float)hop;
+        ppos = fmodf(ppos, (float)L); if (ppos < 0.f) ppos += (float)L;
+        play_pos_[s] = (size_t)ppos;
+      } else if (k3_mode_ == kLooper) {
+        play_pos_[s] += hop;                                  // forward 1× loop
+        while (play_pos_[s] >= L) play_pos_[s] -= L;
+      }
+      // kFreeze: head pinned above; no advance.
     }
-    // kFreeze: head pinned above; no advance.
 
     // Reset the timer, with a little jitter (small so the freeze stays steady).
     float j = (VestigeRand() * 2.f - 1.f) * jitter_ * 0.6f;
     int itv = (int)((float)hop * (1.f + j));
     if (itv < (int)VESTIGE_MIN_INTERVAL) itv = (int)VESTIGE_MIN_INTERVAL;
     timer_[s] = itv;
-  }
-
-  // Whole-loop "straight head" grain (prototype). Near-rectangular window:
-  // alpha sized so the taper == the seam crossfade xf, so the flat middle plays
-  // the buffer at unity (rate 1.0, integer start → sample-exact, no smear) and
-  // only the seam is a short COLA crossfade between consecutive whole-loop
-  // grains. No overlap gain-comp: the body is a single grain at unity.
-  void EmitStraight(int s, size_t glen, size_t xf) {
-    int g = -1;
-    for (int k = 0; k < VESTIGE_GRAINS; k++) {
-      int idx = (next_grain_ + k) % VESTIGE_GRAINS;
-      if (!grains_[idx].IsActive()) { g = idx; next_grain_ = (idx + 1) % VESTIGE_GRAINS; break; }
-    }
-    if (g < 0) return;                        // pool exhausted → skip one pass
-    const size_t wp  = ring_[s].GetWritePos();
-    const size_t cap = VESTIGE_VOICE_CAP;
-    size_t delay = (wp + cap - 0) % cap;      // posi = 0 (top of loop)
-    float alpha = (glen > 0) ? (2.f * (float)xf / (float)glen) : 1.f;
-    if (alpha > 1.f) alpha = 1.f;
-    grain_src_[g]  = &ring_[s];
-    grain_slot_[g] = s;
-    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s], 1, alpha, 1.f);
-    first_grain_[s] = false;
   }
 
   void EmitGrain(int s, size_t glen) {
@@ -571,6 +568,7 @@ class Vestige : public Module {
       active_[s]   = true;
       age_[s]      = ++age_counter_;
       frip_len_    = L;
+      frip_head_   = 0.f;         // play the fresh loop from the top
       StartFadeIn(s);
       return;
     }
@@ -745,6 +743,7 @@ class Vestige : public Module {
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
+    frip_head_ = 0.f;
     muted_    = false;
     auto_armed_ = false;
   }
@@ -826,6 +825,11 @@ class Vestige : public Module {
   bool fripp_mode_    = false;
   size_t frip_len_    = 0;
   float  frip_decay_  = 1.f;
+  // Single frippertronics loop head (per-sample): record writes to it and grains
+  // read from it, so overdubs land exactly where they were played. K3 sets its
+  // motion (forward / backward scrub / frozen). Voiced slots keep their own
+  // per-emit play_pos_ — this is frip-only.
+  float  frip_head_   = 0.f;
   // Frippertronics overdub declick: ramp the summed input in/out over a few ms
   // at record engage/disengage so the sound-on-sound add has no hard step.
   float  frip_od_gain_    = 0.f;   // current overdub input gain (0..1)
