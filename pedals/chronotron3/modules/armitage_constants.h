@@ -30,19 +30,33 @@ static constexpr float EXCITE_GAIN = 1.0f;   // makeup after conditioning
                                              // STAGE-1 GUESS — tune by ear
 
 // ---------------------------------------------------------------------------
-// Voicing / chord (the STUB note set — no analysis at stage 1)
-// Root A2 = MIDI 45 = 110 Hz, which is the reference F0 the Findings were
-// measured at. Minor triad {root, m3, P5} for a moody drone. Easy to change.
+// Note-set behaviours (SW2 A/B). The active tunings are set per behaviour at
+// control rate — no longer a single fixed chord:
+//   SW2 UP   = fixed dense bank  (semitone comb; the spec's validation bed)
+//   SW2 MID  = mono track        (one voice at the tracked pitch)
+//   SW2 DOWN = key-quant multi   (accumulate the last N in-key notes played)
+// Register (K1) shifts whatever set is active by +/- REGISTER_OCT octaves.
+// Only poly *chord detection* is deferred (the hard note-set estimator).
 // ---------------------------------------------------------------------------
-static constexpr float CHORD_ROOT_MIDI          = 45.0f;   // A2, 110 Hz
-static constexpr int   CHORD_NOTE_COUNT         = 3;
-static constexpr float CHORD_INTERVALS_SEMI[3]  = {0.f, 3.f, 7.f};  // minor triad
 
-// Voice budget. Stage 1 = no register stacking, so active voices == chord notes.
-// Arrays are sized for MAX so future stacking needs no reshape. (spec: voice
-// count is a CPU lever, TBD at stage 1 — chosen 6, log in return.)
-static constexpr int MAX_VOICES    = 6;   // per-core allocation ceiling
-static constexpr int ACTIVE_VOICES = CHORD_NOTE_COUNT;  // stage 1: 3
+// Fixed dense bank — semitone comb over ~2 octaves (matches the 25-bin bank the
+// Findings were validated against). This is the voice/CPU/SDRAM ceiling.
+static constexpr int   BANK_NOTE_COUNT = 25;      // resonators in the fixed bank
+static constexpr float BANK_BASE_MIDI  = 33.0f;   // A1 (55 Hz)
+static constexpr float BANK_STEP_SEMI  = 1.0f;    // semitone spacing → 2 octaves
+
+static constexpr int   MAX_VOICES = BANK_NOTE_COUNT;  // array/SDRAM ceiling (25)
+
+// Mono track — single voice following the continuous tracked pitch.
+static constexpr int   MONO_VOICES = 1;
+
+// Key-quantised multivoice — accumulate distinct in-key notes into a stack
+// (play an arpeggio → build a chord). Poor-man's poly, no estimator.
+static constexpr int   QUANT_MAX_VOICES = 6;
+static constexpr float QUANT_ROOT_MIDI  = 33.0f;  // key root (A)
+static constexpr int   QUANT_SCALE_LEN  = 5;
+static constexpr int   QUANT_SCALE[5]   = {0, 3, 5, 7, 10};  // A minor pentatonic
+static constexpr float QUANT_GATE_ENV   = 0.02f;  // input env to accept a new note
 
 // ---------------------------------------------------------------------------
 // Comb / extended Karplus-Strong core (SW1 UP)
