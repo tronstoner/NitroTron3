@@ -70,6 +70,7 @@ class Vestige : public Module {
       fade_gain_[s]   = 0.f;
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
+      if (s < VESTIGE_MAX_VOICES) dying_[s] = false;
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) { grain_src_[g] = &ring_[0]; grain_slot_[g] = 0; }
     // Sensible defaults so Process is silent before the first Controls pass.
@@ -352,6 +353,11 @@ class Vestige : public Module {
           fade_gain_[s] = fade_from_[s] * sh;
         }
         y += slot_sum[s] * fade_gain_[s];
+        // Free a retired (dying) voiced slot once its fade-out has completed.
+        if (s < VESTIGE_MAX_VOICES && dying_[s] &&
+            fade_target_[s] < 0.5f && fade_phase_[s] >= 1.f) {
+          active_[s] = false; dying_[s] = false; loop_len_[s] = 0; gain_[s] = 0.f;
+        }
       }
 
       // ---- Texture (K4) ---------------------------------------------------
@@ -608,16 +614,33 @@ class Vestige : public Module {
     size_t copy = L + SeamXfadeLen(L);
     if (copy > VESTIGE_VOICE_CAP) copy = VESTIGE_VOICE_CAP;
 
-    const int target = AllocVoicedSlot();   // free slot if under target, else evict oldest
+    // Prefer a FREE voiced slot so the outgoing voice can fade out in its OWN
+    // buffer (no slab reuse under in-flight grains). Single-voice mode always
+    // has spares, so this is where the crossfade lives. Only a full pool (6
+    // active) forces reuse of the oldest slab (declick handled in Commit B).
+    int target = FindFreeSlot();
+    if (target < 0) target = EvictOldest();   // full pool: hard reuse (for now)
+
     memcpy(vestige_slab[target], vestige_slab[VESTIGE_REC_SLOT], copy * sizeof(float));
     WriteGuard(target, L);      // crossfades the overhang into the loop head
     loop_len_[target] = L;
     play_pos_[target] = 0;
     timer_[target]    = 0;      // fire the first grain immediately
     active_[target]   = true;
+    dying_[target]    = false;
     age_[target]      = ++age_counter_;
-    StartFadeIn(target);
+    StartFadeIn(target);        // new loop swells in over K5
+
+    // Retire the oldest live voice(s) beyond the target — graceful fade-out over
+    // K5 (frees when silent). For single-voice this IS the crossfade: the old
+    // loop fades out while the new swells in. With K5 CCW both are instant.
+    while (CountLive() > target_voices_) {
+      int o = OldestLive();
+      if (o < 0 || o == target) break;
+      StartDying(o);
+    }
     pending_len_ = 0; overhang_left_ = 0;
+    UpdateVoicedGains();
   }
 
   // Begin a fade-in for a slot: silent now, swelling to unity over K5 time.
@@ -649,15 +672,6 @@ class Vestige : public Module {
 
   // Pick a voiced slot for a new capture: a free slot if under target, else
   // evict the oldest (FIFO) and reuse it.
-  int AllocVoicedSlot() {
-    int n_active = 0;
-    for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (active_[v]) n_active++;
-    if (n_active < target_voices_) {
-      for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (!active_[v]) return v;
-    }
-    return EvictOldest();
-  }
-
   int EvictOldest() {
     int oldest = -1;
     uint32_t best = 0xFFFFFFFFu;
@@ -671,12 +685,36 @@ class Vestige : public Module {
   }
 
   // Reduce active voiced count to target, oldest-first (live K1 control).
+  // Live = active and not fading out. Dying voices still sound (fading) but no
+  // longer count toward the target or the gain normalization.
+  int CountLive() const {
+    int n = 0;
+    for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (active_[v] && !dying_[v]) n++;
+    return n;
+  }
+  int OldestLive() const {
+    int oldest = -1; uint32_t best = 0xFFFFFFFFu;
+    for (int v = 0; v < VESTIGE_MAX_VOICES; v++)
+      if (active_[v] && !dying_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
+    return oldest;
+  }
+  int FindFreeSlot() const {
+    for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (!active_[v] && !dying_[v]) return v;
+    return -1;
+  }
+  // Retire a voice gracefully: keep it sounding but fade it out over K5, then
+  // free it once silent (Process). Used for K1-reduce and the crossfade tail.
+  void StartDying(int s) {
+    if (s < 0 || dying_[s]) return;
+    dying_[s] = true;
+    SetFade(s, 0.f);   // release over K5
+  }
+
   void EvictToTarget() {
-    for (;;) {
-      int n = 0;
-      for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (active_[v]) n++;
-      if (n <= target_voices_) break;
-      EvictOldest();
+    while (CountLive() > target_voices_) {
+      int o = OldestLive();
+      if (o < 0) break;
+      StartDying(o);   // fade out over K5, free when silent
     }
   }
 
@@ -689,14 +727,15 @@ class Vestige : public Module {
     // single voice → the loop stays equally loud at any voice count (single is
     // no longer the loudest), while newer voices still sit above older ones.
     int n = 0;
-    for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (active_[v]) n++;
+    for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (active_[v] && !dying_[v]) n++;
     const float d = VESTIGE_AGE_FADE_DEPTH;
     float sumsq = 0.f;
     for (int v = 0; v < VESTIGE_MAX_VOICES; v++) {
       if (!active_[v]) { gain_[v] = 0.f; continue; }
-      int r = 0;   // rank among active voices: 0 = newest
+      if (dying_[v]) continue;       // fading out: keep its frozen gain_
+      int r = 0;   // rank among live voices: 0 = newest
       for (int w = 0; w < VESTIGE_MAX_VOICES; w++)
-        if (active_[w] && age_[w] > age_[v]) r++;
+        if (active_[w] && !dying_[w] && age_[w] > age_[v]) r++;
       float wr = (n > 1) ? (1.f - d * ((float)r / (float)(n - 1))) : 1.f;
       if (wr < 0.f) wr = 0.f;
       gain_[v] = wr;                 // stash weight; power-normalize below
@@ -705,7 +744,7 @@ class Vestige : public Module {
     if (sumsq > 1e-9f) {
       const float norm = 1.f / sqrtf(sumsq);
       for (int v = 0; v < VESTIGE_MAX_VOICES; v++)
-        if (active_[v]) gain_[v] *= norm;
+        if (active_[v] && !dying_[v]) gain_[v] *= norm;
     }
   }
 
@@ -774,6 +813,7 @@ class Vestige : public Module {
       fade_gain_[s]   = 0.f;   // silence immediately (no fade)
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
+      if (s < VESTIGE_MAX_VOICES) dying_[s] = false;
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
@@ -831,6 +871,7 @@ class Vestige : public Module {
   size_t     play_pos_[VESTIGE_SLOTS] = {0};
   int        timer_[VESTIGE_SLOTS]    = {0};
   bool       active_[VESTIGE_SLOTS]   = {false};
+  bool       dying_[VESTIGE_MAX_VOICES] = {false};  // voiced slot fading out → free when silent
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
   bool       first_grain_[VESTIGE_SLOTS] = {false};  // next grain skips its fade-in
