@@ -22,7 +22,8 @@ namespace armitage_k {
 // ---------------------------------------------------------------------------
 static constexpr float DRIVE       = 1.0f;   // F3: higher costs dynamics, no lift
 static constexpr float ASYM_MIN    = 0.0f;   // F3 knob range floor
-static constexpr float ASYM_MAX    = 0.5f;   // F3 plateau — full useful travel
+static constexpr float ASYM_MAX    = 1.0f;   // extended past F3's 0.5 plateau to full
+                                             // rectification — K4 was too subtle (discovery)
 static constexpr float CREST_FLOOR = 3.0f;   // F4 warn threshold (informational)
 static constexpr float DC_BLOCK_R  = 0.9975f;// one-pole DC blocker on exciter
                                              // (|tanh| adds DC that must go)
@@ -82,13 +83,15 @@ static constexpr float DISP_MAX    = 0.6f;   // STAGE-1 GUESS — max allpass co
 // Per-mode decay derived from that target: higher modes ring shorter (frequency-
 // dependent damping, to mirror the comb loop filter's native behaviour).
 // ---------------------------------------------------------------------------
-static constexpr int   MODES_PER_VOICE = 3;
+// 6 partials (was 3): with fundamentals A1–A3 a 3-partial bank topped out ~660 Hz
+// → muted/dull. More partials reach into the mid/high for a fair A/B vs comb.
+static constexpr int   MODES_PER_VOICE = 6;
 // Base (harmonic) partial ratios; K3 (structure) stretches them toward
 // inharmonic bell/plate spreads: ratio_k -> ratio_k * (1 + spread*(k-1)).
-static constexpr float MODAL_BASE_RATIOS[3] = {1.0f, 2.0f, 3.0f};
+static constexpr float MODAL_BASE_RATIOS[6] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
 static constexpr float MODAL_SPREAD_MAX     = 0.5f;   // K3 max inharmonic stretch
-static constexpr float MODAL_DAMP_EXP       = 0.6f;   // higher modes decay faster:
-                                                      // T60_k = T60 / ratio_k^EXP
+static constexpr float MODAL_DAMP_EXP       = 0.3f;   // higher modes decay faster (0.6
+                                                      // was too dark): T60_k = T60/ratio^EXP
 static constexpr float MODAL_MAKEUP         = 1.0f;   // STAGE-1 GUESS — level match
 static constexpr float R_MAX                = 0.99995f;// stability clamp on pole radius
 
@@ -107,18 +110,22 @@ static constexpr float T60_MAX_S = 8.0f;    // long drone
 static constexpr float REGISTER_OCT = 1.0f;  // +/- 1 octave of continuous travel
 
 // ---------------------------------------------------------------------------
-// Env-coupled output filter (K5) — env follower -> lowpass cutoff on the wet.
-// K5 is bipolar attack/release: CCW = fast attack / slow release (percussive
-// filter pop), CW = slow attack / fast release (swell). Noon ~ symmetric medium.
-// Interpretation of "bipolar attack/release" is a STAGE-1 GUESS — see return.
+// Output filter (K5) — a TRIGGERED envelope (its own AR generator, fired by an
+// input onset — NOT a follower) drives a steep 4-pole (24 dB/oct) non-resonant
+// lowpass on the resonator output. Closed = muted. K5 morphs the AR bipolar:
+//   CCW = fastest attack / longest release  (percussive hit, long tail)
+//   CW  = longest attack / fastest release   (swell in, quick close)
+// So the perceived note DECAY is the filter release — decoupled from resonator
+// damping (K2). Inspired by the Lost+Found topology (not a replica).
 // ---------------------------------------------------------------------------
-static constexpr float ENV_ATK_FAST_MS = 1.0f;    // K5 CCW attack
-static constexpr float ENV_ATK_SLOW_MS = 300.0f;  // K5 CW  attack
-static constexpr float ENV_REL_SLOW_MS = 800.0f;  // K5 CCW release
-static constexpr float ENV_REL_FAST_MS = 30.0f;   // K5 CW  release
-static constexpr float ENV_SENS        = 10.0f;   // passive-bass scaling (env ~0.02-0.1)
-static constexpr float OUTFILT_BASE_HZ  = 200.0f; // cutoff floor (env = 0)
-static constexpr float OUTFILT_RANGE_HZ = 6000.0f;// added at env = 1
+static constexpr float FENV_ATK_FAST_MS  = 1.0f;    // K5 CCW attack (instant hit)
+static constexpr float FENV_ATK_SLOW_MS  = 1000.0f; // K5 CW  attack (slow swell)
+static constexpr float FENV_REL_LONG_MS  = 3000.0f; // K5 CCW release (long tail)
+static constexpr float FENV_REL_SHORT_MS = 30.0f;   // K5 CW  release (quick close)
+static constexpr float OUTFILT_CLOSED_HZ = 40.0f;   // env=0: filter shut → mutes
+static constexpr float OUTFILT_OPEN_HZ   = 9000.0f; // env=1: filter open
+static constexpr float ONSET_ON          = 0.02f;   // input env rising past → trigger
+static constexpr float ONSET_OFF         = 0.008f;  // input env below → re-arm (hysteresis)
 
 // ---------------------------------------------------------------------------
 // Output limiter (in-spec). Simple mono soft-asymptote peak limiter; the

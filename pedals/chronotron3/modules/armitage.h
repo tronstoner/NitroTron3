@@ -44,12 +44,16 @@ class Armitage : public Module {
     for (int v = 0; v < armitage_k::MAX_VOICES; v++) modals_[v].Reset();
     tracker_.Init(sr);
     dc_x1_ = dc_y1_ = 0.f;
-    out_lp_ = 0.f;
-    env_    = 0.f;
     in_env_ = 0.f;
     lim_env_ = 0.f;
     asym_ = 0.f; structure_ = 0.f; register_oct_ = 0.f;
-    t60_ = 1.0f; env_atk_c_ = 0.5f; env_rel_c_ = 0.5f;
+    t60_ = 1.0f;
+    // K5 triggered filter envelope + 4-pole LP.
+    fenv_ = 0.f; fenv_phase_ = kRel; fenv_armed_ = true;
+    fenv_atk_c_ = 0.1f; fenv_rel_c_ = 0.01f;
+    lp1_ = lp2_ = lp3_ = lp4_ = 0.f;
+    g_closed_     = 6.2831853f * armitage_k::OUTFILT_CLOSED_HZ / sr_;
+    filt_octaves_ = log2f(armitage_k::OUTFILT_OPEN_HZ / armitage_k::OUTFILT_CLOSED_HZ);
     lim_atk_c_ = 1.f - expf(-1.f / (armitage_k::LIMIT_ATK_MS * 0.001f * sr_));
     lim_rel_c_ = 1.f - expf(-1.f / (armitage_k::LIMIT_REL_MS * 0.001f * sr_));
     behavior_ = kFixed; prev_behavior_ = kFixed;
@@ -85,10 +89,11 @@ class Armitage : public Module {
     Smooth(register_oct_, (k1 * 2.f - 1.f) * armitage_k::REGISTER_OCT);
     t60_ = ExpMap(k2, armitage_k::T60_MIN_S, armitage_k::T60_MAX_S);
 
-    const float atk_ms = Mapf(k5, armitage_k::ENV_ATK_FAST_MS, armitage_k::ENV_ATK_SLOW_MS);
-    const float rel_ms = Mapf(k5, armitage_k::ENV_REL_SLOW_MS, armitage_k::ENV_REL_FAST_MS);
-    env_atk_c_ = OnePoleCoeff(atk_ms);
-    env_rel_c_ = OnePoleCoeff(rel_ms);
+    // K5 bipolar: CCW fast-atk/long-rel (hit + long tail) → CW slow-atk/fast-rel (swell).
+    const float atk_ms = Mapf(k5, armitage_k::FENV_ATK_FAST_MS, armitage_k::FENV_ATK_SLOW_MS);
+    const float rel_ms = Mapf(k5, armitage_k::FENV_REL_LONG_MS, armitage_k::FENV_REL_SHORT_MS);
+    fenv_atk_c_ = OnePoleCoeff(atk_ms);
+    fenv_rel_c_ = OnePoleCoeff(rel_ms);
 
     // Run YIN only for the tracked behaviours (heavy); fixed bank skips it.
     if (behavior_ != kFixed) tracker_.Update();
@@ -98,7 +103,7 @@ class Armitage : public Module {
 
     // LED1 = core (dim comb / bright modal). LED2 = output env level.
     led1.Set(core_ == kModal ? 1.f : 0.15f);
-    led2.Set(env_ > 1.f ? 1.f : env_);
+    led2.Set(fenv_);   // filter-envelope openness
   }
 
   // -------------------------------------------------------------------------
@@ -127,17 +132,26 @@ class Armitage : public Module {
         y *= armitage_k::MODAL_MAKEUP * voice_norm_;
       }
 
-      // --- Env-coupled output filter (env from raw input dynamics). ---
-      const float rin = fabsf(x) * armitage_k::ENV_SENS;
-      const float ec  = (rin > env_) ? env_atk_c_ : env_rel_c_;
-      env_ += ec * (rin - env_);
-      float envn = env_; if (envn > 1.f) envn = 1.f;
-      const float cut = armitage_k::OUTFILT_BASE_HZ + envn * armitage_k::OUTFILT_RANGE_HZ;
-      float g = 6.2831853f * cut / sr_;
-      if (g > 0.99f) g = 0.99f;
-      out_lp_ += g * (y - out_lp_);
+      // --- K5 triggered-envelope 4-pole LP (Moog-style, non-resonant). ---
+      // Input onset fires the AR envelope (own generator, not a follower); the
+      // envelope drives the cutoff. Closed → muted; the release IS the decay,
+      // decoupled from resonator damping (K2).
+      if (fenv_armed_ && in_env_ > armitage_k::ONSET_ON) { fenv_phase_ = kAtk; fenv_armed_ = false; }
+      if (in_env_ < armitage_k::ONSET_OFF) fenv_armed_ = true;
+      if (fenv_phase_ == kAtk) {
+        fenv_ += fenv_atk_c_ * (1.f - fenv_);
+        if (fenv_ > 0.99f) fenv_phase_ = kRel;
+      } else {
+        fenv_ += fenv_rel_c_ * (0.f - fenv_);
+      }
+      float fg = g_closed_ * exp2f(fenv_ * filt_octaves_);   // exponential cutoff sweep
+      if (fg > 0.99f) fg = 0.99f;
+      lp1_ += fg * (y    - lp1_);
+      lp2_ += fg * (lp1_ - lp2_);
+      lp3_ += fg * (lp2_ - lp3_);
+      lp4_ += fg * (lp3_ - lp4_);
 
-      wet[i] = Limit(out_lp_);
+      wet[i] = Limit(lp4_);
     }
   }
 
@@ -354,9 +368,16 @@ class Armitage : public Module {
   float ap_coeff_ = 0.f;
 
   float dc_x1_ = 0.f, dc_y1_ = 0.f;      // conditioning DC blocker
-  float env_ = 0.f, out_lp_ = 0.f;       // output env-coupled filter
-  float in_env_ = 0.f;                   // input level follower
-  float env_atk_c_ = 0.5f, env_rel_c_ = 0.5f;
+  float in_env_ = 0.f;                   // input level follower (onset + tracker gate)
+
+  // K5: triggered AR filter envelope (own generator) + 4-pole non-resonant LP.
+  enum FenvPhase { kAtk = 0, kRel = 1 };
+  FenvPhase fenv_phase_ = kRel;
+  bool  fenv_armed_ = true;
+  float fenv_ = 0.f, fenv_atk_c_ = 0.1f, fenv_rel_c_ = 0.01f;
+  float lp1_ = 0.f, lp2_ = 0.f, lp3_ = 0.f, lp4_ = 0.f;
+  float g_closed_ = 0.f, filt_octaves_ = 1.f;
+
   float lim_env_ = 0.f, lim_atk_c_ = 0.f, lim_rel_c_ = 0.f;
 
   CombVoice combs_[armitage_k::MAX_VOICES];
