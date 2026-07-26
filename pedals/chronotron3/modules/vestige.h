@@ -89,6 +89,7 @@ class Vestige : public Module {
     // Recording cannot straddle a mode switch — drop any in-flight capture.
     recording_ = false;
     rec_full_  = false;
+    commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
   }
 
   // -------------------------------------------------------------------------
@@ -221,7 +222,7 @@ class Vestige : public Module {
       if (swallow_fs2_) {
         swallow_fs2_ = false;
       } else if (!auto_mode && recording_) {
-        CommitRecording();
+        EndRecording();   // set loop end, record the seam overhang, then commit
       }
     }
 
@@ -230,12 +231,18 @@ class Vestige : public Module {
       RunAutoCapture();
     } else if (recording_ && auto_mode) {
       // Disarmed mid-phrase → close it out.
-      CommitRecording();
+      EndRecording();
     }
 
     // ---- Recording auto-stop (buffer full) --------------------------------
     if (rec_full_) {
       rec_full_ = false;
+      EndRecording();
+    }
+
+    // ---- Deferred commit (fires after the seam overhang is recorded) -------
+    if (commit_pending_) {
+      commit_pending_ = false;
       CommitRecording();
     }
 
@@ -263,10 +270,16 @@ class Vestige : public Module {
           rec_idx_++;
           if (rec_idx_ >= frip_len_) rec_idx_ = 0;
         } else {
-          // Linear capture (voiced, or frippertronics first pass).
+          // Linear capture (voiced, or frippertronics first pass). After the
+          // record end (pending_len_ set) we keep writing a short overhang for
+          // the seam crossfade, then flag commit.
           m[rec_idx_] = x;
           rec_idx_++;
-          if (rec_idx_ >= VESTIGE_LOOP_MAX_SAMPLES) rec_full_ = true;
+          if (overhang_left_ > 0) {
+            if (--overhang_left_ == 0) commit_pending_ = true;
+          } else if (pending_len_ == 0 && rec_idx_ >= VESTIGE_LOOP_MAX_SAMPLES) {
+            rec_full_ = true;
+          }
         }
       }
 
@@ -377,7 +390,12 @@ class Vestige : public Module {
     // Position = the read head + a NARROW phasing spray (not a full-buffer
     // scatter): overlapping grains around the (frozen at freeze) head phase
     // against each other for a consistent, evolving freeze.
-    float off = (VestigeRand() * 2.f - 1.f) * spray_;
+    float slot_spray = spray_;
+    if (L < VESTIGE_SHORT_LEN) {                 // short loop: keep spray from wrapping
+      float cap = (float)L * 0.125f;
+      if (slot_spray > cap) slot_spray = cap;
+    }
+    float off = (VestigeRand() * 2.f - 1.f) * slot_spray;
     float pos = fmodf((float)play_pos_[s] + off, (float)L);
     if (pos < 0.f) pos += (float)L;
     size_t posi = (size_t)pos;
@@ -421,6 +439,29 @@ class Vestige : public Module {
     recording_ = true;
   }
 
+  // Minimal seam crossfade length (samples), scaled down for tiny loops.
+  static size_t SeamXfadeLen(size_t L) {
+    size_t xf = VESTIGE_SEAM_XFADE_MAX;
+    if (xf > L / 2) xf = L / 2;
+    return xf;
+  }
+
+  // Record end (FS2 release / phrase end / buffer full): set the loop length
+  // NOW (timing-exact), then keep recording a short overhang for the seam
+  // crossfade. Commit fires once the overhang is captured (commit_pending_).
+  void EndRecording() {
+    if (!recording_) return;
+    if (fripp_mode_) { CommitRecording(); return; }   // fripp: no overhang
+    size_t L = rec_idx_;
+    if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
+    if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
+    pending_len_ = L;
+    size_t target = L + SeamXfadeLen(L);              // record up to here
+    if (target > VESTIGE_VOICE_CAP) target = VESTIGE_VOICE_CAP;
+    if (rec_idx_ >= target) commit_pending_ = true;   // already have enough
+    else overhang_left_ = (int)(target - rec_idx_);
+  }
+
   void CommitRecording() {
     if (!recording_) return;
     recording_ = false;
@@ -448,19 +489,23 @@ class Vestige : public Module {
     }
 
     // ---- Voiced path: choose target NOW, copy scratch → target -------------
-    size_t L = rec_idx_;
+    size_t L = (pending_len_ > 0) ? pending_len_ : rec_idx_;
     if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
     if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
+    // Copy the loop PLUS the recorded overhang so WriteGuard can crossfade it.
+    size_t copy = L + SeamXfadeLen(L);
+    if (copy > VESTIGE_VOICE_CAP) copy = VESTIGE_VOICE_CAP;
 
     const int target = AllocVoicedSlot();   // free slot if under target, else evict oldest
-    memcpy(vestige_slab[target], vestige_slab[VESTIGE_REC_SLOT], L * sizeof(float));
-    WriteGuard(target, L);
+    memcpy(vestige_slab[target], vestige_slab[VESTIGE_REC_SLOT], copy * sizeof(float));
+    WriteGuard(target, L);      // crossfades the overhang into the loop head
     loop_len_[target] = L;
     play_pos_[target] = 0;
     timer_[target]    = 0;      // fire the first grain immediately
     active_[target]   = true;
     age_[target]      = ++age_counter_;
     StartFadeIn(target);
+    pending_len_ = 0; overhang_left_ = 0;
   }
 
   // Begin a fade-in for a slot: silent now, ramping to unity over K5 time.
@@ -472,11 +517,22 @@ class Vestige : public Module {
     // play_pos = 0; freeze pins its own live centre→end point in ServiceSlot.
   }
 
-  // Copy the loop head into the guard region so grains reading across the loop
-  // boundary continue seamlessly (main thread; guard is not yet read).
+  // Build the wrap-guard so grains reading across the loop boundary continue
+  // seamlessly. First xf samples = equal-power crossfade of the recorded
+  // overhang m[L+k] (natural continuation of the loop tail) fading OUT into the
+  // loop head m[k] fading IN — kills the seam click with no timing change. The
+  // remainder is the loop repeated. (Fripp has no overhang → the crossfade
+  // degenerates to the head copy, i.e. the old behaviour.)
   void WriteGuard(int s, size_t L) {
     float* m = vestige_slab[s];
-    for (size_t k = 0; k < VESTIGE_GUARD_SAMPLES; k++) m[L + k] = m[k % L];
+    size_t xf = SeamXfadeLen(L);
+    for (size_t k = 0; k < xf; k++) {
+      float ov = m[L + k];
+      float hd = m[k];
+      float t  = (float)(k + 1) / (float)(xf + 1);
+      m[L + k] = ov * cosf(t * 1.5707963f) + hd * sinf(t * 1.5707963f);
+    }
+    for (size_t k = xf; k < VESTIGE_GUARD_SAMPLES; k++) m[L + k] = m[k % L];
   }
 
   // Pick a voiced slot for a new capture: a free slot if under target, else
@@ -572,7 +628,7 @@ class Vestige : public Module {
       if (env_ < close) {
         if (silence_since_ == 0) silence_since_ = now;
         else if (now - silence_since_ >= VESTIGE_AUTO_RELEASE_MS) {
-          CommitRecording();               // sound → sustained silence: commit
+          EndRecording();                  // sound → sustained silence: end + overhang
           silence_since_ = 0;
         }
       } else {
@@ -584,6 +640,7 @@ class Vestige : public Module {
   // -------------------------------------------------------------------------
   void ClearAll() {
     recording_ = false;
+    commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
       active_[s]   = false;
       loop_len_[s] = 0;
@@ -685,6 +742,11 @@ class Vestige : public Module {
   volatile bool rec_full_  = false;
   int    rec_slot_ = 0;
   size_t rec_idx_  = 0;
+  // Seam-crossfade overhang: loop end is set at EndRecording, then we record
+  // `overhang_left_` more samples before committing (commit_pending_).
+  volatile bool commit_pending_ = false;
+  size_t pending_len_   = 0;
+  int    overhang_left_ = 0;
 
   // Transport / capture
   bool     muted_        = false;

@@ -46,6 +46,11 @@ static constexpr float  VESTIGE_FREEZE_JITTER = 0.15f;  // small scheduler jitte
 // scrub speed scale with K3.
 static constexpr float  VESTIGE_K3_LOOP_ZONE  = 0.05f;  // fully-CCW forward-loop zone
 static constexpr size_t VESTIGE_GRAIN_MIN_LEN = 256;
+// Short-buffer artifacts (see docs/ChronoTron3/SHORT_BUFFER_PLAN.md):
+// seam crossfade (recorded as an overhang past the loop, so timing stays exact)
+// + a spray clamp for very short loops.
+static constexpr size_t VESTIGE_SEAM_XFADE_MAX = 240;   // ~5 ms seam crossfade (min to kill clicks)
+static constexpr size_t VESTIGE_SHORT_LEN      = 4800;  // ~100 ms: clamp spray below this
 static constexpr float  VESTIGE_CCW_OVERLAP   = 2.0f;   // Hann overlap-add sums flat → seamless loop
 static constexpr float  VESTIGE_CW_OVERLAP    = 3.0f;   // denser cloud so short grains fuse
 static constexpr size_t VESTIGE_MIN_INTERVAL  = 32;     // scheduler floor (samples)
