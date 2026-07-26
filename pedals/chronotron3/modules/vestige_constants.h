@@ -87,7 +87,7 @@ static constexpr float  VESTIGE_CRUSH_BITS_LO  = 2.5f;   // bit depth at full CW
 static constexpr float  VESTIGE_FADE_MAX_S        = 3.0f;  // K5 CW = 3 s release; CCW = instant
 static constexpr float  VESTIGE_FADE_ATTACK_CAP_S = 0.3f;  // attack tracks K5 but caps here (no long swell-in)
 static constexpr float  VESTIGE_FRIP_OD_RAMP_S = 0.005f; // overdub input fade in/out (declick record in/out)
-static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.40f;  // fast tape decay (frippertronics, just past noon)
+static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.20f;  // fast tape decay (frippertronics, just past noon, ~1 repeat)
 static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (frippertronics, full CW)
 
 // ---------------------------------------------------------------------------
