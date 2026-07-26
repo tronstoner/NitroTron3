@@ -572,14 +572,18 @@ class Vestige : public Module {
   // (N-r)/N, normalised 1/sqrt(N) for the stacking law. Fixed slope (K5 now
   // drives the loop fade envelope, not this age-fade).
   void UpdateVoicedGains() {
-    const int N = target_voices_ > 0 ? target_voices_ : 1;
-    const float norm  = 1.f / sqrtf((float)N);
+    // Level tracks the ACTUAL active-voice count, not the K1 target: one loop
+    // running sounds the same as 1-voice mode, two like 2-voice, etc.
+    int n = 0;
+    for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (active_[v]) n++;
+    if (n < 1) n = 1;
+    const float norm = 1.f / sqrtf((float)n);
     for (int v = 0; v < VESTIGE_MAX_VOICES; v++) {
       if (!active_[v]) { gain_[v] = 0.f; continue; }
       int r = 0;   // number of active voices younger than v
       for (int w = 0; w < VESTIGE_MAX_VOICES; w++)
         if (active_[w] && age_[w] > age_[v]) r++;
-      float base = (float)(N - r) / (float)N;
+      float base = (float)(n - r) / (float)n;
       if (base < 0.f) base = 0.f;
       gain_[v] = base * norm;
     }
