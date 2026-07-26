@@ -500,7 +500,6 @@ class Vestige : public Module {
 
   void StartRecording() {
     if (recording_) return;
-    ResumeFromMute();   // starting a record unpauses the existing loop
     if (fripp_mode_) {
       rec_slot_ = VESTIGE_FRIP_SLOT;
       rec_idx_  = (frip_len_ > 0) ? play_pos_[VESTIGE_FRIP_SLOT] : 0; // overdub syncs to playback
@@ -559,6 +558,7 @@ class Vestige : public Module {
   void CommitRecording() {
     if (!recording_) return;
     recording_ = false;
+    ResumeFromMute();   // record END unpauses the retained loops
 
     // ---- Frippertronics path (unchanged: records in-place into FRIP_SLOT) --
     if (fripp_mode_) {
