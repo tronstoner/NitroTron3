@@ -21,14 +21,14 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 
 | Control | Function | Notes |
 |---|---|---|
-| KNOB 1 | Voice count / topology | Padded noon = 1 (parallel) · CCW → up to 6 voiced (FIFO, auto age-fade fixed by count) · CW → frippertronics: just past noon = shortest decay (~1 repeat) · fully CW = infinite sustain. Live; never resets playback |
+| KNOB 1 | Voice count (voiced) / decay (fripp) | Full travel per mode (mode = SW2). **Voiced:** CCW = 6 voices → CW = 1 (FIFO, auto age-fade fixed by active count). **Fripp:** CCW = shortest decay (~1 repeat) → CW = infinite sustain. Live; never resets playback |
 | KNOB 2 | Auto-capture threshold | Used in continuous-auto capture; spare in manual |
 | KNOB 3 | Scan / freeze | **CCW** = normal forward loop · **CCW→noon** = backward auto-scrub decelerating to a **halt at noon** · **noon→CW** = frozen, with the freeze point sweeping **live** across the **whole buffer** — beginning (noon) to a grain-scan-range in from the **END** (full CW). Grain diffusion stays alive throughout |
 | KNOB 4 | Texture | Bipolar, clean at noon: CCW tape saturation (gain-compensated) · CW decimation → digital glitch |
 | KNOB 5 | Loop fade in/out | CCW ≈ instant → CW ~3 s (all topologies). **Release** = exponential tail over the full time (the "dies away" decay); **attack** = raised-cosine swell over the same time but **capped ~0.3 s** so long settings give a long tail without a long swell-in. Applied on loop start / stop / mute |
 | KNOB 6 | Dry/wet mix | *(shell)* |
 | SWITCH 1 | Capture mode | UP = manual (hold-record) · MIDDLE = continuous-auto · DOWN = → manual (TBD) |
-| SWITCH 2 | Unused | Free |
+| SWITCH 2 | Mode (voiced / fripp) | UP / MIDDLE = voiced (capture-replace) · DOWN = frippertronics (overdub-accumulate). Buffer/head stay unified across the toggle |
 | SWITCH 3 | Mode select | *(shell)* |
 | FOOTSWITCH 1 | Stop | Tap = mute/pause (material kept; fades via K5) · Hold = clear all |
 | FOOTSWITCH 2 | Engage | Manual: hold = record, release = set loop end · Auto: record-arm toggle · from muted: resume |
