@@ -155,7 +155,7 @@ class Vestige : public Module {
     // Position / direction across the K3 travel:
     //   CCW zone  → normal forward loop.
     //   zone→noon → backward auto-scrub, decelerating to a HALT at noon.
-    //   noon→CW   → frozen; the freeze point sweeps CENTRE → END (live).
+    //   noon→CW   → frozen; the freeze point sweeps the WHOLE buffer, 0 → END (live).
     if (s < VESTIGE_K3_LOOP_ZONE) {
       k3_mode_ = kLooper;
     } else if (s < 0.5f) {
@@ -350,8 +350,8 @@ class Vestige : public Module {
     if (k3_mode_ == kFreeze) {
       float end_anchor = (float)L - ((float)glen + spray_);   // deepest safe point
       if (end_anchor < 0.f) end_anchor = 0.f;
-      float center = 0.5f * (float)L; if (center > end_anchor) center = end_anchor;
-      play_pos_[s] = (size_t)(center + (end_anchor - center) * freeze_pos_frac_);
+      // noon → CW sweeps the freeze point across the WHOLE buffer: 0 → end.
+      play_pos_[s] = (size_t)(end_anchor * freeze_pos_frac_);
     }
 
     EmitGrain(s, glen);
@@ -723,7 +723,7 @@ class Vestige : public Module {
   enum K3Mode { kLooper = 0, kScrub = 1, kFreeze = 2 };
   K3Mode k3_mode_         = kLooper;
   float  scrub_back_frac_ = 0.f;  // backward scrub speed frac of hop (CCW→noon, →0 at noon)
-  float  freeze_pos_frac_ = 0.f;  // freeze point: 0 = centre (noon) → 1 = end (CW)
+  float  freeze_pos_frac_ = 0.f;  // freeze point: 0 = start (noon) → 1 = end (CW)
   float  k3_amt_          = 0.f;  // raw K3 (first-grain attack softening toward freeze)
 
   // Topology
