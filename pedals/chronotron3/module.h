@@ -33,6 +33,12 @@ class Module {
                         daisy::Led& led1, daisy::Led& led2) = 0;
 
   // Audio-rate hook. `in` = mono input block, `wet` = mono wet output block to
-  // fill (size samples). The shell mixes wet against dry via K6.
+  // fill (size samples). The shell mixes wet against dry via K6 — unless the
+  // module OwnsOutput() (below), in which case `wet` is taken as the final out.
   virtual void Process(const float* in, float* wet, size_t size) = 0;
+
+  // If true, the module has already routed the dry itself (e.g. looper volume +
+  // dry bypass) and fills `wet` with the FINAL output; the shell outputs it
+  // directly and skips the K6 crossfade. Default false = shell does the mix.
+  virtual bool OwnsOutput() const { return false; }
 };

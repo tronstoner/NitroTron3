@@ -51,6 +51,13 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 
   modules[g_active]->Process(in[0], wet_buf, size);
 
+  // Modules that own their output (e.g. vestige: looper volume + dry routing on
+  // K6/SW2) have already produced the final signal — pass it straight through.
+  if (modules[g_active]->OwnsOutput()) {
+    for (size_t i = 0; i < size; i++) out[0][i] = out[1][i] = wet_buf[i];
+    return;
+  }
+
   // K6 = mix. Equal-power crossfade, one-pole smoothed to kill zipper noise.
   const float mix_target = MixCurve(RemapKnob(cs.Knob(5)));  // K6 → index 5
   for (size_t i = 0; i < size; i++) {

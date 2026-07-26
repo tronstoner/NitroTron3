@@ -108,6 +108,8 @@ class Vestige : public Module {
     const float k4 = RemapKnob(cs.Knob(3));
     const float k5 = RemapKnob(cs.Knob(4));
     const int   sw1 = cs.Switch(0);        // 0=UP manual, 1=MID auto, 2=DOWN TBD
+    const int   sw2 = cs.Switch(1);        // dry routing: 0=UP clean · 1=MID auto-cut · 2=DOWN off
+    const float k6  = RemapKnob(cs.Knob(5)); // looper output volume (vestige owns the mix)
     const FootswitchEvent f1 = cs.Foot(0); // FS1 = stop
     const FootswitchEvent f2 = cs.Foot(1); // FS2 = engage
 
@@ -251,9 +253,22 @@ class Vestige : public Module {
       CommitRecording();
     }
 
+    // ---- K6 looper volume + SW2 dry routing (vestige owns its output) ------
+    // K6: 0 (CCW) → unity (noon) → boost (CW). Sets the looper's level only.
+    k6_vol_ = (k6 < 0.5f)
+                ? (k6 * 2.f)
+                : (1.f + (k6 - 0.5f) * 2.f * (VESTIGE_LOOP_BOOST_MAX - 1.f));
+    // SW2 dry (clean) routing:  UP = always on ·  MID = off while recording or
+    // auto-armed ·  DOWN = off (loop only). Gain is smoothed in Process.
+    dry_gain_ = 1.f;
+    if (sw2 == 2) dry_gain_ = 0.f;
+    else if (sw2 == 1 && (recording_ || auto_armed_)) dry_gain_ = 0.f;
+
     // ---- LEDs --------------------------------------------------------------
     UpdateLeds(led1, led2, auto_mode);
   }
+
+  bool OwnsOutput() const override { return true; }
 
   // -------------------------------------------------------------------------
   // Audio-rate. Recording writes, grain scheduler, grain sum, texture.
@@ -356,7 +371,11 @@ class Vestige : public Module {
         y = y * (1.f - digi_amt_) + decim_hold_val_ * digi_amt_;
       }
 
-      wet[i] = y;
+      // Vestige owns its output: looper (y) at K6 volume + routed dry (x).
+      // Both gains one-pole smoothed so K6 moves and the dry gate don't zip.
+      k6_vol_s_   += (k6_vol_   - k6_vol_s_)   * VESTIGE_ROUTING_SMOOTH;
+      dry_gain_s_ += (dry_gain_ - dry_gain_s_) * VESTIGE_ROUTING_SMOOTH;
+      wet[i] = dry_gain_s_ * x + k6_vol_s_ * y;
     }
   }
 
@@ -824,6 +843,9 @@ class Vestige : public Module {
   float      fade_from_[VESTIGE_SLOTS]  = {0.f};   // gain the current fade started at
   float      atk_inc_ = 1.f;                       // attack phase step (1/(atk_s*sr))
   float      rel_inc_ = 1.f;                       // release phase step (1/(rel_s*sr))
+  // Output routing (K6 looper volume + SW2 dry gate) — vestige owns its mix.
+  float      k6_vol_    = 1.f, k6_vol_s_   = 1.f;  // looper volume target / smoothed
+  float      dry_gain_  = 1.f, dry_gain_s_ = 1.f;  // dry (clean) gain target / smoothed
 
   // Cached K3 grain-macro params (Controls → Process)
   size_t grain_len_    = VESTIGE_CCW_GRAIN_LEN;

@@ -9,7 +9,7 @@
 | Control | Function |
 |---|---|
 | **SW3** | **Mode select** — UP = *vestige* · MIDDLE = *mnemonic* · DOWN = *Armitage* |
-| **K6** | **Dry/wet mix** — equal-power, always the mix (every mode) |
+| **K6** | **Dry/wet mix** — equal-power (mnemonic, Armitage). *vestige overrides it as looper volume — see below.* |
 | **Both footswitches held ~2 s** | Enter Daisy bootloader (DFU). The only entry path (sealed pedal). |
 
 The mode owns everything else — including both footswitches. There is no
@@ -26,9 +26,9 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 | KNOB 3 | Scan / freeze | **CCW** = normal forward loop · **CCW→noon** = backward auto-scrub decelerating to a **halt at noon** · **noon→CW** = frozen, with the freeze point sweeping **live** across the **whole buffer** — beginning (noon) to a grain-scan-range in from the **END** (full CW). Grain diffusion stays alive throughout |
 | KNOB 4 | Texture | Bipolar, clean at noon: CCW tape saturation (gain-compensated) · CW decimation → digital glitch |
 | KNOB 5 | Loop fade in/out | CCW = instant → CW = max, **both as real bounded durations on one scale** (no runaway tail). **Attack** = convex swell (slow start → full) over `ATTACK_MAX_S`; **release** = concave dies-away over `RELEASE_MAX_S`. Default 3 s : 3 s (1:1); ratio is set by those two constants. Applied on loop start / stop / mute |
-| KNOB 6 | Dry/wet mix | *(shell)* |
+| KNOB 6 | Looper volume | *vestige owns its output* — additive: `out = dry + K6·looper`. CCW = silent · noon = unity · CW = boost (+6 dB). The clean (dry) is routed by SW2, not by K6 |
 | SWITCH 1 | Capture mode | UP = manual (hold-record) · MIDDLE = continuous-auto · DOWN = → manual (TBD) |
-| SWITCH 2 | Unused | Free |
+| SWITCH 2 | Dry (clean) routing | UP = clean always on (loop plays on top) · MIDDLE = clean on, but cut while recording or auto-armed · DOWN = clean off (loop only) |
 | SWITCH 3 | Mode select | *(shell)* |
 | FOOTSWITCH 1 | Stop | Tap = mute/pause (material kept; fades via K5) · Hold = clear all |
 | FOOTSWITCH 2 | Engage | Manual: hold = record, release = set loop end · Auto: record-arm toggle · from muted: resume |
