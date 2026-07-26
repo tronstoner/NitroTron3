@@ -331,9 +331,9 @@ class Vestige : public Module {
           float sh = 1.f - cosf(0.5f * kVestigePi * p);
           fade_gain_[s] = fade_from_[s] + (1.f - fade_from_[s]) * sh;
         } else {
-          // Convex swell-DOWN: hangs near full, then drops — the mirror of the
-          // swell-up, so fade-in and fade-out feel symmetric.
-          float sh = cosf(0.5f * kVestigePi * p);
+          // Fade-out = the swell played BACKWARDS (time-reverse of the attack
+          // curve), so the fade matches the swell gesture.
+          float sh = 1.f - sinf(0.5f * kVestigePi * p);
           fade_gain_[s] = fade_from_[s] * sh;
         }
         y += slot_sum[s] * fade_gain_[s];
