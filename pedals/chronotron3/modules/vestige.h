@@ -664,20 +664,28 @@ class Vestige : public Module {
   // (N-r)/N, normalised 1/sqrt(N) for the stacking law. Fixed slope (K5 now
   // drives the loop fade envelope, not this age-fade).
   void UpdateVoicedGains() {
-    // Level tracks the ACTUAL active-voice count, not the K1 target: one loop
-    // running sounds the same as 1-voice mode, two like 2-voice, etc.
+    // Level tracks the ACTUAL active-voice count. Age-ramp weights (newest = 1,
+    // oldest = 1-d) are power-normalized as a SET so the total power equals a
+    // single voice → the loop stays equally loud at any voice count (single is
+    // no longer the loudest), while newer voices still sit above older ones.
     int n = 0;
     for (int v = 0; v < VESTIGE_MAX_VOICES; v++) if (active_[v]) n++;
-    if (n < 1) n = 1;
-    const float norm = 1.f / sqrtf((float)n);
+    const float d = VESTIGE_AGE_FADE_DEPTH;
+    float sumsq = 0.f;
     for (int v = 0; v < VESTIGE_MAX_VOICES; v++) {
       if (!active_[v]) { gain_[v] = 0.f; continue; }
-      int r = 0;   // number of active voices younger than v
+      int r = 0;   // rank among active voices: 0 = newest
       for (int w = 0; w < VESTIGE_MAX_VOICES; w++)
         if (active_[w] && age_[w] > age_[v]) r++;
-      float base = (float)(n - r) / (float)n;
-      if (base < 0.f) base = 0.f;
-      gain_[v] = base * norm;
+      float wr = (n > 1) ? (1.f - d * ((float)r / (float)(n - 1))) : 1.f;
+      if (wr < 0.f) wr = 0.f;
+      gain_[v] = wr;                 // stash weight; power-normalize below
+      sumsq += wr * wr;
+    }
+    if (sumsq > 1e-9f) {
+      const float norm = 1.f / sqrtf(sumsq);
+      for (int v = 0; v < VESTIGE_MAX_VOICES; v++)
+        if (active_[v]) gain_[v] *= norm;
     }
   }
 
