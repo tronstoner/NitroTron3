@@ -284,8 +284,12 @@ class Vestige : public Module {
         if (fripp_mode_ && frip_len_ > 0) {
           // Overdub (sound-on-sound): decay existing, add ramped input, wrap at
           // loop len. The input ramp (frip_od_gain_) declicks record in/out.
+          // The decay is ramped WITH it (eff_decay: 1.0 when the input is faded
+          // out → matches the untouched loop, real decay at full overdub), so
+          // auto-record's partial ducking has no amplitude step at its seams.
           frip_od_gain_ += frip_od_coef_ * (frip_od_target_ - frip_od_gain_);
-          m[rec_idx_] = m[rec_idx_] * frip_decay_ + x * frip_od_gain_;
+          float eff_decay = 1.f + (frip_decay_ - 1.f) * frip_od_gain_;
+          m[rec_idx_] = m[rec_idx_] * eff_decay + x * frip_od_gain_;
           rec_idx_++;
           if (rec_idx_ >= frip_len_) rec_idx_ = 0;
           if (frip_stop_pending_ && frip_od_gain_ < 1e-3f) {
