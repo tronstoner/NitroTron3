@@ -378,6 +378,19 @@ class Vestige : public Module {
     if (!active_[s] || L < VESTIGE_GRAIN_MIN_LEN) return;
     if (--timer_[s] > 0) return;
 
+    // --- Prototype: frippertronics straight-head playback at K3 fully CCW ----
+    // One grain spans the WHOLE loop with a near-rectangular window (only a
+    // short seam crossfade), so the body reproduces the buffer 1:1 like a tape
+    // head — no granular smear / time-shift. Re-emitted every (L - xf) samples
+    // so consecutive whole-loop grains overlap by xf at the wrap (COLA seam).
+    if (s == VESTIGE_FRIP_SLOT && k3_mode_ == kLooper) {
+      size_t xf = SeamXfadeLen(L);
+      play_pos_[s] = 0;                       // always from the top of the loop
+      EmitStraight(s, L, xf);
+      timer_[s] = (int)((L > xf) ? (L - xf) : L);
+      return;
+    }
+
     size_t glen = SlotGrainLen(L);
 
     // Freeze (noon→CW): pin the head to the LIVE freeze point (centre→end)
@@ -411,6 +424,29 @@ class Vestige : public Module {
     int itv = (int)((float)hop * (1.f + j));
     if (itv < (int)VESTIGE_MIN_INTERVAL) itv = (int)VESTIGE_MIN_INTERVAL;
     timer_[s] = itv;
+  }
+
+  // Whole-loop "straight head" grain (prototype). Near-rectangular window:
+  // alpha sized so the taper == the seam crossfade xf, so the flat middle plays
+  // the buffer at unity (rate 1.0, integer start → sample-exact, no smear) and
+  // only the seam is a short COLA crossfade between consecutive whole-loop
+  // grains. No overlap gain-comp: the body is a single grain at unity.
+  void EmitStraight(int s, size_t glen, size_t xf) {
+    int g = -1;
+    for (int k = 0; k < VESTIGE_GRAINS; k++) {
+      int idx = (next_grain_ + k) % VESTIGE_GRAINS;
+      if (!grains_[idx].IsActive()) { g = idx; next_grain_ = (idx + 1) % VESTIGE_GRAINS; break; }
+    }
+    if (g < 0) return;                        // pool exhausted → skip one pass
+    const size_t wp  = ring_[s].GetWritePos();
+    const size_t cap = VESTIGE_VOICE_CAP;
+    size_t delay = (wp + cap - 0) % cap;      // posi = 0 (top of loop)
+    float alpha = (glen > 0) ? (2.f * (float)xf / (float)glen) : 1.f;
+    if (alpha > 1.f) alpha = 1.f;
+    grain_src_[g]  = &ring_[s];
+    grain_slot_[g] = s;
+    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s], 1, alpha, 1.f);
+    first_grain_[s] = false;
   }
 
   void EmitGrain(int s, size_t glen) {
