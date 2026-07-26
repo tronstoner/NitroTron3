@@ -22,7 +22,7 @@ static constexpr size_t VESTIGE_VOICE_CAP        = VESTIGE_LOOP_MAX_SAMPLES + VE
 // Topology (K1)
 // ---------------------------------------------------------------------------
 static constexpr int    VESTIGE_MAX_VOICES   = 6;   // max LIVE voiced (K1 range 1..6)
-static constexpr int    VESTIGE_VOICE_SPARES = 5;   // spare slabs for in-flight fade-outs + grain drain
+static constexpr int    VESTIGE_VOICE_SPARES = 3;   // spare slabs for in-flight fade-outs / crossfades
 static constexpr int    VESTIGE_VOICE_SLABS  = VESTIGE_MAX_VOICES + VESTIGE_VOICE_SPARES; // voiced slabs
 static constexpr int    VESTIGE_FRIP_SLOT    = VESTIGE_VOICE_SLABS;      // frippertronics buffer
 static constexpr int    VESTIGE_REC_SLOT     = VESTIGE_VOICE_SLABS + 1;  // dedicated record scratch

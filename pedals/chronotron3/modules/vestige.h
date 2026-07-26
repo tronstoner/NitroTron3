@@ -619,12 +619,7 @@ class Vestige : public Module {
     // has spares, so this is where the crossfade lives. Only a full pool (6
     // active) forces reuse of the oldest slab (declick handled in Commit B).
     int target = FindFreeSlot();
-    if (target < 0) {
-      // Every slab busy (only if in-flight fades outnumber the spares — rare).
-      // Reuse the oldest, but drop its grains first so none read the new buffer.
-      target = EvictOldest();
-      KillSlotGrains(target);
-    }
+    if (target < 0) target = EvictOldest();   // full pool: hard reuse (for now)
 
     memcpy(vestige_slab[target], vestige_slab[VESTIGE_REC_SLOT], copy * sizeof(float));
     WriteGuard(target, L);      // crossfades the overhang into the loop head
@@ -703,21 +698,8 @@ class Vestige : public Module {
       if (active_[v] && !dying_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
     return oldest;
   }
-  // A slab is only reusable once it's idle AND no in-flight grain still reads
-  // it — otherwise a stale grain would read the freshly-overwritten buffer
-  // (the freeze-mode digital noise).
-  bool SlotHasGrains(int s) const {
-    for (int g = 0; g < VESTIGE_GRAINS; g++)
-      if (grains_[g].IsActive() && grain_slot_[g] == s) return true;
-    return false;
-  }
-  void KillSlotGrains(int s) {
-    for (int g = 0; g < VESTIGE_GRAINS; g++)
-      if (grain_slot_[g] == s) grains_[g] = GrainVoice{};   // deactivate
-  }
   int FindFreeSlot() const {
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++)
-      if (!active_[v] && !dying_[v] && !SlotHasGrains(v)) return v;
+    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (!active_[v] && !dying_[v]) return v;
     return -1;
   }
   // Retire a voice gracefully: keep it sounding but fade it out over K5, then
