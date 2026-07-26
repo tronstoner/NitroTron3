@@ -328,7 +328,8 @@ class Vestige : public Module {
           if (fade_in_phase_[s] < 1.f) {
             fade_in_phase_[s] += fade_in_inc_;
             if (fade_in_phase_[s] > 1.f) fade_in_phase_[s] = 1.f;
-            fade_gain_[s] = 0.5f * (1.f - cosf(kVestigePi * fade_in_phase_[s]));
+            // Convex swell: slow start → steep approach to full.
+            fade_gain_[s] = 1.f - cosf(0.5f * kVestigePi * fade_in_phase_[s]);
           } else {
             fade_gain_[s] = 1.f;
           }
@@ -519,12 +520,12 @@ class Vestige : public Module {
 
   static constexpr float kVestigePi = 3.14159265358979323846f;
 
-  // Raised-cosine attack: invert 0.5*(1-cos(pi*p)) so an interrupted release
+  // Convex attack: invert 1-cos(pi/2*p) so an interrupted release
   // (mute→unmute mid-fade) resumes the swell from the current gain, not a jump.
   static float FadeInPhaseFromGain(float g) {
     if (g <= 0.f) return 0.f;
     if (g >= 1.f) return 1.f;
-    return acosf(1.f - 2.f * g) * (1.f / kVestigePi);
+    return acosf(1.f - g) * (2.f / kVestigePi);
   }
 
   // Minimal seam crossfade length (samples), scaled down for tiny loops.
