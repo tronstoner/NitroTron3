@@ -60,40 +60,24 @@ static constexpr int   QUANT_SCALE[5]   = {0, 3, 5, 7, 10};  // A minor pentaton
 static constexpr float QUANT_GATE_ENV   = 0.02f;  // input env to accept a new note
 
 // ---------------------------------------------------------------------------
-// Comb / extended Karplus-Strong core (SW1 UP)
-// Round-trip Dtot = fs/f (one period); the loop reads at Dfrac and Dfrac+1 and
-// averages them — the two-point-average loop filter, |L(f)| = cos(pi f/fs).
-// g derived per voice from the F1 T60 relation AND the actual Dtot (register-
-// dependent) so high registers do not choke (spec Register section, REQUIRED).
+// Comb / extended Karplus-Strong — the resonator core (A/B decided: comb wins,
+// modal dropped). Round-trip Dtot = fs/f (one period); the loop reads at Dfrac
+// and Dfrac+1 and averages them — two-point-average loop filter, |L(f)| =
+// cos(pi f/fs). g derived per voice from the F1 T60 relation AND the actual
+// Dtot (register-dependent) so high registers do not choke (spec, REQUIRED).
 // ---------------------------------------------------------------------------
 static constexpr int   COMB_MAX_SAMPLES = 2048;  // >= longest Dtot; 2048 -> ~23 Hz
 static constexpr float G_MAX            = 0.9995f;// stability clamp on loop gain
-static constexpr float COMB_MAKEUP      = 0.35f; // STAGE-1 GUESS — level match vs modal
+static constexpr float COMB_MAKEUP      = 0.35f; // STAGE-1 GUESS — output level
 
-// Dispersion allpass chain in the comb loop (K3 = structure for comb).
+// Dispersion allpass chain in the comb loop (K3 = structure).
 // First-order allpasses add inharmonicity / stringy detune. K3 0->1 scales the
 // coefficient 0 -> DISP_MAX across DISP_STAGES stages.
 static constexpr int   DISP_STAGES = 2;
 static constexpr float DISP_MAX    = 0.6f;   // STAGE-1 GUESS — max allpass coeff
 
-// ---------------------------------------------------------------------------
-// Modal bandpass bank core (SW1 DOWN)
-// N two-pole resonators per note. Pole radius r from the SAME T60 target as the
-// comb (r = 10^(-3/(T60*fs))), so decay is level-matched between cores.
-// Per-mode decay derived from that target: higher modes ring shorter (frequency-
-// dependent damping, to mirror the comb loop filter's native behaviour).
-// ---------------------------------------------------------------------------
-// 6 partials (was 3): with fundamentals A1–A3 a 3-partial bank topped out ~660 Hz
-// → muted/dull. More partials reach into the mid/high for a fair A/B vs comb.
-static constexpr int   MODES_PER_VOICE = 6;
-// Base (harmonic) partial ratios; K3 (structure) stretches them toward
-// inharmonic bell/plate spreads: ratio_k -> ratio_k * (1 + spread*(k-1)).
-static constexpr float MODAL_BASE_RATIOS[6] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-static constexpr float MODAL_SPREAD_MAX     = 0.5f;   // K3 max inharmonic stretch
-static constexpr float MODAL_DAMP_EXP       = 0.3f;   // higher modes decay faster (0.6
-                                                      // was too dark): T60_k = T60/ratio^EXP
-static constexpr float MODAL_MAKEUP         = 1.0f;   // STAGE-1 GUESS — level match
-static constexpr float R_MAX                = 0.99995f;// stability clamp on pole radius
+// Modal bandpass core: DROPPED — comb is the keeper (A/B decided 2026). SW1 is
+// now free (reassignment TBD, next increment).
 
 // ---------------------------------------------------------------------------
 // Damping (K2) — target decay time, the primary timbre control.
@@ -133,7 +117,12 @@ static constexpr float OUTFILT_OPEN_HZ   = 9000.0f; // env=1: filter open
 // and the filter only releases near silence. OFF is set low for that reason.
 static constexpr float ONSET_ENV_HZ = 80.0f;   // follower cutoff (fast/snappy)
 static constexpr float ONSET_ON     = 0.015f;  // rising past → note-on / retrigger
-static constexpr float ONSET_OFF    = 0.004f;  // fall below → note-off + re-arm
+static constexpr float ONSET_OFF    = 0.004f;  // fall below → re-arm (fast env)
+// Gate hold: a slow-release peak follower keeps the note-gate OPEN through the
+// note's natural decay (esp. guitar, whose fast env dips mid-note) so it isn't
+// cut too soon. Instant attack, slow release. Playability stopgap — smarter
+// env detection is a later fine-tuning pass.
+static constexpr float GATE_HOLD_MS = 700.0f;
 
 // ---------------------------------------------------------------------------
 // Output limiter (in-spec). Simple mono soft-asymptote peak limiter; the

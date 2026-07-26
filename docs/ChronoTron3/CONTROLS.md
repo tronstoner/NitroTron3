@@ -60,11 +60,11 @@ Passthrough for now — no spec yet. All controls unused pending design.
 | KNOB 4 | Asymmetry | Excitation enrichment, 0 → 1.0 (full rectification; fills spectral gaps). Sole conditioning control |
 | KNOB 5 | Filter envelope | Gated AR → 4-pole 24 dB/oct non-resonant LP; closed = muted. Fast onset detect (hysteresis crossing) retriggers the sweep per note; sustains while the note rings; releases on note-off. Bipolar: noon = snappy attack+release · CCW = longer attack · CW = longer release. Perceived decay = release, decoupled from K2 (CCW cuts the tail fast, CW lets it ring out) |
 | KNOB 6 | Dry/wet mix | *(shell)* |
-| SWITCH 1 | Resonator core | UP = comb (Karplus-Strong) · MIDDLE → comb · DOWN = modal (bandpass, 6 partials) |
+| SWITCH 1 | Unused | Free — modal core dropped, comb is the keeper; reassignment TBD |
 | SWITCH 2 | **Note-set behaviour (A/B)** | UP = fixed dense bank (25-note semitone comb) · MIDDLE = mono-tracked voice (follows played pitch) · DOWN = key-quantised multivoice (arpeggiate to stack an in-key chord) |
 | SWITCH 3 | Mode select | *(shell)* |
 | FOOTSWITCH 1 / 2 | Unused | (bootloader gesture still reserved) |
-| LED 1 | Resonator core | dim = comb · bright = modal |
+| LED 1 | Input activity | brightness follows what you play (play indicator) |
 | LED 2 | Filter envelope | openness of the K5 filter |
 
 **How to smoketest each SW2 behaviour** (play into the pedal — the resonators are
@@ -72,7 +72,7 @@ Passthrough for now — no spec yet. All controls unused pending design.
 
 - **UP fixed bank** — rings to anything you play, incl. chords. Judge the core
   itself: timbre, K2 damping range, K1 register, K3 structure, K4 asymmetry,
-  comb-vs-modal (SW1), drone character.
+  drone character.
 - **MIDDLE mono** — play single notes/lines; it tunes to the pitch and rings.
   Judge tracking across the range, register, the "voice" feel. (Chords → picks
   one pitch — that's expected; poly detection is deferred.)

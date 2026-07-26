@@ -2,8 +2,8 @@
 //
 // armitage — impulse synth / resonator / drone.  SW3 DOWN.
 //
-// Discovery build. Exciter (asymmetric-saturation conditioning, F3) -> resonator
-// bank (comb OR modal, SW1) -> env-coupled output filter (K5) -> limiter -> wet.
+// Discovery build. Exciter (asymmetric-saturation conditioning, F3) -> comb
+// resonator bank (Karplus-Strong) -> gated-AR filter (K5) -> limiter -> wet.
 //
 // Note-set BEHAVIOUR is chosen on SW2 (A/B), instead of one fixed chord:
 //   SW2 UP   kFixed  — dense semitone bank (~2 oct), the spec's validation bed.
@@ -13,7 +13,7 @@
 //   SW2 DOWN kQuant  — key-quantised multivoice: play an arpeggio, it stacks the
 //                      distinct in-key notes into a chord. Poor-man's poly.
 // Only true polyphonic *chord detection* (the hard note-set estimator) is
-// deferred. SW1 selects the resonator core; both cores stay in the binary.
+// deferred. Modal core dropped (comb is the keeper); SW1 is now free.
 //
 // Spec: docs/ChronoTron3/impulse resonator - armitage/IMPULSE_SYNTH_SPEC.md
 // Reference math: saturation.py / validate.py.  All tuning in armitage_constants.h.
@@ -42,7 +42,6 @@ class Armitage : public Module {
   void Init(float sr) override {
     sr_ = sr;
     for (int v = 0; v < armitage_k::MAX_VOICES; v++) combs_[v].Init(armitage_comb_buf[v]);
-    for (int v = 0; v < armitage_k::MAX_VOICES; v++) modals_[v].Reset();
     tracker_.Init(sr);
     dc_x1_ = dc_y1_ = 0.f;
     lim_env_ = 0.f;
@@ -52,6 +51,8 @@ class Armitage : public Module {
     onset_env_.Init(sr_);
     onset_env_.SetCutoff(armitage_k::ONSET_ENV_HZ);
     env_val_ = 0.f;
+    gate_env_ = 0.f;
+    gate_rel_c_ = 1.f - expf(-1.f / (armitage_k::GATE_HOLD_MS * 0.001f * sr_));
     fenv_ = 0.f; fenv_gate_ = false; fenv_armed_ = true;
     fenv_atk_c_ = 0.1f; fenv_rel_c_ = 0.01f;
     lp1_ = lp2_ = lp3_ = lp4_ = 0.f;
@@ -81,9 +82,7 @@ class Armitage : public Module {
     const float k5 = RemapKnob(cs.Knob(4));
     // K6 = mix (shell). SW3 = module select (shell).
 
-    const int sw1 = cs.Switch(0);   // core: UP(0)=comb, DOWN(2)=modal, MID->comb
-    core_ = (sw1 == 2) ? kModal : kComb;
-
+    // SW1 is free now (modal core dropped) — left unread until reassigned.
     const int sw2 = cs.Switch(1);   // behaviour: UP=fixed, MID=mono, DOWN=quant
     behavior_ = (sw2 == 0) ? kFixed : (sw2 == 1) ? kMono : kQuant;
 
@@ -111,9 +110,10 @@ class Armitage : public Module {
     BuildNotes();
     RecomputeVoices();
 
-    // LED1 = core (dim comb / bright modal). LED2 = output env level.
-    led1.Set(core_ == kModal ? 1.f : 0.15f);
-    led2.Set(fenv_);   // filter-envelope openness
+    // LED1 = input activity (play indicator). LED2 = filter-envelope openness.
+    float l1 = env_val_ * 8.f; if (l1 > 1.f) l1 = 1.f;
+    led1.Set(l1);
+    led2.Set(fenv_);
   }
 
   // -------------------------------------------------------------------------
@@ -132,15 +132,10 @@ class Armitage : public Module {
       float e = (1.f - asym_) * t + asym_ * fabsf(t);
       e = DcBlock(e) * armitage_k::EXCITE_GAIN;
 
-      // --- Resonator bank (one core active, active_voices_ tunings). ---
+      // --- Comb resonator bank (active_voices_ tunings). ---
       float y = 0.f;
-      if (core_ == kComb) {
-        for (int v = 0; v < active_voices_; v++) y += combs_[v].Process(e, ap_coeff_);
-        y *= armitage_k::COMB_MAKEUP * voice_norm_;
-      } else {
-        for (int v = 0; v < active_voices_; v++) y += modals_[v].Process(e);
-        y *= armitage_k::MODAL_MAKEUP * voice_norm_;
-      }
+      for (int v = 0; v < active_voices_; v++) y += combs_[v].Process(e, ap_coeff_);
+      y *= armitage_k::COMB_MAKEUP * voice_norm_;
 
       // --- K5 gated-AR 4-pole LP (Moog-style, non-resonant). ---
       // Input gate = note on/off (hysteresis). Note-on → attack toward open
@@ -157,7 +152,11 @@ class Armitage : public Module {
       } else if (!fenv_armed_ && env_val_ < armitage_k::ONSET_OFF) {
         fenv_armed_ = true;
       }
-      fenv_gate_ = (env_val_ > armitage_k::ONSET_OFF);
+      // Gate hold: peak follower (instant attack, slow release) keeps the gate
+      // open through the note's decay so it isn't cut too soon (guitar).
+      if (env_val_ > gate_env_) gate_env_ = env_val_;
+      else gate_env_ += gate_rel_c_ * (0.f - gate_env_);
+      fenv_gate_ = (gate_env_ > armitage_k::ONSET_OFF);
       const float ftgt = fenv_gate_ ? 1.f : 0.f;
       fenv_ += (fenv_gate_ ? fenv_atk_c_ : fenv_rel_c_) * (ftgt - fenv_);
       float fg = g_closed_ * exp2f(fenv_ * filt_octaves_);   // exponential cutoff sweep
@@ -172,7 +171,6 @@ class Armitage : public Module {
   }
 
  private:
-  enum Core     { kComb = 0, kModal = 1 };
   enum Behavior { kFixed = 0, kMono = 1, kQuant = 2 };
 
   // ---------------------------------------------------------------- Comb voice
@@ -212,26 +210,6 @@ class Armitage : public Module {
       const float y = x + g * lp;
       buf[wp] = y;
       wp++; if (wp >= armitage_k::COMB_MAX_SAMPLES) wp = 0;
-      return y;
-    }
-  };
-
-  // --------------------------------------------------------------- Modal voice
-  struct Modal {
-    struct Mode {
-      float b0 = 0.f, a1 = 0.f, a2 = 0.f, y1 = 0.f, y2 = 0.f;
-      inline float Process(float x) {
-        const float y = b0 * x - a1 * y1 - a2 * y2;
-        y2 = y1; y1 = y;
-        return y;
-      }
-    } m[armitage_k::MODES_PER_VOICE];
-    void Reset() {
-      for (int k = 0; k < armitage_k::MODES_PER_VOICE; k++) { m[k].y1 = 0.f; m[k].y2 = 0.f; }
-    }
-    inline float Process(float x) {
-      float y = 0.f;
-      for (int k = 0; k < armitage_k::MODES_PER_VOICE; k++) y += m[k].Process(x);
       return y;
     }
   };
@@ -304,22 +282,6 @@ class Armitage : public Module {
       float g = powf(10.f, -3.f * dtot / (t60_ * sr_));
       if (g > armitage_k::G_MAX) g = armitage_k::G_MAX;
       combs_[v].g = g;
-
-      // Modal: MODES_PER_VOICE partials; structure spreads them inharmonically.
-      const float spread = structure_ * armitage_k::MODAL_SPREAD_MAX;
-      for (int k = 0; k < armitage_k::MODES_PER_VOICE; k++) {
-        float ratio = armitage_k::MODAL_BASE_RATIOS[k] * (1.f + spread * (float)k);
-        float fk = f * ratio;
-        if (fk > 0.45f * sr_) fk = 0.45f * sr_;
-        float t60k = t60_ / powf(ratio, armitage_k::MODAL_DAMP_EXP);
-        float r = powf(10.f, -3.f / (t60k * sr_));
-        if (r > armitage_k::R_MAX) r = armitage_k::R_MAX;
-        const float theta = 6.2831853f * fk / sr_;
-        Modal::Mode& mm = modals_[v].m[k];
-        mm.a1 = -2.f * r * cosf(theta);
-        mm.a2 = r * r;
-        mm.b0 = (1.f - r);
-      }
     }
   }
 
@@ -363,7 +325,6 @@ class Armitage : public Module {
 
   // ---------------------------------------------------------------- state
   float sr_ = CT3_SAMPLE_RATE_HZ;
-  Core  core_ = kComb;
   Behavior behavior_ = kFixed, prev_behavior_ = kFixed;
 
   PitchTracker tracker_;
@@ -388,6 +349,7 @@ class Armitage : public Module {
   // Onset envelope (fast 4-pole follower) — shared by tracker/quant/K5 gates.
   EnvFollower onset_env_;
   float env_val_ = 0.f;                  // latest onset-env value (read in Controls too)
+  float gate_env_ = 0.f, gate_rel_c_ = 0.f;  // slow-release peak follower (gate hold)
 
   // K5: gated AR filter envelope (own generator) + 4-pole non-resonant LP.
   bool  fenv_gate_ = false;              // sustain gate: input above ONSET_OFF
@@ -399,5 +361,4 @@ class Armitage : public Module {
   float lim_env_ = 0.f, lim_atk_c_ = 0.f, lim_rel_c_ = 0.f;
 
   CombVoice combs_[armitage_k::MAX_VOICES];
-  Modal     modals_[armitage_k::MAX_VOICES];
 };
