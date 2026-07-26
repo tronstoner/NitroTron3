@@ -85,7 +85,8 @@ static constexpr float  VESTIGE_CRUSH_BITS_LO  = 2.5f;   // bit depth at full CW
 // K5 loop fade in/out (per-slot envelope). Voiced age-fade is now fixed.
 // ---------------------------------------------------------------------------
 static constexpr float  VESTIGE_FADE_MAX_S     = 3.0f;   // K5 CW = 3 s fade in/out; CCW = instant
-static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.90f;  // fast tape decay (frippertronics, full CW)
+static constexpr float  VESTIGE_FRIP_OD_RAMP_S = 0.005f; // overdub input fade in/out (declick record in/out)
+static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.40f;  // fast tape decay (frippertronics, full CW)
 static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (frippertronics, just past noon)
 
 // ---------------------------------------------------------------------------

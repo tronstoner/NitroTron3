@@ -58,6 +58,7 @@ class Vestige : public Module {
   // -------------------------------------------------------------------------
   void Init(float sr) override {
     sr_ = sr;
+    frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
       ring_[s].Init(vestige_slab[s], VESTIGE_VOICE_CAP);  // memsets the slab
       loop_len_[s] = 0;
@@ -90,6 +91,7 @@ class Vestige : public Module {
     recording_ = false;
     rec_full_  = false;
     commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
+    frip_od_gain_ = 0.f; frip_od_target_ = 0.f; frip_stop_pending_ = false;
   }
 
   // -------------------------------------------------------------------------
@@ -265,10 +267,16 @@ class Vestige : public Module {
       if (recording_) {
         float* m = vestige_slab[rec_slot_];
         if (fripp_mode_ && frip_len_ > 0) {
-          // Overdub (sound-on-sound): decay existing, add new, wrap at loop len.
-          m[rec_idx_] = m[rec_idx_] * frip_decay_ + x;
+          // Overdub (sound-on-sound): decay existing, add ramped input, wrap at
+          // loop len. The input ramp (frip_od_gain_) declicks record in/out.
+          frip_od_gain_ += frip_od_coef_ * (frip_od_target_ - frip_od_gain_);
+          m[rec_idx_] = m[rec_idx_] * frip_decay_ + x * frip_od_gain_;
           rec_idx_++;
           if (rec_idx_ >= frip_len_) rec_idx_ = 0;
+          if (frip_stop_pending_ && frip_od_gain_ < 1e-3f) {
+            frip_stop_pending_ = false;
+            commit_pending_    = true;   // faded out → Controls commits (WriteGuard)
+          }
         } else {
           // Linear capture (voiced, or frippertronics first pass). After the
           // record end (pending_len_ set) we keep writing a short overhang for
@@ -428,6 +436,9 @@ class Vestige : public Module {
     if (fripp_mode_) {
       rec_slot_ = VESTIGE_FRIP_SLOT;
       rec_idx_  = (frip_len_ > 0) ? play_pos_[VESTIGE_FRIP_SLOT] : 0; // overdub syncs to playback
+      if (frip_len_ > 0) {          // overdub: fade the summed input in (declick)
+        frip_od_gain_ = 0.f; frip_od_target_ = 1.f; frip_stop_pending_ = false;
+      }
     } else {
       // Record into a dedicated scratch slot so recording never evicts/mutes a
       // playing voice. Target slot is chosen at commit time.
@@ -451,7 +462,12 @@ class Vestige : public Module {
   // crossfade. Commit fires once the overhang is captured (commit_pending_).
   void EndRecording() {
     if (!recording_) return;
-    if (fripp_mode_) { CommitRecording(); return; }   // fripp: no overhang
+    if (fripp_mode_) {
+      // Overdub: fade the input out, then commit once silent (declick record-out).
+      if (frip_len_ > 0) { frip_od_target_ = 0.f; frip_stop_pending_ = true; return; }
+      CommitRecording();                                // first pass: nothing to fade
+      return;
+    }
     size_t L = rec_idx_;
     if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
     if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
@@ -735,6 +751,12 @@ class Vestige : public Module {
   bool fripp_mode_    = false;
   size_t frip_len_    = 0;
   float  frip_decay_  = 1.f;
+  // Frippertronics overdub declick: ramp the summed input in/out over a few ms
+  // at record engage/disengage so the sound-on-sound add has no hard step.
+  float  frip_od_gain_    = 0.f;   // current overdub input gain (0..1)
+  float  frip_od_target_  = 0.f;   // 1 = fading in, 0 = fading out
+  float  frip_od_coef_    = 1.f;   // per-sample one-pole ramp coef (set in Init)
+  volatile bool frip_stop_pending_ = false;  // deferred commit: wait for fade-out
 
   // Texture (K4)
   float tape_amt_ = 0.f, digi_amt_ = 0.f;
