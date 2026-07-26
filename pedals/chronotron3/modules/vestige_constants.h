@@ -22,10 +22,13 @@ static constexpr size_t VESTIGE_VOICE_CAP        = VESTIGE_LOOP_MAX_SAMPLES + VE
 // Topology (K1)
 // ---------------------------------------------------------------------------
 static constexpr int    VESTIGE_MAX_VOICES  = 6;      // voiced poly max (slots 0..5)
-static constexpr int    VESTIGE_FRIP_SLOT   = VESTIGE_MAX_VOICES; // slot 6 = frippertronics buffer
-static constexpr int    VESTIGE_SLOTS       = VESTIGE_MAX_VOICES + 1;
-static constexpr float  VESTIGE_FRIP_THRESHOLD = 0.86f;  // K1 above this → frippertronics region
-static constexpr int    VESTIGE_GRAINS      = 16;    // shared grain pool (bounds CPU)
+static constexpr int    VESTIGE_FRIP_SLOT   = VESTIGE_MAX_VOICES;     // slot 6 = frippertronics buffer
+static constexpr int    VESTIGE_REC_SLOT    = VESTIGE_MAX_VOICES + 1; // slot 7 = dedicated record scratch
+static constexpr int    VESTIGE_SLOTS       = VESTIGE_MAX_VOICES + 2; // 8 slots total
+// K1 mapping: padded noon = 1 voice; CCW adds voices to 6; CW = frippertronics.
+static constexpr float  VESTIGE_K1_NOON_LO  = 0.44f;  // below → voiced, more voices toward CCW
+static constexpr float  VESTIGE_K1_NOON_HI  = 0.56f;  // above → frippertronics region
+static constexpr int    VESTIGE_GRAINS      = 24;    // shared grain pool (bounds CPU)
 
 // ---------------------------------------------------------------------------
 // Grain smoothness macro (K3): looper (CCW / 0) → freeze (CW / 1)
@@ -36,7 +39,7 @@ static constexpr size_t VESTIGE_GRAIN_MIN_LEN = 256;
 static constexpr float  VESTIGE_CCW_OVERLAP   = 2.0f;   // Hann overlap-add sums flat → seamless loop
 static constexpr float  VESTIGE_CW_OVERLAP    = 3.0f;   // denser cloud so short grains fuse
 static constexpr size_t VESTIGE_MIN_INTERVAL  = 32;     // scheduler floor (samples)
-static constexpr size_t VESTIGE_MIN_LOOP_SAMPLES = 480; // 10 ms shortest capture (short FS2 tap)
+static constexpr size_t VESTIGE_MIN_LOOP_SAMPLES = 240; // 5 ms shortest capture (short FS2 tap)
 
 // ---------------------------------------------------------------------------
 // Footswitch timing (FS1 stop)
@@ -51,25 +54,24 @@ static constexpr float    VESTIGE_ENV_COEF        = 0.002f; // input |env| one-p
 static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K2 CCW: sensitive
 static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K2 CW:  insensitive
 static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold = open * hyst
-static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 300;    // silence held this long ends a phrase
+static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 80;     // silence held this long ends a phrase
 
 // ---------------------------------------------------------------------------
 // Texture (K4): bipolar, clean at centre
 //   analogue side (CCW) = tape saturation → extreme; digital side (CW) = decimate/crush → glitch
 // ---------------------------------------------------------------------------
 static constexpr float  VESTIGE_TEX_DEADZONE   = 0.06f;  // clean band around noon
-static constexpr float  VESTIGE_TAPE_DRIVE_MAX = 45.f;   // tanh drive at full CCW
+static constexpr float  VESTIGE_TAPE_DRIVE_MAX = 8.f;    // tanh drive at full CCW (grit, gain-compensated)
 static constexpr float  VESTIGE_DECIM_HOLD_MAX = 96.f;   // sample-hold length (samples) at full CW
 static constexpr float  VESTIGE_CRUSH_BITS_HI  = 16.f;   // bit depth near noon
 static constexpr float  VESTIGE_CRUSH_BITS_LO  = 2.5f;   // bit depth at full CW
 
 // ---------------------------------------------------------------------------
-// K5 fade / decay
+// K5 loop fade in/out (per-slot envelope). Voiced age-fade is now fixed.
 // ---------------------------------------------------------------------------
-static constexpr float  VESTIGE_AGE_SLOPE_MIN  = 0.35f;  // gentle age-fade curve (voiced)
-static constexpr float  VESTIGE_AGE_SLOPE_MAX  = 3.0f;   // steep age-fade curve (voiced)
-static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.90f;  // fast tape decay (frippertronics)
-static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (frippertronics)
+static constexpr float  VESTIGE_FADE_MAX_S     = 3.0f;   // K5 CW = 3 s fade in/out; CCW = instant
+static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.90f;  // fast tape decay (frippertronics, full CW)
+static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (frippertronics, just past noon)
 
 // ---------------------------------------------------------------------------
 // LED blink (Controls runs every ~10 ms)

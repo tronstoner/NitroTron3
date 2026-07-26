@@ -7,19 +7,21 @@
 //   FS2  = main engage (manual: record while held; auto: record-arm toggle).
 //   FS1  = stop (tap = mute/pause · hold = clear all).
 //   SW1  = capture mode (UP manual · MID continuous-auto · DOWN → manual, TBD).
-//   K1   = voice count / topology (1 parallel … 6 voiced … frippertronics).
+//   K1   = voice count / topology (CCW 6 voices … noon 1 voice … CW frippertronics).
 //   K2   = auto-capture threshold (spare in manual).
 //   K3   = smoothness macro (looper CCW → freeze CW).
 //   K4   = texture (bipolar: tape saturation CCW ↔ decimation/crush CW).
-//   K5   = fade / decay (age-fade slope voiced · overdub decay frippertronics).
+//   K5   = loop fade in/out time (CCW instant → CW 3 s).
 //   K6   = mix (shell-owned).
 //
 // Reuses the core grain engine (grain_voice.h / ring_buffer.h). Playback is a
 // shared pool of GrainVoice objects; each grain is tagged with the RingBuffer it
 // reads from, so any number of loop-voices share the pool with bounded CPU.
 //
-// Storage: one SDRAM slab per slot (6 voiced + 1 frippertronics). Recording
-// writes directly into the slab; each slot's RingBuffer views the same memory
+// Storage: one SDRAM slab per slot (6 voiced + 1 frippertronics + 1 record
+// scratch). Recording writes directly into the record scratch slab (voiced) so
+// it never evicts a playing loop; commit copies the scratch into a target slot.
+// Each slot's RingBuffer views the same memory
 // for grain reads. A wrap-guard copy of the loop head sits after the loop end so
 // grains that read across the loop boundary stay seamless.
 //
@@ -29,6 +31,7 @@
 #include "vestige_constants.h"
 #include "grain_voice.h"   // core/blocks — pulls in ring_buffer.h
 #include <cmath>
+#include <cstring>         // memcpy (commit copies record scratch → target slot)
 
 // ---------------------------------------------------------------------------
 // SDRAM storage — one slab per slot. File scope (single TU) is safe here.
@@ -63,8 +66,10 @@ class Vestige : public Module {
       active_[s]   = false;
       age_[s]      = 0;
       gain_[s]     = 0.f;
+      fade_gain_[s]   = 0.f;
+      fade_target_[s] = 0.f;
     }
-    for (int g = 0; g < VESTIGE_GRAINS; g++) grain_src_[g] = &ring_[0];
+    for (int g = 0; g < VESTIGE_GRAINS; g++) { grain_src_[g] = &ring_[0]; grain_slot_[g] = 0; }
     // Sensible defaults so Process is silent before the first Controls pass.
     grain_len_ = VESTIGE_CCW_GRAIN_LEN;
     overlap_   = VESTIGE_CCW_OVERLAP;
@@ -99,20 +104,36 @@ class Vestige : public Module {
     blink_++;
 
     // ---- Topology (K1): voice count / frippertronics -----------------------
-    bool want_frip = (k1 > VESTIGE_FRIP_THRESHOLD);
+    //   CCW..NOON_LO : voiced, 6 voices (full CCW) → 1 voice (noon)
+    //   NOON_LO..HI  : voiced, 1 voice (padded noon)
+    //   NOON_HI..CW  : frippertronics, decay 1.0 (just past noon) → 0.90 (full CW)
+    bool want_frip = (k1 > VESTIGE_K1_NOON_HI);
     if (want_frip && !fripp_mode_) EnterFrippertronics();
     if (!want_frip && fripp_mode_) LeaveFrippertronics();
     fripp_mode_ = want_frip;
 
     if (!fripp_mode_) {
-      target_voices_ = 1 + Quantize(k1 / VESTIGE_FRIP_THRESHOLD, VESTIGE_MAX_VOICES);
-      if (target_voices_ > VESTIGE_MAX_VOICES) target_voices_ = VESTIGE_MAX_VOICES;
+      if (k1 < VESTIGE_K1_NOON_LO) {
+        float pos = k1 / VESTIGE_K1_NOON_LO;   // 0 (full CCW) → 1 (at noon band)
+        int tv = 1 + (int)lroundf((1.f - pos) * (float)(VESTIGE_MAX_VOICES - 1));
+        if (tv < 1) tv = 1;
+        if (tv > VESTIGE_MAX_VOICES) tv = VESTIGE_MAX_VOICES;
+        target_voices_ = tv;
+      } else {
+        target_voices_ = 1;                    // padded noon = 1 voice
+      }
       EvictToTarget();       // reducing K1 evicts oldest-first, live
-      UpdateVoicedGains(k5); // age-ramp fade, K5 = slope
+      UpdateVoicedGains();    // fixed age-ramp fade (K5 no longer affects it)
     } else {
       gain_[VESTIGE_FRIP_SLOT] = 1.f;
-      frip_decay_ = Mapf(k5, VESTIGE_FRIP_DECAY_MIN, VESTIGE_FRIP_DECAY_MAX);
+      float cw = (k1 - VESTIGE_K1_NOON_HI) / (1.f - VESTIGE_K1_NOON_HI);
+      frip_decay_ = Mapf(cw, VESTIGE_FRIP_DECAY_MAX, VESTIGE_FRIP_DECAY_MIN);
     }
+
+    // ---- K5 loop fade in/out time → per-sample coefficient -----------------
+    float fade_time_s = Mapf(k5, 0.f, VESTIGE_FADE_MAX_S);
+    fade_coef_ = (fade_time_s < 1e-4f) ? 1.f
+                                       : 1.f - expf(-1.f / (fade_time_s * sr_));
 
     // ---- K3 smoothness macro ----------------------------------------------
     const float s = k3;                    // 0 = looper (CCW), 1 = freeze (CW)
@@ -136,7 +157,8 @@ class Vestige : public Module {
       digi_amt_ = VestigeClamp(d, 0.f, 1.f);
       tape_amt_ = 0.f;
     }
-    tape_drive_ = 1.f + tape_amt_ * VESTIGE_TAPE_DRIVE_MAX;
+    tape_drive_  = 1.f + tape_amt_ * VESTIGE_TAPE_DRIVE_MAX;
+    tape_makeup_ = 1.f / (0.5f + 0.5f * tape_drive_);  // color, not boost
     decim_hold_ = 1.f + digi_amt_ * (VESTIGE_DECIM_HOLD_MAX - 1.f);
     crush_bits_ = Mapf(digi_amt_, VESTIGE_CRUSH_BITS_HI, VESTIGE_CRUSH_BITS_LO);
 
@@ -151,7 +173,9 @@ class Vestige : public Module {
     }
     if (f1.falling) {
       if (!clear_latched_ && f1.held_ms <= VESTIGE_FS1_TAP_MAX_MS) {
-        muted_ = !muted_;   // tap: toggle mute/pause (material retained)
+        muted_ = !muted_;   // tap: toggle mute (fades out/in over K5 time)
+        for (int s = 0; s < VESTIGE_SLOTS; s++)
+          if (active_[s]) fade_target_[s] = muted_ ? 0.f : 1.f;
       }
       clear_latched_ = false;
     }
@@ -161,6 +185,8 @@ class Vestige : public Module {
     if (f2.rising) {
       if (muted_) {
         muted_ = false;      // FS2 re-arm resumes the retained loops
+        for (int s = 0; s < VESTIGE_SLOTS; s++)
+          if (active_[s]) fade_target_[s] = 1.f;   // fade back in
         swallow_fs2_ = true; // consume this press; do not start a record
       } else if (auto_mode) {
         auto_armed_ = !auto_armed_;   // continuous-auto: record-arm toggle
@@ -221,23 +247,29 @@ class Vestige : public Module {
         }
       }
 
-      // ---- Grain scheduler + sum -----------------------------------------
+      // ---- Grain scheduler + per-slot sum + fade envelope -----------------
+      // Mute/unmute rides the per-slot fade (K5), so the scheduler runs even
+      // while muted so the fade-out tail can play; fully-faded slots sum to 0.
+      if (fripp_mode_) {
+        ServiceSlot(VESTIGE_FRIP_SLOT);
+      } else {
+        for (int v = 0; v < VESTIGE_MAX_VOICES; v++) ServiceSlot(v);
+      }
+      float slot_sum[VESTIGE_SLOTS] = {0.f};
+      for (int g = 0; g < VESTIGE_GRAINS; g++) {
+        if (grains_[g].IsActive())
+          slot_sum[grain_slot_[g]] += grains_[g].Process(*grain_src_[g]);
+      }
       float y = 0.f;
-      if (!muted_) {
-        if (fripp_mode_) {
-          ServiceSlot(VESTIGE_FRIP_SLOT);
-        } else {
-          for (int v = 0; v < VESTIGE_MAX_VOICES; v++) ServiceSlot(v);
-        }
-        for (int g = 0; g < VESTIGE_GRAINS; g++) {
-          if (grains_[g].IsActive()) y += grains_[g].Process(*grain_src_[g]);
-        }
+      for (int s = 0; s < VESTIGE_SLOTS; s++) {
+        fade_gain_[s] += fade_coef_ * (fade_target_[s] - fade_gain_[s]);
+        y += slot_sum[s] * fade_gain_[s];
       }
 
       // ---- Texture (K4) ---------------------------------------------------
       if (tape_amt_ > 0.001f) {
-        // Tape saturation → extreme: asymmetric tanh, makeup toward unity.
-        float driven = tanhf(y * tape_drive_ + 0.15f * tape_amt_);
+        // Tape saturation: tanh grit with makeup gain — colors, doesn't boost.
+        float driven = tanhf(y * tape_drive_) * tape_makeup_;
         y = y * (1.f - tape_amt_) + driven * tape_amt_;
       }
       if (digi_amt_ > 0.001f) {
@@ -315,9 +347,13 @@ class Vestige : public Module {
     const size_t cap = VESTIGE_VOICE_CAP;
     size_t delay = (wp + cap - posi) % cap;
 
-    grain_src_[g] = &ring_[s];
+    grain_src_[g]  = &ring_[s];
+    grain_slot_[g] = s;
+    // Overlap gain-compensation: Hann overlap-add is COLA (flat) only at 2×;
+    // at 3× the sum ripples ~1.5×, so scale by 2/overlap to hold level constant.
+    float ov_comp = 2.f / overlap_;
     // rate 1.0, forward, full Hann (alpha=1) so overlap-add stays click-free.
-    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s], 1, 1.0f);
+    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s] * ov_comp, 1, 1.0f);
   }
 
   // -------------------------------------------------------------------------
@@ -329,9 +365,11 @@ class Vestige : public Module {
       rec_slot_ = VESTIGE_FRIP_SLOT;
       rec_idx_  = (frip_len_ > 0) ? play_pos_[VESTIGE_FRIP_SLOT] : 0; // overdub syncs to playback
     } else {
-      rec_slot_ = AllocVoicedSlot();
+      // Record into a dedicated scratch slot so recording never evicts/mutes a
+      // playing voice. Target slot is chosen at commit time.
+      rec_slot_ = VESTIGE_REC_SLOT;
       rec_idx_  = 0;
-      active_[rec_slot_]   = false;  // not audible until committed
+      active_[rec_slot_]   = false;  // scratch slot is never itself audible
       loop_len_[rec_slot_] = 0;
     }
     recording_ = true;
@@ -340,26 +378,49 @@ class Vestige : public Module {
   void CommitRecording() {
     if (!recording_) return;
     recording_ = false;
-    const int s = rec_slot_;
 
-    if (fripp_mode_ && frip_len_ > 0) {
-      // Overdub pass ended — refresh the wrap-guard, keep playing.
-      WriteGuard(s, frip_len_);
+    // ---- Frippertronics path (unchanged: records in-place into FRIP_SLOT) --
+    if (fripp_mode_) {
+      const int s = rec_slot_;   // == VESTIGE_FRIP_SLOT
+      if (frip_len_ > 0) {
+        // Overdub pass ended — refresh the wrap-guard, keep playing.
+        WriteGuard(s, frip_len_);
+        return;
+      }
+      size_t L = rec_idx_;
+      if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
+      if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
+      WriteGuard(s, L);
+      loop_len_[s] = L;
+      play_pos_[s] = 0;
+      timer_[s]    = 0;
+      active_[s]   = true;
+      age_[s]      = ++age_counter_;
+      frip_len_    = L;
+      StartFadeIn(s);
       return;
     }
 
+    // ---- Voiced path: choose target NOW, copy scratch → target -------------
     size_t L = rec_idx_;
     if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
     if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
 
-    WriteGuard(s, L);
-    loop_len_[s] = L;
-    play_pos_[s] = 0;
-    timer_[s]    = 0;      // fire the first grain immediately
-    active_[s]   = true;
-    age_[s]      = ++age_counter_;
+    const int target = AllocVoicedSlot();   // free slot if under target, else evict oldest
+    memcpy(vestige_slab[target], vestige_slab[VESTIGE_REC_SLOT], L * sizeof(float));
+    WriteGuard(target, L);
+    loop_len_[target] = L;
+    play_pos_[target] = 0;
+    timer_[target]    = 0;      // fire the first grain immediately
+    active_[target]   = true;
+    age_[target]      = ++age_counter_;
+    StartFadeIn(target);
+  }
 
-    if (fripp_mode_) frip_len_ = L;
+  // Begin a fade-in for a slot: silent now, ramping to unity over K5 time.
+  void StartFadeIn(int s) {
+    fade_gain_[s]   = 0.f;
+    fade_target_[s] = 1.f;
   }
 
   // Copy the loop head into the guard region so grains reading across the loop
@@ -402,11 +463,11 @@ class Vestige : public Module {
     }
   }
 
-  // Age-ramped fade over the FIFO stack. rank r (0 = newest); gain=(N-r)/N,
-  // shaped by the K5 slope, normalised 1/sqrt(N) for the stacking law.
-  void UpdateVoicedGains(float k5) {
+  // Age-ramped fade over the FIFO stack. rank r (0 = newest); linear gain
+  // (N-r)/N, normalised 1/sqrt(N) for the stacking law. Fixed slope (K5 now
+  // drives the loop fade envelope, not this age-fade).
+  void UpdateVoicedGains() {
     const int N = target_voices_ > 0 ? target_voices_ : 1;
-    const float slope = Mapf(k5, VESTIGE_AGE_SLOPE_MIN, VESTIGE_AGE_SLOPE_MAX);
     const float norm  = 1.f / sqrtf((float)N);
     for (int v = 0; v < VESTIGE_MAX_VOICES; v++) {
       if (!active_[v]) { gain_[v] = 0.f; continue; }
@@ -415,7 +476,7 @@ class Vestige : public Module {
         if (active_[w] && age_[w] > age_[v]) r++;
       float base = (float)(N - r) / (float)N;
       if (base < 0.f) base = 0.f;
-      gain_[v] = powf(base, slope) * norm;
+      gain_[v] = base * norm;
     }
   }
 
@@ -441,6 +502,7 @@ class Vestige : public Module {
     loop_len_[VESTIGE_FRIP_SLOT] = frip_len_;
     play_pos_[VESTIGE_FRIP_SLOT] = 0;
     timer_[VESTIGE_FRIP_SLOT]    = 0;
+    if (active_[VESTIGE_FRIP_SLOT]) StartFadeIn(VESTIGE_FRIP_SLOT);
   }
 
   void LeaveFrippertronics() {
@@ -479,6 +541,8 @@ class Vestige : public Module {
       play_pos_[s] = 0;
       timer_[s]    = 0;
       gain_[s]     = 0.f;
+      fade_gain_[s]   = 0.f;   // silence immediately (no fade)
+      fade_target_[s] = 0.f;
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
@@ -488,8 +552,8 @@ class Vestige : public Module {
 
   // -------------------------------------------------------------------------
   // LED mapping (single-colour, blink states). Liberties taken — see report.
-  //   led1 (RECORD): solid while recording · fast-blink while auto-armed · off
-  //   led2 (PLAY):   solid while playing · slow-blink while muted/paused · off
+  //   led1 (PLAY/STOP): solid while playing · slow-blink while muted/paused · off
+  //   led2 (RECORD):    solid while recording · fast-blink while auto-armed · off
   //   clear: both fast-blink together for a moment.
   // -------------------------------------------------------------------------
   void UpdateLeds(daisy::Led& led1, daisy::Led& led2, bool auto_mode) {
@@ -506,14 +570,14 @@ class Vestige : public Module {
     bool has_content = false;
     for (int s = 0; s < VESTIGE_SLOTS; s++) if (active_[s]) has_content = true;
 
-    // led1 — record status
-    if (recording_)            led1.Set(1.f);
-    else if (auto_mode && auto_armed_) led1.Set(fast ? 1.f : 0.f);
+    // led1 — playback/stop status (correlates with FS1 = stop)
+    if (muted_ && has_content) led1.Set(slow ? 1.f : 0.f);
+    else if (has_content)      led1.Set(1.f);
     else                       led1.Set(0.f);
 
-    // led2 — playback status
-    if (muted_ && has_content) led2.Set(slow ? 1.f : 0.f);
-    else if (has_content)      led2.Set(1.f);
+    // led2 — record status (correlates with FS2 = engage/record)
+    if (recording_)            led2.Set(1.f);
+    else if (auto_mode && auto_armed_) led2.Set(fast ? 1.f : 0.f);
     else                       led2.Set(0.f);
   }
 
@@ -525,6 +589,7 @@ class Vestige : public Module {
   // Grain pool (shared across all slots)
   GrainVoice       grains_[VESTIGE_GRAINS];
   const RingBuffer* grain_src_[VESTIGE_GRAINS];
+  int              grain_slot_[VESTIGE_GRAINS] = {0};  // which slot emitted grain g
   int              next_grain_ = 0;
 
   // Per-slot loop state (slots 0..5 voiced, slot 6 frippertronics)
@@ -536,6 +601,11 @@ class Vestige : public Module {
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
   uint32_t   age_counter_ = 0;
+
+  // Per-slot loop fade envelope (K5): multiplier on each slot's summed output.
+  float      fade_gain_[VESTIGE_SLOTS]   = {0.f};  // current smoothed gain
+  float      fade_target_[VESTIGE_SLOTS] = {0.f};  // 0 (fade out) or 1 (fade in)
+  float      fade_coef_ = 1.f;                     // per-sample smoothing coef (K5)
 
   // Cached K3 grain-macro params (Controls → Process)
   size_t grain_len_ = VESTIGE_CCW_GRAIN_LEN;
@@ -551,7 +621,7 @@ class Vestige : public Module {
 
   // Texture (K4)
   float tape_amt_ = 0.f, digi_amt_ = 0.f;
-  float tape_drive_ = 1.f, decim_hold_ = 1.f, crush_bits_ = 16.f;
+  float tape_drive_ = 1.f, tape_makeup_ = 1.f, decim_hold_ = 1.f, crush_bits_ = 16.f;
   float decim_phase_ = 0.f, decim_hold_val_ = 0.f;
 
   // Recording
