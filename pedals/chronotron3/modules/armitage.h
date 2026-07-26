@@ -51,6 +51,9 @@ class Armitage : public Module {
     // K5 triggered filter envelope + 4-pole LP.
     fenv_ = 0.f; fenv_gate_ = false;
     fenv_atk_c_ = 0.1f; fenv_rel_c_ = 0.01f;
+    fast_env_ = slow_env_ = 0.f; transient_armed_ = true;
+    fast_coef_ = 1.f - expf(-1.f / (armitage_k::FENV_FAST_MS * 0.001f * sr_));
+    slow_coef_ = 1.f - expf(-1.f / (armitage_k::FENV_SLOW_MS * 0.001f * sr_));
     lp1_ = lp2_ = lp3_ = lp4_ = 0.f;
     g_closed_     = 6.2831853f * armitage_k::OUTFILT_CLOSED_HZ / sr_;
     filt_octaves_ = log2f(armitage_k::OUTFILT_OPEN_HZ / armitage_k::OUTFILT_CLOSED_HZ);
@@ -144,8 +147,22 @@ class Armitage : public Module {
       // (retriggers each note); sustains at open while the signal is present;
       // note-off → release toward closed. Closed → muted; the release IS the
       // perceived decay, decoupled from resonator damping (K2).
-      if (in_env_ > armitage_k::ONSET_ON)  fenv_gate_ = true;   // note-on
-      if (in_env_ < armitage_k::ONSET_OFF) fenv_gate_ = false;  // note-off
+      // Fast/slow followers → transient (pluck) detector.
+      const float ax2 = fabsf(x);
+      fast_env_ += fast_coef_ * (ax2 - fast_env_);
+      slow_env_ += slow_coef_ * (ax2 - slow_env_);
+      // Level gate = note on/off (handles swells + note-off → release).
+      if (in_env_ > armitage_k::ONSET_ON)  fenv_gate_ = true;
+      if (in_env_ < armitage_k::ONSET_OFF) fenv_gate_ = false;
+      // Transient = a fresh pluck even during legato → restart the sweep.
+      if (transient_armed_ &&
+          fast_env_ > slow_env_ * armitage_k::TRANSIENT_RATIO &&
+          slow_env_ > armitage_k::ONSET_OFF) {
+        fenv_ = 0.f;             // retrigger: restart the attack sweep
+        fenv_gate_ = true;
+        transient_armed_ = false;
+      }
+      if (fast_env_ < slow_env_ * armitage_k::TRANSIENT_RATIO_OFF) transient_armed_ = true;
       const float ftgt = fenv_gate_ ? 1.f : 0.f;
       fenv_ += (fenv_gate_ ? fenv_atk_c_ : fenv_rel_c_) * (ftgt - fenv_);
       float fg = g_closed_ * exp2f(fenv_ * filt_octaves_);   // exponential cutoff sweep
@@ -377,6 +394,9 @@ class Armitage : public Module {
   // K5: gated AR filter envelope (own generator) + 4-pole non-resonant LP.
   bool  fenv_gate_ = false;              // input gate: note on/off (hysteresis)
   float fenv_ = 0.f, fenv_atk_c_ = 0.1f, fenv_rel_c_ = 0.01f;
+  // Transient (pluck) detector for retrigger during legato.
+  float fast_env_ = 0.f, slow_env_ = 0.f, fast_coef_ = 0.f, slow_coef_ = 0.f;
+  bool  transient_armed_ = true;
   float lp1_ = 0.f, lp2_ = 0.f, lp3_ = 0.f, lp4_ = 0.f;
   float g_closed_ = 0.f, filt_octaves_ = 1.f;
 

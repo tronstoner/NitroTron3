@@ -128,6 +128,12 @@ static constexpr float OUTFILT_CLOSED_HZ = 40.0f;   // env=0: filter shut → mu
 static constexpr float OUTFILT_OPEN_HZ   = 9000.0f; // env=1: filter open
 static constexpr float ONSET_ON          = 0.02f;   // input env above → note-on (gate)
 static constexpr float ONSET_OFF         = 0.008f;  // input env below → note-off (hysteresis)
+// Transient (pluck) detector — retriggers the filter sweep on a fresh attack
+// even during legato (when the level gate never drops). Fast vs slow follower.
+static constexpr float FENV_FAST_MS        = 3.0f;   // fast follower time
+static constexpr float FENV_SLOW_MS        = 80.0f;  // slow follower time
+static constexpr float TRANSIENT_RATIO     = 1.6f;   // fast/slow above this = pluck → retrigger
+static constexpr float TRANSIENT_RATIO_OFF = 1.15f;  // fall below → re-arm (hysteresis)
 
 // ---------------------------------------------------------------------------
 // Output limiter (in-spec). Simple mono soft-asymptote peak limiter; the

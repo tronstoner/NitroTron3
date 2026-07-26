@@ -58,7 +58,7 @@ Passthrough for now — no spec yet. All controls unused pending design.
 | KNOB 2 | Damping | Decay time (T60), short/plucky → long drone. Primary timbre |
 | KNOB 3 | Structure | Comb: allpass dispersion · Modal: inharmonic partial spread |
 | KNOB 4 | Asymmetry | Excitation enrichment, 0 → 1.0 (full rectification; fills spectral gaps). Sole conditioning control |
-| KNOB 5 | Filter envelope | Gated AR (retriggers each note-on; releases only on note-off) → 4-pole 24 dB/oct non-resonant LP; closed = muted. Bipolar: noon = snappy attack+release · CCW = longer attack · CW = longer release. Perceived decay = release, decoupled from K2 |
+| KNOB 5 | Filter envelope | Gated AR → 4-pole 24 dB/oct non-resonant LP; closed = muted. Retriggers on each pluck (transient-detected — works even legato); sustains while held; releases only on note-off. Bipolar: noon = snappy attack+release · CCW = longer attack · CW = longer release. Perceived decay = release, decoupled from K2 |
 | KNOB 6 | Dry/wet mix | *(shell)* |
 | SWITCH 1 | Resonator core | UP = comb (Karplus-Strong) · MIDDLE → comb · DOWN = modal (bandpass, 6 partials) |
 | SWITCH 2 | **Note-set behaviour (A/B)** | UP = fixed dense bank (25-note semitone comb) · MIDDLE = mono-tracked voice (follows played pitch) · DOWN = key-quantised multivoice (arpeggiate to stack an in-key chord) |
