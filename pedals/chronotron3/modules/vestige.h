@@ -221,26 +221,18 @@ class Vestige : public Module {
     }
 
     // ---- FS2 = main engage -------------------------------------------------
+    // FS2 always means "record"; starting a record resumes a paused loop
+    // (StartRecording → ResumeFromMute). To resume WITHOUT recording, tap FS1.
     const bool auto_mode = (sw1 == 1);
     if (f2.rising) {
-      if (muted_) {
-        muted_ = false;      // FS2 re-arm resumes the retained loops
-        for (int s = 0; s < VESTIGE_SLOTS; s++)
-          if (active_[s]) {
-            fade_target_[s] = 1.f;                  // fade back in
-            fade_in_phase_[s] = FadeInPhaseFromGain(fade_gain_[s]);
-          }
-        swallow_fs2_ = true; // consume this press; do not start a record
-      } else if (auto_mode) {
+      if (auto_mode) {
         auto_armed_ = !auto_armed_;   // continuous-auto: record-arm toggle
       } else {
         StartRecording();    // manual (SW1 UP) and DOWN (TBD → manual)
       }
     }
     if (f2.falling) {
-      if (swallow_fs2_) {
-        swallow_fs2_ = false;
-      } else if (!auto_mode && recording_) {
+      if (!auto_mode && recording_) {
         EndRecording();   // set loop end, record the seam overhang, then commit
       }
     }
@@ -495,8 +487,20 @@ class Vestige : public Module {
   // -------------------------------------------------------------------------
   // Recording lifecycle
   // -------------------------------------------------------------------------
+  // Resume paused loops (fade back in from the current gain). No-op if playing.
+  void ResumeFromMute() {
+    if (!muted_) return;
+    muted_ = false;
+    for (int s = 0; s < VESTIGE_SLOTS; s++)
+      if (active_[s]) {
+        fade_target_[s]   = 1.f;
+        fade_in_phase_[s] = FadeInPhaseFromGain(fade_gain_[s]);
+      }
+  }
+
   void StartRecording() {
     if (recording_) return;
+    ResumeFromMute();   // starting a record unpauses the existing loop
     if (fripp_mode_) {
       rec_slot_ = VESTIGE_FRIP_SLOT;
       rec_idx_  = (frip_len_ > 0) ? play_pos_[VESTIGE_FRIP_SLOT] : 0; // overdub syncs to playback
@@ -759,7 +763,8 @@ class Vestige : public Module {
     frip_len_ = 0;
     frip_head_ = 0.f;
     muted_    = false;
-    auto_armed_ = false;
+    // NB: auto_armed_ is intentionally preserved — clearing the loop should not
+    // disarm continuous-auto if it was armed.
   }
 
   // -------------------------------------------------------------------------
@@ -869,7 +874,6 @@ class Vestige : public Module {
 
   // Transport / capture
   bool     muted_        = false;
-  bool     swallow_fs2_  = false;
   bool     clear_latched_= false;
   bool     auto_armed_   = false;
   int      flash_        = 0;
