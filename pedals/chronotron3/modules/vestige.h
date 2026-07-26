@@ -108,32 +108,38 @@ class Vestige : public Module {
     const float k4 = RemapKnob(cs.Knob(3));
     const float k5 = RemapKnob(cs.Knob(4));
     const int   sw1 = cs.Switch(0);        // 0=UP manual, 1=MID auto, 2=DOWN TBD
-    const int   sw2 = cs.Switch(1);        // 0=UP/1=MID voiced, 2=DOWN frippertronics
     const FootswitchEvent f1 = cs.Foot(0); // FS1 = stop
     const FootswitchEvent f2 = cs.Foot(1); // FS2 = engage
 
     blink_++;
 
-    // ---- Mode (SW2): voiced (UP/MID) vs frippertronics (DOWN) --------------
-    // The toggle is the mode readout, so the buffer/head can stay unified with
-    // no audible switch. K1 then gets its FULL travel in each mode:
-    //   voiced → voice count  (CCW = 6 → CW = 1)
-    //   fripp  → decay        (CCW = ~1 repeat → CW = infinite)
-    bool want_frip = (sw2 == 2);
+    // ---- Topology (K1): voice count / frippertronics -----------------------
+    //   CCW..NOON_LO : voiced, 6 voices (full CCW) → 1 voice (noon)
+    //   NOON_LO..HI  : voiced, 1 voice (padded noon)
+    //   NOON_HI..CW  : frippertronics, decay 0.40 (just past noon, ~1 repeat) → 1.0 infinite (full CW)
+    bool want_frip = (k1 > VESTIGE_K1_NOON_HI);
     if (want_frip && !fripp_mode_) EnterFrippertronics();
     if (!want_frip && fripp_mode_) LeaveFrippertronics();
     fripp_mode_ = want_frip;
 
     if (!fripp_mode_) {
-      int tv = 1 + (int)lroundf((1.f - k1) * (float)(VESTIGE_MAX_VOICES - 1));
-      if (tv < 1) tv = 1;
-      if (tv > VESTIGE_MAX_VOICES) tv = VESTIGE_MAX_VOICES;
-      target_voices_ = tv;
+      if (k1 < VESTIGE_K1_NOON_LO) {
+        float pos = k1 / VESTIGE_K1_NOON_LO;   // 0 (full CCW) → 1 (at noon band)
+        int tv = 1 + (int)lroundf((1.f - pos) * (float)(VESTIGE_MAX_VOICES - 1));
+        if (tv < 1) tv = 1;
+        if (tv > VESTIGE_MAX_VOICES) tv = VESTIGE_MAX_VOICES;
+        target_voices_ = tv;
+      } else {
+        target_voices_ = 1;                    // padded noon = 1 voice
+      }
       EvictToTarget();       // reducing K1 evicts oldest-first, live
       UpdateVoicedGains();    // fixed age-ramp fade (K5 no longer affects it)
     } else {
       gain_[VESTIGE_FRIP_SLOT] = 1.f;
-      frip_decay_ = Mapf(k1, VESTIGE_FRIP_DECAY_MIN, VESTIGE_FRIP_DECAY_MAX);
+      float cw = (k1 - VESTIGE_K1_NOON_HI) / (1.f - VESTIGE_K1_NOON_HI);
+      // Reversed travel: just past noon = shortest decay (barely repeats),
+      // full CW = infinite sustain.
+      frip_decay_ = Mapf(cw, VESTIGE_FRIP_DECAY_MIN, VESTIGE_FRIP_DECAY_MAX);
     }
 
     // ---- K5 loop fade in/out time ------------------------------------------
