@@ -18,9 +18,14 @@ public:
     // alpha_override < 0 → length-based Tukey (default). >= 0 → forced Tukey
     // alpha (use 1.0 = full Hann for smooth grains so a 2× overlap sums to
     // constant amplitude — no overlap-add tremolo).
+    // instant_attack: when true, the grain skips its fade-IN (starts at full
+    // amplitude) but keeps its fade-OUT taper — an asymmetric window for the
+    // first grain of a fresh loop so playback starts immediately. Defaults
+    // false, so all existing callers are logically unchanged.
     void Trigger(const RingBuffer& buf, size_t delay, size_t length,
                  bool reverse = false, float rate = 1.f, float gain = 1.f,
-                 int loops = 1, float alpha_override = -1.f) {
+                 int loops = 1, float alpha_override = -1.f,
+                 bool instant_attack = false) {
         size_t wp = buf.GetWritePos();
         size_t bl = buf.GetLength();
         float start;
@@ -55,6 +60,7 @@ public:
         size_t min_taper = (loops > 1) ? 240 : 1;  // 5 ms minimum for loops
         if (taper_samples_ < min_taper) taper_samples_ = min_taper;
         if (taper_samples_ > grain_len_ / 2) taper_samples_ = grain_len_ / 2;
+        instant_attack_ = instant_attack;
     }
 
     float Process(const RingBuffer& buf) {
@@ -62,7 +68,7 @@ public:
 
         // Tukey window: cosine taper at edges, flat in the middle
         float window;
-        if (phase_ < taper_samples_) {
+        if (phase_ < taper_samples_ && !instant_attack_) {
             float t = static_cast<float>(phase_) / static_cast<float>(taper_samples_);
             window = 0.5f * (1.f - cosf(static_cast<float>(M_PI) * t));
         } else if (phase_ >= grain_len_ - taper_samples_) {
@@ -106,4 +112,5 @@ private:
     size_t taper_samples_ = 1;
     int loops_left_ = 0;
     bool active_ = false;
+    bool instant_attack_ = false;
 };

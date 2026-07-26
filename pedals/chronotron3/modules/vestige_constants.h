@@ -34,7 +34,12 @@ static constexpr int    VESTIGE_GRAINS      = 24;    // shared grain pool (bound
 // Grain smoothness macro (K3): looper (CCW / 0) → freeze (CW / 1)
 // ---------------------------------------------------------------------------
 static constexpr size_t VESTIGE_CCW_GRAIN_LEN = 19200;  // 400 ms — long grain, looper end
-static constexpr size_t VESTIGE_CW_GRAIN_LEN  = 1440;   // 30 ms  — short grain, freeze end
+static constexpr size_t VESTIGE_CW_GRAIN_LEN  = 4800;   // 100 ms — tonal freeze grain (30 ms was buzzy)
+// Freeze character: the read head slows to a standstill and grains read a NARROW
+// window around it so the overlap phases against itself (consistent), rather than
+// scattering across the whole buffer (random). Tune by ear.
+static constexpr size_t VESTIGE_FREEZE_SPRAY  = 1200;   // ±25 ms phasing spray at full freeze
+static constexpr float  VESTIGE_FREEZE_JITTER = 0.15f;  // small scheduler jitter at freeze
 static constexpr size_t VESTIGE_GRAIN_MIN_LEN = 256;
 static constexpr float  VESTIGE_CCW_OVERLAP   = 2.0f;   // Hann overlap-add sums flat → seamless loop
 static constexpr float  VESTIGE_CW_OVERLAP    = 3.0f;   // denser cloud so short grains fuse

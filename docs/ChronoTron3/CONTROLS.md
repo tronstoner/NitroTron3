@@ -23,7 +23,7 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 |---|---|---|
 | KNOB 1 | Voice count / topology | Padded noon = 1 (parallel) · CCW → up to 6 voiced (FIFO, auto age-fade fixed by count) · CW → frippertronics, fade-out grows toward CW. Live; never resets playback |
 | KNOB 2 | Auto-capture threshold | Used in continuous-auto capture; spare in manual |
-| KNOB 3 | Smoothness | CCW = looper (long grains, ordered) → CW = freeze (short grains, full-buffer scatter) |
+| KNOB 3 | Smoothness | CCW = looper (long grains, plays through 1×) → CW = freeze (read head time-stretches to a standstill; grains phase around a fixed point — consistent, not random scatter) |
 | KNOB 4 | Texture | Bipolar, clean at noon: CCW tape saturation (gain-compensated) · CW decimation → digital glitch |
 | KNOB 5 | Loop fade in/out | CCW ≈ instant → CW ~3 s. Fade envelope applied on loop start / stop / mute (all topologies) |
 | KNOB 6 | Dry/wet mix | *(shell)* |

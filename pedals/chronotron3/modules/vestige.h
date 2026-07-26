@@ -71,10 +71,11 @@ class Vestige : public Module {
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) { grain_src_[g] = &ring_[0]; grain_slot_[g] = 0; }
     // Sensible defaults so Process is silent before the first Controls pass.
-    grain_len_ = VESTIGE_CCW_GRAIN_LEN;
-    overlap_   = VESTIGE_CCW_OVERLAP;
-    scatter_   = 0.f;
-    jitter_    = 0.f;
+    grain_len_    = VESTIGE_CCW_GRAIN_LEN;
+    overlap_      = VESTIGE_CCW_OVERLAP;
+    advance_rate_ = 1.f;
+    spray_        = 0.f;
+    jitter_       = 0.f;
     target_voices_ = 1;
   }
 
@@ -141,8 +142,12 @@ class Vestige : public Module {
     grain_len_ = (size_t)glen_f;
     if (grain_len_ < VESTIGE_GRAIN_MIN_LEN) grain_len_ = VESTIGE_GRAIN_MIN_LEN;
     overlap_ = Mapf(s, VESTIGE_CCW_OVERLAP, VESTIGE_CW_OVERLAP);
-    scatter_ = s;          // position randomisation across the WHOLE buffer
-    jitter_  = s;          // scheduler timing jitter (ordered at CCW)
+    // Freeze is a time-stretch to a STANDSTILL, not a scatter: the read head
+    // slows (advance 1×→0) and grains read a NARROW window around it so the
+    // overlap phases against itself (consistent, evolving), not random jumps.
+    advance_rate_ = 1.f - s;
+    spray_  = s * (float)VESTIGE_FREEZE_SPRAY;
+    jitter_ = s * VESTIGE_FREEZE_JITTER;
 
     // ---- K4 texture (bipolar) ---------------------------------------------
     float k4c = k4 - 0.5f;
@@ -315,10 +320,11 @@ class Vestige : public Module {
     size_t hop = (size_t)((float)glen / overlap_);
     if (hop < VESTIGE_MIN_INTERVAL) hop = VESTIGE_MIN_INTERVAL;
 
-    play_pos_[s] += hop;
+    // Advance the read head at advance_rate_ (1× looper → 0 = frozen freeze).
+    play_pos_[s] += (size_t)((float)hop * advance_rate_);
     while (play_pos_[s] >= L) play_pos_[s] -= L;
 
-    // Reset the timer, jittered as K3 opens (ordered → scattered).
+    // Reset the timer, with a little jitter (small so the freeze stays steady).
     float j = (VestigeRand() * 2.f - 1.f) * jitter_ * 0.6f;
     int itv = (int)((float)hop * (1.f + j));
     if (itv < (int)VESTIGE_MIN_INTERVAL) itv = (int)VESTIGE_MIN_INTERVAL;
@@ -334,12 +340,12 @@ class Vestige : public Module {
     if (g < 0) return;   // pool exhausted → drop (glitch, acceptable)
 
     const size_t L = loop_len_[s];
-    // Position: ordered cursor lerped toward a full-buffer random pick by K3.
-    float ordered = (float)play_pos_[s];
-    float rnd     = VestigeRand() * (float)L;
-    float pos     = ordered + (rnd - ordered) * scatter_;
-    if (pos < 0.f) pos = 0.f;
-    if (pos >= (float)L) pos = (float)L - 1.f;
+    // Position = the read head + a NARROW phasing spray (not a full-buffer
+    // scatter): overlapping grains around the (frozen at freeze) head phase
+    // against each other for a consistent, evolving freeze.
+    float off = (VestigeRand() * 2.f - 1.f) * spray_;
+    float pos = fmodf((float)play_pos_[s] + off, (float)L);
+    if (pos < 0.f) pos += (float)L;
     size_t posi = (size_t)pos;
 
     // Delay = distance from the (frozen) write head back to this absolute index.
@@ -353,7 +359,11 @@ class Vestige : public Module {
     // at 3× the sum ripples ~1.5×, so scale by 2/overlap to hold level constant.
     float ov_comp = 2.f / overlap_;
     // rate 1.0, forward, full Hann (alpha=1) so overlap-add stays click-free.
-    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s] * ov_comp, 1, 1.0f);
+    // The first grain of a fresh loop skips its fade-IN (instant_attack) so
+    // playback starts immediately; it keeps its fade-out for the grain handoff.
+    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s] * ov_comp, 1, 1.0f,
+                       first_grain_[s]);
+    first_grain_[s] = false;
   }
 
   // -------------------------------------------------------------------------
@@ -421,6 +431,7 @@ class Vestige : public Module {
   void StartFadeIn(int s) {
     fade_gain_[s]   = 0.f;
     fade_target_[s] = 1.f;
+    first_grain_[s] = true;   // first grain of this fresh loop starts instantly
   }
 
   // Copy the loop head into the guard region so grains reading across the loop
@@ -600,6 +611,7 @@ class Vestige : public Module {
   bool       active_[VESTIGE_SLOTS]   = {false};
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
+  bool       first_grain_[VESTIGE_SLOTS] = {false};  // next grain skips its fade-in
   uint32_t   age_counter_ = 0;
 
   // Per-slot loop fade envelope (K5): multiplier on each slot's summed output.
@@ -608,10 +620,11 @@ class Vestige : public Module {
   float      fade_coef_ = 1.f;                     // per-sample smoothing coef (K5)
 
   // Cached K3 grain-macro params (Controls → Process)
-  size_t grain_len_ = VESTIGE_CCW_GRAIN_LEN;
-  float  overlap_   = VESTIGE_CCW_OVERLAP;
-  float  scatter_   = 0.f;
-  float  jitter_    = 0.f;
+  size_t grain_len_    = VESTIGE_CCW_GRAIN_LEN;
+  float  overlap_      = VESTIGE_CCW_OVERLAP;
+  float  advance_rate_ = 1.f;   // read-head speed: 1× looper → 0 = frozen freeze
+  float  spray_        = 0.f;   // ± phasing spray (samples) around the head
+  float  jitter_       = 0.f;   // scheduler timing jitter
 
   // Topology
   int  target_voices_ = 1;
