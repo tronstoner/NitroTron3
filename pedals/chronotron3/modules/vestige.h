@@ -114,7 +114,7 @@ class Vestige : public Module {
     // ---- Topology (K1): voice count / frippertronics -----------------------
     //   CCW..NOON_LO : voiced, 6 voices (full CCW) → 1 voice (noon)
     //   NOON_LO..HI  : voiced, 1 voice (padded noon)
-    //   NOON_HI..CW  : frippertronics, decay 1.0 (just past noon) → 0.90 (full CW)
+    //   NOON_HI..CW  : frippertronics, decay 0.40 (just past noon, ~1 repeat) → 1.0 infinite (full CW)
     bool want_frip = (k1 > VESTIGE_K1_NOON_HI);
     if (want_frip && !fripp_mode_) EnterFrippertronics();
     if (!want_frip && fripp_mode_) LeaveFrippertronics();
@@ -135,7 +135,9 @@ class Vestige : public Module {
     } else {
       gain_[VESTIGE_FRIP_SLOT] = 1.f;
       float cw = (k1 - VESTIGE_K1_NOON_HI) / (1.f - VESTIGE_K1_NOON_HI);
-      frip_decay_ = Mapf(cw, VESTIGE_FRIP_DECAY_MAX, VESTIGE_FRIP_DECAY_MIN);
+      // Reversed travel: just past noon = shortest decay (barely repeats),
+      // full CW = infinite sustain.
+      frip_decay_ = Mapf(cw, VESTIGE_FRIP_DECAY_MIN, VESTIGE_FRIP_DECAY_MAX);
     }
 
     // ---- K5 loop fade in/out time ------------------------------------------
