@@ -90,8 +90,9 @@ static constexpr float  VESTIGE_CRUSH_BITS_LO  = 2.5f;   // bit depth at full CW
 static constexpr float  VESTIGE_AGE_FADE_DEPTH     = 0.4f;
 // K5 fade in/out. BOTH are real bounded DURATIONS (linear in K5, 0 → max), so
 // they share one scale and their ratio is explicit — no runaway one-pole tail.
-static constexpr float  VESTIGE_FADE_ATTACK_MAX_S  = 6.0f;  // K5 CW: swell-in finishes in this
-static constexpr float  VESTIGE_FADE_RELEASE_MAX_S = 6.0f;  // K5 CW: fade-out finishes in this (symmetric)
+static constexpr float  VESTIGE_FADE_ATTACK_MAX_S  = 6.0f;   // K5 CW: swell-in finishes in this
+static constexpr float  VESTIGE_FADE_RELEASE_MAX_S = 6.0f;   // K5 CW: fade-out finishes in this (symmetric)
+static constexpr float  VESTIGE_FADE_FLOOR         = 0.001f; // -60 dB: fade endpoint (dB-linear span)
 static constexpr float  VESTIGE_FRIP_OD_RAMP_S = 0.005f; // overdub input fade in/out (declick record in/out)
 static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.20f;  // fast tape decay (frippertronics, just past noon, ~1 repeat)
 static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (frippertronics, full CW)
