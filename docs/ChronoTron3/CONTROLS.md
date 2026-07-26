@@ -25,7 +25,7 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 | KNOB 2 | Auto-capture threshold | Used in continuous-auto capture; spare in manual |
 | KNOB 3 | Scan / freeze | **CCW** = normal forward loop · **CCW→noon** = backward auto-scrub decelerating to a **halt at noon** · **noon→CW** = frozen, with the freeze point sweeping **live** across the **whole buffer** — beginning (noon) to a grain-scan-range in from the **END** (full CW). Grain diffusion stays alive throughout |
 | KNOB 4 | Texture | Bipolar, clean at noon: CCW tape saturation (gain-compensated) · CW decimation → digital glitch |
-| KNOB 5 | Loop fade in/out | CCW ≈ instant → CW ~3 s (all topologies). **Release** = exponential tail over the full time (the "dies away" decay); **attack** = raised-cosine swell over the same time but **capped ~0.3 s** so long settings give a long tail without a long swell-in. Applied on loop start / stop / mute |
+| KNOB 5 | Loop fade in/out | CCW = instant → CW = max, **both as real bounded durations on one scale** (no runaway tail). **Attack** = convex swell (slow start → full) over `ATTACK_MAX_S`; **release** = concave dies-away over `RELEASE_MAX_S`. Default 3 s : 3 s (1:1); ratio is set by those two constants. Applied on loop start / stop / mute |
 | KNOB 6 | Dry/wet mix | *(shell)* |
 | SWITCH 1 | Capture mode | UP = manual (hold-record) · MIDDLE = continuous-auto · DOWN = → manual (TBD) |
 | SWITCH 2 | Unused | Free |

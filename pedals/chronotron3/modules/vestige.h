@@ -69,7 +69,7 @@ class Vestige : public Module {
       gain_[s]     = 0.f;
       fade_gain_[s]   = 0.f;
       fade_target_[s] = 0.f;
-      fade_in_phase_[s] = 0.f;
+      fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) { grain_src_[g] = &ring_[0]; grain_slot_[g] = 0; }
     // Sensible defaults so Process is silent before the first Controls pass.
@@ -142,16 +142,13 @@ class Vestige : public Module {
       frip_decay_ = Mapf(cw, VESTIGE_FRIP_DECAY_MIN, VESTIGE_FRIP_DECAY_MAX);
     }
 
-    // ---- K5 loop fade in/out time ------------------------------------------
-    // Release = exponential tail over the full K5 time (the "dies away" decay).
-    // Attack  = raised-cosine swell over the SAME time but capped, so long K5
-    // settings give a long tail without a long swell-in on every loop start.
-    float fade_time_s = Mapf(k5, 0.f, VESTIGE_FADE_MAX_S);
-    fade_coef_ = (fade_time_s < 1e-4f) ? 1.f
-                                       : 1.f - expf(-1.f / (fade_time_s * sr_));
-    float atk_s = (fade_time_s > VESTIGE_FADE_ATTACK_CAP_S) ? VESTIGE_FADE_ATTACK_CAP_S
-                                                            : fade_time_s;
-    fade_in_inc_ = (atk_s < 1e-4f) ? 1.f : 1.f / (atk_s * sr_);
+    // ---- K5 fade in/out: two bounded durations on one scale ----------------
+    // Both are phase ramps that FINISH in their time (no one-pole tail): attack
+    // = convex swell over atk_s, release = concave "dies-away" over rel_s.
+    float atk_s = Mapf(k5, 0.f, VESTIGE_FADE_ATTACK_MAX_S);
+    float rel_s = Mapf(k5, 0.f, VESTIGE_FADE_RELEASE_MAX_S);
+    atk_inc_ = (atk_s < 1e-4f) ? 1.f : 1.f / (atk_s * sr_);
+    rel_inc_ = (rel_s < 1e-4f) ? 1.f : 1.f / (rel_s * sr_);
 
     // ---- K3 smoothness macro ----------------------------------------------
     const float s = k3;                    // 0 = looper (CCW), 1 = freeze (CW)
@@ -212,10 +209,7 @@ class Vestige : public Module {
       if (!clear_latched_ && f1.held_ms <= VESTIGE_FS1_TAP_MAX_MS) {
         muted_ = !muted_;   // tap: toggle mute (fades out/in over K5 time)
         for (int s = 0; s < VESTIGE_SLOTS; s++)
-          if (active_[s]) {
-            fade_target_[s] = muted_ ? 0.f : 1.f;
-            if (!muted_) fade_in_phase_[s] = FadeInPhaseFromGain(fade_gain_[s]);
-          }
+          if (active_[s]) SetFade(s, muted_ ? 0.f : 1.f);
       }
       clear_latched_ = false;
     }
@@ -323,19 +317,23 @@ class Vestige : public Module {
       }
       float y = 0.f;
       for (int s = 0; s < VESTIGE_SLOTS; s++) {
-        if (fade_target_[s] > 0.5f) {
-          // Attack: raised-cosine S-curve (click-free, not front-loaded).
-          if (fade_in_phase_[s] < 1.f) {
-            fade_in_phase_[s] += fade_in_inc_;
-            if (fade_in_phase_[s] > 1.f) fade_in_phase_[s] = 1.f;
-            // Convex swell: slow start → steep approach to full.
-            fade_gain_[s] = 1.f - cosf(0.5f * kVestigePi * fade_in_phase_[s]);
-          } else {
-            fade_gain_[s] = 1.f;
-          }
+        // One duration-based fade for both directions. fade_phase_ ramps 0→1
+        // over the (attack|release) time; fade_from_ is the gain the fade
+        // started at, so an interrupted fade resumes smoothly with no jump.
+        const bool rising = (fade_target_[s] > 0.5f);
+        if (fade_phase_[s] < 1.f) {
+          fade_phase_[s] += rising ? atk_inc_ : rel_inc_;
+          if (fade_phase_[s] > 1.f) fade_phase_[s] = 1.f;
+        }
+        const float p = fade_phase_[s];
+        if (rising) {
+          // Convex swell: slow start → steep approach to full.
+          float sh = 1.f - cosf(0.5f * kVestigePi * p);
+          fade_gain_[s] = fade_from_[s] + (1.f - fade_from_[s]) * sh;
         } else {
-          // Release: exponential tail toward 0.
-          fade_gain_[s] += fade_coef_ * (0.f - fade_gain_[s]);
+          // Concave "dies-away": fast initial drop → slow tail, bounded.
+          float sh = 1.f - sinf(0.5f * kVestigePi * p);
+          fade_gain_[s] = fade_from_[s] * sh;
         }
         y += slot_sum[s] * fade_gain_[s];
       }
@@ -493,10 +491,7 @@ class Vestige : public Module {
     if (!muted_) return;
     muted_ = false;
     for (int s = 0; s < VESTIGE_SLOTS; s++)
-      if (active_[s]) {
-        fade_target_[s]   = 1.f;
-        fade_in_phase_[s] = FadeInPhaseFromGain(fade_gain_[s]);
-      }
+      if (active_[s]) SetFade(s, 1.f);
   }
 
   void StartRecording() {
@@ -520,12 +515,13 @@ class Vestige : public Module {
 
   static constexpr float kVestigePi = 3.14159265358979323846f;
 
-  // Convex attack: invert 1-cos(pi/2*p) so an interrupted release
-  // (mute→unmute mid-fade) resumes the swell from the current gain, not a jump.
-  static float FadeInPhaseFromGain(float g) {
-    if (g <= 0.f) return 0.f;
-    if (g >= 1.f) return 1.f;
-    return acosf(1.f - g) * (2.f / kVestigePi);
+  // Begin a fade toward `target` (0 or 1) for slot s. Captures the current gain
+  // as the fade's start point and resets its phase, so an interrupted fade
+  // resumes smoothly (no jump) regardless of direction.
+  void SetFade(int s, float target) {
+    fade_target_[s] = target;
+    fade_from_[s]   = fade_gain_[s];
+    fade_phase_[s]  = 0.f;
   }
 
   // Minimal seam crossfade length (samples), scaled down for tiny loops.
@@ -604,11 +600,10 @@ class Vestige : public Module {
     pending_len_ = 0; overhang_left_ = 0;
   }
 
-  // Begin a fade-in for a slot: silent now, ramping to unity over K5 time.
+  // Begin a fade-in for a slot: silent now, swelling to unity over K5 time.
   void StartFadeIn(int s) {
-    fade_gain_[s]     = 0.f;
-    fade_target_[s]   = 1.f;
-    fade_in_phase_[s] = 0.f;  // raised-cosine attack from silence
+    fade_gain_[s] = 0.f;
+    SetFade(s, 1.f);          // swell from silence
     first_grain_[s] = true;   // first grain of this fresh loop starts (near-)instantly
     // Position isn't anchored here: looper/scrub start from CommitRecording's
     // play_pos = 0; freeze pins its own live centre→end point in ServiceSlot.
@@ -758,7 +753,7 @@ class Vestige : public Module {
       gain_[s]     = 0.f;
       fade_gain_[s]   = 0.f;   // silence immediately (no fade)
       fade_target_[s] = 0.f;
-      fade_in_phase_[s] = 0.f;
+      fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
@@ -824,9 +819,10 @@ class Vestige : public Module {
   // Per-slot loop fade envelope (K5): multiplier on each slot's summed output.
   float      fade_gain_[VESTIGE_SLOTS]   = {0.f};  // current smoothed gain
   float      fade_target_[VESTIGE_SLOTS] = {0.f};  // 0 (fade out) or 1 (fade in)
-  float      fade_in_phase_[VESTIGE_SLOTS] = {0.f}; // raised-cosine attack phase (0..1)
-  float      fade_coef_   = 1.f;                   // release: exponential coef (full K5 time)
-  float      fade_in_inc_ = 1.f;                   // attack: raised-cosine phase step (capped K5 time)
+  float      fade_phase_[VESTIGE_SLOTS] = {0.f};   // progress of current fade (0..1)
+  float      fade_from_[VESTIGE_SLOTS]  = {0.f};   // gain the current fade started at
+  float      atk_inc_ = 1.f;                       // attack phase step (1/(atk_s*sr))
+  float      rel_inc_ = 1.f;                       // release phase step (1/(rel_s*sr))
 
   // Cached K3 grain-macro params (Controls → Process)
   size_t grain_len_    = VESTIGE_CCW_GRAIN_LEN;
