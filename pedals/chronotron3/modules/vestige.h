@@ -73,9 +73,12 @@ class Vestige : public Module {
     // Sensible defaults so Process is silent before the first Controls pass.
     grain_len_    = VESTIGE_CCW_GRAIN_LEN;
     overlap_      = VESTIGE_CCW_OVERLAP;
-    advance_rate_ = 1.f;
     spray_        = 0.f;
     jitter_       = 0.f;
+    freeze_active_   = false;
+    scrub_back_frac_ = 0.f;
+    anchor_frac_     = 0.f;
+    anchor_pull_     = 0.f;
     target_voices_ = 1;
   }
 
@@ -142,12 +145,17 @@ class Vestige : public Module {
     grain_len_ = (size_t)glen_f;
     if (grain_len_ < VESTIGE_GRAIN_MIN_LEN) grain_len_ = VESTIGE_GRAIN_MIN_LEN;
     overlap_ = Mapf(s, VESTIGE_CCW_OVERLAP, VESTIGE_CW_OVERLAP);
-    // Freeze is a time-stretch to a STANDSTILL, not a scatter: the read head
-    // slows (advance 1×→0) and grains read a NARROW window around it so the
-    // overlap phases against itself (consistent, evolving), not random jumps.
-    advance_rate_ = 1.f - s;
     spray_  = s * (float)VESTIGE_FREEZE_SPRAY;
     jitter_ = s * VESTIGE_FREEZE_JITTER;
+    // Position/direction: a small CCW zone plays the loop forward; above it the
+    // head auto-scrubs BACKWARD, decelerating to a deterministic freeze anchored
+    // toward the END. Anchor + deceleration scale with K3 travel.
+    freeze_active_   = (s >= VESTIGE_K3_LOOP_ZONE);
+    float t = (s - VESTIGE_K3_LOOP_ZONE) / (1.f - VESTIGE_K3_LOOP_ZONE);
+    if (t < 0.f) t = 0.f;
+    scrub_back_frac_ = 1.f - t;   // backward speed: ~1× just past CCW → 0 at CW
+    anchor_frac_     = t;         // freeze anchor: front (CCW edge) → end (CW)
+    anchor_pull_     = t;         // ease toward anchor; = 1 at CW → snap = freeze
 
     // ---- K4 texture (bipolar) ---------------------------------------------
     float k4c = k4 - 0.5f;
@@ -320,9 +328,23 @@ class Vestige : public Module {
     size_t hop = (size_t)((float)glen / overlap_);
     if (hop < VESTIGE_MIN_INTERVAL) hop = VESTIGE_MIN_INTERVAL;
 
-    // Advance the read head at advance_rate_ (1× looper → 0 = frozen freeze).
-    play_pos_[s] += (size_t)((float)hop * advance_rate_);
-    while (play_pos_[s] >= L) play_pos_[s] -= L;
+    // Read-head motion. CCW zone = normal forward 1× loop. Otherwise a backward
+    // auto-scrub that decelerates to a deterministic freeze anchored toward the
+    // END (a grain scan-range in, so the tail plays without wrapping to front).
+    if (freeze_active_) {
+      const float scan       = (float)glen + spray_;          // grain reach
+      float       end_anchor = (float)L - scan;               // deepest safe freeze
+      if (end_anchor < 0.f) end_anchor = 0.f;
+      const float frz  = anchor_frac_ * end_anchor;           // K3-scaled anchor
+      float       ppos = (float)play_pos_[s];
+      ppos -= scrub_back_frac_ * (float)hop;                  // backward drift
+      ppos += (frz - ppos) * anchor_pull_;                    // ease → anchor (freeze at CW)
+      ppos = fmodf(ppos, (float)L); if (ppos < 0.f) ppos += (float)L;
+      play_pos_[s] = (size_t)ppos;
+    } else {
+      play_pos_[s] += hop;                                    // forward 1× loop
+      while (play_pos_[s] >= L) play_pos_[s] -= L;
+    }
 
     // Reset the timer, with a little jitter (small so the freeze stays steady).
     float j = (VestigeRand() * 2.f - 1.f) * jitter_ * 0.6f;
@@ -622,9 +644,13 @@ class Vestige : public Module {
   // Cached K3 grain-macro params (Controls → Process)
   size_t grain_len_    = VESTIGE_CCW_GRAIN_LEN;
   float  overlap_      = VESTIGE_CCW_OVERLAP;
-  float  advance_rate_ = 1.f;   // read-head speed: 1× looper → 0 = frozen freeze
   float  spray_        = 0.f;   // ± phasing spray (samples) around the head
   float  jitter_       = 0.f;   // scheduler timing jitter
+  // K3 backward-scrub / deterministic end-freeze (Controls → ServiceSlot)
+  bool   freeze_active_   = false;
+  float  scrub_back_frac_ = 0.f;  // backward speed as a fraction of hop (1× → 0)
+  float  anchor_frac_     = 0.f;  // freeze anchor position fraction (front → end)
+  float  anchor_pull_     = 0.f;  // ease-toward-anchor coefficient (→ 1 = frozen)
 
   // Topology
   int  target_voices_ = 1;

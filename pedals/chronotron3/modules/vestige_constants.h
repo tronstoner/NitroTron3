@@ -40,6 +40,11 @@ static constexpr size_t VESTIGE_CW_GRAIN_LEN  = 4800;   // 100 ms — tonal free
 // scattering across the whole buffer (random). Tune by ear.
 static constexpr size_t VESTIGE_FREEZE_SPRAY  = 1200;   // ±25 ms phasing spray at full freeze
 static constexpr float  VESTIGE_FREEZE_JITTER = 0.15f;  // small scheduler jitter at freeze
+// K3 travel: a small zone at the very CCW end is the normal forward loop; above
+// it the head auto-scrubs BACKWARD, decelerating to a deterministic freeze
+// anchored toward the END of the buffer (a grain scan-range in). Anchor and
+// scrub speed scale with K3.
+static constexpr float  VESTIGE_K3_LOOP_ZONE  = 0.05f;  // fully-CCW forward-loop zone
 static constexpr size_t VESTIGE_GRAIN_MIN_LEN = 256;
 static constexpr float  VESTIGE_CCW_OVERLAP   = 2.0f;   // Hann overlap-add sums flat → seamless loop
 static constexpr float  VESTIGE_CW_OVERLAP    = 3.0f;   // denser cloud so short grains fuse
