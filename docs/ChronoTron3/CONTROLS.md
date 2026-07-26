@@ -21,19 +21,19 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 
 | Control | Function | Notes |
 |---|---|---|
-| KNOB 1 | Voice count / topology | 1 = parallel · 2–6 = voiced (FIFO, age-fade) · > ~0.86 = frippertronics. Live; never resets playback |
+| KNOB 1 | Voice count / topology | Padded noon = 1 (parallel) · CCW → up to 6 voiced (FIFO, auto age-fade fixed by count) · CW → frippertronics, fade-out grows toward CW. Live; never resets playback |
 | KNOB 2 | Auto-capture threshold | Used in continuous-auto capture; spare in manual |
 | KNOB 3 | Smoothness | CCW = looper (long grains, ordered) → CW = freeze (short grains, full-buffer scatter) |
-| KNOB 4 | Texture | Bipolar, clean at noon: CCW tape saturation/degrade · CW decimation → digital glitch |
-| KNOB 5 | Fade / decay | Age-fade slope (voiced) · overdub decay (frippertronics) |
+| KNOB 4 | Texture | Bipolar, clean at noon: CCW tape saturation (gain-compensated) · CW decimation → digital glitch |
+| KNOB 5 | Loop fade in/out | CCW ≈ instant → CW ~3 s. Fade envelope applied on loop start / stop / mute (all topologies) |
 | KNOB 6 | Dry/wet mix | *(shell)* |
 | SWITCH 1 | Capture mode | UP = manual (hold-record) · MIDDLE = continuous-auto · DOWN = → manual (TBD) |
 | SWITCH 2 | Unused | Free |
 | SWITCH 3 | Mode select | *(shell)* |
-| FOOTSWITCH 1 | Stop | Tap = mute/pause (material kept) · Hold = clear all |
+| FOOTSWITCH 1 | Stop | Tap = mute/pause (material kept; fades via K5) · Hold = clear all |
 | FOOTSWITCH 2 | Engage | Manual: hold = record, release = set loop end · Auto: record-arm toggle · from muted: resume |
-| LED 1 | Record state | solid = recording · fast-blink = auto-armed · off |
-| LED 2 | Play state | solid = playing · slow-blink = muted · off |
+| LED 1 | Play state | solid = playing · slow-blink = muted · off |
+| LED 2 | Record state | solid = recording · fast-blink = auto-armed · off |
 
 ---
 
@@ -57,15 +57,15 @@ Passthrough for now — no spec yet. All controls unused pending design.
 | KNOB 1 | Register | Bipolar: CCW sub · noon unison · CW upper (±1 octave, continuous) |
 | KNOB 2 | Damping | Decay time (T60), short/plucky → long drone. Primary timbre |
 | KNOB 3 | Structure | Comb: allpass dispersion · Modal: inharmonic partial spread |
-| KNOB 4 | Asymmetry | Excitation enrichment, 0 → 0.5 (fills spectral gaps, F3). Sole conditioning control |
-| KNOB 5 | Envelope | Bipolar attack/release of the env-coupled output filter (fast ↔ slow) |
+| KNOB 4 | Asymmetry | Excitation enrichment, 0 → 1.0 (full rectification; fills spectral gaps). Sole conditioning control |
+| KNOB 5 | Filter envelope | Triggered AR envelope (fired by input onset) → 4-pole 24 dB/oct non-resonant LP; closed = muted. Bipolar: CCW fast-atk/long-rel (hit + long tail) · CW slow-atk/fast-rel (swell). Sets perceived decay, decoupled from K2 damping |
 | KNOB 6 | Dry/wet mix | *(shell)* |
-| SWITCH 1 | Resonator core | UP = comb (Karplus-Strong) · MIDDLE → comb · DOWN = modal (bandpass) |
+| SWITCH 1 | Resonator core | UP = comb (Karplus-Strong) · MIDDLE → comb · DOWN = modal (bandpass, 6 partials) |
 | SWITCH 2 | **Note-set behaviour (A/B)** | UP = fixed dense bank (25-note semitone comb) · MIDDLE = mono-tracked voice (follows played pitch) · DOWN = key-quantised multivoice (arpeggiate to stack an in-key chord) |
 | SWITCH 3 | Mode select | *(shell)* |
 | FOOTSWITCH 1 / 2 | Unused | (bootloader gesture still reserved) |
 | LED 1 | Resonator core | dim = comb · bright = modal |
-| LED 2 | Output level | env-follower brightness |
+| LED 2 | Filter envelope | openness of the K5 filter |
 
 **How to smoketest each SW2 behaviour** (play into the pedal — the resonators are
 *excited* by your signal):
