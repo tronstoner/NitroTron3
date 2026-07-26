@@ -21,14 +21,16 @@ static constexpr size_t VESTIGE_VOICE_CAP        = VESTIGE_LOOP_MAX_SAMPLES + VE
 // ---------------------------------------------------------------------------
 // Topology (K1)
 // ---------------------------------------------------------------------------
-static constexpr int    VESTIGE_MAX_VOICES  = 6;      // voiced poly max (slots 0..5)
-static constexpr int    VESTIGE_FRIP_SLOT   = VESTIGE_MAX_VOICES;     // slot 6 = frippertronics buffer
-static constexpr int    VESTIGE_REC_SLOT    = VESTIGE_MAX_VOICES + 1; // slot 7 = dedicated record scratch
-static constexpr int    VESTIGE_SLOTS       = VESTIGE_MAX_VOICES + 2; // 8 slots total
+static constexpr int    VESTIGE_MAX_VOICES   = 6;   // max LIVE voiced (K1 range 1..6)
+static constexpr int    VESTIGE_VOICE_SPARES = 3;   // spare slabs for in-flight fade-outs / crossfades
+static constexpr int    VESTIGE_VOICE_SLABS  = VESTIGE_MAX_VOICES + VESTIGE_VOICE_SPARES; // voiced slabs
+static constexpr int    VESTIGE_FRIP_SLOT    = VESTIGE_VOICE_SLABS;      // frippertronics buffer
+static constexpr int    VESTIGE_REC_SLOT     = VESTIGE_VOICE_SLABS + 1;  // dedicated record scratch
+static constexpr int    VESTIGE_SLOTS        = VESTIGE_VOICE_SLABS + 2;  // total slabs
 // K1 mapping: padded noon = 1 voice; CCW adds voices to 6; CW = frippertronics.
 static constexpr float  VESTIGE_K1_NOON_LO  = 0.44f;  // below → voiced, more voices toward CCW
 static constexpr float  VESTIGE_K1_NOON_HI  = 0.56f;  // above → frippertronics region
-static constexpr int    VESTIGE_GRAINS      = 24;    // shared grain pool (bounds CPU)
+static constexpr int    VESTIGE_GRAINS      = 32;    // shared grain pool (bounds CPU; headroom for spares)
 
 // ---------------------------------------------------------------------------
 // Grain smoothness macro (K3): looper (CCW / 0) → freeze (CW / 1)
