@@ -75,9 +75,9 @@ class Vestige : public Module {
     overlap_      = VESTIGE_CCW_OVERLAP;
     spray_        = 0.f;
     jitter_       = 0.f;
-    freeze_active_   = false;
+    k3_mode_         = kLooper;
     scrub_back_frac_ = 0.f;
-    anchor_frac_     = 0.f;
+    freeze_pos_frac_ = 0.f;
     k3_amt_          = 0.f;
     target_voices_ = 1;
   }
@@ -150,12 +150,22 @@ class Vestige : public Module {
     // Position/direction: a small CCW zone plays the loop forward; above it the
     // head auto-scrubs BACKWARD, decelerating to a deterministic freeze anchored
     // toward the END. Anchor + deceleration scale with K3 travel.
-    k3_amt_          = s;         // first-grain attack softening toward freeze
-    freeze_active_   = (s >= VESTIGE_K3_LOOP_ZONE);
-    float t = (s - VESTIGE_K3_LOOP_ZONE) / (1.f - VESTIGE_K3_LOOP_ZONE);
-    if (t < 0.f) t = 0.f;
-    scrub_back_frac_ = 1.f - t;   // backward scrub speed: ~1× just past CCW → 0 at CW
-    anchor_frac_     = t;         // NEW-buffer scrub START anchor: front (CCW) → end (CW)
+    k3_amt_ = s;                  // first-grain attack softening toward freeze
+    // Position / direction across the K3 travel:
+    //   CCW zone  → normal forward loop.
+    //   zone→noon → backward auto-scrub, decelerating to a HALT at noon.
+    //   noon→CW   → frozen; the freeze point sweeps CENTRE → END (live).
+    if (s < VESTIGE_K3_LOOP_ZONE) {
+      k3_mode_ = kLooper;
+    } else if (s < 0.5f) {
+      k3_mode_ = kScrub;
+      float t2 = (s - VESTIGE_K3_LOOP_ZONE) / (0.5f - VESTIGE_K3_LOOP_ZONE);
+      scrub_back_frac_ = 1.f - t2;          // ~1× just off CCW → 0 at noon
+    } else {
+      k3_mode_ = kFreeze;
+      scrub_back_frac_ = 0.f;
+      freeze_pos_frac_ = (s - 0.5f) * 2.f;  // 0 = centre (noon) → 1 = end (CW)
+    }
 
     // ---- K4 texture (bipolar) ---------------------------------------------
     float k4c = k4 - 0.5f;
@@ -321,27 +331,32 @@ class Vestige : public Module {
     if (--timer_[s] > 0) return;
 
     size_t glen = SlotGrainLen(L);
+
+    // Freeze (noon→CW): pin the head to the LIVE freeze point (centre→end)
+    // before emitting, so the grain reads the current frozen position.
+    if (k3_mode_ == kFreeze) {
+      float end_anchor = (float)L - ((float)glen + spray_);   // deepest safe point
+      if (end_anchor < 0.f) end_anchor = 0.f;
+      float center = 0.5f * (float)L; if (center > end_anchor) center = end_anchor;
+      play_pos_[s] = (size_t)(center + (end_anchor - center) * freeze_pos_frac_);
+    }
+
     EmitGrain(s, glen);
 
-    // Hop = grain/overlap, so overlap stays >= 1 (continuous output) whatever
-    // the loop length. Ordered read advances 1× real time at CCW.
+    // Hop = grain/overlap, so overlap stays >= 1 (continuous output).
     size_t hop = (size_t)((float)glen / overlap_);
     if (hop < VESTIGE_MIN_INTERVAL) hop = VESTIGE_MIN_INTERVAL;
 
-    // Read-head motion. CCW zone = normal forward 1× loop. Otherwise a backward
-    // auto-scrub that decelerates to a deterministic freeze anchored toward the
-    // END (a grain scan-range in, so the tail plays without wrapping to front).
-    if (freeze_active_) {
-      // Backward auto-scrub at the K3 speed (1× → 0 at full CW). The START
-      // position is set once per new buffer (StartFadeIn), NOT here — turning K3
-      // on a running loop only changes scrub speed, it never repositions.
+    if (k3_mode_ == kScrub) {
+      // Backward auto-scrub (CCW→noon); speed per K3, 0 at noon. Live.
       float ppos = (float)play_pos_[s] - scrub_back_frac_ * (float)hop;
       ppos = fmodf(ppos, (float)L); if (ppos < 0.f) ppos += (float)L;
       play_pos_[s] = (size_t)ppos;
-    } else {
+    } else if (k3_mode_ == kLooper) {
       play_pos_[s] += hop;                                    // forward 1× loop
       while (play_pos_[s] >= L) play_pos_[s] -= L;
     }
+    // kFreeze: head pinned above; no advance.
 
     // Reset the timer, with a little jitter (small so the freeze stays steady).
     float j = (VestigeRand() * 2.f - 1.f) * jitter_ * 0.6f;
@@ -453,15 +468,8 @@ class Vestige : public Module {
     fade_gain_[s]   = 0.f;
     fade_target_[s] = 1.f;
     first_grain_[s] = true;   // first grain of this fresh loop starts (near-)instantly
-    // Scrub START position for this fresh buffer: K3-scaled anchor, front → end
-    // (end = a grain scan-range in, so the tail plays without wrapping to front).
-    const size_t L = loop_len_[s];
-    if (L > 0) {
-      const size_t glen = SlotGrainLen(L);
-      float end_anchor = (float)L - ((float)glen + spray_);
-      if (end_anchor < 0.f) end_anchor = 0.f;
-      play_pos_[s] = (size_t)(anchor_frac_ * end_anchor);
-    }
+    // Position isn't anchored here: looper/scrub start from CommitRecording's
+    // play_pos = 0; freeze pins its own live centre→end point in ServiceSlot.
   }
 
   // Copy the loop head into the guard region so grains reading across the loop
@@ -655,9 +663,10 @@ class Vestige : public Module {
   float  spray_        = 0.f;   // ± phasing spray (samples) around the head
   float  jitter_       = 0.f;   // scheduler timing jitter
   // K3 backward-scrub / deterministic end-freeze (Controls → ServiceSlot)
-  bool   freeze_active_   = false;
-  float  scrub_back_frac_ = 0.f;  // backward scrub speed as a fraction of hop (1× → 0)
-  float  anchor_frac_     = 0.f;  // NEW-buffer scrub start anchor (front → end)
+  enum K3Mode { kLooper = 0, kScrub = 1, kFreeze = 2 };
+  K3Mode k3_mode_         = kLooper;
+  float  scrub_back_frac_ = 0.f;  // backward scrub speed frac of hop (CCW→noon, →0 at noon)
+  float  freeze_pos_frac_ = 0.f;  // freeze point: 0 = centre (noon) → 1 = end (CW)
   float  k3_amt_          = 0.f;  // raw K3 (first-grain attack softening toward freeze)
 
   // Topology
