@@ -126,14 +126,14 @@ static constexpr float FENV_REL_MIN_MS = 5.0f;    // noon: snappy release
 static constexpr float FENV_REL_MAX_MS = 3000.0f; // full CW: long tail
 static constexpr float OUTFILT_CLOSED_HZ = 40.0f;   // env=0: filter shut → mutes
 static constexpr float OUTFILT_OPEN_HZ   = 9000.0f; // env=1: filter open
-static constexpr float ONSET_ON          = 0.02f;   // input env above → note-on (gate)
-static constexpr float ONSET_OFF         = 0.008f;  // input env below → note-off (hysteresis)
-// Transient (pluck) detector — retriggers the filter sweep on a fresh attack
-// even during legato (when the level gate never drops). Fast vs slow follower.
-static constexpr float FENV_FAST_MS        = 3.0f;   // fast follower time
-static constexpr float FENV_SLOW_MS        = 80.0f;  // slow follower time
-static constexpr float TRANSIENT_RATIO     = 1.6f;   // fast/slow above this = pluck → retrigger
-static constexpr float TRANSIENT_RATIO_OFF = 1.15f;  // fall below → re-arm (hysteresis)
+// Onset detection matches the proven nitrotron3 attack-sync: a fast 4-pole
+// EnvFollower + hysteresis crossing on the raw passive-bass env scale
+// (~0.02–0.1). A fresh crossing (armed → above ON) retriggers the sweep; the
+// gate holds open while ONSET_OFF is exceeded, so the natural ring-out survives
+// and the filter only releases near silence. OFF is set low for that reason.
+static constexpr float ONSET_ENV_HZ = 80.0f;   // follower cutoff (fast/snappy)
+static constexpr float ONSET_ON     = 0.015f;  // rising past → note-on / retrigger
+static constexpr float ONSET_OFF    = 0.004f;  // fall below → note-off + re-arm
 
 // ---------------------------------------------------------------------------
 // Output limiter (in-spec). Simple mono soft-asymptote peak limiter; the

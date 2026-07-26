@@ -50,7 +50,7 @@ static constexpr uint32_t VESTIGE_FS1_CLEAR_HOLD_MS = 700;  // >= this while hel
 // ---------------------------------------------------------------------------
 // Continuous-auto capture (SW1 MIDDLE)
 // ---------------------------------------------------------------------------
-static constexpr float    VESTIGE_ENV_COEF        = 0.002f; // input |env| one-pole
+static constexpr float    VESTIGE_ENV_COEF        = 0.008f; // input |env| one-pole (~60 Hz; 0.002 was too lazy for onsets/short samples)
 static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K2 CCW: sensitive
 static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K2 CW:  insensitive
 static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold = open * hyst

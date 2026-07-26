@@ -25,6 +25,7 @@
 #include "module.h"
 #include "knob_map.h"          // RemapKnob, MidiToFreq, Mapf
 #include "pitch_tracker.h"     // core/blocks — mono YIN (tracked behaviours)
+#include "env_follower.h"      // core/blocks — fast 4-pole follower (onset detect)
 #include "armitage_constants.h"
 
 // ---------------------------------------------------------------------------
@@ -44,16 +45,15 @@ class Armitage : public Module {
     for (int v = 0; v < armitage_k::MAX_VOICES; v++) modals_[v].Reset();
     tracker_.Init(sr);
     dc_x1_ = dc_y1_ = 0.f;
-    in_env_ = 0.f;
     lim_env_ = 0.f;
     asym_ = 0.f; structure_ = 0.f; register_oct_ = 0.f;
     t60_ = 1.0f;
-    // K5 triggered filter envelope + 4-pole LP.
-    fenv_ = 0.f; fenv_gate_ = false;
+    // Onset envelope (fast 4-pole follower) + K5 gated-AR filter envelope.
+    onset_env_.Init(sr_);
+    onset_env_.SetCutoff(armitage_k::ONSET_ENV_HZ);
+    env_val_ = 0.f;
+    fenv_ = 0.f; fenv_gate_ = false; fenv_armed_ = true;
     fenv_atk_c_ = 0.1f; fenv_rel_c_ = 0.01f;
-    fast_env_ = slow_env_ = 0.f; transient_armed_ = true;
-    fast_coef_ = 1.f - expf(-1.f / (armitage_k::FENV_FAST_MS * 0.001f * sr_));
-    slow_coef_ = 1.f - expf(-1.f / (armitage_k::FENV_SLOW_MS * 0.001f * sr_));
     lp1_ = lp2_ = lp3_ = lp4_ = 0.f;
     g_closed_     = 6.2831853f * armitage_k::OUTFILT_CLOSED_HZ / sr_;
     filt_octaves_ = log2f(armitage_k::OUTFILT_OPEN_HZ / armitage_k::OUTFILT_CLOSED_HZ);
@@ -123,9 +123,9 @@ class Armitage : public Module {
     for (size_t i = 0; i < size; i++) {
       const float x = in[i];
 
-      // Input level follower (for tracker gating + quant note gate).
-      in_env_ += 0.002f * (fabsf(x) - in_env_);
-      tracker_.Feed(x, in_env_);
+      // Onset envelope (fast 4-pole follower) — tracker gate, quant gate, K5.
+      env_val_ = onset_env_.Process(x);
+      tracker_.Feed(x, env_val_);
 
       // --- Conditioning: asymmetric saturation (F3) + DC block. ---
       const float t = tanhf(armitage_k::DRIVE * x);
@@ -147,22 +147,17 @@ class Armitage : public Module {
       // (retriggers each note); sustains at open while the signal is present;
       // note-off → release toward closed. Closed → muted; the release IS the
       // perceived decay, decoupled from resonator damping (K2).
-      // Fast/slow followers → transient (pluck) detector.
-      const float ax2 = fabsf(x);
-      fast_env_ += fast_coef_ * (ax2 - fast_env_);
-      slow_env_ += slow_coef_ * (ax2 - slow_env_);
-      // Level gate = note on/off (handles swells + note-off → release).
-      if (in_env_ > armitage_k::ONSET_ON)  fenv_gate_ = true;
-      if (in_env_ < armitage_k::ONSET_OFF) fenv_gate_ = false;
-      // Transient = a fresh pluck even during legato → restart the sweep.
-      if (transient_armed_ &&
-          fast_env_ > slow_env_ * armitage_k::TRANSIENT_RATIO &&
-          slow_env_ > armitage_k::ONSET_OFF) {
+      // Onset detect: proven hysteresis crossing on the fast env (as the
+      // nitrotron3 attack-sync). A fresh onset restarts the sweep (retrigger);
+      // the gate holds open through the natural ring-out and releases only when
+      // the input falls to near-silence (ONSET_OFF is low for that).
+      if (fenv_armed_ && env_val_ > armitage_k::ONSET_ON) {
         fenv_ = 0.f;             // retrigger: restart the attack sweep
-        fenv_gate_ = true;
-        transient_armed_ = false;
+        fenv_armed_ = false;
+      } else if (!fenv_armed_ && env_val_ < armitage_k::ONSET_OFF) {
+        fenv_armed_ = true;
       }
-      if (fast_env_ < slow_env_ * armitage_k::TRANSIENT_RATIO_OFF) transient_armed_ = true;
+      fenv_gate_ = (env_val_ > armitage_k::ONSET_OFF);
       const float ftgt = fenv_gate_ ? 1.f : 0.f;
       fenv_ += (fenv_gate_ ? fenv_atk_c_ : fenv_rel_c_) * (ftgt - fenv_);
       float fg = g_closed_ * exp2f(fenv_ * filt_octaves_);   // exponential cutoff sweep
@@ -263,7 +258,7 @@ class Armitage : public Module {
 
       case kQuant: {
         // Accumulate distinct in-key notes while a note is playing.
-        if (in_env_ > armitage_k::QUANT_GATE_ENV) {
+        if (env_val_ > armitage_k::QUANT_GATE_ENV) {
           const float q = QuantizeToScale(tracker_.GetMidiNoteContinuous());
           if (q != last_quant_) {
             last_quant_ = q;
@@ -389,14 +384,15 @@ class Armitage : public Module {
   float ap_coeff_ = 0.f;
 
   float dc_x1_ = 0.f, dc_y1_ = 0.f;      // conditioning DC blocker
-  float in_env_ = 0.f;                   // input level follower (onset + tracker gate)
+
+  // Onset envelope (fast 4-pole follower) — shared by tracker/quant/K5 gates.
+  EnvFollower onset_env_;
+  float env_val_ = 0.f;                  // latest onset-env value (read in Controls too)
 
   // K5: gated AR filter envelope (own generator) + 4-pole non-resonant LP.
-  bool  fenv_gate_ = false;              // input gate: note on/off (hysteresis)
+  bool  fenv_gate_ = false;              // sustain gate: input above ONSET_OFF
+  bool  fenv_armed_ = true;              // retrigger arm (hysteresis crossing)
   float fenv_ = 0.f, fenv_atk_c_ = 0.1f, fenv_rel_c_ = 0.01f;
-  // Transient (pluck) detector for retrigger during legato.
-  float fast_env_ = 0.f, slow_env_ = 0.f, fast_coef_ = 0.f, slow_coef_ = 0.f;
-  bool  transient_armed_ = true;
   float lp1_ = 0.f, lp2_ = 0.f, lp3_ = 0.f, lp4_ = 0.f;
   float g_closed_ = 0.f, filt_octaves_ = 1.f;
 
