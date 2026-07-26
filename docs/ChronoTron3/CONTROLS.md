@@ -23,7 +23,7 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 |---|---|---|
 | KNOB 1 | Voice count / topology | Padded noon = 1 (parallel) · CCW → up to 6 voiced (FIFO, auto age-fade fixed by count) · CW → frippertronics, fade-out grows toward CW. Live; never resets playback |
 | KNOB 2 | Auto-capture threshold | Used in continuous-auto capture; spare in manual |
-| KNOB 3 | Scan / freeze | CCW = normal forward loop → turning CW auto-scrubs **backward** through the buffer, decelerating to a **freeze locked toward the END** (a grain scan-range in, so the tail plays without wrapping to the front). Grain diffusion stays alive throughout |
+| KNOB 3 | Scan / freeze | CCW = normal forward loop → turning CW auto-scrubs **backward**, decelerating to a halt (full CW = frozen). The scrub's **start point for a newly-captured buffer** scales with K3 — beginning (CCW) → a grain-scan-range in from the **END** (CW), so a buffer captured at full CW freezes near the end. On a *running* loop, K3 changes only the scrub speed, not the position. Grain diffusion stays alive throughout |
 | KNOB 4 | Texture | Bipolar, clean at noon: CCW tape saturation (gain-compensated) · CW decimation → digital glitch |
 | KNOB 5 | Loop fade in/out | CCW ≈ instant → CW ~3 s. Fade envelope applied on loop start / stop / mute (all topologies) |
 | KNOB 6 | Dry/wet mix | *(shell)* |
