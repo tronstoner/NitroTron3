@@ -110,22 +110,24 @@ static constexpr float T60_MAX_S = 8.0f;    // long drone
 static constexpr float REGISTER_OCT = 1.0f;  // +/- 1 octave of continuous travel
 
 // ---------------------------------------------------------------------------
-// Output filter (K5) — a TRIGGERED envelope (its own AR generator, fired by an
-// input onset — NOT a follower) drives a steep 4-pole (24 dB/oct) non-resonant
-// lowpass on the resonator output. Closed = muted. K5 morphs the AR bipolar:
-//   CCW = fastest attack / longest release  (percussive hit, long tail)
-//   CW  = longest attack / fastest release   (swell in, quick close)
-// So the perceived note DECAY is the filter release — decoupled from resonator
-// damping (K2). Inspired by the Lost+Found topology (not a replica).
+// Output filter (K5) — a GATED AR envelope (its own generator, gated by the
+// input, NOT a follower) drives a steep 4-pole (24 dB/oct) non-resonant lowpass
+// on the resonator output. Closed = muted. Full note-on/off cycle:
+//   input rises past ONSET_ON  → note-on  → attack toward open (retriggers each note)
+//   held above ONSET_OFF       → sustain at open (NO release while signal present)
+//   falls below ONSET_OFF      → note-off → release toward closed
+// K5 is bipolar: noon = shortest attack AND release; CCW stretches the attack,
+// CW stretches the release. Perceived decay = filter release, decoupled from
+// resonator damping (K2). Inspired by the Lost+Found topology (not a replica).
 // ---------------------------------------------------------------------------
-static constexpr float FENV_ATK_FAST_MS  = 1.0f;    // K5 CCW attack (instant hit)
-static constexpr float FENV_ATK_SLOW_MS  = 1000.0f; // K5 CW  attack (slow swell)
-static constexpr float FENV_REL_LONG_MS  = 3000.0f; // K5 CCW release (long tail)
-static constexpr float FENV_REL_SHORT_MS = 30.0f;   // K5 CW  release (quick close)
+static constexpr float FENV_ATK_MIN_MS = 1.0f;    // noon: snappy attack
+static constexpr float FENV_ATK_MAX_MS = 1000.0f; // full CCW: slow swell
+static constexpr float FENV_REL_MIN_MS = 5.0f;    // noon: snappy release
+static constexpr float FENV_REL_MAX_MS = 3000.0f; // full CW: long tail
 static constexpr float OUTFILT_CLOSED_HZ = 40.0f;   // env=0: filter shut → mutes
 static constexpr float OUTFILT_OPEN_HZ   = 9000.0f; // env=1: filter open
-static constexpr float ONSET_ON          = 0.02f;   // input env rising past → trigger
-static constexpr float ONSET_OFF         = 0.008f;  // input env below → re-arm (hysteresis)
+static constexpr float ONSET_ON          = 0.02f;   // input env above → note-on (gate)
+static constexpr float ONSET_OFF         = 0.008f;  // input env below → note-off (hysteresis)
 
 // ---------------------------------------------------------------------------
 // Output limiter (in-spec). Simple mono soft-asymptote peak limiter; the

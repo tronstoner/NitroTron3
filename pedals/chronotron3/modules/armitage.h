@@ -49,7 +49,7 @@ class Armitage : public Module {
     asym_ = 0.f; structure_ = 0.f; register_oct_ = 0.f;
     t60_ = 1.0f;
     // K5 triggered filter envelope + 4-pole LP.
-    fenv_ = 0.f; fenv_phase_ = kRel; fenv_armed_ = true;
+    fenv_ = 0.f; fenv_gate_ = false;
     fenv_atk_c_ = 0.1f; fenv_rel_c_ = 0.01f;
     lp1_ = lp2_ = lp3_ = lp4_ = 0.f;
     g_closed_     = 6.2831853f * armitage_k::OUTFILT_CLOSED_HZ / sr_;
@@ -89,9 +89,16 @@ class Armitage : public Module {
     Smooth(register_oct_, (k1 * 2.f - 1.f) * armitage_k::REGISTER_OCT);
     t60_ = ExpMap(k2, armitage_k::T60_MIN_S, armitage_k::T60_MAX_S);
 
-    // K5 bipolar: CCW fast-atk/long-rel (hit + long tail) → CW slow-atk/fast-rel (swell).
-    const float atk_ms = Mapf(k5, armitage_k::FENV_ATK_FAST_MS, armitage_k::FENV_ATK_SLOW_MS);
-    const float rel_ms = Mapf(k5, armitage_k::FENV_REL_LONG_MS, armitage_k::FENV_REL_SHORT_MS);
+    // K5 bipolar: noon = shortest attack+release; CCW stretches attack, CW
+    // stretches release.
+    float atk_ms, rel_ms;
+    if (k5 < 0.5f) {                                   // CCW → longer attack
+      atk_ms = Mapf((0.5f - k5) * 2.f, armitage_k::FENV_ATK_MIN_MS, armitage_k::FENV_ATK_MAX_MS);
+      rel_ms = armitage_k::FENV_REL_MIN_MS;
+    } else {                                           // CW → longer release
+      atk_ms = armitage_k::FENV_ATK_MIN_MS;
+      rel_ms = Mapf((k5 - 0.5f) * 2.f, armitage_k::FENV_REL_MIN_MS, armitage_k::FENV_REL_MAX_MS);
+    }
     fenv_atk_c_ = OnePoleCoeff(atk_ms);
     fenv_rel_c_ = OnePoleCoeff(rel_ms);
 
@@ -132,18 +139,15 @@ class Armitage : public Module {
         y *= armitage_k::MODAL_MAKEUP * voice_norm_;
       }
 
-      // --- K5 triggered-envelope 4-pole LP (Moog-style, non-resonant). ---
-      // Input onset fires the AR envelope (own generator, not a follower); the
-      // envelope drives the cutoff. Closed → muted; the release IS the decay,
-      // decoupled from resonator damping (K2).
-      if (fenv_armed_ && in_env_ > armitage_k::ONSET_ON) { fenv_phase_ = kAtk; fenv_armed_ = false; }
-      if (in_env_ < armitage_k::ONSET_OFF) fenv_armed_ = true;
-      if (fenv_phase_ == kAtk) {
-        fenv_ += fenv_atk_c_ * (1.f - fenv_);
-        if (fenv_ > 0.99f) fenv_phase_ = kRel;
-      } else {
-        fenv_ += fenv_rel_c_ * (0.f - fenv_);
-      }
+      // --- K5 gated-AR 4-pole LP (Moog-style, non-resonant). ---
+      // Input gate = note on/off (hysteresis). Note-on → attack toward open
+      // (retriggers each note); sustains at open while the signal is present;
+      // note-off → release toward closed. Closed → muted; the release IS the
+      // perceived decay, decoupled from resonator damping (K2).
+      if (in_env_ > armitage_k::ONSET_ON)  fenv_gate_ = true;   // note-on
+      if (in_env_ < armitage_k::ONSET_OFF) fenv_gate_ = false;  // note-off
+      const float ftgt = fenv_gate_ ? 1.f : 0.f;
+      fenv_ += (fenv_gate_ ? fenv_atk_c_ : fenv_rel_c_) * (ftgt - fenv_);
       float fg = g_closed_ * exp2f(fenv_ * filt_octaves_);   // exponential cutoff sweep
       if (fg > 0.99f) fg = 0.99f;
       lp1_ += fg * (y    - lp1_);
@@ -370,10 +374,8 @@ class Armitage : public Module {
   float dc_x1_ = 0.f, dc_y1_ = 0.f;      // conditioning DC blocker
   float in_env_ = 0.f;                   // input level follower (onset + tracker gate)
 
-  // K5: triggered AR filter envelope (own generator) + 4-pole non-resonant LP.
-  enum FenvPhase { kAtk = 0, kRel = 1 };
-  FenvPhase fenv_phase_ = kRel;
-  bool  fenv_armed_ = true;
+  // K5: gated AR filter envelope (own generator) + 4-pole non-resonant LP.
+  bool  fenv_gate_ = false;              // input gate: note on/off (hysteresis)
   float fenv_ = 0.f, fenv_atk_c_ = 0.1f, fenv_rel_c_ = 0.01f;
   float lp1_ = 0.f, lp2_ = 0.f, lp3_ = 0.f, lp4_ = 0.f;
   float g_closed_ = 0.f, filt_octaves_ = 1.f;
