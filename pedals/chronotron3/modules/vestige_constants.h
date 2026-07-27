@@ -74,7 +74,19 @@ static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold =
 static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 80;     // silence held this long ends a phrase
 
 // ---------------------------------------------------------------------------
-// Texture (K4): bipolar, clean at centre
+// K4 = tape varispeed (pitch + speed COUPLED — the whole loop plays faster &
+// higher / slower & lower, like a tape speed knob). Bipolar exp around noon.
+//   CCW → down · noon = unity (dead-zone detent) · CW → up
+// Grains read at this rate AND the loop head advances at it, so pitch and loop
+// period move together. Texture (below) is PARKED while K4 is the pitch knob.
+// ---------------------------------------------------------------------------
+static constexpr float  VESTIGE_PITCH_OCT_DOWN = -1.f;   // full CCW = -1 octave (0.5x)
+static constexpr float  VESTIGE_PITCH_OCT_UP   =  1.f;   // full CW  = +1 octave (2.0x)
+static constexpr float  VESTIGE_PITCH_DEADZONE = 0.04f;  // unity detent half-width around noon
+static constexpr float  VESTIGE_PITCH_SMOOTH   = 0.0006f;// ~35 ms tape-glide on pitch changes
+
+// ---------------------------------------------------------------------------
+// Texture (K4 — PARKED): bipolar, clean at centre
 //   analogue side (CCW) = tape saturation → extreme; digital side (CW) = decimate/crush → glitch
 // ---------------------------------------------------------------------------
 static constexpr float  VESTIGE_TEX_DEADZONE   = 0.06f;  // clean band around noon

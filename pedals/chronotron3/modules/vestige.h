@@ -186,23 +186,22 @@ class Vestige : public Module {
       freeze_pos_frac_ = (s - 0.5f) * 2.f;  // 0 = centre (noon) → 1 = end (CW)
     }
 
-    // ---- K4 texture (bipolar) ---------------------------------------------
+    // ---- K4 = tape varispeed (pitch + speed coupled) ----------------------
+    // Bipolar exp around noon; unity dead-zone detent. Grains read at this rate
+    // and the loop head advances at it (see EmitGrain / ServiceSlot /
+    // AdvanceFripHead) → the whole loop transposes AND changes period, tape-style.
+    // Texture (tape sat / digi crush) is parked while K4 is the pitch knob.
+    tape_amt_ = 0.f; digi_amt_ = 0.f;
     float k4c = k4 - 0.5f;
-    if (fabsf(k4c) < VESTIGE_TEX_DEADZONE) {
-      tape_amt_ = 0.f; digi_amt_ = 0.f;
-    } else if (k4c < 0.f) {                // analogue / tape side
-      float a = (-k4c - VESTIGE_TEX_DEADZONE) / (0.5f - VESTIGE_TEX_DEADZONE);
-      tape_amt_ = VestigeClamp(a, 0.f, 1.f);
-      digi_amt_ = 0.f;
-    } else {                               // digital / decimate side
-      float d = (k4c - VESTIGE_TEX_DEADZONE) / (0.5f - VESTIGE_TEX_DEADZONE);
-      digi_amt_ = VestigeClamp(d, 0.f, 1.f);
-      tape_amt_ = 0.f;
+    if (fabsf(k4c) < VESTIGE_PITCH_DEADZONE) {
+      pitch_rate_ = 1.f;
+    } else {
+      const float span = 0.5f - VESTIGE_PITCH_DEADZONE;
+      float oct = (k4c < 0.f)
+        ? ((-k4c - VESTIGE_PITCH_DEADZONE) / span) * VESTIGE_PITCH_OCT_DOWN
+        : (( k4c - VESTIGE_PITCH_DEADZONE) / span) * VESTIGE_PITCH_OCT_UP;
+      pitch_rate_ = powf(2.f, oct);
     }
-    tape_drive_  = 1.f + tape_amt_ * VESTIGE_TAPE_DRIVE_MAX;
-    tape_makeup_ = 1.f / (0.5f + 0.5f * tape_drive_);  // color, not boost
-    decim_hold_ = 1.f + digi_amt_ * (VESTIGE_DECIM_HOLD_MAX - 1.f);
-    crush_bits_ = Mapf(digi_amt_, VESTIGE_CRUSH_BITS_HI, VESTIGE_CRUSH_BITS_LO);
 
     // ---- K2: auto-capture threshold ---------------------------------------
     auto_thresh_ = Mapf(k2, VESTIGE_AUTO_THRESH_MIN, VESTIGE_AUTO_THRESH_MAX);
@@ -286,6 +285,9 @@ class Vestige : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     for (size_t i = 0; i < size; i++) {
       const float x = in[i];
+
+      // ---- Tape varispeed (K4): one-pole glide so the knob doesn't zip -----
+      pitch_rate_s_ += (pitch_rate_ - pitch_rate_s_) * VESTIGE_PITCH_SMOOTH;
 
       // ---- Frippertronics loop head (single per-sample head) --------------
       // Advance it before record/playback so both reference the same position.
@@ -449,9 +451,12 @@ class Vestige : public Module {
       // Playback advances forward on its OWN (continuous across K3 transitions —
       // snapping it to frip_rec_ jumped the read position when returning from
       // scrub/freeze = a click). Record tracks playback here so overdub is in
-      // time; they only diverge while scrubbing/frozen.
-      frip_head_ += 1.f;
+      // time; they only diverge while scrubbing/frozen. Tape varispeed: the head
+      // moves at pitch_rate_s_, so the loop period follows pitch and the record
+      // head (tracking it) resamples the live input — the intended tape feel.
+      frip_head_ += pitch_rate_s_;
       while (frip_head_ >= (float)L) frip_head_ -= (float)L;
+      while (frip_head_ < 0.f)       frip_head_ += (float)L;
       frip_rec_ = frip_head_;
     }
     play_pos_[s] = (size_t)frip_head_;
@@ -463,6 +468,13 @@ class Vestige : public Module {
     if (--timer_[s] > 0) return;
 
     size_t glen = SlotGrainLen(L);
+    // Varispeed coverage guard: a grain reads glen*rate source samples. Pitched
+    // up it reads further, so cap glen to keep the read inside the wrap-guard's
+    // head-continuation copy (else it wraps through the seam mid-grain = click).
+    if (pitch_rate_s_ > 1.f) {
+      size_t cov = (size_t)((float)VESTIGE_GUARD_SAMPLES / pitch_rate_s_);
+      if (glen > cov) glen = cov;
+    }
     const bool is_frip = (s == VESTIGE_FRIP_SLOT);
 
     // Freeze (noon→CW): pin the head to the LIVE freeze point before emitting.
@@ -489,7 +501,11 @@ class Vestige : public Module {
         ppos = fmodf(ppos, (float)L); if (ppos < 0.f) ppos += (float)L;
         play_pos_[s] = (size_t)ppos;
       } else if (k3_mode_ == kLooper) {
-        play_pos_[s] += hop;                                  // forward 1× loop
+        // Tape varispeed: advance the head at the pitch rate so the loop period
+        // follows pitch (grains are also read at that rate in EmitGrain).
+        size_t adv = (size_t)((float)hop * pitch_rate_s_);
+        if (adv < 1) adv = 1;
+        play_pos_[s] += adv;                                  // forward loop @ rate
         while (play_pos_[s] >= L) play_pos_[s] -= L;
       }
       // kFreeze: head pinned above; no advance.
@@ -539,8 +555,10 @@ class Vestige : public Module {
     // immediately, softened proportionally toward freeze (k3_amt_) to avoid a
     // sharp attack-repeat there. attack_scale 0 = instant, 1 = normal fade-in.
     float atk_scale = first_grain_[s] ? k3_amt_ : 1.f;
-    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s] * ov_comp, 1, 1.0f,
-                       atk_scale);
+    // rate = tape varispeed (K4): the grain reads its window at this rate, so
+    // playback transposes; the head speed above matches it → coupled pitch+time.
+    grains_[g].Trigger(ring_[s], delay, glen, false, pitch_rate_s_,
+                       gain_[s] * ov_comp, 1, 1.0f, atk_scale);
     first_grain_[s] = false;
   }
 
@@ -1007,7 +1025,12 @@ class Vestige : public Module {
   float  frip_od_coef_    = 1.f;   // per-sample one-pole ramp coef (set in Init)
   volatile bool frip_stop_pending_ = false;  // deferred commit: wait for fade-out
 
-  // Texture (K4)
+  // Tape varispeed (K4): pitch + speed coupled. Target set in Controls, glided
+  // per-sample to pitch_rate_s_ (see Process); read by the grain engine + heads.
+  float pitch_rate_   = 1.f;   // target rate (1 = unity)
+  float pitch_rate_s_ = 1.f;   // smoothed (audio-rate tape glide)
+
+  // Texture (K4 — parked while K4 is the pitch knob)
   float tape_amt_ = 0.f, digi_amt_ = 0.f;
   float tape_drive_ = 1.f, tape_makeup_ = 1.f, decim_hold_ = 1.f, crush_bits_ = 16.f;
   float decim_phase_ = 0.f, decim_hold_val_ = 0.f;
