@@ -95,7 +95,19 @@ largely **superseded** by the following; `CONTROLS.md` is the current control ma
 
 - **Frippertronics glitches** — audible glitches remain in frippertronics; needs
   investigation + tweaks (specifics to capture next session). **First task on
-  resume.**
+  resume.** _(Session 2: found several — voiced→fripp carry-over/seam "dang"
+  (removed seeding, buffers now fully separate); overdub was writing at the
+  K3-scanned playback tap so freeze/scrub wrote weirdly (split out a
+  forward-only record head). More by ear.)_
+
+### Exploration paths (parked)
+
+- **Glitched grain-rate recording.** Before the fix above, the fripp overdub
+  wrote at the K3-scanned *playback* tap (the scrub/freeze grain position)
+  instead of a forward record head — so recorded material got smeared, glitched
+  and pitch-shifted by the grain motion. Not without merit: worth revisiting
+  deliberately as an opt-in texture (e.g. a toggle that records *through* the
+  grain scanner for glitch / pitch-shift artifacts). Parked.
 
 ## Decisions taken (liberties — flag if wrong)
 
