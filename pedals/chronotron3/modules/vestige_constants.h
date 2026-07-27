@@ -80,10 +80,18 @@ static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 80;     // silence held this
 // Grains read at this rate AND the loop head advances at it, so pitch and loop
 // period move together. Texture (below) is PARKED while K4 is the pitch knob.
 // ---------------------------------------------------------------------------
-static constexpr float  VESTIGE_PITCH_OCT_DOWN = -1.f;   // full CCW = -1 octave (0.5x)
-static constexpr float  VESTIGE_PITCH_OCT_UP   =  1.f;   // full CW  = +1 octave (2.0x)
-static constexpr float  VESTIGE_PITCH_DEADZONE = 0.04f;  // unity detent half-width around noon
-static constexpr float  VESTIGE_PITCH_SMOOTH   = 0.0006f;// ~35 ms tape-glide on pitch changes
+// K4 quantises to a fixed set of tape-speed ratios (a rotary switch). The set
+// merges just-intonation intervals (fine musical control near unity) with clock
+// divisions (¼…4× reach), overlapping at ½ / 1 / 2. Simple ratios also keep the
+// resampler imaging on harmonics (cleaner than arbitrary fractions). Symmetric:
+// 6 below unity · unity dead-centre (noon) · 6 above. The pitch glide below
+// still carries the tape between stops (portamento, not a zipper step).
+static constexpr float VESTIGE_PITCH_STEPS[] = {
+  0.25f, 1.f/3.f, 0.5f, 2.f/3.f, 0.75f, 0.8f,   // ¼ ⅓ ½ ⅔ ¾ ⅘  (down)
+  1.f,                                          // unity (noon)
+  1.25f, 4.f/3.f, 1.5f, 2.f, 3.f, 4.f };        // 5⁄4 4⁄3 3⁄2 2 3 4 (up)
+static constexpr int   VESTIGE_PITCH_NSTEPS = 13;
+static constexpr float VESTIGE_PITCH_SMOOTH = 0.0006f;   // ~35 ms tape-glide between stops
 // Record head leads the playback tap by this many cells in frippertronics looper
 // mode, like the head gap on a real tape machine. Keeps playback from reading
 // the live write-frontier (where a fractional read at r≠1 blends the just-written

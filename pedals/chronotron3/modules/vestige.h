@@ -192,16 +192,12 @@ class Vestige : public Module {
     // AdvanceFripHead) → the whole loop transposes AND changes period, tape-style.
     // Texture (tape sat / digi crush) is parked while K4 is the pitch knob.
     tape_amt_ = 0.f; digi_amt_ = 0.f;
-    float k4c = k4 - 0.5f;
-    if (fabsf(k4c) < VESTIGE_PITCH_DEADZONE) {
-      pitch_rate_ = 1.f;
-    } else {
-      const float span = 0.5f - VESTIGE_PITCH_DEADZONE;
-      float oct = (k4c < 0.f)
-        ? ((-k4c - VESTIGE_PITCH_DEADZONE) / span) * VESTIGE_PITCH_OCT_DOWN
-        : (( k4c - VESTIGE_PITCH_DEADZONE) / span) * VESTIGE_PITCH_OCT_UP;
-      pitch_rate_ = powf(2.f, oct);
-    }
+    // Quantise K4 to the fixed ratio table (rotary switch). Equal knob travel per
+    // stop; noon (k4=0.5) lands exactly on unity (the centre entry).
+    int pidx = (int)(k4 * (float)(VESTIGE_PITCH_NSTEPS - 1) + 0.5f);
+    if (pidx < 0) pidx = 0;
+    if (pidx >= VESTIGE_PITCH_NSTEPS) pidx = VESTIGE_PITCH_NSTEPS - 1;
+    pitch_rate_ = VESTIGE_PITCH_STEPS[pidx];
 
     // ---- K2: auto-capture threshold ---------------------------------------
     auto_thresh_ = Mapf(k2, VESTIGE_AUTO_THRESH_MIN, VESTIGE_AUTO_THRESH_MAX);
