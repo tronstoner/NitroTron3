@@ -86,11 +86,15 @@ static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 80;     // silence held this
 // resampler imaging on harmonics (cleaner than arbitrary fractions). Symmetric:
 // 6 below unity · unity dead-centre (noon) · 6 above. The pitch glide below
 // still carries the tape between stops (portamento, not a zipper step).
+// Reciprocal-symmetric: every interval is paired with its 1/x on the far side of
+// unity, and the just intervals (M3 5/4, P4 4/3, P5 3/2) are transposed by octave
+// out to ±2 octaves so the outer octaves aren't just bare integers. Gap between
+// 3 and 4 (and its mirror ¼–⅓) is intentional — it mirrors the fifth→octave gap.
 static constexpr float VESTIGE_PITCH_STEPS[] = {
-  0.25f, 1.f/3.f, 0.5f, 2.f/3.f, 0.75f, 0.8f,   // ¼ ⅓ ½ ⅔ ¾ ⅘  (down)
-  1.f,                                          // unity (noon)
-  1.25f, 4.f/3.f, 1.5f, 2.f, 3.f, 4.f };        // 5⁄4 4⁄3 3⁄2 2 3 4 (up)
-static constexpr int   VESTIGE_PITCH_NSTEPS = 13;
+  1.f/4.f, 1.f/3.f, 3.f/8.f, 2.f/5.f, 1.f/2.f, 2.f/3.f, 3.f/4.f, 4.f/5.f, // down
+  1.f,                                                                    // unity
+  5.f/4.f, 4.f/3.f, 3.f/2.f, 2.f, 5.f/2.f, 8.f/3.f, 3.f, 4.f };           // up
+static constexpr int   VESTIGE_PITCH_NSTEPS = 17;
 static constexpr float VESTIGE_PITCH_SMOOTH = 0.0006f;   // ~35 ms tape-glide between stops
 // Record head leads the playback tap by this many cells in frippertronics looper
 // mode, like the head gap on a real tape machine. Keeps playback from reading
