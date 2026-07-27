@@ -805,10 +805,15 @@ class Vestige : public Module {
         if (active_[v] && age_[v] >= best) { best = age_[v]; src = v; }
       if (src >= 0) {
         size_t L = loop_len_[src];
+        // Copy the loop PLUS its already-built wrap-guard, so the fripp seam is
+        // the voiced loop's seamless seam. (Copying only [0,L) and re-running
+        // WriteGuard here crossfaded the head against stale fripp-slab data →
+        // a step at the wrap = the percussive "dang".)
+        size_t copyN = L + VESTIGE_GUARD_SAMPLES;
+        if (copyN > VESTIGE_VOICE_CAP) copyN = VESTIGE_VOICE_CAP;
         float* d = vestige_slab[VESTIGE_FRIP_SLOT];
         float* srcm = vestige_slab[src];
-        for (size_t k = 0; k < L; k++) d[k] = srcm[k];
-        WriteGuard(VESTIGE_FRIP_SLOT, L);
+        for (size_t k = 0; k < copyN; k++) d[k] = srcm[k];
         frip_len_ = L;
       }
     }
