@@ -258,6 +258,10 @@ class Vestige : public Module {
       CommitRecording();
     }
 
+    // Keep the fripp wrap-guard live while overdubbing, so the seam tracks the
+    // decaying/overdubbed loop (no stale, undecayed transient stuck at it).
+    if (fripp_mode_ && recording_ && frip_len_ > 0) RefreshFrippGuard(frip_len_);
+
     // ---- K6 looper volume + SW2 dry routing (vestige owns its output) ------
     // K6: 0 (CCW) → unity (noon) → boost (CW). Sets the looper's level only.
     k6_vol_ = (k6 < 0.5f)
@@ -610,13 +614,13 @@ class Vestige : public Module {
       const int s = rec_slot_;   // == VESTIGE_FRIP_SLOT
       if (frip_len_ > 0) {
         // Overdub pass ended — refresh the wrap-guard, keep playing.
-        WriteGuard(s, frip_len_);
+        RefreshFrippGuard(frip_len_);
         return;
       }
       size_t L = rec_idx_;
       if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
       if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
-      WriteGuard(s, L);
+      RefreshFrippGuard(L);
       loop_len_[s] = L;
       play_pos_[s] = 0;
       timer_[s]    = 0;
@@ -685,6 +689,24 @@ class Vestige : public Module {
   // loop head m[k] fading IN — kills the seam click with no timing change. The
   // remainder is the loop repeated. (Fripp has no overhang → the crossfade
   // degenerates to the head copy, i.e. the old behaviour.)
+  // Rebuild the frippertronics wrap-guard from the CURRENT loop. Unlike the
+  // voiced guard (which crossfades a RECORDED overhang), fripp has no overhang,
+  // so the seam [L, L+xf) bridges the loop's own tail into its head — killing
+  // the end≠start step ("dang"). Called live during overdub so the guard tracks
+  // the decaying/overdubbed loop instead of being a stale, undecayed snapshot
+  // (that snapshot was the transient "stuck" at the seam that never faded).
+  void RefreshFrippGuard(size_t L) {
+    if (L == 0) return;
+    float* m = vestige_slab[VESTIGE_FRIP_SLOT];
+    size_t xf = SeamXfadeLen(L);
+    float tail = m[L - 1];
+    for (size_t k = 0; k < xf; k++) {
+      float t = (float)(k + 1) / (float)(xf + 1);        // 0→1
+      m[L + k] = tail * cosf(t * 1.5707963f) + m[k] * sinf(t * 1.5707963f);
+    }
+    for (size_t k = xf; k < VESTIGE_GUARD_SAMPLES; k++) m[L + k] = m[k % L];
+  }
+
   void WriteGuard(int s, size_t L) {
     float* m = vestige_slab[s];
     size_t xf = SeamXfadeLen(L);
