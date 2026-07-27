@@ -313,26 +313,49 @@ class Vestige : public Module {
           // advances exactly one cell/tick = the original behaviour.
           frip_od_gain_ += frip_od_coef_ * (frip_od_target_ - frip_od_gain_);
           float eff_decay = 1.f + (frip_decay_ - 1.f) * frip_od_gain_;
-          frip_in_acc_ += x;   // accumulate input across the cell(s) swept
-          frip_in_cnt_ += 1;
-          size_t cur = (size_t)frip_rec_;
-          if (cur != frip_rec_prev_idx_) {
-            // Box-averaged input for this span: pitch-down (many ticks per cell)
-            // → anti-aliased; pitch-up (one tick, ≥1 cell) → held across gaps.
-            float in_avg = frip_in_acc_ / (float)frip_in_cnt_;
-            frip_in_acc_ = 0.f; frip_in_cnt_ = 0;
-            const size_t xf = SeamXfadeLen(frip_len_);
-            size_t c = frip_rec_prev_idx_;
-            do {
-              c++; if (c >= frip_len_) c = 0;
-              m[c] = m[c] * eff_decay + in_avg * frip_od_gain_;
-              // Keep the wrap-guard in lock-step at AUDIO rate (a control-rate
-              // refresh lags the fast decay → seam mismatch = a click).
-              if (c >= xf && c < VESTIGE_GUARD_SAMPLES) m[frip_len_ + c] = m[c];
-              if (c + 1 == frip_len_) FrippSeamXfade(m, frip_len_, xf);
-            } while (c != cur);
-            frip_rec_prev_idx_ = cur;
+          const size_t cur = (size_t)frip_rec_;
+          const size_t xf  = SeamXfadeLen(frip_len_);
+          if (pitch_rate_s_ >= 1.f) {
+            // Upsample (rate ≥ 1): the head crossed ≥1 cell this tick. Linear-ramp
+            // the input across the crossed cells (write-side dual of the read's
+            // interpolation) so the tape gets a smooth slope, not a stair-step —
+            // the stair-step is what bakes imaging/aliasing at non-integer rates.
+            // At rate 1 exactly this writes one cell with in=x = the original.
+            if (cur != frip_rec_prev_idx_) {
+              size_t count = (cur + frip_len_ - frip_rec_prev_idx_) % frip_len_;
+              size_t c = frip_rec_prev_idx_;
+              for (size_t k = 1; k <= count; k++) {
+                c++; if (c >= frip_len_) c = 0;
+                float t  = (float)k / (float)count;             // 0→1 across span
+                float in = frip_in_prev_ + (x - frip_in_prev_) * t;
+                m[c] = m[c] * eff_decay + in * frip_od_gain_;
+                // Keep the wrap-guard in lock-step at AUDIO rate (a control-rate
+                // refresh lags the fast decay → seam mismatch = a click).
+                if (c >= xf && c < VESTIGE_GUARD_SAMPLES) m[frip_len_ + c] = m[c];
+                if (c + 1 == frip_len_) FrippSeamXfade(m, frip_len_, xf);
+              }
+              frip_rec_prev_idx_ = cur;
+            }
+            frip_in_acc_ = 0.f; frip_in_cnt_ = 0;   // unused in this regime
+          } else {
+            // Downsample (rate < 1): several ticks map to one cell. Box-average
+            // the input over those ticks (anti-alias the decimation), write once
+            // when the cell advances.
+            frip_in_acc_ += x; frip_in_cnt_ += 1;
+            if (cur != frip_rec_prev_idx_) {
+              float in_avg = frip_in_acc_ / (float)frip_in_cnt_;
+              frip_in_acc_ = 0.f; frip_in_cnt_ = 0;
+              size_t c = frip_rec_prev_idx_;
+              do {
+                c++; if (c >= frip_len_) c = 0;
+                m[c] = m[c] * eff_decay + in_avg * frip_od_gain_;
+                if (c >= xf && c < VESTIGE_GUARD_SAMPLES) m[frip_len_ + c] = m[c];
+                if (c + 1 == frip_len_) FrippSeamXfade(m, frip_len_, xf);
+              } while (c != cur);
+              frip_rec_prev_idx_ = cur;
+            }
           }
+          frip_in_prev_ = x;
           if (frip_stop_pending_ && frip_od_gain_ < 1e-3f) {
             frip_stop_pending_ = false;
             commit_pending_    = true;   // faded out → Controls commits (WriteGuard)
@@ -470,7 +493,13 @@ class Vestige : public Module {
       frip_head_ += pitch_rate_s_;
       while (frip_head_ >= (float)L) frip_head_ -= (float)L;
       while (frip_head_ < 0.f)       frip_head_ += (float)L;
-      frip_rec_ = frip_head_;
+      // Record head leads the play tap (tape-machine head gap) so playback never
+      // reads the live write-frontier. Skip the lead if the loop is too short to
+      // separate them meaningfully.
+      float lead = (float)VESTIGE_FRIP_REC_LEAD;
+      if (lead > (float)L * 0.5f) lead = 0.f;
+      frip_rec_ = frip_head_ + lead;
+      while (frip_rec_ >= (float)L) frip_rec_ -= (float)L;
     }
     play_pos_[s] = (size_t)frip_head_;
   }
@@ -595,7 +624,7 @@ class Vestige : public Module {
       if (frip_len_ > 0) {          // overdub: fade the summed input in (declick)
         frip_od_gain_ = 0.f; frip_od_target_ = 1.f; frip_stop_pending_ = false;
         frip_rec_prev_idx_ = (size_t)frip_rec_;  // seed tape resample cursor
-        frip_in_acc_ = 0.f; frip_in_cnt_ = 0;
+        frip_in_acc_ = 0.f; frip_in_cnt_ = 0; frip_in_prev_ = 0.f;
       }
     } else {
       // Record into a dedicated scratch slot so recording never evicts/mutes a
@@ -1036,6 +1065,7 @@ class Vestige : public Module {
   size_t frip_rec_prev_idx_ = 0;  // last integer cell written (tape resample cursor)
   float  frip_in_acc_ = 0.f;   // input accumulator for box-averaged write (pitch-down)
   int    frip_in_cnt_ = 0;
+  float  frip_in_prev_ = 0.f;  // previous input sample (write-side linear ramp, pitch-up)
   // Frippertronics overdub declick: ramp the summed input in/out over a few ms
   // at record engage/disengage so the sound-on-sound add has no hard step.
   float  frip_od_gain_    = 0.f;   // current overdub input gain (0..1)

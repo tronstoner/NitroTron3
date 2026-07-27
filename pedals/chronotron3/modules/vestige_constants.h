@@ -84,6 +84,11 @@ static constexpr float  VESTIGE_PITCH_OCT_DOWN = -1.f;   // full CCW = -1 octave
 static constexpr float  VESTIGE_PITCH_OCT_UP   =  1.f;   // full CW  = +1 octave (2.0x)
 static constexpr float  VESTIGE_PITCH_DEADZONE = 0.04f;  // unity detent half-width around noon
 static constexpr float  VESTIGE_PITCH_SMOOTH   = 0.0006f;// ~35 ms tape-glide on pitch changes
+// Record head leads the playback tap by this many cells in frippertronics looper
+// mode, like the head gap on a real tape machine. Keeps playback from reading
+// the live write-frontier (where a fractional read at r≠1 blends the just-written
+// cell with a one-revolution-old neighbour = the varispeed record hash).
+static constexpr size_t VESTIGE_FRIP_REC_LEAD  = 240;    // ~5 ms head gap
 
 // ---------------------------------------------------------------------------
 // Texture (K4 — PARKED): bipolar, clean at centre
