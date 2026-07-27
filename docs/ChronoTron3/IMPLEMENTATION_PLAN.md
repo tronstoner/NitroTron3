@@ -38,6 +38,65 @@ looper↔freeze smoothness macro (grain size + position scatter + density
 co-vary; spray window = whole buffer). K1 = voices/topology. K4 = bipolar
 texture (tape degrade ↔ digital glitch). ~8 s SDRAM buffer.
 
+## vestige — as-built progress (2026-07-27)
+
+Iterated hard by ear this session. The stage-1 "Concrete choices" below are now
+largely **superseded** by the following; `CONTROLS.md` is the current control map.
+
+**Short-buffer / grain artifacts**
+- Overhang seam-crossfade: the loop end is set at record-end, then a short
+  overhang (~5 ms) is recorded past it and equal-power-crossfaded into the head
+  — loop period/timing stays exact, no wrap click at any length. See
+  `SHORT_BUFFER_PLAN.md`. Plus a short-buffer spray clamp.
+
+**K3 scan/freeze**
+- Freeze point now sweeps the **whole buffer**: start (noon) → end (full CW);
+  CCW→noon = backward auto-scrub decelerating to a halt.
+
+**Voiced level (gain law)**
+- Power-normalized age-fade by the **actual active-voice count** → the loop holds
+  **constant loudness at any voice count** (single-voice no longer loudest).
+  Age-fade depth is tunable (`VESTIGE_AGE_FADE_DEPTH`). *(Resolves the 1/N-vs-1/√N
+  open item and the age-gain-direction flag.)*
+
+**Frippertronics**
+- Decay travel **reversed**: just past noon ≈ 1 repeat (`FRIP_DECAY_MIN` 0.20) →
+  full CW = infinite sustain.
+- Record in/out **declicked** (overdub input ramp); decay is ramped *with* the
+  overdub gain so auto-record's partial ducking has no amplitude step at seams.
+- **Single-head, phase-locked** playback+record: overdubs land exactly where
+  played (removed the straight-head prototype). One loop head; K3 sets its motion.
+
+**Footswitches**
+- Starting a record **resumes a paused loop** (on record END). FS2 = pure record;
+  resume-without-recording = FS1 tap. FS1-hold clear **keeps** continuous-auto armed.
+
+**K5 fade in/out**
+- Convex **swell** attack + **time-reversed** release (perceptually matched, not
+  just geometrically), bounded durations (`FADE_ATTACK/RELEASE_MAX_S`, 6 s).
+
+**Output routing (K6 / SW2)** — vestige owns its output (`Module::OwnsOutput`)
+- **K6 = looper volume** (CCW silent · noon unity · CW +6 dB), additive:
+  `out = dry + K6·looper`.
+- **SW2 = dry (clean) routing:** UP always on · MID cut while recording/auto-armed
+  · DOWN off. **HARD RULE: the clean path is sacrosanct — never limited/processed;
+  only the wet/looper may be tamed.**
+
+**Voice allocation / stealing**
+- Capture prefers a free slab and retires the oldest live voice (a **crossfade**
+  in single-voice mode). Total *granulating* voices are **capped at
+  `VESTIGE_MAX_VOICES`** (the CPU/grain ceiling); beyond it the oldest is **stolen**
+  — fast-released (`VESTIGE_STEAL_RELEASE_S` ~6 ms, declicked). This fixes the
+  fade-pileup **crackle** (accumulating voices → per-sample `fmodf`×voices overran
+  the audio block, worst in freeze). Zombie-voice bug fixed (unmute no longer
+  resurrects dying voices).
+
+### Known issues / next session
+
+- **Frippertronics glitches** — audible glitches remain in frippertronics; needs
+  investigation + tweaks (specifics to capture next session). **First task on
+  resume.**
+
 ## Decisions taken (liberties — flag if wrong)
 
 - **SW3 order** A/B/C = vestige/mnemonic/Armitage (per your call, provisional).
