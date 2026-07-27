@@ -360,10 +360,49 @@ class Vestige : public Module {
             frip_stop_pending_ = false;
             commit_pending_    = true;   // faded out → Controls commits (WriteGuard)
           }
+        } else if (fripp_mode_) {
+          // Frippertronics FIRST capture: lay the input onto the tape through the
+          // same rate-r resampler as overdubs (tape speed sets the recording
+          // density — the ONE thing that used to differ). The record head grows
+          // forward from 0 (no wrap, no guard, no decay: empty buffer); the loop
+          // length = the cells the head sweeps. The seam is synthesised at commit
+          // (RefreshFrippGuard), so no overhang here. Consequence, by design: the
+          // faster the tape, the sooner it fills → shorter max window (real tape).
+          frip_rec_ += pitch_rate_s_;
+          const size_t cur = (size_t)frip_rec_;
+          if (pitch_rate_s_ >= 1.f) {
+            if (cur != frip_rec_prev_idx_) {
+              size_t count = cur - frip_rec_prev_idx_;      // forward, no wrap
+              size_t c = frip_rec_prev_idx_;
+              for (size_t k = 1; k <= count; k++) {
+                c++;
+                if (c >= VESTIGE_VOICE_CAP) { rec_full_ = true; break; }
+                float t = (float)k / (float)count;          // 0→1 linear ramp
+                m[c] = frip_in_prev_ + (x - frip_in_prev_) * t;
+              }
+              frip_rec_prev_idx_ = cur;
+            }
+            frip_in_acc_ = 0.f; frip_in_cnt_ = 0;   // unused in this regime
+          } else {
+            frip_in_acc_ += x; frip_in_cnt_ += 1;
+            if (cur != frip_rec_prev_idx_) {
+              float in_avg = frip_in_acc_ / (float)frip_in_cnt_;
+              frip_in_acc_ = 0.f; frip_in_cnt_ = 0;
+              size_t c = frip_rec_prev_idx_;
+              while (c != cur) {
+                c++;
+                if (c >= VESTIGE_VOICE_CAP) { rec_full_ = true; break; }
+                m[c] = in_avg;
+              }
+              frip_rec_prev_idx_ = cur;
+            }
+          }
+          frip_in_prev_ = x;
+          rec_idx_ = cur;                             // growing loop length
+          if (rec_idx_ >= VESTIGE_LOOP_MAX_SAMPLES) rec_full_ = true;
         } else {
-          // Linear capture (voiced, or frippertronics first pass). After the
-          // record end (pending_len_ set) we keep writing a short overhang for
-          // the seam crossfade, then flag commit.
+          // Linear capture (voiced only). After the record end (pending_len_ set)
+          // we keep writing a short overhang for the seam crossfade, then commit.
           m[rec_idx_] = x;
           rec_idx_++;
           if (overhang_left_ > 0) {
@@ -624,6 +663,9 @@ class Vestige : public Module {
       if (frip_len_ > 0) {          // overdub: fade the summed input in (declick)
         frip_od_gain_ = 0.f; frip_od_target_ = 1.f; frip_stop_pending_ = false;
         frip_rec_prev_idx_ = (size_t)frip_rec_;  // seed tape resample cursor
+        frip_in_acc_ = 0.f; frip_in_cnt_ = 0; frip_in_prev_ = 0.f;
+      } else {                      // first capture: record head grows from 0 at rate r
+        frip_rec_ = 0.f; frip_rec_prev_idx_ = 0;
         frip_in_acc_ = 0.f; frip_in_cnt_ = 0; frip_in_prev_ = 0.f;
       }
     } else {
