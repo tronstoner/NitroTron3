@@ -98,6 +98,12 @@ static constexpr float  VESTIGE_FADE_RELEASE_MAX_S = 6.0f;  // K5 CW: fade-out f
 // → boost at CW), SW2 = dry (clean) routing. Both gains one-pole smoothed.
 static constexpr float  VESTIGE_LOOP_BOOST_MAX = 2.0f;   // K6 full CW = +6 dB on the looper
 static constexpr float  VESTIGE_ROUTING_SMOOTH = 0.003f; // ~7 ms smoothing for K6 / dry-gate
+// Concurrent-voice cap: total granulating voiced voices (live + fading) is
+// bounded to VESTIGE_MAX_VOICES — the pre-regression ceiling the CPU/grain pool
+// handled fine. Beyond it, the oldest is "stolen": fast-released over
+// VESTIGE_STEAL_RELEASE_S (declicked) so its slab frees quickly. Classic
+// synth-style voice-stealing — a new note reclaims the oldest, cutting its tail.
+static constexpr float  VESTIGE_STEAL_RELEASE_S = 0.006f; // fast release on voice-steal (~6 ms)
 static constexpr float  VESTIGE_FRIP_OD_RAMP_S = 0.005f; // overdub input fade in/out (declick record in/out)
 static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.20f;  // fast tape decay (frippertronics, just past noon, ~1 repeat)
 static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (frippertronics, full CW)

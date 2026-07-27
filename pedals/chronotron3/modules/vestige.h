@@ -59,6 +59,7 @@ class Vestige : public Module {
   void Init(float sr) override {
     sr_ = sr;
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
+    steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
       ring_[s].Init(vestige_slab[s], VESTIGE_VOICE_CAP);  // memsets the slab
       loop_len_[s] = 0;
@@ -70,7 +71,7 @@ class Vestige : public Module {
       fade_gain_[s]   = 0.f;
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
-      if (s < VESTIGE_VOICE_SLABS) dying_[s] = false;
+      if (s < VESTIGE_VOICE_SLABS) { dying_[s] = false; stolen_[s] = false; }
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) { grain_src_[g] = &ring_[0]; grain_slot_[g] = 0; }
     // Sensible defaults so Process is silent before the first Controls pass.
@@ -212,7 +213,10 @@ class Vestige : public Module {
       if (!clear_latched_ && f1.held_ms <= VESTIGE_FS1_TAP_MAX_MS) {
         muted_ = !muted_;   // tap: toggle mute (fades out/in over K5 time)
         for (int s = 0; s < VESTIGE_SLOTS; s++)
-          if (active_[s]) SetFade(s, muted_ ? 0.f : 1.f);
+          // Don't touch dying voices — resurrecting their fade would strand them
+          // active forever (they'd never hit the free condition).
+          if (active_[s] && !(s < VESTIGE_VOICE_SLABS && dying_[s]))
+            SetFade(s, muted_ ? 0.f : 1.f);
       }
       clear_latched_ = false;
     }
@@ -337,8 +341,10 @@ class Vestige : public Module {
         // over the (attack|release) time; fade_from_ is the gain the fade
         // started at, so an interrupted fade resumes smoothly with no jump.
         const bool rising = (fade_target_[s] > 0.5f);
+        // Stolen (fast-released) voices fade out at steal_inc_, not the K5 rate.
+        const bool fast = (s < VESTIGE_VOICE_SLABS && stolen_[s]);
         if (fade_phase_[s] < 1.f) {
-          fade_phase_[s] += rising ? atk_inc_ : rel_inc_;
+          fade_phase_[s] += rising ? atk_inc_ : (fast ? steal_inc_ : rel_inc_);
           if (fade_phase_[s] > 1.f) fade_phase_[s] = 1.f;
         }
         const float p = fade_phase_[s];
@@ -356,7 +362,8 @@ class Vestige : public Module {
         // Free a retired (dying) voiced slot once its fade-out has completed.
         if (s < VESTIGE_VOICE_SLABS && dying_[s] &&
             fade_target_[s] < 0.5f && fade_phase_[s] >= 1.f) {
-          active_[s] = false; dying_[s] = false; loop_len_[s] = 0; gain_[s] = 0.f;
+          active_[s] = false; dying_[s] = false; stolen_[s] = false;
+          loop_len_[s] = 0; gain_[s] = 0.f;
         }
       }
 
@@ -517,7 +524,8 @@ class Vestige : public Module {
     if (!muted_) return;
     muted_ = false;
     for (int s = 0; s < VESTIGE_SLOTS; s++)
-      if (active_[s]) SetFade(s, 1.f);
+      if (active_[s] && !(s < VESTIGE_VOICE_SLABS && dying_[s]))
+        SetFade(s, 1.f);   // don't resurrect dying voices
   }
 
   void StartRecording() {
@@ -619,7 +627,7 @@ class Vestige : public Module {
     // has spares, so this is where the crossfade lives. Only a full pool (6
     // active) forces reuse of the oldest slab (declick handled in Commit B).
     int target = FindFreeSlot();
-    if (target < 0) target = EvictOldest();   // full pool: hard reuse (for now)
+    if (target < 0) { target = EvictOldest(); KillSlotGrains(target); }  // last resort
 
     memcpy(vestige_slab[target], vestige_slab[VESTIGE_REC_SLOT], copy * sizeof(float));
     WriteGuard(target, L);      // crossfades the overhang into the loop head
@@ -639,6 +647,10 @@ class Vestige : public Module {
       if (o < 0 || o == target) break;
       StartDying(o);
     }
+    // Bound total granulating voices to the CPU/grain ceiling: steal (fast-
+    // release) the oldest tails beyond it. This is what keeps a long fade + fast
+    // captures from piling up ~9 voices and overrunning the audio block.
+    EnforceVoiceCap();
     pending_len_ = 0; overhang_left_ = 0;
     UpdateVoicedGains();
   }
@@ -708,6 +720,40 @@ class Vestige : public Module {
     if (s < 0 || dying_[s]) return;
     dying_[s] = true;
     SetFade(s, 0.f);   // release over K5
+  }
+
+  // Concurrency cap: count/find the oldest voice that is NOT already being
+  // fast-released. Total granulating voices are bounded to VESTIGE_MAX_VOICES
+  // (the pre-regression CPU/grain ceiling); the excess oldest gets stolen.
+  int CountUnstolen() const {
+    int n = 0;
+    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (active_[v] && !stolen_[v]) n++;
+    return n;
+  }
+  int OldestUnstolen() const {
+    int oldest = -1; uint32_t best = 0xFFFFFFFFu;
+    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++)
+      if (active_[v] && !stolen_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
+    return oldest;
+  }
+  // Steal a voice: fast-release it (declicked) so its slab frees quickly.
+  void StealVoice(int s) {
+    if (s < 0) return;
+    stolen_[s] = true;
+    if (!dying_[s]) { dying_[s] = true; SetFade(s, 0.f); }
+  }
+  // Keep total granulating voices within the CPU/grain budget by stealing the
+  // oldest not-already-stolen voice until the count is back under the cap.
+  void EnforceVoiceCap() {
+    while (CountUnstolen() > VESTIGE_MAX_VOICES) {
+      int o = OldestUnstolen();
+      if (o < 0) break;
+      StealVoice(o);
+    }
+  }
+  void KillSlotGrains(int s) {
+    for (int g = 0; g < VESTIGE_GRAINS; g++)
+      if (grain_slot_[g] == s) grains_[g] = GrainVoice{};   // deactivate
   }
 
   void EvictToTarget() {
@@ -813,7 +859,7 @@ class Vestige : public Module {
       fade_gain_[s]   = 0.f;   // silence immediately (no fade)
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
-      if (s < VESTIGE_VOICE_SLABS) dying_[s] = false;
+      if (s < VESTIGE_VOICE_SLABS) { dying_[s] = false; stolen_[s] = false; }
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
@@ -871,7 +917,9 @@ class Vestige : public Module {
   size_t     play_pos_[VESTIGE_SLOTS] = {0};
   int        timer_[VESTIGE_SLOTS]    = {0};
   bool       active_[VESTIGE_SLOTS]   = {false};
-  bool       dying_[VESTIGE_VOICE_SLABS] = {false};  // voiced slot fading out → free when silent
+  bool       dying_[VESTIGE_VOICE_SLABS]  = {false}; // voiced slot fading out → free when silent
+  bool       stolen_[VESTIGE_VOICE_SLABS] = {false}; // dying voice being fast-released (voice-steal)
+  float      steal_inc_ = 1.f;                        // fast-release phase step for stolen voices
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
   bool       first_grain_[VESTIGE_SLOTS] = {false};  // next grain skips its fade-in
