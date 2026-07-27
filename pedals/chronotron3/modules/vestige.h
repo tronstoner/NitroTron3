@@ -528,12 +528,16 @@ class Vestige : public Module {
       frip_head_ += pitch_rate_s_;
       while (frip_head_ >= (float)L) frip_head_ -= (float)L;
       while (frip_head_ < 0.f)       frip_head_ += (float)L;
-      // Record head leads the play tap (tape-machine head gap) so playback never
-      // reads the live write-frontier. Skip the lead if the loop is too short to
-      // separate them meaningfully.
-      float lead = (float)VESTIGE_FRIP_REC_LEAD;
-      if (lead > (float)L * 0.5f) lead = 0.f;
-      frip_rec_ = frip_head_ + lead;
+      // Record head TRAILS the play tap by a small gap (tape-machine head gap):
+      // the read passes each spot first, the write overwrites it a moment later,
+      // so playback returns the PREVIOUS revolution's content — an overdub comes
+      // back one loop later (real looper), not as a slapback that combs against
+      // the clean signal. Grains also read forward, away from the trailing write-
+      // frontier → the varispeed hash stays fixed. Skip if the loop is too short.
+      float gap = (float)VESTIGE_FRIP_HEAD_GAP;
+      if (gap > (float)L * 0.5f) gap = 0.f;
+      frip_rec_ = frip_head_ - gap;
+      while (frip_rec_ < 0.f)       frip_rec_ += (float)L;
       while (frip_rec_ >= (float)L) frip_rec_ -= (float)L;
     }
     play_pos_[s] = (size_t)frip_head_;

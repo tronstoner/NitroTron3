@@ -96,11 +96,12 @@ static constexpr float VESTIGE_PITCH_STEPS[] = {
   5.f/4.f, 4.f/3.f, 3.f/2.f, 2.f, 5.f/2.f, 8.f/3.f, 3.f, 4.f };           // up
 static constexpr int   VESTIGE_PITCH_NSTEPS = 17;
 static constexpr float VESTIGE_PITCH_SMOOTH = 0.0006f;   // ~35 ms tape-glide between stops
-// Record head leads the playback tap by this many cells in frippertronics looper
-// mode, like the head gap on a real tape machine. Keeps playback from reading
-// the live write-frontier (where a fractional read at r≠1 blends the just-written
-// cell with a one-revolution-old neighbour = the varispeed record hash).
-static constexpr size_t VESTIGE_FRIP_REC_LEAD  = 240;    // ~5 ms head gap
+// Record head LAGS the playback tap by this many cells in frippertronics looper
+// mode, like the head gap on a real tape machine. Playback therefore reads the
+// PREVIOUS revolution's content — an overdub returns one loop later (real looper
+// behaviour), not as a short slapback that combs against the clean signal — and
+// reads away from the live write-frontier (also the varispeed record-hash fix).
+static constexpr size_t VESTIGE_FRIP_HEAD_GAP  = 240;    // ~5 ms head gap
 
 // ---------------------------------------------------------------------------
 // Texture (K4 — PARKED): bipolar, clean at centre
