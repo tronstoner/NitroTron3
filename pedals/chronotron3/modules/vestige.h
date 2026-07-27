@@ -84,7 +84,7 @@ class Vestige : public Module {
     freeze_pos_frac_ = 0.f;
     k3_amt_          = 0.f;
     target_voices_ = 1;
-    frip_head_ = 0.f;
+    frip_head_ = 0.f; frip_rec_ = 0.f;
   }
 
   void Activate() override {
@@ -96,7 +96,7 @@ class Vestige : public Module {
     rec_full_  = false;
     commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
     frip_od_gain_ = 0.f; frip_od_target_ = 0.f; frip_stop_pending_ = false;
-    frip_head_ = 0.f;
+    frip_head_ = 0.f; frip_rec_ = 0.f;
   }
 
   // -------------------------------------------------------------------------
@@ -300,7 +300,7 @@ class Vestige : public Module {
           // ramped WITH it (eff_decay: 1.0 when faded out → matches the
           // untouched loop, real decay at full overdub) so auto-record's
           // partial ducking has no amplitude step at its seams.
-          size_t idx = (size_t)frip_head_;
+          size_t idx = (size_t)frip_rec_;   // write at the forward record phase
           frip_od_gain_ += frip_od_coef_ * (frip_od_target_ - frip_od_gain_);
           float eff_decay = 1.f + (frip_decay_ - 1.f) * frip_od_gain_;
           m[idx] = m[idx] * eff_decay + x * frip_od_gain_;
@@ -415,16 +415,24 @@ class Vestige : public Module {
   void AdvanceFripHead() {
     const int    s = VESTIGE_FRIP_SLOT;
     const size_t L = frip_len_;
+    // Record phase: ALWAYS advances forward at rate 1.0 (a normal tape write
+    // head), independent of K3. Overdub writes here, so recording lays material
+    // forward through the buffer even while playback scrubs or freezes.
+    frip_rec_ += 1.f;
+    while (frip_rec_ >= (float)L) frip_rec_ -= (float)L;
+    // Playback tap: K3 scans it. CCW tracks the record phase (overdub lands in
+    // time); CCW→noon scrubs backward; noon→CW pins to the live freeze point.
     if (k3_mode_ == kFreeze) {
       size_t glen = SlotGrainLen(L);
       float end_anchor = (float)L - ((float)glen + spray_);
       if (end_anchor < 0.f) end_anchor = 0.f;
       frip_head_ = end_anchor * freeze_pos_frac_;          // pinned freeze point
-    } else {
-      float rate = (k3_mode_ == kLooper) ? 1.f : -scrub_back_frac_;
-      frip_head_ += rate;
+    } else if (k3_mode_ == kScrub) {
+      frip_head_ -= scrub_back_frac_;
       while (frip_head_ >= (float)L) frip_head_ -= (float)L;
       while (frip_head_ < 0.f)      frip_head_ += (float)L;
+    } else {  // kLooper
+      frip_head_ = frip_rec_;                              // playback == record
     }
     play_pos_[s] = (size_t)frip_head_;
   }
@@ -610,6 +618,7 @@ class Vestige : public Module {
       age_[s]      = ++age_counter_;
       frip_len_    = L;
       frip_head_   = 0.f;         // play the fresh loop from the top
+      frip_rec_    = 0.f;         // record phase starts at the top too
       StartFadeIn(s);
       return;
     }
@@ -853,7 +862,7 @@ class Vestige : public Module {
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
-    frip_head_ = 0.f;
+    frip_head_ = 0.f; frip_rec_ = 0.f;
     muted_    = false;
     // NB: auto_armed_ is intentionally preserved — clearing the loop should not
     // disarm continuous-auto if it was armed.
@@ -947,7 +956,8 @@ class Vestige : public Module {
   // read from it, so overdubs land exactly where they were played. K3 sets its
   // motion (forward / backward scrub / frozen). Voiced slots keep their own
   // per-emit play_pos_ — this is frip-only.
-  float  frip_head_   = 0.f;
+  float  frip_head_   = 0.f;   // playback tap (K3-scanned: loop / scrub / freeze)
+  float  frip_rec_    = 0.f;   // record phase (always forward; overdub writes here)
   // Frippertronics overdub declick: ramp the summed input in/out over a few ms
   // at record engage/disengage so the sound-on-sound add has no hard step.
   float  frip_od_gain_    = 0.f;   // current overdub input gain (0..1)
