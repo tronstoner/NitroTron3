@@ -94,6 +94,7 @@ static constexpr float  VESTIGE_AGE_FADE_DEPTH     = 0.4f;
 // they share one scale and their ratio is explicit — no runaway one-pole tail.
 static constexpr float  VESTIGE_FADE_ATTACK_MAX_S  = 6.0f;  // K5 CW: swell-in finishes in this
 static constexpr float  VESTIGE_FADE_RELEASE_MAX_S = 6.0f;  // K5 CW: fade-out finishes in this (symmetric)
+static constexpr float  VESTIGE_FADE_MIN_S         = 0.003f; // K5 CCW floor: declick, not a 1-sample step (voice-steal click)
 // Output routing (vestige owns its mix): K6 = looper volume (0 → unity at noon
 // → boost at CW), SW2 = dry (clean) routing. Both gains one-pole smoothed.
 static constexpr float  VESTIGE_LOOP_BOOST_MAX = 2.0f;   // K6 full CW = +6 dB on the looper

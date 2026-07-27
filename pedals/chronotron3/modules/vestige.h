@@ -151,8 +151,12 @@ class Vestige : public Module {
     // = convex swell over atk_s, release = concave "dies-away" over rel_s.
     float atk_s = Mapf(k5, 0.f, VESTIGE_FADE_ATTACK_MAX_S);
     float rel_s = Mapf(k5, 0.f, VESTIGE_FADE_RELEASE_MAX_S);
-    atk_inc_ = (atk_s < 1e-4f) ? 1.f : 1.f / (atk_s * sr_);
-    rel_inc_ = (rel_s < 1e-4f) ? 1.f : 1.f / (rel_s * sr_);
+    // Floor at a short declick so K5 hard-CCW is "instant" but not a 1-sample
+    // step — a voice-steal (old cut / new started with no fade) clicks otherwise.
+    if (atk_s < VESTIGE_FADE_MIN_S) atk_s = VESTIGE_FADE_MIN_S;
+    if (rel_s < VESTIGE_FADE_MIN_S) rel_s = VESTIGE_FADE_MIN_S;
+    atk_inc_ = 1.f / (atk_s * sr_);
+    rel_inc_ = 1.f / (rel_s * sr_);
 
     // ---- K3 smoothness macro ----------------------------------------------
     const float s = k3;                    // 0 = looper (CCW), 1 = freeze (CW)
