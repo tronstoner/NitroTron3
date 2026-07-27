@@ -432,7 +432,13 @@ class Vestige : public Module {
       while (frip_head_ >= (float)L) frip_head_ -= (float)L;
       while (frip_head_ < 0.f)      frip_head_ += (float)L;
     } else {  // kLooper
-      frip_head_ = frip_rec_;                              // playback == record
+      // Playback advances forward on its OWN (continuous across K3 transitions —
+      // snapping it to frip_rec_ jumped the read position when returning from
+      // scrub/freeze = a click). Record tracks playback here so overdub is in
+      // time; they only diverge while scrubbing/frozen.
+      frip_head_ += 1.f;
+      while (frip_head_ >= (float)L) frip_head_ -= (float)L;
+      frip_rec_ = frip_head_;
     }
     play_pos_[s] = (size_t)frip_head_;
   }
