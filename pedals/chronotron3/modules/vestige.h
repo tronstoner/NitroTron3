@@ -301,24 +301,37 @@ class Vestige : public Module {
       if (recording_) {
         float* m = vestige_slab[rec_slot_];
         if (fripp_mode_ && frip_len_ > 0) {
-          // Overdub (sound-on-sound) writes at the loop head, so the phrase
-          // lands where it's played. Decay existing, add ramped input. The
-          // input ramp (frip_od_gain_) declicks record in/out; the decay is
-          // ramped WITH it (eff_decay: 1.0 when faded out → matches the
-          // untouched loop, real decay at full overdub) so auto-record's
-          // partial ducking has no amplitude step at its seams.
-          size_t idx = (size_t)frip_rec_;   // write at the forward record phase
+          // Overdub (sound-on-sound), tape-style. The record head frip_rec_
+          // moves at the varispeed rate, so we RESAMPLE the live input onto
+          // every buffer cell the head sweeps this sample rather than writing
+          // one sample per tick (which left gaps pitched-up / accumulated in
+          // one cell pitched-down = the glitch). Decay existing, add ramped
+          // input. The input ramp (frip_od_gain_) declicks record in/out; the
+          // decay is ramped WITH it (eff_decay: 1.0 when faded out → matches
+          // the untouched loop, real decay at full overdub) so auto-record's
+          // partial ducking has no amplitude step at its seams. At rate 1 this
+          // advances exactly one cell/tick = the original behaviour.
           frip_od_gain_ += frip_od_coef_ * (frip_od_target_ - frip_od_gain_);
           float eff_decay = 1.f + (frip_decay_ - 1.f) * frip_od_gain_;
-          m[idx] = m[idx] * eff_decay + x * frip_od_gain_;
-          // Keep the wrap-guard in lock-step with the loop at AUDIO rate (a
-          // control-rate refresh lags the fast decay → a seam mismatch = the
-          // during-record click). Mirror the just-written body sample into the
-          // guard; recompute the seam crossfade the moment the tail is written.
-          {
-            size_t xf = SeamXfadeLen(frip_len_);
-            if (idx >= xf && idx < VESTIGE_GUARD_SAMPLES) m[frip_len_ + idx] = m[idx];
-            if (idx + 1 == frip_len_) FrippSeamXfade(m, frip_len_, xf);
+          frip_in_acc_ += x;   // accumulate input across the cell(s) swept
+          frip_in_cnt_ += 1;
+          size_t cur = (size_t)frip_rec_;
+          if (cur != frip_rec_prev_idx_) {
+            // Box-averaged input for this span: pitch-down (many ticks per cell)
+            // → anti-aliased; pitch-up (one tick, ≥1 cell) → held across gaps.
+            float in_avg = frip_in_acc_ / (float)frip_in_cnt_;
+            frip_in_acc_ = 0.f; frip_in_cnt_ = 0;
+            const size_t xf = SeamXfadeLen(frip_len_);
+            size_t c = frip_rec_prev_idx_;
+            do {
+              c++; if (c >= frip_len_) c = 0;
+              m[c] = m[c] * eff_decay + in_avg * frip_od_gain_;
+              // Keep the wrap-guard in lock-step at AUDIO rate (a control-rate
+              // refresh lags the fast decay → seam mismatch = a click).
+              if (c >= xf && c < VESTIGE_GUARD_SAMPLES) m[frip_len_ + c] = m[c];
+              if (c + 1 == frip_len_) FrippSeamXfade(m, frip_len_, xf);
+            } while (c != cur);
+            frip_rec_prev_idx_ = cur;
           }
           if (frip_stop_pending_ && frip_od_gain_ < 1e-3f) {
             frip_stop_pending_ = false;
@@ -581,6 +594,8 @@ class Vestige : public Module {
       rec_idx_  = (frip_len_ > 0) ? play_pos_[VESTIGE_FRIP_SLOT] : 0; // overdub syncs to playback
       if (frip_len_ > 0) {          // overdub: fade the summed input in (declick)
         frip_od_gain_ = 0.f; frip_od_target_ = 1.f; frip_stop_pending_ = false;
+        frip_rec_prev_idx_ = (size_t)frip_rec_;  // seed tape resample cursor
+        frip_in_acc_ = 0.f; frip_in_cnt_ = 0;
       }
     } else {
       // Record into a dedicated scratch slot so recording never evicts/mutes a
@@ -1018,6 +1033,9 @@ class Vestige : public Module {
   // per-emit play_pos_ — this is frip-only.
   float  frip_head_   = 0.f;   // playback tap (K3-scanned: loop / scrub / freeze)
   float  frip_rec_    = 0.f;   // record phase (always forward; overdub writes here)
+  size_t frip_rec_prev_idx_ = 0;  // last integer cell written (tape resample cursor)
+  float  frip_in_acc_ = 0.f;   // input accumulator for box-averaged write (pitch-down)
+  int    frip_in_cnt_ = 0;
   // Frippertronics overdub declick: ramp the summed input in/out over a few ms
   // at record engage/disengage so the sound-on-sound add has no hard step.
   float  frip_od_gain_    = 0.f;   // current overdub input gain (0..1)
