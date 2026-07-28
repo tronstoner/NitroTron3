@@ -34,14 +34,17 @@ static constexpr float MNEMD_XFADE_MS   = 10.f; // chain-switch crossfade agains
 
 // --- BBD (spec §3) ---
 static constexpr float MNEMD_FCLK_D0  = 48000.f;   // f_clk at d=0
-static constexpr float MNEMD_FCLK_D1  = 9000.f;    // f_clk at d=1 (exp map)
-static constexpr float MNEMD_BBD_AA   = 0.40f;     // input/recon LPF factor x f_clk
-static constexpr float MNEMD_BBD_LOSS = 0.30f;     // stage-loss LPF factor x f_clk
+static constexpr float MNEMD_FCLK_D1  = 2500.f;    // f_clk at d=1 (exp map) — pushed way down so full-CCW is a true lo-fi extreme (old "good" ~5.5k now lands mid-travel)
+static constexpr float MNEMD_BBD_AA   = 0.35f;     // input/recon LPF factor x f_clk — lower = less ZOH imaging fizz, more muffled (less "decimator")
+static constexpr float MNEMD_BBD_LOSS = 0.28f;     // stage-loss LPF factor x f_clk — more HF roll-off
 static constexpr float MNEMD_BBD_COMP_EXP = 0.5f;  // compander exponent base
 static constexpr float MNEMD_BBD_CDET_ATK_MS = 2.f, MNEMD_BBD_CDET_REL_MS = 50.f;
 static constexpr float MNEMD_BBD_NOISE_LP_HZ = 6000.f;
-static constexpr float MNEMD_BBD_NOISE_DB0 = -74.f, MNEMD_BBD_NOISE_DB1 = -52.f;
-static constexpr float MNEMD_BBD_NL_DRIVE  = 3.0f; // tanh drive = 1 + NL_DRIVE*d (Tier 2)
+static constexpr float MNEMD_BBD_NOISE_DB0 = -70.f, MNEMD_BBD_NOISE_DB1 = -40.f;
+// Aged-BBD clock instability: the BBD chain borrows the modulation block for a
+// SLOW pitch wander (fraction of the tape depth) so repeats aren't dead-steady.
+static constexpr float MNEMD_BBD_WANDER_SC = 0.45f;
+static constexpr float MNEMD_BBD_NL_DRIVE  = 4.5f; // tanh drive = 1 + NL_DRIVE*d (Tier 2) — unity-gain, so more grind at same level
 
 // --- Tape (spec §4) ---
 static constexpr float MNEMD_TAPE_DEV_CENTS = 70.f;  // max ± speed deviation at d=1
@@ -146,7 +149,9 @@ class MnemDegrade {
     dev = dev * (1.f - MNEMD_OU_SHARE) + ou_ * MNEMD_OU_SHARE;   // blend sines + OU
     float cents = dev * MNEMD_TAPE_DEV_CENTS * d_;               // scale by depth
     cents += snag_cents_;                                        // Tier-2 snag pitch env
-    return (active_chain_ == +1) ? cents * mix_ : 0.f;
+    if (active_chain_ == +1) return cents * mix_;                // tape: full wander
+    if (active_chain_ == -1) return cents * MNEMD_BBD_WANDER_SC * mix_; // BBD: slow clock drift
+    return 0.f;
   }
 
   // Per-sample colour of the loop write signal. Applies the active chain; blends
@@ -175,12 +180,18 @@ class MnemDegrade {
  private:
   // ---- control-rate updates ---------------------------------------------
   void RecomputeControl() {
-    // BBD clock + coupled coeffs
-    f_clk_ = MNEMD_FCLK_D0 * powf(MNEMD_FCLK_D1 / MNEMD_FCLK_D0, d_);
+    // BBD clock + coupled coeffs. Quantise f_clk to an EXACT integer divisor of
+    // the sample rate so the ZOH holds a whole number of samples at every knob
+    // position — otherwise sr/f_clk lands between integers and the hold length
+    // jitters N<->N+1, which reads as digital-decimator sizzle (the artefact
+    // that fluctuates in/out as K3 moves). Integer hold = the clean "correct" tone.
+    float f_target = MNEMD_FCLK_D0 * powf(MNEMD_FCLK_D1 / MNEMD_FCLK_D0, d_);
+    bbd_hold_len_ = (int)(sr_ / f_target + 0.5f);
+    if (bbd_hold_len_ < 1) bbd_hold_len_ = 1;
+    f_clk_ = sr_ / (float)bbd_hold_len_;              // the actual, quantised clock
     bbd_in_lp_.LP(MNEMD_BBD_AA * f_clk_, 0.707f, sr_);
     bbd_rec_lp_.LP(MNEMD_BBD_AA * f_clk_, 0.707f, sr_);
     bbd_loss_.SetLP(MNEMD_BBD_LOSS * f_clk_, sr_);
-    bbd_phase_inc_ = f_clk_ / sr_;
     comp_exp_ = MNEMD_BBD_COMP_EXP * (0.3f + 0.7f * d_);
     bbd_noise_lin_ = powf(10.f, (MNEMD_BBD_NOISE_DB0 +
                           (MNEMD_BBD_NOISE_DB1 - MNEMD_BBD_NOISE_DB0) * d_) / 20.f);
@@ -228,7 +239,7 @@ class MnemDegrade {
 
   void ResetChain() {
     bbd_in_lp_.Reset(); bbd_rec_lp_.Reset(); bbd_loss_.Reset(); bbd_noise_lp_.Reset();
-    bbd_phase_ = 0.f; bbd_hold_ = 0.f; comp_g_ = exp_g_ = 1.f; comp_env_ = exp_env_ = 0.f;
+    bbd_samp_ctr_ = 0; bbd_hold_ = 0.f; comp_g_ = exp_g_ = 1.f; comp_env_ = exp_env_ = 0.f;
     tape_lp_.Reset(); tape_hp_.Reset(); head_bump_.Reset();
     tape_noise_lp1_.Reset(); tape_noise_lp2_.Reset(); sat_x1_ = 0.f;
     env_ = 0.f; drop_left_ = 0; drop_gain_ = drop_g_cur_ = 1.f; snag_cents_ = 0.f;
@@ -244,10 +255,11 @@ class MnemDegrade {
     float cg = powf(comp_env_ + 1e-5f, -comp_exp_);
     comp_g_ += (cg - comp_g_) * gain_smooth_;
     x *= comp_g_;
-    // A.1 decimate ZOH @ f_clk (collapsed line, in-place) + A.5 noise
-    bbd_phase_ += bbd_phase_inc_;
-    if (bbd_phase_ >= 1.f) {
-      bbd_phase_ -= 1.f;
+    // A.1 decimate ZOH @ f_clk (collapsed line, in-place) + A.5 noise.
+    // Integer sample counter -> exactly bbd_hold_len_ samples per hold, no
+    // fractional jitter (see RecomputeControl: quantised f_clk).
+    if (++bbd_samp_ctr_ >= bbd_hold_len_) {
+      bbd_samp_ctr_ = 0;
       float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_;
       bbd_hold_ = x + n;
     }
@@ -331,10 +343,11 @@ class MnemDegrade {
   // BBD
   MnemdBiquad  bbd_in_lp_, bbd_rec_lp_;
   MnemdOnePole bbd_loss_, bbd_noise_lp_;
-  float f_clk_ = 48000.f, bbd_phase_ = 0.f, bbd_phase_inc_ = 1.f, bbd_hold_ = 0.f;
+  float f_clk_ = 48000.f, bbd_hold_ = 0.f;
+  int   bbd_hold_len_ = 1, bbd_samp_ctr_ = 0;
   float comp_env_ = 0.f, exp_env_ = 0.f, comp_g_ = 1.f, exp_g_ = 1.f, comp_exp_ = 0.5f;
   float cdet_atk_ = 0.f, cdet_rel_ = 0.f, bbd_noise_lin_ = 0.f, bbd_nl_drive_ = 1.f;
-  float bbd_makeup_ = 1.4f;                       // level match (tune per §1)
+  float bbd_makeup_ = 0.7f;                       // level match (tune per §1)
 
   // Tape
   MnemdOnePole tape_lp_, tape_noise_lp1_, tape_noise_lp2_;
