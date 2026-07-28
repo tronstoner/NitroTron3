@@ -312,9 +312,11 @@ class Mnemonic : public Module {
         delayed = delay_.ReadFrac(wp - read_delay_ - wobble);
       }
 
-      // Feedback tapped from the read (already filtered on prior laps, since the
-      // K4/K5 filter is IN the loop) -> repeats progressively age. No ducker.
-      float fb = delayed * fb_eff;
+      // Feedback tapped from the read (already filtered on prior laps). A dedicated
+      // saturator compresses the RECIRCULATION only (analog bloom: repeats warm +
+      // even out); the fresh input stays present (only mild K3 tape drive touches
+      // it). Saturating after fb_eff means more feedback -> more bloom.
+      float fb = FbSat(delayed * fb_eff);
 
       // Loop plays INTO the delay input, parallel with the (gated) dry send.
       send_gain_ += (send_target_ - send_gain_) * send_coef_;
@@ -352,6 +354,9 @@ class Mnemonic : public Module {
   inline float TapeDrive(float x) {                     // unity small-signal, soft peaks
     float d = drive_sm_;
     return tanhf(x * d) / d;
+  }
+  inline float FbSat(float v) {                         // feedback-path compression (bloom)
+    return tanhf(v * MNEM_FB_DRIVE) / MNEM_FB_DRIVE;
   }
   inline float Degrade(float x) {
     if (bbd_amt_ > 0.f) {                               // BBD: sample-hold + gentle crush + round

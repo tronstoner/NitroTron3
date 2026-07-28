@@ -59,6 +59,10 @@ static constexpr float MNEM_DIV_HYST = 0.015f;  // knob margin to change divisio
 static constexpr float MNEM_FB_MAX      = 1.15f;  // >1: oscillates; tanh bounds level
 static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // base in-loop tanh drive (always on)
 static constexpr float MNEM_TAPE_DRIVE_K3 = 2.6f; // extra drive added at full K3-CW tape
+// Dedicated feedback-path saturator (analog bloom): compresses the RECIRCULATION
+// only, so repeats warm + even out while the fresh input (first repeat) stays
+// present. Higher = compresses earlier / more. Unity small-signal, bounded.
+static constexpr float MNEM_FB_DRIVE = 3.0f;
 // No build-up ducker: the in-loop tanh (TapeDrive) is the sole level safety, so
 // feedback regenerates accurately and K1 sweeps don't get ducked. (The Mode-B
 // ducker was the feedback-drown regression — removed.)
