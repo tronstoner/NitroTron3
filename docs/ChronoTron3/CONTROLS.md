@@ -37,16 +37,31 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 
 ---
 
-## mnemonic — SW3 MIDDLE · tap-tempo delay *(unspecced placeholder)*
+## mnemonic — SW3 MIDDLE · tap-tempo tape/BBD delay
 
-Passthrough for now — no spec yet. All controls unused pending design.
+Spec: `mnemonic-concept.md` + `mnemonic-impl-plan.md`. As-built first pass
+(M0–M9) — every value is a starting bracket, untested by ear.
 
-| Control | Function |
-|---|---|
-| KNOB 1–6 | Unused (K6 still the shell mix) |
-| SWITCH 1 / 2 | Unused |
-| FOOTSWITCH 1 / 2 | Unused |
-| LED 1 / 2 | Off |
+| Control | Function | Notes |
+|---|---|---|
+| KNOB 1 | Delay time / division | **SW2 UP** = absolute delay time (exp 20 ms–3 s), turning it **glides** = varispeed pitch bend. **SW2 MID** = tap division, 11 stops, noon = 1/1 (quarter = tap): CCW 3/4·2/3·1/2·1/3·1/4 shorter · CW 4/3·3/2·2/1·3/1·4/1 longer. **SW2 DOWN** = stretch/shrink the captured rhythm |
+| KNOB 2 | Feedback | 0 (CCW) → bounded self-oscillation (CW). Runs into always-on tape saturation + build-up ducker |
+| KNOB 3 | Degrade | Bipolar, clean at noon: **CCW** BBD (sample-rate decimation + gentle crush + rounding) · **CW** tape (extra drive + wow/flutter warble + progressive HF loss) |
+| KNOB 4 | Tone tilt | Bipolar, flat at noon (cut-only): **CCW** LPF (rolls off highs, dark) · **CW** HPF (rolls off lows, thin). Sets where the delay sits |
+| KNOB 5 | Resonance / EQ | Resonant peak at K4's corner (Q rises CCW→CW toward BPF-ish). Emphasises a band into the tape drive. In the feedback loop, so it ages the repeats |
+| KNOB 6 | Dry/wet mix | *(shell — equal-power. Dry is never processed/limited)* |
+| SWITCH 1 | FS1 **hold** gesture | **UP** = tape spin-up (hold → time↓/pitch↑ + feedback↑, slewed; release slews back) · **MIDDLE** = hold/loop (press record, release play) · **DOWN** = tape slow-down (hold → time↑/pitch↓ + feedback↑) |
+| SWITCH 2 | Time mode | **UP** = knob time · **MIDDLE** = tap tempo (FS1 taps) · **DOWN** = rhythmic taps (capture-the-rhythm multi-tap) |
+| SWITCH 3 | Mode select | *(shell)* |
+| FOOTSWITCH 1 | Tap / gesture | **Tap** = tap tempo (SW2 MID/DOWN only; median of taps, windowed) · **Hold** = the SW1 gesture. In SW1=MID, FS1 is the loop record gesture (press=record, release=play) |
+| FOOTSWITCH 2 | Bypass / kill | **Tap** = bypass toggle — gates the send + loop, but the delay **trail rings out** · **Hold** = kill (clears the delay line + deletes the loop) |
+| LED 1 | Delay clock | Blinks at the effective delay timing (tempo × division) |
+| LED 2 | Bypass / loop state | Active = solid · bypassed = off · recording = solid · loop armed = rapid flash · loop running while bypassed = dim slow flash |
+
+**Loop (SW1 = MID).** Recorded from the clean signal; plays back *into* the delay
+line in parallel with the live input. Recording starts on down-press (accurate
+start); a press shorter than the min-loop gate leaves no loop. Bypass pauses the
+loop, kill (FS2 hold) deletes it.
 
 ---
 
