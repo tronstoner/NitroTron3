@@ -380,6 +380,8 @@ any of these as current behaviour.
 - `ChronoTron3/IMPLEMENTATION_PLAN.md` — stage-1 implementation plan for the ChronoTron3 bundle.
 - `ChronoTron3/dynamic-looper-concept.md` — working spec for the grain-based dynamic looper module (*vestige*).
 - `ChronoTron3/impulse resonator - armitage/IMPULSE_SYNTH_SPEC.md` — working spec for the impulse-resonator synth module (*armitage*), with `saturation.py` / `validate.py` alongside it.
+- `ChronoTron3/mnemonic-concept.md` — working spec for the tap-tempo tape/BBD delay module (*mnemonic*): varispeed core, feedback→oscillation, in-loop tone/EQ/degrade, hold/loop, tape gestures.
+- `ChronoTron3/mnemonic-impl-plan.md` — staged (M0–M9) implementation plan for *mnemonic*, with firmware-translation notes and a reuse map.
 
 ### Generators, demos, assets
 
