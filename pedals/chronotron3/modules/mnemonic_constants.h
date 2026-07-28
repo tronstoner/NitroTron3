@@ -62,8 +62,7 @@ static constexpr float MNEM_DIV_HYST = 0.015f;  // knob margin to change divisio
 // Feedback (K2, 0 -> self-oscillation) + always-on tape drive
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_FB_MAX      = 1.15f;  // >1: oscillates; tanh bounds level
-static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // base in-loop tanh drive (always on)
-static constexpr float MNEM_TAPE_DRIVE_K3 = 2.6f; // extra drive added at full K3-CW tape
+static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // always-on base warmth (K3 degrade engine adds colour on top)
 // Dedicated feedback-path saturator (analog bloom): compresses the RECIRCULATION
 // only, so repeats warm + even out while the fresh input (first repeat) stays
 // present. Higher = compresses earlier / more. Unity small-signal, bounded.
@@ -96,16 +95,14 @@ static constexpr float MNEM_SMOOTH_MS = 5.f;
 static constexpr float MNEM_TIME_SMOOTH_MS = 12.f;
 
 // ---------------------------------------------------------------------------
-// Degrade character (K3): CW tape (warble+drive+HF loss) / CCW BBD (decimate)
+// Degrade character (K3): full bipolar BBD/Tape engine in mnemonic_degrade.h.
+// The tape speed-irregularity it produces (in cents) is integrated here into a
+// read-tap position offset (speed deviation -> tape displacement). The leak is a
+// high-pass on the integrator so a DC speed offset can't drift the delay time;
+// it passes the whole mod band (wow 0.7 Hz .. flutter 11.7 Hz, OU, snags).
 // ---------------------------------------------------------------------------
-static constexpr float MNEM_WOW_HZ           = 0.7f;   // slow tape wow
-static constexpr float MNEM_FLUTTER_HZ       = 6.3f;   // fast flutter
-static constexpr float MNEM_WOW_DEPTH_MS     = 7.f;    // read-tap wobble at full tape
-static constexpr float MNEM_FLUTTER_DEPTH_MS = 1.6f;
-static constexpr float MNEM_TAPE_HFLOSS_HZ   = 2200.f; // in-loop LP cutoff at full tape
-static constexpr int   MNEM_BBD_DECIM_MAX    = 16;     // sample-hold factor at full CCW (48k/16=3k)
-static constexpr float MNEM_BBD_LP_HZ        = 4200.f; // rounding LP on the BBD side
-static constexpr float MNEM_BBD_BITS_MIN     = 8.f;    // gentle bit reduction floor (>=8, "round")
+static constexpr float MNEM_FLUTTER_LEAK  = 0.99999f;
+static constexpr float MNEM_CENTS_TO_RATE = 0.00057762f;  // ~ ln2/1200 (cents -> fractional speed)
 
 // ---------------------------------------------------------------------------
 // Footswitch / tap timing (control-rate, wall-clock ms via System::GetNow)

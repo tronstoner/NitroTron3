@@ -27,6 +27,7 @@
 //
 #include "module.h"
 #include "mnemonic_constants.h"
+#include "mnemonic_degrade.h"   // K3 bipolar BBD/Tape degradation engine
 #include "ring_buffer.h"   // core/blocks — mono circular buffer with ReadFrac
 #include <math.h>
 #include <cstring>         // memset (kill)
@@ -99,18 +100,14 @@ class Mnemonic : public Module {
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
     edge_detune_samps_ = MNEM_EDGE_DETUNE_MS * 0.001f * sr_;
 
-    bbd_lp_.SetLP(MNEM_BBD_LP_HZ, sr_);
-    tape_hf_lp_.SetLP(18000.f, sr_);
     SetFilters(2000.f, 2000.f);   // harmless defaults until first Controls
-    wow_inc_  = MNEM_WOW_HZ / sr_;
-    flut_inc_ = MNEM_FLUTTER_HZ / sr_;
+    degrade_.Init(sr_);
   }
 
   void Activate() override {
     snap_ = true;                 // snap read tap to target on first Controls (no sweep-in)
     gesture_engaged_ = false; gest_amt_ = 0.f;
     hp1_.Reset(); hp2_.Reset(); lp1_.Reset(); lp2_.Reset();
-    tape_hf_lp_.Reset(); bbd_lp_.Reset();
   }
 
   // -------------------------------------------------------------------------
@@ -131,15 +128,12 @@ class Mnemonic : public Module {
     // ---- K2 feedback ------------------------------------------------------
     fb_gain_ = k2 * MNEM_FB_MAX;
 
-    // ---- K3 degrade character (bipolar) ----------------------------------
-    if (k3 >= 0.5f) { tape_amt_ = (k3 - 0.5f) * 2.f; bbd_amt_ = 0.f; }
-    else            { bbd_amt_  = (0.5f - k3) * 2.f; tape_amt_ = 0.f; }
-    tape_drive_ = MNEM_TAPE_DRIVE + tape_amt_ * MNEM_TAPE_DRIVE_K3;
-    tape_hf_lp_.SetLP(Mapf(1.f - tape_amt_, MNEM_TAPE_HFLOSS_HZ, 18000.f), sr_);
-    bbd_hold_ = 1 + (int)(bbd_amt_ * (MNEM_BBD_DECIM_MAX - 1));
-    bbd_bits_ = Mapf(bbd_amt_, 14.f, MNEM_BBD_BITS_MIN);
-    wow_depth_  = MNEM_WOW_DEPTH_MS  * 0.001f * sr_;
-    flut_depth_ = MNEM_FLUTTER_DEPTH_MS * 0.001f * sr_;
+    // ---- K3 degrade: bipolar BBD (CCW) / Tape (CW) engine ----------------
+    // Base tape warmth stays always-on (TapeDrive, constant); K3 drives the
+    // degrade chains on top (clean-ish dead-zone at centre). Colour is applied in
+    // the loop; the tape speed-irregularity modulates the MAIN read tap (Process).
+    tape_drive_ = MNEM_TAPE_DRIVE;                  // constant base warmth
+    degrade_.SetDepth((k3 - 0.5f) * 2.f);           // p in [-1,+1] (dead-zone in engine)
 
     // ---- K4 tilt/center + K5 narrow (converging 24 dB HP+LP) -------------
     // Wide band edges from K4 (K5=0): CCW lowers the LP (dark), CW raises the HP
@@ -263,7 +257,6 @@ class Mnemonic : public Module {
   // -------------------------------------------------------------------------
   void Process(const float* in, float* wet, size_t size) override {
     const float wp0 = (float)delay_.GetWritePos();
-    const float two_pi = 6.2831853f;
 
     for (size_t i = 0; i < size; i++) {
       // Audio-rate param smoothing — kills the control-tick (~10 ms) zipper on
@@ -295,14 +288,12 @@ class Mnemonic : public Module {
       // Varispeed glide (THE identity): read tap eases toward its target.
       read_delay_ += (target_eff_ - read_delay_) * MNEM_GLIDE_COEF;
 
-      // Wow/flutter read-tap wobble (tape side of K3).
-      float wobble = 0.f;
-      if (tape_amt_ > 0.f) {
-        wow_ph_  += wow_inc_;  if (wow_ph_  >= 1.f) wow_ph_  -= 1.f;
-        flut_ph_ += flut_inc_; if (flut_ph_ >= 1.f) flut_ph_ -= 1.f;
-        wobble = (sinf(two_pi * wow_ph_) * wow_depth_ +
-                  sinf(two_pi * flut_ph_) * flut_depth_) * tape_amt_;
-      }
+      // Tape speed-irregularity (cents, from the degrade engine) integrated to a
+      // read-tap position offset (speed deviation -> tape displacement), leaky so
+      // a DC offset can't drift the delay time. 0 unless the tape chain is active.
+      float cents = degrade_.TapePitchCents();
+      flutter_int_ = flutter_int_ * MNEM_FLUTTER_LEAK + cents * MNEM_CENTS_TO_RATE;
+      float wobble = flutter_int_;
       const float wp = wp0 + (float)i;
 
       // Read tap: single, or the Edge dual-tap (4/4 + K1 division, detuned).
@@ -328,8 +319,8 @@ class Mnemonic : public Module {
 
       float x = in[i] * send_gain_ + loop_s + fb;
       x = Filter(x);                                    // K4/K5 tone — IN the loop (ages repeats)
-      x = TapeDrive(x);                                 // always-on tape saturation
-      x = Degrade(x);                                   // tape HF loss / BBD decimate
+      x = TapeDrive(x);                                 // always-on base tape warmth
+      x = degrade_.ColourProcess(x);                    // K3 BBD/Tape colour — IN the loop
       delay_.Write(x);
 
       wet[i] = delayed;                                 // raw read (filtered on prior laps)
@@ -361,17 +352,6 @@ class Mnemonic : public Module {
   }
   inline float FbSat(float v) {                         // feedback-path compression (bloom)
     return tanhf(v * MNEM_FB_DRIVE) / MNEM_FB_DRIVE;
-  }
-  inline float Degrade(float x) {
-    if (bbd_amt_ > 0.f) {                               // BBD: sample-hold + gentle crush + round
-      if (++bbd_counter_ >= bbd_hold_) { bbd_counter_ = 0; bbd_held_ = x; }
-      x = bbd_held_;
-      float q = powf(2.f, bbd_bits_);
-      x = roundf(x * q) / q;
-      x = bbd_lp_.LP(x);
-    }
-    if (tape_amt_ > 0.f) x = tape_hf_lp_.LP(x);         // tape: progressive HF loss
-    return x;
   }
 
   // ---- loop (two-slab scratch -> playback; REPLACE, not overdub) ---------
@@ -484,13 +464,9 @@ class Mnemonic : public Module {
   float   lo_sm_ = 2000.f, hi_sm_ = 2000.f;    // smoothed cutoffs (drive the SVFs)
   float   filter_makeup_ = 1.f, makeup_sm_ = 1.f;
 
-  // degrade
-  float tape_amt_ = 0.f, bbd_amt_ = 0.f;
-  MnemOnePole tape_hf_lp_, bbd_lp_;
-  int   bbd_hold_ = 1, bbd_counter_ = 0;
-  float bbd_held_ = 0.f, bbd_bits_ = 14.f;
-  float wow_ph_ = 0.f, flut_ph_ = 0.f, wow_inc_ = 0.f, flut_inc_ = 0.f;
-  float wow_depth_ = 0.f, flut_depth_ = 0.f;
+  // degrade (K3): bipolar BBD/Tape engine + tape-speed read-tap integrator
+  MnemDegrade degrade_;
+  float flutter_int_ = 0.f;
 
   // gestures
   bool  gesture_engaged_ = false;
