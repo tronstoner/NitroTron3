@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mnemonic — K4/K5 converging-band filter model</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --panel:#fff; --ink:#1a1d21; --muted:#5b6470;
+    --line:#d6dae0; --grid:#e7eaee; --accent:#c8452b; --accent2:#2b6fc8;
+    --fill:rgba(200,69,43,.14); --curve:#c8452b; --marker:#2b6fc8;
+    --knob:#e9ecf0; --knobline:#1a1d21;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#15171b; --panel:#1e2127; --ink:#e9ecf0; --muted:#98a2b0;
+      --line:#333842; --grid:#262a31; --accent:#ff6a4d; --accent2:#5fa0ff;
+      --fill:rgba(255,106,77,.16); --curve:#ff6a4d; --marker:#5fa0ff;
+      --knob:#2a2e36; --knobline:#e9ecf0;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#15171b; --panel:#1e2127; --ink:#e9ecf0; --muted:#98a2b0;
+    --line:#333842; --grid:#262a31; --accent:#ff6a4d; --accent2:#5fa0ff;
+    --fill:rgba(255,106,77,.16); --curve:#ff6a4d; --marker:#5fa0ff;
+    --knob:#2a2e36; --knobline:#e9ecf0;
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f5f7; --panel:#fff; --ink:#1a1d21; --muted:#5b6470;
+    --line:#d6dae0; --grid:#e7eaee; --accent:#c8452b; --accent2:#2b6fc8;
+    --fill:rgba(200,69,43,.14); --curve:#c8452b; --marker:#2b6fc8;
+    --knob:#e9ecf0; --knobline:#1a1d21;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 20px 48px;}
+  h1{font-size:20px;margin:0 0 2px;}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:13px;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:18px;margin-bottom:16px;}
+  .row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;}
+  .plot-wrap{flex:1 1 520px;min-width:280px;}
+  canvas{width:100%;height:auto;display:block;border-radius:8px;}
+  .controls{flex:0 0 240px;display:flex;flex-direction:column;gap:20px;}
+  .knobrow{display:flex;gap:22px;justify-content:center;}
+  .knob-cell{text-align:center;user-select:none;}
+  .knob{width:92px;height:92px;border-radius:50%;background:var(--knob);
+    border:2px solid var(--line);position:relative;cursor:ns-resize;margin:0 auto 8px;
+    touch-action:none;}
+  .knob::after{content:"";position:absolute;left:50%;top:8px;width:3px;height:34px;
+    margin-left:-1.5px;background:var(--knobline);border-radius:2px;transform-origin:50% 38px;}
+  .knob .cap{position:absolute;inset:0;border-radius:50%;}
+  .knob-name{font-weight:600;font-size:13px;}
+  .knob-val{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;}
+  .readout{font-size:13px;line-height:1.7;font-variant-numeric:tabular-nums;}
+  .readout b{color:var(--accent);}
+  .readout .m{color:var(--marker);}
+  .slider-cell{font-size:13px;}
+  input[type=range]{width:100%;accent-color:var(--accent);}
+  .hint{color:var(--muted);font-size:12px;margin-top:10px;}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-top:6px;flex-wrap:wrap;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:12px;height:3px;border-radius:2px;display:inline-block;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>mnemonic — K4 / K5 converging-band filter</h1>
+  <p class="sub">Proposed model for confirmation. Two 24&nbsp;dB/oct (4-pole) filters — a high-pass and a low-pass — define a passband. <b>K4</b> sets where the delay lives (tilt / center); <b>K5</b> reduces the space between the HP and LP cutoffs, narrowing the band. No resonant band-pass peak — the emphasis comes from the two cutoffs converging.</p>
+
+  <div class="card">
+    <div class="row">
+      <div class="plot-wrap">
+        <canvas id="plot" width="1040" height="520"></canvas>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--curve)"></i>combined response (HP × LP, 24 dB/oct each)</span>
+          <span><i class="sw" style="background:var(--marker)"></i>HP / LP cutoffs</span>
+        </div>
+      </div>
+      <div class="controls">
+        <div class="knobrow">
+          <div class="knob-cell">
+            <div class="knob" id="k4" data-val="0.5"><div class="cap"></div></div>
+            <div class="knob-name">K4 · tilt / center</div>
+            <div class="knob-val" id="k4v">noon</div>
+          </div>
+          <div class="knob-cell">
+            <div class="knob" id="k5" data-val="0" ><div class="cap"></div></div>
+            <div class="knob-name">K5 · narrow</div>
+            <div class="knob-val" id="k5v">0%</div>
+          </div>
+        </div>
+        <div class="readout">
+          HP cutoff: <b id="rHp">20 Hz</b><br>
+          LP cutoff: <b id="rLp">20.0 kHz</b><br>
+          band width: <span class="m" id="rBw">10.0 oct</span><br>
+          center: <span class="m" id="rC">632 Hz</span>
+        </div>
+        <div class="slider-cell">
+          edge emphasis (moderate): <span id="resv">60%</span>
+          <input type="range" id="res" min="0" max="100" value="60">
+          <div class="hint">Defaults to 0 (maximally-flat Butterworth). Nudge only if you want a little bloom at the cutoffs — the model is narrowing, not peaking.</div>
+        </div>
+      </div>
+    </div>
+    <div class="hint">Drag the knobs vertically. K4 CCW rolls off highs (dark), CW rolls off lows (thin), noon = flat. K5 pulls the far cutoff toward the near one, collapsing toward the center at full CW.</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const F_MIN=20, F_MAX=20000;
+  // Tunable range endpoints (confirm/tune these):
+  const LP_MIN=180;    // darkest LP cutoff at full K4-CCW
+  const HP_MAX=4000;   // thinnest HP cutoff at full K4-CW
+
+  const state = { k4:0.5, k5:0.0, res:0.6 };   // res default = the chosen "moderate" emphasis
+
+  function band(k4,k5){
+    const tilt=(k4-0.5)*2;                                   // -1..+1
+    const lo0 = F_MIN*Math.pow(HP_MAX/F_MIN, Math.max(0, tilt));   // HP edge 20..4000
+    const hi0 = F_MAX*Math.pow(LP_MIN/F_MAX, Math.max(0,-tilt));   // LP edge 20000..180
+    const center=Math.sqrt(lo0*hi0);
+    const lo=center*Math.pow(lo0/center, 1-k5);              // K5 shrinks toward center
+    const hi=center*Math.pow(hi0/center, 1-k5);
+    return {lo,hi,center};
+  }
+
+  function magDb(f,lo,hi,res){
+    const hp=1/Math.sqrt(1+Math.pow(lo/f,8));   // 4-pole Butterworth HP
+    const lp=1/Math.sqrt(1+Math.pow(f/hi,8));    // 4-pole Butterworth LP
+    let db=20*Math.log10(Math.max(1e-6,hp*lp));
+    if(res>0){                                    // illustrative edge bloom
+      const w=0.16;
+      const bl=Math.exp(-Math.pow((Math.log(f)-Math.log(lo))/w,2)/2);
+      const bh=Math.exp(-Math.pow((Math.log(f)-Math.log(hi))/w,2)/2);
+      db+=res*14*Math.max(bl,bh);
+    }
+    return db;
+  }
+
+  const cv=document.getElementById('plot'), ctx=cv.getContext('2d');
+  const DPR=Math.max(1,window.devicePixelRatio||1);
+  function resize(){
+    const w=cv.clientWidth, h=w*0.5;
+    cv.width=w*DPR; cv.height=h*DPR; cv.style.height=h+'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0); draw();
+  }
+  const ML=52, MR=16, MT=14, MB=30;
+  function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+  const xf=f=>{const W=cv.clientWidth-ML-MR;
+    return ML+(Math.log(f)-Math.log(F_MIN))/(Math.log(F_MAX)-Math.log(F_MIN))*W;};
+  const DB_HI=6, DB_LO=-48;
+  const yf=db=>{const H=(cv.clientWidth*0.5)-MT-MB;
+    return MT+(DB_HI-db)/(DB_HI-DB_LO)*H;};
+
+  function draw(){
+    const W=cv.clientWidth, H=W*0.5;
+    ctx.clearRect(0,0,W,H);
+    const grid=css('--grid'), line=css('--line'), muted=css('--muted'),
+          curve=css('--curve'), fill=css('--fill'), marker=css('--marker');
+    ctx.font='11px -apple-system,sans-serif';
+    // grid: freqs
+    const freqs=[20,50,100,200,500,1000,2000,5000,10000,20000];
+    ctx.textAlign='center'; ctx.textBaseline='top';
+    freqs.forEach(f=>{const x=xf(f);
+      ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath();
+      ctx.moveTo(x,MT); ctx.lineTo(x,H-MB); ctx.stroke();
+      ctx.fillStyle=muted; ctx.fillText(f>=1000?(f/1000)+'k':f, x, H-MB+5);
+    });
+    // grid: dB
+    ctx.textAlign='right'; ctx.textBaseline='middle';
+    for(let db=0;db>=DB_LO;db-=12){const y=yf(db);
+      ctx.strokeStyle=db===0?line:grid; ctx.lineWidth=1; ctx.beginPath();
+      ctx.moveTo(ML,y); ctx.lineTo(W-MR,y); ctx.stroke();
+      ctx.fillStyle=muted; ctx.fillText(db+' dB', ML-6, y);
+    }
+    const b=band(state.k4,state.k5);
+    // curve + fill
+    ctx.beginPath();
+    let started=false;
+    for(let px=ML;px<=W-MR;px++){
+      const t=(px-ML)/(W-ML-MR);
+      const f=Math.exp(Math.log(F_MIN)+t*(Math.log(F_MAX)-Math.log(F_MIN)));
+      const y=Math.min(H-MB,Math.max(MT,yf(magDb(f,b.lo,b.hi,state.res))));
+      if(!started){ctx.moveTo(px,y);started=true;} else ctx.lineTo(px,y);
+    }
+    ctx.strokeStyle=curve; ctx.lineWidth=2.4; ctx.stroke();
+    ctx.lineTo(W-MR,H-MB); ctx.lineTo(ML,H-MB); ctx.closePath();
+    ctx.fillStyle=fill; ctx.fill();
+    // cutoff markers
+    ctx.setLineDash([4,4]); ctx.lineWidth=1.5; ctx.strokeStyle=marker;
+    [['HP',b.lo],['LP',b.hi]].forEach(([lab,f])=>{
+      const x=xf(Math.min(F_MAX,Math.max(F_MIN,f)));
+      ctx.beginPath(); ctx.moveTo(x,MT); ctx.lineTo(x,H-MB); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle=marker; ctx.textAlign='center'; ctx.textBaseline='top';
+      ctx.fillText(lab,x,MT+2); ctx.setLineDash([4,4]);
+    });
+    ctx.setLineDash([]);
+    // readouts
+    const fmt=f=>f>=1000?(f/1000).toFixed(1)+' kHz':Math.round(f)+' Hz';
+    document.getElementById('rHp').textContent=fmt(b.lo);
+    document.getElementById('rLp').textContent=fmt(b.hi);
+    document.getElementById('rBw').textContent=(Math.log2(b.hi/b.lo)).toFixed(2)+' oct';
+    document.getElementById('rC').textContent=fmt(b.center);
+  }
+
+  // knob drag — rotate the whole knob element so its ::after pointer follows
+  function knob(id,valId,fmt){
+    const el=document.getElementById(id), vlab=document.getElementById(valId);
+    function render(){
+      const v=state[id];
+      const deg=-135+v*270;          // 0..1 -> -135deg..+135deg
+      el.style.transform=`rotate(${deg}deg)`;
+      vlab.textContent=fmt(v);
+    }
+    let dragging=false, lastY=0;
+    el.addEventListener('pointerdown',e=>{dragging=true;lastY=e.clientY;el.setPointerCapture(e.pointerId);});
+    el.addEventListener('pointermove',e=>{
+      if(!dragging)return;
+      const dy=lastY-e.clientY; lastY=e.clientY;
+      state[id]=Math.min(1,Math.max(0,state[id]+dy/180));
+      render(); draw();
+    });
+    el.addEventListener('pointerup',()=>dragging=false);
+    el.addEventListener('dblclick',()=>{state[id]=(id==='k4')?0.5:0;render();draw();});
+    render();
+  }
+  knob('k4','k4v',v=>Math.abs(v-0.5)<0.02?'noon':(v<0.5?'CCW '+Math.round((0.5-v)*200)+'%':'CW '+Math.round((v-0.5)*200)+'%'));
+  knob('k5','k5v',v=>Math.round(v*100)+'%');
+
+  document.getElementById('res').addEventListener('input',e=>{
+    state.res=e.target.value/100;
+    document.getElementById('resv').textContent=e.target.value+'%';
+    draw();
+  });
+
+  window.addEventListener('resize',resize);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change',draw);
+  resize();
+})();
+</script>
+</body>
+</html>

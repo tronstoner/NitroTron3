@@ -4,21 +4,23 @@
 // Spec: docs/ChronoTron3/mnemonic-concept.md + mnemonic-impl-plan.md
 //
 // Analog-style delay: changing the delay time (knob, tap, or tape gesture) glides
-// a single read tap, so the pitch bends while it moves (varispeed) — never a
-// clean-digital crossfade. Colour (filter -> EQ -> tape drive -> degrade) sits
-// INSIDE the feedback loop, so repeats age. K2 feedback runs into the always-on
-// tape saturation up to a bounded self-oscillation. On top: a Hazarai-style
-// hold/loop, and FS1-hold tape gestures (spin-up / slow-down).
+// the read tap, so the pitch bends while it moves (varispeed) — never a
+// clean-digital crossfade. The tape character (drive + K3 degrade) sits INSIDE
+// the feedback loop so repeats age; the K4/K5 tone filters sit AFTER the delay
+// read (OUT of the loop) so they shape the wet without bleeding the regeneration
+// — feedback is tapped clean/full-band. K2 feedback runs into the always-on tape
+// saturation up to a bounded self-oscillation (no ducker). On top: a Hazarai-
+// style hold/loop, and FS1-hold tape gestures (spin-up / slow-down).
 //
-//   K1 = delay time (SW2 UP) / tap division (SW2 MID) / rhythm stretch (SW2 DOWN)
+//   K1 = delay time (SW2 UP) / tap division (SW2 MID) / Edge division tap (DOWN)
 //   K2 = feedback (0 -> self-oscillation)
 //   K3 = degrade — bipolar: CCW BBD/decimate · noon clean · CW tape warble/drive
-//   K4 = tone tilt — bipolar: CCW LPF · noon flat · CW HPF (cut-only)
-//   K5 = resonance / EQ emphasis at K4's corner (peak -> BPF-ish)
+//   K4 = tone tilt / center — bipolar: CCW toward LPF · noon flat · CW toward HPF
+//   K5 = narrow — shrinks the gap between the 24 dB HP & LP cutoffs (band-limit)
 //   K6 = dry/wet mix (shell-owned equal-power; mnemonic does NOT own output)
 //   SW1 = FS1-hold gesture: UP spin-up · MID loop record/play · DOWN slow-down
-//   SW2 = time mode: UP knob-time · MID tap-tempo · DOWN rhythmic (capture) taps
-//   FS1 = tap tempo (tap) / SW1 gesture (hold)
+//   SW2 = time mode: UP knob-time · MID tap-tempo · DOWN Edge dual-tap (4/4 + div)
+//   FS1 = tap tempo (tap) / SW1 gesture (hold) — unified hold-then-commit
 //   FS2 = bypass (tap: gate send, trail rings) / kill+clear (hold)
 //   LED1 = delay-clock blink · LED2 = bypass / loop state
 //
@@ -87,17 +89,16 @@ class Mnemonic : public Module {
     target_eff_ = base_delay_;
     read_delay_ = base_delay_;
 
-    duck_atk_g_ = 1.f - expf(-1.f / (MNEM_DUCK_ATK_MS * 0.001f * sr_));
-    duck_rel_g_ = 1.f - expf(-1.f / (MNEM_DUCK_REL_MS * 0.001f * sr_));
     gest_atk_coef_ = 1.f - expf(-1.f / (MNEM_GEST_ATK_MS * 0.001f * sr_));
     gest_rel_coef_ = 1.f - expf(-1.f / (MNEM_GEST_REL_MS * 0.001f * sr_));
     send_coef_ = 1.f - expf(-1.f / (0.003f * sr_));            // 3 ms send gate ramp
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
+    edge_detune_samps_ = MNEM_EDGE_DETUNE_MS * 0.001f * sr_;
 
     bbd_lp_.SetLP(MNEM_BBD_LP_HZ, sr_);
     tape_hf_lp_.SetLP(18000.f, sr_);
-    svf_.Set(MNEM_CORNER_NOON_HZ, 0.7f, sr_);
+    SetFilters(2000.f, 2000.f);   // harmless defaults until first Controls
     wow_inc_  = MNEM_WOW_HZ / sr_;
     flut_inc_ = MNEM_FLUTTER_HZ / sr_;
   }
@@ -105,8 +106,8 @@ class Mnemonic : public Module {
   void Activate() override {
     snap_ = true;                 // snap read tap to target on first Controls (no sweep-in)
     gesture_engaged_ = false; gest_amt_ = 0.f;
-    duck_env_ = 0.f;
-    svf_.Reset(); tape_hf_lp_.Reset(); bbd_lp_.Reset();
+    hp1_.Reset(); hp2_.Reset(); lp1_.Reset(); lp2_.Reset();
+    tape_hf_lp_.Reset(); bbd_lp_.Reset();
   }
 
   // -------------------------------------------------------------------------
@@ -137,19 +138,22 @@ class Mnemonic : public Module {
     wow_depth_  = MNEM_WOW_DEPTH_MS  * 0.001f * sr_;
     flut_depth_ = MNEM_FLUTTER_DEPTH_MS * 0.001f * sr_;
 
-    // ---- K4 tilt + K5 resonance (peak at the corner) ---------------------
-    float corner;
-    if (k4 >= 0.5f) { tilt_side_ = +1; tilt_amt_ = (k4 - 0.5f) * 2.f;
-                      corner = MNEM_CORNER_NOON_HZ *
-                               powf(MNEM_CORNER_HP_MAX_HZ / MNEM_CORNER_NOON_HZ, tilt_amt_); }
-    else            { tilt_side_ = -1; tilt_amt_ = (0.5f - k4) * 2.f;
-                      corner = MNEM_CORNER_NOON_HZ *
-                               powf(MNEM_CORNER_LP_MIN_HZ / MNEM_CORNER_NOON_HZ, tilt_amt_); }
-    peak_add_ = k5 * MNEM_PEAK_ADD;
-    svf_.Set(corner, Mapf(k5, MNEM_PEAK_Q_MIN, MNEM_PEAK_Q_MAX), sr_);
+    // ---- K4 tilt/center + K5 narrow (converging 24 dB HP+LP) -------------
+    // Wide band edges from K4 (K5=0): CCW lowers the LP (dark), CW raises the HP
+    // (thin), noon = 20 Hz .. 20 kHz. K5 shrinks both toward the geometric center
+    // => a band-limit by convergence, resonant at both cutoffs (no single peak).
+    float tilt = (k4 - 0.5f) * 2.f;                    // -1 .. +1
+    float lo0 = MNEM_FILT_FMIN * powf(MNEM_FILT_HP_MAX / MNEM_FILT_FMIN,
+                                      tilt > 0.f ? tilt : 0.f);
+    float hi0 = MNEM_FILT_FMAX * powf(MNEM_FILT_LP_MIN / MNEM_FILT_FMAX,
+                                      tilt < 0.f ? -tilt : 0.f);
+    float center = sqrtf(lo0 * hi0);
+    float lo = center * powf(lo0 / center, 1.f - k5);  // HP cutoff
+    float hi = center * powf(hi0 / center, 1.f - k5);  // LP cutoff
+    SetFilters(lo, hi);
 
-    // ---- K1 delay time / division / rhythm, by SW2 -----------------------
-    pattern_n_ = 0;
+    // ---- K1 delay time / division, by SW2 --------------------------------
+    edge_ = (sw2_ == 2);
     if (sw2_ == 0) {                                   // knob time (free)
       float ms = MNEM_TIME_MIN_MS *
                  powf(MNEM_TIME_MAX_MS / MNEM_TIME_MIN_MS, k1);
@@ -158,14 +162,9 @@ class Mnemonic : public Module {
       int d = QuantizeDivision(k1);
       if (have_tempo_)
         base_delay_ = quarter_ms_ * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-    } else {                                           // rhythmic capture taps
-      int d = QuantizeDivision(k1);
-      if (pattern_iv_n_ >= 1) {
-        base_delay_ = pattern_total_ms_ * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-        pattern_n_  = pattern_iv_n_;                   // multi-tap active
-      } else if (have_tempo_) {
-        base_delay_ = quarter_ms_ * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-      }
+    } else {                                           // Edge dual-tap: A=4/4, B=div
+      edge_div_ratio_ = MNEM_DIV_RATIOS[QuantizeDivision(k1)];
+      if (have_tempo_) base_delay_ = quarter_ms_ * 0.001f * sr_;   // tap A = quarter
     }
     base_delay_ = MnemClamp(base_delay_, 0.001f * MNEM_TIME_MIN_MS * sr_,
                             (float)MNEM_DELAY_SAMPLES - 2.f);
@@ -275,36 +274,31 @@ class Mnemonic : public Module {
       }
       const float wp = wp0 + (float)i;
 
-      // Read tap(s): single, or the captured rhythm (multi-tap).
+      // Read tap: single, or the Edge dual-tap (4/4 + K1 division, detuned).
       float delayed;
-      if (pattern_n_ > 0) {
-        delayed = 0.f;
-        for (int t = 0; t < pattern_n_; t++)
-          delayed += delay_.ReadFrac(wp - read_delay_ * pattern_ratio_[t] - wobble)
-                     * pattern_gain_[t];
+      if (edge_) {
+        float a = delay_.ReadFrac(wp - read_delay_ - wobble);
+        float b = delay_.ReadFrac(wp - (read_delay_ * edge_div_ratio_ +
+                                        edge_detune_samps_) - wobble);
+        delayed = a * MNEM_EDGE_A_GAIN + b * MNEM_EDGE_B_GAIN;
       } else {
         delayed = delay_.ReadFrac(wp - read_delay_ - wobble);
       }
 
-      // Feedback build-up ducker: simmer runaway oscillation (wet only).
+      // Feedback is tapped CLEAN (pre-filter) so regeneration stays full-band and
+      // accurate. Only the always-on tape stages colour the loop; no ducker.
       float fb = delayed * fb_eff;
-      if (MNEM_DUCK_ENABLE) {
-        float a = fabsf(delayed);
-        duck_env_ += (a > duck_env_ ? duck_atk_g_ : duck_rel_g_) * (a - duck_env_);
-        if (duck_env_ > MNEM_DUCK_THRESH) fb *= MNEM_DUCK_THRESH / duck_env_;
-      }
 
       // Loop plays INTO the delay input, parallel with the (gated) dry send.
       send_gain_ += (send_target_ - send_gain_) * send_coef_;
       float loop_s = LoopPlay();
 
       float x = in[i] * send_gain_ + loop_s + fb;
-      if (MNEM_EQ_IN_LOOP) x = Filter(x);              // K4/K5 ages repeats
-      x = TapeDrive(x);                                 // always-on saturation
-      x = Degrade(x);                                   // tape HF loss / BBD decimate
+      x = TapeDrive(x);                                 // always-on tape saturation (in loop)
+      x = Degrade(x);                                   // tape HF loss / BBD decimate (in loop)
       delay_.Write(x);
 
-      wet[i] = MNEM_EQ_IN_LOOP ? delayed : Filter(delayed);  // post-loop A/B path
+      wet[i] = Filter(delayed);                         // K4/K5 tone — OUT of the loop
     }
   }
 
@@ -312,13 +306,19 @@ class Mnemonic : public Module {
   bool OwnsOutput() const override { return false; }
 
  private:
-  // ---- colour stages -----------------------------------------------------
+  // ---- tone filter (out of the loop): 24 dB HP -> 24 dB LP ---------------
+  void SetFilters(float lo, float hi) {
+    lo = MnemClamp(lo, MNEM_FILT_FMIN, MNEM_FILT_FMAX);
+    hi = MnemClamp(hi, lo, MNEM_FILT_FMAX);             // keep hi >= lo
+    hp1_.Set(lo, MNEM_FILTER_RES_Q, sr_); hp2_.Set(lo, MNEM_FILTER_RES_Q, sr_);
+    lp1_.Set(hi, MNEM_FILTER_RES_Q, sr_); lp2_.Set(hi, MNEM_FILTER_RES_Q, sr_);
+  }
   inline float Filter(float x) {
     float lp, bp, hp;
-    svf_.Process(x, lp, bp, hp);
-    float tone = (tilt_side_ >= 0) ? (x * (1.f - tilt_amt_) + hp * tilt_amt_)
-                                   : (x * (1.f - tilt_amt_) + lp * tilt_amt_);
-    return tone + peak_add_ * bp;                       // resonant emphasis at corner
+    hp1_.Process(x, lp, bp, hp);  x = hp;               // HP stage 1
+    hp2_.Process(x, lp, bp, hp);  x = hp;               // HP stage 2 (24 dB/oct)
+    lp1_.Process(x, lp, bp, hp);  x = lp;               // LP stage 1
+    lp2_.Process(x, lp, bp, hp);  return lp;            // LP stage 2 (24 dB/oct)
   }
   inline float TapeDrive(float x) {                     // unity small-signal, soft peaks
     float d = tape_drive_;
@@ -362,7 +362,7 @@ class Mnemonic : public Module {
     return s * loop_gain_;
   }
 
-  // ---- tap tempo + rhythm capture ---------------------------------------
+  // ---- tap tempo (sets the quarter note; used by SW2 MID + DOWN) --------
   void RegisterTap(uint32_t t) {                        // t = the downpress timestamp
     if (last_tap_ms_ != 0) {
       uint32_t iv = t - last_tap_ms_;
@@ -373,9 +373,8 @@ class Mnemonic : public Module {
         int cnt = tap_wr_ < MNEM_TAP_MEDIAN_N ? tap_wr_ : MNEM_TAP_MEDIAN_N;
         quarter_ms_ = MedianMs(cnt);
         have_tempo_ = true;
-        if (sw2_ == 2) AppendPattern(iv);
       } else {                                          // gap too long -> new gesture
-        tap_wr_ = 0; pattern_iv_n_ = 0;
+        tap_wr_ = 0;
       }
     }
     last_tap_ms_ = t;
@@ -390,25 +389,11 @@ class Mnemonic : public Module {
     }
     return tmp[cnt / 2];
   }
-  void AppendPattern(uint32_t iv) {
-    if (pattern_iv_n_ < MNEM_MAX_PATTERN_TAPS) pattern_iv_ms_[pattern_iv_n_++] = (float)iv;
-    float cum = 0.f;
-    for (int k = 0; k < pattern_iv_n_; k++) cum += pattern_iv_ms_[k];
-    pattern_total_ms_ = cum > 1.f ? cum : 1.f;
-    float run = 0.f;
-    for (int k = 0; k < pattern_iv_n_; k++) {
-      run += pattern_iv_ms_[k];
-      pattern_ratio_[k] = run / pattern_total_ms_;      // (0..1], last = 1
-      pattern_gain_[k]  = powf(MNEM_PATTERN_TAP_DECAY, (float)k);
-    }
-  }
 
   // ---- kill --------------------------------------------------------------
   void Kill() {
     memset(mnem_delay_slab, 0, MNEM_DELAY_SAMPLES * sizeof(float));  // clear the trail
     loop_len_ = 0; loop_playing_ = false; loop_scratch_recording_ = false;
-    pattern_iv_n_ = 0; pattern_n_ = 0;
-    duck_env_ = 0.f;
   }
 
   // ---- LEDs --------------------------------------------------------------
@@ -452,12 +437,9 @@ class Mnemonic : public Module {
 
   // feedback / drive
   float fb_gain_ = 0.f, tape_drive_ = MNEM_TAPE_DRIVE;
-  float duck_env_ = 0.f, duck_atk_g_ = 0.f, duck_rel_g_ = 0.f;
 
-  // filter
-  MnemSVF svf_;
-  int   tilt_side_ = -1;
-  float tilt_amt_ = 0.f, peak_add_ = 0.f;
+  // tone filter (out of loop): 24 dB HP (hp1->hp2) then 24 dB LP (lp1->lp2)
+  MnemSVF hp1_, hp2_, lp1_, lp2_;
 
   // degrade
   float tape_amt_ = 0.f, bbd_amt_ = 0.f;
@@ -498,12 +480,9 @@ class Mnemonic : public Module {
   float quarter_ms_ = 400.f;
   int   div_idx_ = MNEM_DIV_NOON;
 
-  // rhythm pattern (SW2 DOWN)
-  int   pattern_iv_n_ = 0, pattern_n_ = 0;
-  float pattern_iv_ms_[MNEM_MAX_PATTERN_TAPS] = {0};
-  float pattern_ratio_[MNEM_MAX_PATTERN_TAPS] = {0};
-  float pattern_gain_[MNEM_MAX_PATTERN_TAPS]  = {0};
-  float pattern_total_ms_ = 1.f;
+  // Edge dual-tap (SW2 DOWN)
+  bool  edge_ = false;
+  float edge_div_ratio_ = 1.f, edge_detune_samps_ = 0.f;
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;

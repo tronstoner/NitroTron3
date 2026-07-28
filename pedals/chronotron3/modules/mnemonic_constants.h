@@ -59,23 +59,23 @@ static constexpr float MNEM_DIV_HYST = 0.015f;  // knob margin to change divisio
 static constexpr float MNEM_FB_MAX      = 1.15f;  // >1: oscillates; tanh bounds level
 static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // base in-loop tanh drive (always on)
 static constexpr float MNEM_TAPE_DRIVE_K3 = 2.6f; // extra drive added at full K3-CW tape
-// Feedback build-up ducker (borrowed from NitroTron3 Mode B): slow env on the
-// recirculating signal pulls loop gain down so oscillation simmers, not clips.
-static constexpr bool  MNEM_DUCK_ENABLE = true;
-static constexpr float MNEM_DUCK_THRESH = 0.55f;
-static constexpr float MNEM_DUCK_ATK_MS = 40.f;
-static constexpr float MNEM_DUCK_REL_MS = 600.f;
+// No build-up ducker: the in-loop tanh (TapeDrive) is the sole level safety, so
+// feedback regenerates accurately and K1 sweeps don't get ducked. (The Mode-B
+// ducker was the feedback-drown regression — removed.)
 
 // ---------------------------------------------------------------------------
-// Tone tilt (K4) + resonance/EQ (K5). Cut-only tilt; peak sits at the corner.
+// Tone filter (K4 tilt/center + K5 narrow) — POST-delay, OUT of the feedback
+// loop. Two 24 dB/oct filters (2x cascaded SVF each): a high-pass at `lo` and a
+// low-pass at `hi`. K4 sets tilt/center; K5 shrinks the gap hi<->lo toward the
+// center (band-limit by convergence, not one sharp BP peak). Each SVF stage runs
+// at MNEM_FILTER_RES_Q -> a moderate resonant bump at BOTH cutoffs.
+// Model mirrored in docs/ChronoTron3/mnemonic-filter-demo.html.
 // ---------------------------------------------------------------------------
-static constexpr float MNEM_CORNER_NOON_HZ = 1200.f;  // flat pivot / peak home
-static constexpr float MNEM_CORNER_LP_MIN_HZ = 180.f; // full CCW LP corner (dark)
-static constexpr float MNEM_CORNER_HP_MAX_HZ = 3500.f;// full CW HP corner (thin)
-static constexpr float MNEM_PEAK_Q_MIN = 0.5f;        // K5 CCW (gentle)
-static constexpr float MNEM_PEAK_Q_MAX = 7.f;         // K5 CW (sharp -> BPF-ish)
-static constexpr float MNEM_PEAK_ADD   = 1.0f;        // resonant BP added on top at K5 max
-static constexpr bool  MNEM_EQ_IN_LOOP = true;        // A/B: true = ages repeats; false = static
+static constexpr float MNEM_FILT_FMIN    = 20.f;    // band floor
+static constexpr float MNEM_FILT_FMAX    = 20000.f; // band ceiling
+static constexpr float MNEM_FILT_HP_MAX  = 4000.f;  // HP cutoff at full K4-CW (thin)
+static constexpr float MNEM_FILT_LP_MIN  = 180.f;   // LP cutoff at full K4-CCW (dark)
+static constexpr float MNEM_FILTER_RES_Q = 1.6f;    // per-SVF-stage Q (~+9 dB combined bump)
 
 // ---------------------------------------------------------------------------
 // Degrade character (K3): CW tape (warble+drive+HF loss) / CCW BBD (decimate)
@@ -122,10 +122,12 @@ static constexpr float    MNEM_LOOP_XFADE_MS = 6.f;  // seam crossfade at the wr
 static constexpr float    MNEM_LOOP_FADE_MS  = 8.f;  // play start/stop de-click ramp
 
 // ---------------------------------------------------------------------------
-// Rhythmic taps (SW2 DOWN, M9): capture-the-rhythm multi-tap
+// Edge dual-tap (SW2 DOWN): tap A = 4/4 (quarter) · tap B = K1 division. A fixed
+// detune keeps them off unison at noon -> chorus; feedback recirculates the sum.
 // ---------------------------------------------------------------------------
-static constexpr int   MNEM_MAX_PATTERN_TAPS = 6;
-static constexpr float MNEM_PATTERN_TAP_DECAY = 0.78f; // per-tap gain rolloff over the pattern
+static constexpr float MNEM_EDGE_DETUNE_MS = 11.f;  // fixed offset on tap B (chorus near unison)
+static constexpr float MNEM_EDGE_A_GAIN    = 0.75f; // 4/4 tap level
+static constexpr float MNEM_EDGE_B_GAIN    = 0.75f; // division tap level
 
 // ---------------------------------------------------------------------------
 // LEDs
