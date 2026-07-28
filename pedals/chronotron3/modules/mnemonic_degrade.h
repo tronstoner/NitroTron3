@@ -44,30 +44,30 @@ static constexpr float MNEMD_BBD_NOISE_DB0 = -74.f, MNEMD_BBD_NOISE_DB1 = -52.f;
 static constexpr float MNEMD_BBD_NL_DRIVE  = 3.0f; // tanh drive = 1 + NL_DRIVE*d (Tier 2)
 
 // --- Tape (spec §4) ---
-static constexpr float MNEMD_TAPE_DEV_CENTS = 35.f;  // max ± speed deviation at d=1
-static constexpr float MNEMD_WOW_HZ = 0.7f,  MNEMD_WOW_SH  = 0.50f;
+static constexpr float MNEMD_TAPE_DEV_CENTS = 70.f;  // max ± speed deviation at d=1
+static constexpr float MNEMD_WOW_HZ = 0.7f,  MNEMD_WOW_SH  = 0.60f;
 static constexpr float MNEMD_FL1_HZ = 4.3f,  MNEMD_FL1_SH  = 0.30f;
 static constexpr float MNEMD_FL2_HZ = 11.7f, MNEMD_FL2_SH  = 0.20f;
 static constexpr float MNEMD_JITTER_MS   = 250.f;   // amp re-draw interval
 static constexpr float MNEMD_JITTER_TAU_MS = 150.f; // amp smoothing
-static constexpr float MNEMD_JITTER_AMT  = 0.20f;   // ±20 %
+static constexpr float MNEMD_JITTER_AMT  = 0.35f;   // ±35 %
 static constexpr float MNEMD_OU_TAU_S    = 0.5f;    // OU time constant
 static constexpr float MNEMD_OU_SHARE    = 0.25f;   // OU share of total deviation
 static constexpr float MNEMD_TAPE_LP_D0 = 18000.f, MNEMD_TAPE_LP_D1 = 3500.f; // HF loss
 static constexpr float MNEMD_HEADBUMP_HZ = 70.f, MNEMD_HEADBUMP_Q = 1.2f, MNEMD_HEADBUMP_DB1 = 4.f;
 static constexpr float MNEMD_TAPE_HP_D0 = 30.f, MNEMD_TAPE_HP_D1 = 45.f;
-static constexpr float MNEMD_SAT_K  = 3.0f;   // k = 1 + SAT_K*d
+static constexpr float MNEMD_SAT_K  = 2.5f;   // k = 1 + SAT_K*sqrt(d)  (k tops out ~3.5 at full CW)
 static constexpr float MNEMD_SAT_A  = 0.15f;  // a = SAT_A*d (asymmetry)
-static constexpr float MNEMD_SAT_BIAS = 0.02f;// bias deadzone t = SAT_BIAS*d (Tier 2)
-static constexpr float MNEMD_TAPE_NOISE_DB0 = -76.f, MNEMD_TAPE_NOISE_DB1 = -54.f;
+static constexpr float MNEMD_SAT_BIAS = 0.0f; // bias deadzone t = SAT_BIAS*d (Tier 2) — OFF for now (grit source)
+static constexpr float MNEMD_TAPE_NOISE_DB0 = -76.f, MNEMD_TAPE_NOISE_DB1 = -46.f;
 static constexpr float MNEMD_TAPE_NOISE_ENV_DB = 8.f;  // env-modulated term at d=1
 // dropouts / snags (Tier 2)
 static constexpr float MNEMD_DROP_RATE1 = 1.2f;   // events/s at d=1
 static constexpr float MNEMD_DROP_MIN_MS = 5.f,  MNEMD_DROP_MAX_MS = 40.f;
-static constexpr float MNEMD_DROP_DB_MIN = 3.f,  MNEMD_DROP_DB_MAX = 18.f;
+static constexpr float MNEMD_DROP_DB_MIN = 2.f,  MNEMD_DROP_DB_MAX = 10.f;  // capped: waver, not silence
 static constexpr float MNEMD_DROP_FALL_MS = 3.f, MNEMD_DROP_REC_MS = 12.f;
-static constexpr float MNEMD_SNAG_RATE_SC = 0.4f; // snag rate = 0.4 x drop rate
-static constexpr float MNEMD_SNAG_CENTS_MIN = 30.f, MNEMD_SNAG_CENTS_MAX = 150.f;
+static constexpr float MNEMD_SNAG_RATE_SC = 1.0f; // snag rate = 1.0 x drop rate
+static constexpr float MNEMD_SNAG_CENTS_MIN = 50.f, MNEMD_SNAG_CENTS_MAX = 200.f;
 static constexpr float MNEMD_SNAG_FALL_MS = 15.f, MNEMD_SNAG_REC_MS = 60.f;
 
 // ---------------------------------------------------------------------------
@@ -191,12 +191,15 @@ class MnemDegrade {
     tape_hp_hz_ = MNEMD_TAPE_HP_D0 + (MNEMD_TAPE_HP_D1 - MNEMD_TAPE_HP_D0) * d_;
     tape_hp_.Set(tape_hp_hz_, sr_);
     head_bump_.Peak(MNEMD_HEADBUMP_HZ, MNEMD_HEADBUMP_Q, MNEMD_HEADBUMP_DB1 * d_, sr_);
-    sat_k_ = 1.f + MNEMD_SAT_K * d_;
-    sat_a_ = MNEMD_SAT_A * d_;
-    sat_bias_ = MNEMD_SAT_BIAS * d_;
+    // Saturation + noise use a shaped depth (sqrt) so they ramp in SOONER on K3
+    // than the wow/flutter/snag terms (which stay linear in d_).
+    float ds = sqrtf(d_);
+    sat_k_ = 1.f + MNEMD_SAT_K * ds;
+    sat_a_ = MNEMD_SAT_A * ds;
+    sat_bias_ = MNEMD_SAT_BIAS * ds;
     tape_noise_lin_ = powf(10.f, (MNEMD_TAPE_NOISE_DB0 +
-                            (MNEMD_TAPE_NOISE_DB1 - MNEMD_TAPE_NOISE_DB0) * d_) / 20.f);
-    tape_noise_env_ = MNEMD_TAPE_NOISE_ENV_DB * d_;
+                            (MNEMD_TAPE_NOISE_DB1 - MNEMD_TAPE_NOISE_DB0) * ds) / 20.f);
+    tape_noise_env_ = MNEMD_TAPE_NOISE_ENV_DB * ds;
 
     sine_inc_[0] = MNEMD_WOW_HZ / sr_; sine_inc_[1] = MNEMD_FL1_HZ / sr_; sine_inc_[2] = MNEMD_FL2_HZ / sr_;
 
@@ -289,7 +292,10 @@ class MnemDegrade {
     return x * tape_makeup_;
   }
   inline float Shape(float x) {                            // asym waveshaper + bias deadzone
-    float y = tanhf(sat_k_ * x + sat_a_ * x * x);
+    // Normalise to unity small-signal gain (d/dx at 0 = sat_k) so the shaper
+    // colours WITHOUT boosting level — otherwise it adds up to sat_k x gain and
+    // clips at input ~1/sat_k (the "too loud / too distorted at any setting" bug).
+    float y = tanhf(sat_k_ * x + sat_a_ * x * x) / sat_k_;
     if (sat_bias_ > 1e-4f) { float t = sat_bias_; y *= (x * x) / (x * x + t * t); }
     return y;
   }
