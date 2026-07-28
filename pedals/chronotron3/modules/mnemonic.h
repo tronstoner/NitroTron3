@@ -34,7 +34,10 @@
 // SDRAM storage — delay line + loop capture. File scope (single TU) is safe.
 // ---------------------------------------------------------------------------
 static float DSY_SDRAM_BSS mnem_delay_slab[MNEM_DELAY_SAMPLES];
-static float DSY_SDRAM_BSS mnem_loop_slab[MNEM_LOOP_SAMPLES];
+// Two loop slabs: one plays, one records (scratch). Commit = pointer swap, so a
+// short tap that recorded into scratch never disturbs the loop already playing.
+static float DSY_SDRAM_BSS mnem_loop_slab_a[MNEM_LOOP_SAMPLES];
+static float DSY_SDRAM_BSS mnem_loop_slab_b[MNEM_LOOP_SAMPLES];
 
 static inline float MnemClamp(float v, float lo, float hi) {
   return v < lo ? lo : (v > hi ? hi : v);
@@ -75,7 +78,10 @@ class Mnemonic : public Module {
   void Init(float sr) override {
     sr_ = sr;
     delay_.Init(mnem_delay_slab, MNEM_DELAY_SAMPLES);
-    memset(mnem_loop_slab, 0, MNEM_LOOP_SAMPLES * sizeof(float));
+    loop_play_buf_ = mnem_loop_slab_a;
+    loop_rec_buf_  = mnem_loop_slab_b;
+    memset(mnem_loop_slab_a, 0, MNEM_LOOP_SAMPLES * sizeof(float));
+    memset(mnem_loop_slab_b, 0, MNEM_LOOP_SAMPLES * sizeof(float));
 
     base_delay_ = 0.001f * 400.f * sr_;   // 400 ms default
     target_eff_ = base_delay_;
@@ -165,22 +171,56 @@ class Mnemonic : public Module {
                             (float)MNEM_DELAY_SAMPLES - 2.f);
     if (snap_) { read_delay_ = base_delay_; snap_ = false; }
 
-    // ---- FS1: tap tempo / SW1 gesture / loop -----------------------------
+    // ---- FS1: unified hold-then-commit -----------------------------------
+    // Downpress is the universal event; press length disambiguates it:
+    //   released < MNEM_TAP_RELEASE_MS  -> TAP (tempo / rhythm, per SW2)
+    //   held    >= MNEM_LONGPRESS_MS    -> sustained gesture (SW1 latched at down):
+    //                                      MID = loop record · UP/DOWN = tape
+    //   released in the deadzone        -> no-op
+    // In loop mode we always record into the scratch buffer from the downpress and
+    // only commit (pointer-swap) once the press becomes a sustained gesture, so a
+    // short tap never disturbs the loop already playing.
     const FootswitchEvent& f1 = cs.Foot(0);
-    if (sw1_ == 1) {                                   // MID: hold/loop
-      gesture_engaged_ = false;
-      if (f1.rising)  StartLoopRecord(now);
-      if (f1.falling) StopLoopRecord(now);
-    } else {                                           // UP spin-up / DOWN slow-down
-      gest_dir_ = (sw1_ == 0) ? +1 : -1;
-      if (f1.rising) press_was_gesture_ = false;
-      if (f1.down && f1.held_ms >= MNEM_LONGPRESS_MS) {
-        gesture_engaged_ = true; press_was_gesture_ = true;
+    if (f1.rising) {
+      f1_down_ms_ = now;
+      f1_mode_ = sw1_;                       // latch SW1 for the whole press
+      f1_gesture_committed_ = false;
+      loop_committed_this_press_ = false;
+      if (f1_mode_ == 1) {                   // MID: start scratch recording now
+        loop_scratch_recording_ = true;
+        loop_rec_write_ = 0;
+        loop_rec_full_ = false;
       }
-      if (f1.falling) {
-        if (!press_was_gesture_ && (sw2_ == 1 || sw2_ == 2)) RegisterTap(now);
-        gesture_engaged_ = false;
+    }
+    if (f1.down && !f1_gesture_committed_ &&
+        (now - f1_down_ms_) >= MNEM_LONGPRESS_MS) {
+      f1_gesture_committed_ = true;          // crossed into sustained-gesture land
+      if (f1_mode_ == 0) { gesture_engaged_ = true; gest_dir_ = +1; }   // spin-up
+      else if (f1_mode_ == 2) { gesture_engaged_ = true; gest_dir_ = -1; } // slow-down
+      // f1_mode_ == 1 (loop): scratch keeps recording; commit on release.
+    }
+    if (loop_rec_full_) {                    // scratch hit the ceiling: auto record-end
+      loop_rec_full_ = false;
+      if (loop_scratch_recording_ && f1_gesture_committed_) {
+        CommitLoopFromScratch();
+        loop_committed_this_press_ = true;
       }
+    }
+    if (f1.falling) {
+      uint32_t held = now - f1_down_ms_;
+      if (!loop_committed_this_press_) {
+        if (f1_gesture_committed_) {
+          if (f1_mode_ == 1) CommitLoopFromScratch();       // loop: commit + play
+          // UP/DOWN tape gesture ends via the gesture_engaged_ reset below.
+        } else if (held < MNEM_TAP_RELEASE_MS) {
+          if (sw2_ == 1 || sw2_ == 2) RegisterTap(f1_down_ms_);  // TAP (downpress-timed)
+        }
+        // else: released in the deadzone -> no-op
+      }
+      loop_scratch_recording_ = false;       // discard any uncommitted scratch
+      f1_gesture_committed_ = false;
+      loop_committed_this_press_ = false;
+      gesture_engaged_ = false;              // release ends the tape gesture (slew back)
     }
 
     // ---- FS2: bypass (tap) / kill (hold) ---------------------------------
@@ -206,10 +246,11 @@ class Mnemonic : public Module {
     const float two_pi = 6.2831853f;
 
     for (size_t i = 0; i < size; i++) {
-      // Loop record (clean input) — capture before any colour.
-      if (loop_recording_ && loop_write_ < MNEM_LOOP_SAMPLES) {
-        mnem_loop_slab[loop_write_++] = in[i];
-        if (loop_write_ >= MNEM_LOOP_SAMPLES) CommitLoop();  // hit ceiling
+      // Loop scratch record (clean input) — capture before any colour. Buffer
+      // full raises a flag the control loop treats as a record-end (vestige-style).
+      if (loop_scratch_recording_ && loop_rec_write_ < MNEM_LOOP_SAMPLES) {
+        loop_rec_buf_[loop_rec_write_++] = in[i];
+        if (loop_rec_write_ >= MNEM_LOOP_SAMPLES) loop_rec_full_ = true;
       }
 
       // Gesture ramp (spin-up / slow-down envelope).
@@ -295,32 +336,26 @@ class Mnemonic : public Module {
     return x;
   }
 
-  // ---- loop --------------------------------------------------------------
-  void StartLoopRecord(uint32_t now) {
-    loop_recording_ = true; loop_playing_ = false;
-    loop_write_ = 0; loop_rec_start_ms_ = now;
-  }
-  void StopLoopRecord(uint32_t now) {
-    if (!loop_recording_) return;
-    loop_recording_ = false;
-    if ((now - loop_rec_start_ms_) < MNEM_LOOP_MIN_MS) { loop_len_ = 0; return; }  // too short
-    CommitLoop();
-  }
-  void CommitLoop() {
-    loop_recording_ = false;
-    loop_len_ = loop_write_;
+  // ---- loop (two-slab scratch -> playback; REPLACE, not overdub) ---------
+  void CommitLoopFromScratch() {
+    loop_scratch_recording_ = false;
+    if (loop_rec_write_ == 0) return;                   // nothing recorded
+    float* tmp = loop_play_buf_;                        // swap: scratch becomes the loop
+    loop_play_buf_ = loop_rec_buf_;
+    loop_rec_buf_  = tmp;
+    loop_len_  = loop_rec_write_;
     loop_read_ = 0;
     loop_gain_ = 0.f; loop_gain_target_ = 1.f;          // fade in
-    loop_playing_ = loop_len_ > 0;
+    loop_playing_ = true;
   }
   inline float LoopPlay() {
     if (!loop_playing_ || loop_len_ == 0 || bypassed_) return 0.f;  // paused in bypass
     size_t p = loop_read_;
-    float s = mnem_loop_slab[p];
+    float s = loop_play_buf_[p];
     size_t xf = loop_xfade_samps_;
     if (loop_len_ > 2 * xf && p >= loop_len_ - xf) {    // seam crossfade at wrap
       float frac = (float)(p - (loop_len_ - xf)) / (float)xf;
-      s = s * (1.f - frac) + mnem_loop_slab[p - (loop_len_ - xf)] * frac;
+      s = s * (1.f - frac) + loop_play_buf_[p - (loop_len_ - xf)] * frac;
     }
     if (++loop_read_ >= loop_len_) loop_read_ = 0;
     loop_gain_ += (loop_gain_target_ - loop_gain_) * loop_fade_coef_;
@@ -328,9 +363,9 @@ class Mnemonic : public Module {
   }
 
   // ---- tap tempo + rhythm capture ---------------------------------------
-  void RegisterTap(uint32_t now) {
+  void RegisterTap(uint32_t t) {                        // t = the downpress timestamp
     if (last_tap_ms_ != 0) {
-      uint32_t iv = now - last_tap_ms_;
+      uint32_t iv = t - last_tap_ms_;
       if (iv >= MNEM_TAP_MIN_MS && iv <= MNEM_TAP_WINDOW_MS) {
         if (iv > MNEM_TAP_MAX_MS) iv = MNEM_TAP_MAX_MS;
         tap_iv_[tap_wr_ % MNEM_TAP_MEDIAN_N] = iv;
@@ -343,7 +378,7 @@ class Mnemonic : public Module {
         tap_wr_ = 0; pattern_iv_n_ = 0;
       }
     }
-    last_tap_ms_ = now;
+    last_tap_ms_ = t;
   }
   float MedianMs(int cnt) {
     float tmp[MNEM_TAP_MEDIAN_N];
@@ -371,7 +406,7 @@ class Mnemonic : public Module {
   // ---- kill --------------------------------------------------------------
   void Kill() {
     memset(mnem_delay_slab, 0, MNEM_DELAY_SAMPLES * sizeof(float));  // clear the trail
-    loop_len_ = 0; loop_playing_ = false; loop_recording_ = false;
+    loop_len_ = 0; loop_playing_ = false; loop_scratch_recording_ = false;
     pattern_iv_n_ = 0; pattern_n_ = 0;
     duck_env_ = 0.f;
   }
@@ -389,7 +424,8 @@ class Mnemonic : public Module {
     float l2;
     bool fast = ((now / 120) % 2) == 0;
     bool slow = ((now / 400) % 2) == 0;
-    if (loop_recording_)      l2 = 1.f;                        // solid while recording
+    bool rec = loop_scratch_recording_ && f1_gesture_committed_;  // confirmed loop record
+    if (rec)                  l2 = 1.f;                        // solid while recording
     else if (loop_len_ > 0) { l2 = bypassed_ ? (slow ? 0.25f : 0.f)   // loop + bypass: dim flash
                                              : (fast ? 1.f : 0.f); }  // loop armed: rapid flash
     else                      l2 = bypassed_ ? 0.f : 1.f;            // active solid / bypass off
@@ -432,19 +468,27 @@ class Mnemonic : public Module {
   float wow_depth_ = 0.f, flut_depth_ = 0.f;
 
   // gestures
-  bool  gesture_engaged_ = false, press_was_gesture_ = false;
+  bool  gesture_engaged_ = false;
   int   gest_dir_ = +1;
   float gest_amt_ = 0.f, gest_atk_coef_ = 0.f, gest_rel_coef_ = 0.f;
+
+  // FS1 unified state machine
+  int      f1_mode_ = 0;                 // SW1 latched at downpress
+  uint32_t f1_down_ms_ = 0;
+  bool     f1_gesture_committed_ = false;
+  bool     loop_committed_this_press_ = false;
 
   // bypass / send gate
   bool  bypassed_ = false, kill_fired_ = false;
   float send_gain_ = 1.f, send_target_ = 1.f, send_coef_ = 0.f;
 
-  // loop
-  bool   loop_recording_ = false, loop_playing_ = false;
-  size_t loop_len_ = 0, loop_write_ = 0, loop_read_ = 0, loop_xfade_samps_ = 0;
+  // loop (two-slab scratch/playback, pointer-swap commit; REPLACE not overdub)
+  float* loop_play_buf_ = nullptr;
+  float* loop_rec_buf_  = nullptr;
+  bool   loop_scratch_recording_ = false, loop_playing_ = false;
+  volatile bool loop_rec_full_ = false;
+  size_t loop_len_ = 0, loop_rec_write_ = 0, loop_read_ = 0, loop_xfade_samps_ = 0;
   float  loop_gain_ = 0.f, loop_gain_target_ = 0.f, loop_fade_coef_ = 0.f;
-  uint32_t loop_rec_start_ms_ = 0;
 
   // tap tempo
   uint32_t last_tap_ms_ = 0;

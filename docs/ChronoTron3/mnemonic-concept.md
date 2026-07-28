@@ -242,32 +242,36 @@ separate constants for UP vs DOWN (per brief).
 
 ## Footswitches
 
-### FS1 — tap tempo / gesture
+### FS1 — unified hold-then-commit
 
-FS1's action splits by **press length** and by **SW1**:
+**The downpress is the universal event; press *length* disambiguates it — and
+short taps always mean tempo/rhythm, in every SW1 position.** SW1 only selects
+which *sustained* (long-hold) gesture you get. This is the key design: the loop
+and tape gestures never block the taps.
 
-| | SW1 = UP | SW1 = MID (loop) | SW1 = DOWN |
-|---|---|---|---|
-| **Tap** (short) | tap tempo* | (see note) | tap tempo* |
-| **Hold** (long) | spin-up gesture | record window | slow-down gesture |
+| Release timing | What it is |
+|---|---|
+| released **before** `MNEM_TAP_RELEASE_MS` (≈300 ms) | **Tap** → tempo (SW2 MID) / rhythm (SW2 DOWN) |
+| held **past** `MNEM_LONGPRESS_MS` (≈450 ms) | **Sustained gesture** (SW1-latched): MID = loop record · UP = spin-up · DOWN = slow-down |
+| released **in the deadzone** between | no-op (ambiguous; ignored) |
 
-\* Tap tempo only registers when **SW2 = tap-tempo (MID)**; in knob-time mode a
-tap is a no-op (or reserved).
+- **Downpress is the timing reference** for taps even though the tap *commits* on
+  release: the interval is measured downpress-to-downpress, so tempo accuracy is
+  unaffected — only the moment the new value is *applied* waits for release.
+  This "hold a provisional value, commit when the gesture is confirmed" pattern
+  is the same one the loop uses (scratch buffer → commit).
+- **SW1 is latched at downpress** — flipping SW1 mid-press does not change the
+  gesture; the new mode takes effect on the next press.
 
-**Tap tempo (SW2 = MID):**
-- Two successive taps set the tempo **immediately**; further taps refine via the
-  **median** of the recent intervals.
-- A configurable **listening window** groups taps into one gesture; a gap longer
-  than the window ends the gesture and the next tap starts fresh.
-- **Slowest-tap bound** needed (fastest is not a concern): intervals longer than
-  the max are ignored / clamped. *(Proposed max tap interval ≈ 2 s; combined with
-  K1 ×4 that reaches the multi-second ceiling. `draft`.)*
+**Tap tempo (SW2 = MID):** two taps set it immediately; further taps refine via
+the **median** of recent intervals. A **listening window** groups taps; a gap
+longer than the window starts fresh. **Slowest-tap clamp** ≈ 2 s (fastest is not
+a concern); with K1 ×4 that reaches the multi-second ceiling.
 
-**Loop interaction (SW1 = MID).** When SW1 is MID, FS1 is **dedicated to the
-loop** — the press *is* the record gesture, so tap-tempo is not available on FS1
-here. Set tempo (via K1 in knob mode, or tap before switching SW1 to MID), then
-flip SW1 to MID to perform the loop. *(This overload is intentional and mirrors
-vestige's FS2 overload; flag if you want tempo kept live in loop mode.)*
+**No conflict with the loop.** In SW1 = MID you get *both*: short taps set
+tempo/rhythm, a long hold records a loop (into a scratch buffer, committed only
+when the hold crosses the threshold — see below). A short tap therefore never
+disturbs a loop already playing, and it still registers as a tempo/rhythm tap.
 
 ### FS2 — bypass / kill (locked; pause-vs-restart draft)
 
@@ -288,24 +292,26 @@ loop. *(Pause/resume chosen as simplest; `draft`.)*
 
 ## Hold / loop function (SW1 = MID)
 
-EHX Hazarai-inspired, recorded from the **clean** signal:
+EHX Hazarai-inspired, recorded from the **clean** signal. Built on a **two-buffer
+scratch → commit** model so a short tap can never disturb the loop that's playing:
 
-- **Press FS1** → start recording immediately (recording starts on down-press so
-  the loop start point is accurate and immediate — no count-in).
-- **Release FS1** → stop recording, start loop playback.
-- The recorded loop **plays back *into* the delay line in parallel with the live
-  clean input** — so the loop feeds the delay/feedback/colour chain just like
-  playing does.
-- **Minimum-loop gate:** a press released faster than a minimum duration is
-  treated as *no loop* (too short) — this keeps quick presses from being confused
-  with tap gestures, even though recording always starts on down-press. *(Min
-  loop length `draft`, e.g. ≥ ~300–500 ms.)*
+- **Press FS1** → recording into a **scratch buffer** starts immediately on the
+  down-press (accurate, count-in-free start point).
+- **Held past `MNEM_LONGPRESS_MS`** → the press is confirmed a loop gesture.
+- **Release FS1** → **commit**: the scratch buffer is swapped in as the live loop
+  (near-free pointer swap) and playback starts. **REPLACE, not overdub** — a new
+  commit overwrites the previous loop.
+- **Released before the threshold** → it was a tap; the scratch is discarded and
+  the loop already playing is untouched.
+- **Buffer full** (16 s ceiling) → treated as an automatic record-end (commit),
+  vestige-style, via a `volatile` flag the control loop consumes.
+- The committed loop **plays back *into* the delay line in parallel with the live
+  clean input** — feeding the delay/feedback/colour chain just like playing does.
 - Bypass (FS2 tap) pauses the loop; un-bypass resumes it. FS2 hold (kill) deletes
   it.
 
-*(Open: max loop length, overdub vs one-shot record, whether a second press
-re-records or overdubs. Proposed v1: single one-shot loop, re-press = re-record
-from scratch. `draft`.)*
+*(v1: single loop, REPLACE on each commit — no overdub / sound-on-sound. Open:
+max loop length final value; whether to add overdub later. `draft`.)*
 
 ---
 
@@ -380,8 +386,14 @@ Notes:
   port, and their tunings.
 - **Tape-gesture ramp tunings** — separate feedback ramps + glide rates for SW1
   UP vs DOWN.
-- **Loop** — max length, one-shot vs overdub, re-press behaviour; pause/resume
-  (proposed) vs restart on bypass.
-- **Output ownership** — does mnemonic take `OwnsOutput()` to implement the
-  wet-trail bypass, or can the shell K6 mix serve? (Likely owns output.)
+- **FS1 model** — **ruled & built: unified hold-then-commit.** Downpress is the
+  universal event; short tap = tempo/rhythm (all SW1 positions), long hold =
+  SW1-latched sustained gesture. Two thresholds with a deadzone
+  (`MNEM_TAP_RELEASE_MS` / `MNEM_LONGPRESS_MS`) — values still to tune.
+- **Loop** — **ruled & built: two-buffer scratch→commit, REPLACE not overdub;**
+  buffer-full = auto record-end. Bypass pauses / un-bypass resumes; kill deletes.
+  Open: final max length; possible later overdub mode.
+- **Output ownership** — **resolved: no `OwnsOutput()`.** The shell K6 equal-power
+  mix serves; the wet-trail bypass works because the wet buffer carries the
+  decaying tail and the dry stays sacrosanct.
 - **LED patterns** — final blink vocabulary, consistent with vestige.

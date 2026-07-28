@@ -133,10 +133,11 @@ constants; release slews back to K1/K2. **Milestone: held dive-bomb and swell,
 smooth return.**
 
 ### M8 — Hold / loop (SW1 MID)
-Clean-signal loop recorder into its own SDRAM slab. Press = record from down (for
-an accurate start), release = stop + play. Loop plays **into the delay input** in
-parallel with live dry. Min-loop gate discards too-short presses. Bypass
-pauses/resumes; kill deletes. **Milestone: Hazarai-style loop feeding the delay.**
+Clean-signal loop recorder. Press = record from down (accurate start), release =
+commit + play. Loop plays **into the delay input** in parallel with live dry.
+Bypass pauses/resumes; kill deletes. **Milestone: Hazarai-style loop feeding the
+delay.** *(Superseded by the FS1 rework below — now a two-buffer scratch→commit,
+REPLACE-not-overdub, buffer-full = auto record-end.)*
 
 ### M9 — SW2 DOWN (rhythmic taps): capture-the-rhythm
 **Ruled:** build **capture-the-rhythm** multi-tap first — the tap gesture records
@@ -166,15 +167,35 @@ Names indicative; values are starting brackets to bracket the range, not final.
 - Loop: `MNEM_LOOP_MIN_S` (~0.3–0.5).
 - FS: `MNEM_LONGPRESS_MS` (reuse bundle value if one exists).
 
+## As-built rework — FS1 unified hold-then-commit (post-M9)
+
+The stage-1 M5–M8 FS1 handling was reworked after review into one model (see
+`mnemonic-concept.md` § FS1). Landed:
+
+- **Downpress is the universal event; press length disambiguates.** Released
+  before `MNEM_TAP_RELEASE_MS` (300) = tap (tempo/rhythm, *all* SW1 positions);
+  held past `MNEM_LONGPRESS_MS` (450) = SW1-latched sustained gesture (MID loop /
+  UP spin-up / DOWN slow-down); deadzone between = no-op. Taps and the loop/tape
+  gestures now coexist — the old "loop dedicates FS1" constraint is gone.
+- **Taps commit on release but are timed from the downpress** (`RegisterTap` takes
+  the down timestamp), so tempo accuracy is release-independent.
+- **SW1 latched at downpress** (`f1_mode_`); mid-press flips take effect next press.
+- **Loop = two SDRAM slabs, pointer-swap commit, REPLACE not overdub.** Scratch
+  records from the downpress; commits only when the press becomes a sustained
+  gesture, so a short tap never disturbs a playing loop. Buffer-full raises a
+  `volatile` flag the control loop treats as an auto record-end (vestige pattern).
+
 ## Decisions to collect (block the stages that need them)
 
-- **M9 / SW2 DOWN** — rhythmic-tap design (hard gate on M9).
+- **M9 / SW2 DOWN** — rhythmic-tap design (hard gate on M9). *(Ruled:
+  capture-the-rhythm; built.)*
 - **M1/M5** — knob-time range + taper, tap-max interval, division snap-vs-glide.
 - **M3** — K5 topology (peak vs peak+BPF) and EQ placement (in-loop vs post) — but
   build both so the ruling is an ear test, not a rewrite.
 - **M2** — which feedback safeguards to port and their tunings.
-- **M6** — `OwnsOutput()` yes/no; bypass pause/resume vs restart.
-- **M8** — loop max length, one-shot vs overdub, re-press behaviour.
+- **FS1 thresholds** — tune `MNEM_TAP_RELEASE_MS` / `MNEM_LONGPRESS_MS` + the
+  deadzone width by feel.
+- **M8** — loop max length; whether to add an overdub mode later.
 - **LEDs** — final blink vocabulary consistent with vestige.
 
 ## Not doing (v1)

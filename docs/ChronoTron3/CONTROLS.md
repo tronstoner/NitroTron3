@@ -53,15 +53,17 @@ Spec: `mnemonic-concept.md` + `mnemonic-impl-plan.md`. As-built first pass
 | SWITCH 1 | FS1 **hold** gesture | **UP** = tape spin-up (hold → time↓/pitch↑ + feedback↑, slewed; release slews back) · **MIDDLE** = hold/loop (press record, release play) · **DOWN** = tape slow-down (hold → time↑/pitch↓ + feedback↑) |
 | SWITCH 2 | Time mode | **UP** = knob time · **MIDDLE** = tap tempo (FS1 taps) · **DOWN** = rhythmic taps (capture-the-rhythm multi-tap) |
 | SWITCH 3 | Mode select | *(shell)* |
-| FOOTSWITCH 1 | Tap / gesture | **Tap** = tap tempo (SW2 MID/DOWN only; median of taps, windowed) · **Hold** = the SW1 gesture. In SW1=MID, FS1 is the loop record gesture (press=record, release=play) |
+| FOOTSWITCH 1 | Tap / gesture (hold-then-commit) | **Short tap** (release < ~300 ms) = tempo/rhythm tap — works in *every* SW1 position · **Long hold** (> ~450 ms) = the SW1-latched sustained gesture: MID loop record · UP spin-up · DOWN slow-down. Downpress is the timing reference; deadzone between = no-op |
 | FOOTSWITCH 2 | Bypass / kill | **Tap** = bypass toggle — gates the send + loop, but the delay **trail rings out** · **Hold** = kill (clears the delay line + deletes the loop) |
 | LED 1 | Delay clock | Blinks at the effective delay timing (tempo × division) |
 | LED 2 | Bypass / loop state | Active = solid · bypassed = off · recording = solid · loop armed = rapid flash · loop running while bypassed = dim slow flash |
 
 **Loop (SW1 = MID).** Recorded from the clean signal; plays back *into* the delay
-line in parallel with the live input. Recording starts on down-press (accurate
-start); a press shorter than the min-loop gate leaves no loop. Bypass pauses the
-loop, kill (FS2 hold) deletes it.
+line in parallel with the live input. A short tap sets tempo/rhythm and never
+disturbs a playing loop; a long hold records into a scratch buffer and **commits
+on release** (pointer-swap, **replaces** the old loop — no overdub). Recording
+starts on down-press for an accurate start; buffer-full auto-ends. Bypass pauses
+the loop, kill (FS2 hold) deletes it.
 
 ---
 

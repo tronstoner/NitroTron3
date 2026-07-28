@@ -92,7 +92,12 @@ static constexpr float MNEM_BBD_BITS_MIN     = 8.f;    // gentle bit reduction f
 // ---------------------------------------------------------------------------
 // Footswitch / tap timing (control-rate, wall-clock ms via System::GetNow)
 // ---------------------------------------------------------------------------
-static constexpr uint32_t MNEM_LONGPRESS_MS = 350;   // FS1 tap-vs-hold (UP/DOWN gesture)
+// FS1 disambiguation (unified hold-then-commit): released before TAP_RELEASE = a
+// tap; held past LONGPRESS = a sustained gesture (loop / tape); released in the
+// deadzone between = no-op. Kept as two separate constants (a deadzone may be
+// wanted) rather than one shared threshold.
+static constexpr uint32_t MNEM_TAP_RELEASE_MS = 300; // released before this = TAP
+static constexpr uint32_t MNEM_LONGPRESS_MS   = 450; // held beyond this = sustained gesture
 static constexpr uint32_t MNEM_TAP_WINDOW_MS = 3000; // group taps into one gesture
 static constexpr uint32_t MNEM_TAP_MAX_MS    = 2000; // slowest usable tap interval
 static constexpr uint32_t MNEM_TAP_MIN_MS    = 40;   // ignore faster than this
@@ -111,7 +116,8 @@ static constexpr float MNEM_GEST_REL_MS       = 1400.f;// slew back on release
 // ---------------------------------------------------------------------------
 // Hold / loop (SW1 MID)
 // ---------------------------------------------------------------------------
-static constexpr uint32_t MNEM_LOOP_MIN_MS  = 300;   // shorter press -> no loop (gate vs tap)
+// Loop commit is governed by MNEM_LONGPRESS_MS (a press held that long is a loop,
+// not a tap); no separate min-length gate.
 static constexpr float    MNEM_LOOP_XFADE_MS = 6.f;  // seam crossfade at the wrap
 static constexpr float    MNEM_LOOP_FADE_MS  = 8.f;  // play start/stop de-click ramp
 
