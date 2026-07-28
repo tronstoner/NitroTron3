@@ -56,10 +56,10 @@ static constexpr float MNEMD_OU_SHARE    = 0.25f;   // OU share of total deviati
 static constexpr float MNEMD_TAPE_LP_D0 = 18000.f, MNEMD_TAPE_LP_D1 = 3500.f; // HF loss
 static constexpr float MNEMD_HEADBUMP_HZ = 70.f, MNEMD_HEADBUMP_Q = 1.2f, MNEMD_HEADBUMP_DB1 = 4.f;
 static constexpr float MNEMD_TAPE_HP_D0 = 30.f, MNEMD_TAPE_HP_D1 = 45.f;
-static constexpr float MNEMD_SAT_K  = 2.5f;   // k = 1 + SAT_K*sqrt(d)  (k tops out ~3.5 at full CW)
+static constexpr float MNEMD_SAT_K  = 4.0f;   // k = 1 + SAT_K*sqrt(d)  (k tops out ~5.0 at full CW)
 static constexpr float MNEMD_SAT_A  = 0.15f;  // a = SAT_A*d (asymmetry)
 static constexpr float MNEMD_SAT_BIAS = 0.0f; // bias deadzone t = SAT_BIAS*d (Tier 2) — OFF for now (grit source)
-static constexpr float MNEMD_TAPE_NOISE_DB0 = -76.f, MNEMD_TAPE_NOISE_DB1 = -46.f;
+static constexpr float MNEMD_TAPE_NOISE_DB0 = -80.f, MNEMD_TAPE_NOISE_DB1 = -58.f;
 static constexpr float MNEMD_TAPE_NOISE_ENV_DB = 8.f;  // env-modulated term at d=1
 // dropouts / snags (Tier 2)
 static constexpr float MNEMD_DROP_RATE1 = 1.2f;   // events/s at d=1
