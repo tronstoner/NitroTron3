@@ -25,8 +25,13 @@ static constexpr size_t MNEM_LOOP_SAMPLES       = (size_t)(MNEM_LOOP_MAX_S * MNE
 // ---------------------------------------------------------------------------
 // Delay time (K1, SW2 UP = knob time)
 // ---------------------------------------------------------------------------
-static constexpr float MNEM_TIME_MIN_MS = 20.f;
-static constexpr float MNEM_TIME_MAX_MS = 3000.f;
+static constexpr float MNEM_TIME_MIN_MS = 50.f;
+static constexpr float MNEM_TIME_MAX_MS = 1500.f;
+// Knob-time curve (SW2 UP): 1.0 = pure exponential (equal knob degrees = equal
+// TIME RATIO, the natural/correct delay-knob feel; noon ~275 ms, ~2.3x per
+// quarter-turn). >1 pre-warps toward short delays but risks a dead CCW half —
+// leave at 1.0 unless you deliberately want skew.
+static constexpr float MNEM_TIME_CURVE = 1.0f;
 
 // Varispeed glide: one-pole coef per sample pulling the read tap toward its
 // target. Small = slow, syrupy tape slur; large = snappy. ~1/(coef*sr) sec.
@@ -85,6 +90,10 @@ static constexpr float MNEM_FILT_MAKEUP_MAX = 16.f; // cap on the center-gain ma
 
 // Audio-rate parameter smoothing (kills the ~10 ms control-tick zipper on K2-K5).
 static constexpr float MNEM_SMOOTH_MS = 5.f;
+// Delay-time target smoothing: pre-smooths base_delay_ before the varispeed glide
+// so the read-tap velocity (= pitch) stays continuous when K1 moves. Longer =
+// less jitter but more lag before the glide. Pitch-sensitive, so a touch slower.
+static constexpr float MNEM_TIME_SMOOTH_MS = 12.f;
 
 // ---------------------------------------------------------------------------
 // Degrade character (K3): CW tape (warble+drive+HF loss) / CCW BBD (decimate)

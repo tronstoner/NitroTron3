@@ -86,6 +86,7 @@ class Mnemonic : public Module {
     memset(mnem_loop_slab_b, 0, MNEM_LOOP_SAMPLES * sizeof(float));
 
     base_delay_ = 0.001f * 400.f * sr_;   // 400 ms default
+    base_delay_sm_ = base_delay_;
     target_eff_ = base_delay_;
     read_delay_ = base_delay_;
 
@@ -93,6 +94,7 @@ class Mnemonic : public Module {
     gest_rel_coef_ = 1.f - expf(-1.f / (MNEM_GEST_REL_MS * 0.001f * sr_));
     send_coef_ = 1.f - expf(-1.f / (0.003f * sr_));            // 3 ms send gate ramp
     param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // K2-K5 zipper smoother
+    time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K1 delay-time de-jitter
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
     edge_detune_samps_ = MNEM_EDGE_DETUNE_MS * 0.001f * sr_;
@@ -168,8 +170,9 @@ class Mnemonic : public Module {
     // ---- K1 delay time / division, by SW2 --------------------------------
     edge_ = (sw2_ == 2);
     if (sw2_ == 0) {                                   // knob time (free)
+      float kt = powf(k1, MNEM_TIME_CURVE);            // pre-warp: more travel for short delays
       float ms = MNEM_TIME_MIN_MS *
-                 powf(MNEM_TIME_MAX_MS / MNEM_TIME_MIN_MS, k1);
+                 powf(MNEM_TIME_MAX_MS / MNEM_TIME_MIN_MS, kt);
       base_delay_ = ms * 0.001f * sr_;
     } else if (sw2_ == 1) {                            // tap tempo -> division
       int d = QuantizeDivision(k1);
@@ -182,7 +185,7 @@ class Mnemonic : public Module {
     base_delay_ = MnemClamp(base_delay_, 0.001f * MNEM_TIME_MIN_MS * sr_,
                             (float)MNEM_DELAY_SAMPLES - 2.f);
     if (snap_) {                                   // first Controls after Activate: no ramp-in
-      read_delay_ = base_delay_;
+      read_delay_ = base_delay_; base_delay_sm_ = base_delay_;
       lo_sm_ = lo_; hi_sm_ = hi_;
       fb_sm_ = fb_gain_; drive_sm_ = tape_drive_; makeup_sm_ = filter_makeup_;
       snap_ = false;
@@ -270,6 +273,7 @@ class Mnemonic : public Module {
       makeup_sm_ += (filter_makeup_ - makeup_sm_) * param_smooth_;
       lo_sm_     += (lo_ - lo_sm_) * param_smooth_;
       hi_sm_     += (hi_ - hi_sm_) * param_smooth_;
+      base_delay_sm_ += (base_delay_ - base_delay_sm_) * time_smooth_;  // de-jitter K1 before the glide
       SetFilters(lo_sm_, hi_sm_);   // recompute SVF coeffs from smoothed cutoffs (2 tanf)
 
       // Loop scratch record (clean input) — capture before any colour. Buffer
@@ -285,7 +289,7 @@ class Mnemonic : public Module {
       float time_fac = 1.f, fb_target = fb_sm_;
       if (gest_dir_ == +1) { time_fac = 1.f + gest_amt_ * (MNEM_GEST_UP_TIMEFAC - 1.f);   fb_target = MNEM_GEST_UP_FB; }
       else                 { time_fac = 1.f + gest_amt_ * (MNEM_GEST_DOWN_TIMEFAC - 1.f); fb_target = MNEM_GEST_DOWN_FB; }
-      target_eff_ = MnemClamp(base_delay_ * time_fac, 1.f, (float)MNEM_DELAY_SAMPLES - 2.f);
+      target_eff_ = MnemClamp(base_delay_sm_ * time_fac, 1.f, (float)MNEM_DELAY_SAMPLES - 2.f);
       float fb_eff = fb_sm_ + gest_amt_ * (fb_target - fb_sm_);
 
       // Varispeed glide (THE identity): read tap eases toward its target.
@@ -466,7 +470,8 @@ class Mnemonic : public Module {
   RingBuffer delay_;
 
   // varispeed
-  float base_delay_ = 0.f, target_eff_ = 0.f, read_delay_ = 0.f;
+  float base_delay_ = 0.f, base_delay_sm_ = 0.f, target_eff_ = 0.f, read_delay_ = 0.f;
+  float time_smooth_ = 0.004f;
   bool  snap_ = true;
 
   // feedback / drive — targets set at control rate, *_sm_ smoothed at audio rate
