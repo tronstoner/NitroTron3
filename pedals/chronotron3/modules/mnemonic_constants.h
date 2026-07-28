@@ -75,7 +75,12 @@ static constexpr float MNEM_FILT_FMIN    = 20.f;    // band floor
 static constexpr float MNEM_FILT_FMAX    = 20000.f; // band ceiling
 static constexpr float MNEM_FILT_HP_MAX  = 4000.f;  // HP cutoff at full K4-CW (thin)
 static constexpr float MNEM_FILT_LP_MIN  = 180.f;   // LP cutoff at full K4-CCW (dark)
-static constexpr float MNEM_FILTER_RES_Q = 1.6f;    // per-SVF-stage Q (~+9 dB combined bump)
+static constexpr float MNEM_FILTER_RES_Q = 0.707f;  // per-stage Q: 0.707 = flat/no resonance; raise for "nasal" formant (~1.6 = +9 dB)
+static constexpr float MNEM_FILT_MAKEUP_XS  = 2.0f; // narrow-band over-compensation: 1 = level-restore only, >1 = narrow K5 sits louder
+static constexpr float MNEM_FILT_MAKEUP_MAX = 16.f; // cap on the center-gain makeup (~+24 dB)
+
+// Audio-rate parameter smoothing (kills the ~10 ms control-tick zipper on K2-K5).
+static constexpr float MNEM_SMOOTH_MS = 5.f;
 
 // ---------------------------------------------------------------------------
 // Degrade character (K3): CW tape (warble+drive+HF loss) / CCW BBD (decimate)

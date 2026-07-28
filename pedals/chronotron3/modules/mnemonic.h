@@ -5,12 +5,11 @@
 //
 // Analog-style delay: changing the delay time (knob, tap, or tape gesture) glides
 // the read tap, so the pitch bends while it moves (varispeed) — never a
-// clean-digital crossfade. The tape character (drive + K3 degrade) sits INSIDE
-// the feedback loop so repeats age; the K4/K5 tone filters sit AFTER the delay
-// read (OUT of the loop) so they shape the wet without bleeding the regeneration
-// — feedback is tapped clean/full-band. K2 feedback runs into the always-on tape
-// saturation up to a bounded self-oscillation (no ducker). On top: a Hazarai-
-// style hold/loop, and FS1-hold tape gestures (spin-up / slow-down).
+// clean-digital crossfade. Colour (K4/K5 filter + tape drive + K3 degrade) sits
+// INSIDE the feedback loop, so repeats progressively age. K2 feedback runs into
+// the always-on tape saturation up to a bounded self-oscillation (no ducker).
+// On top: a Hazarai-style hold/loop, and FS1-hold tape gestures (spin-up /
+// slow-down).
 //
 //   K1 = delay time (SW2 UP) / tap division (SW2 MID) / Edge division tap (DOWN)
 //   K2 = feedback (0 -> self-oscillation)
@@ -63,6 +62,7 @@ struct MnemSVF {
     a2 = g * a1;
     a3 = g * a2;
   }
+  void CopyCoefFrom(const MnemSVF& o) { a1 = o.a1; a2 = o.a2; a3 = o.a3; k = o.k; }
   void Process(float x, float& lp, float& bp, float& hp) {
     float v3 = x - ic2;
     float v1 = a1 * ic1 + a2 * v3;
@@ -92,6 +92,7 @@ class Mnemonic : public Module {
     gest_atk_coef_ = 1.f - expf(-1.f / (MNEM_GEST_ATK_MS * 0.001f * sr_));
     gest_rel_coef_ = 1.f - expf(-1.f / (MNEM_GEST_REL_MS * 0.001f * sr_));
     send_coef_ = 1.f - expf(-1.f / (0.003f * sr_));            // 3 ms send gate ramp
+    param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // K2-K5 zipper smoother
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
     edge_detune_samps_ = MNEM_EDGE_DETUNE_MS * 0.001f * sr_;
@@ -148,9 +149,21 @@ class Mnemonic : public Module {
     float hi0 = MNEM_FILT_FMAX * powf(MNEM_FILT_LP_MIN / MNEM_FILT_FMAX,
                                       tilt < 0.f ? -tilt : 0.f);
     float center = sqrtf(lo0 * hi0);
-    float lo = center * powf(lo0 / center, 1.f - k5);  // HP cutoff
-    float hi = center * powf(hi0 / center, 1.f - k5);  // LP cutoff
-    SetFilters(lo, hi);
+    lo_ = center * powf(lo0 / center, 1.f - k5);       // HP cutoff target (smoothed in Process)
+    hi_ = center * powf(hi0 / center, 1.f - k5);       // LP cutoff target
+
+    // Narrow bands lose level at their CENTER through the cascade; in the loop
+    // that reads as "silenced". Compensate with a center-gain makeup (rises as K5
+    // narrows; auto-falls if RES_Q adds resonance, which lifts the center itself).
+    // MNEM_FILT_MAKEUP_XS over-compensates (>1) so narrow K5 sits louder, not just
+    // level-restored — only the above-unity part is scaled, so wide K5 stays flat.
+    float r = (hi_ > lo_) ? hi_ / lo_ : 1.0001f;
+    float xh = sqrtf(r), xl = 1.f / xh, Q = MNEM_FILTER_RES_Q;
+    float hpM = (xh * xh) / sqrtf((1.f - xh * xh) * (1.f - xh * xh) + (xh / Q) * (xh / Q));
+    float lpM = 1.f        / sqrtf((1.f - xl * xl) * (1.f - xl * xl) + (xl / Q) * (xl / Q));
+    float cg = hpM * lpM; cg *= cg;                    // two cascaded stages each
+    float comp = 1.f + (1.f / (cg + 1e-6f) - 1.f) * MNEM_FILT_MAKEUP_XS;
+    filter_makeup_ = MnemClamp(comp, 1.f, MNEM_FILT_MAKEUP_MAX);
 
     // ---- K1 delay time / division, by SW2 --------------------------------
     edge_ = (sw2_ == 2);
@@ -168,7 +181,12 @@ class Mnemonic : public Module {
     }
     base_delay_ = MnemClamp(base_delay_, 0.001f * MNEM_TIME_MIN_MS * sr_,
                             (float)MNEM_DELAY_SAMPLES - 2.f);
-    if (snap_) { read_delay_ = base_delay_; snap_ = false; }
+    if (snap_) {                                   // first Controls after Activate: no ramp-in
+      read_delay_ = base_delay_;
+      lo_sm_ = lo_; hi_sm_ = hi_;
+      fb_sm_ = fb_gain_; drive_sm_ = tape_drive_; makeup_sm_ = filter_makeup_;
+      snap_ = false;
+    }
 
     // ---- FS1: unified hold-then-commit -----------------------------------
     // Downpress is the universal event; press length disambiguates it:
@@ -245,6 +263,15 @@ class Mnemonic : public Module {
     const float two_pi = 6.2831853f;
 
     for (size_t i = 0; i < size; i++) {
+      // Audio-rate param smoothing — kills the control-tick (~10 ms) zipper on
+      // K2/K3/K4/K5. (K1 is already smoothed by the varispeed glide.)
+      fb_sm_     += (fb_gain_       - fb_sm_)     * param_smooth_;
+      drive_sm_  += (tape_drive_    - drive_sm_)  * param_smooth_;
+      makeup_sm_ += (filter_makeup_ - makeup_sm_) * param_smooth_;
+      lo_sm_     += (lo_ - lo_sm_) * param_smooth_;
+      hi_sm_     += (hi_ - hi_sm_) * param_smooth_;
+      SetFilters(lo_sm_, hi_sm_);   // recompute SVF coeffs from smoothed cutoffs (2 tanf)
+
       // Loop scratch record (clean input) — capture before any colour. Buffer
       // full raises a flag the control loop treats as a record-end (vestige-style).
       if (loop_scratch_recording_ && loop_rec_write_ < MNEM_LOOP_SAMPLES) {
@@ -255,11 +282,11 @@ class Mnemonic : public Module {
       // Gesture ramp (spin-up / slow-down envelope).
       float gt = gesture_engaged_ ? 1.f : 0.f;
       gest_amt_ += (gt - gest_amt_) * (gesture_engaged_ ? gest_atk_coef_ : gest_rel_coef_);
-      float time_fac = 1.f, fb_target = fb_gain_;
+      float time_fac = 1.f, fb_target = fb_sm_;
       if (gest_dir_ == +1) { time_fac = 1.f + gest_amt_ * (MNEM_GEST_UP_TIMEFAC - 1.f);   fb_target = MNEM_GEST_UP_FB; }
       else                 { time_fac = 1.f + gest_amt_ * (MNEM_GEST_DOWN_TIMEFAC - 1.f); fb_target = MNEM_GEST_DOWN_FB; }
       target_eff_ = MnemClamp(base_delay_ * time_fac, 1.f, (float)MNEM_DELAY_SAMPLES - 2.f);
-      float fb_eff = fb_gain_ + gest_amt_ * (fb_target - fb_gain_);
+      float fb_eff = fb_sm_ + gest_amt_ * (fb_target - fb_sm_);
 
       // Varispeed glide (THE identity): read tap eases toward its target.
       read_delay_ += (target_eff_ - read_delay_) * MNEM_GLIDE_COEF;
@@ -285,8 +312,8 @@ class Mnemonic : public Module {
         delayed = delay_.ReadFrac(wp - read_delay_ - wobble);
       }
 
-      // Feedback is tapped CLEAN (pre-filter) so regeneration stays full-band and
-      // accurate. Only the always-on tape stages colour the loop; no ducker.
+      // Feedback tapped from the read (already filtered on prior laps, since the
+      // K4/K5 filter is IN the loop) -> repeats progressively age. No ducker.
       float fb = delayed * fb_eff;
 
       // Loop plays INTO the delay input, parallel with the (gated) dry send.
@@ -294,11 +321,12 @@ class Mnemonic : public Module {
       float loop_s = LoopPlay();
 
       float x = in[i] * send_gain_ + loop_s + fb;
-      x = TapeDrive(x);                                 // always-on tape saturation (in loop)
-      x = Degrade(x);                                   // tape HF loss / BBD decimate (in loop)
+      x = Filter(x);                                    // K4/K5 tone — IN the loop (ages repeats)
+      x = TapeDrive(x);                                 // always-on tape saturation
+      x = Degrade(x);                                   // tape HF loss / BBD decimate
       delay_.Write(x);
 
-      wet[i] = Filter(delayed);                         // K4/K5 tone — OUT of the loop
+      wet[i] = delayed;                                 // raw read (filtered on prior laps)
     }
   }
 
@@ -306,22 +334,23 @@ class Mnemonic : public Module {
   bool OwnsOutput() const override { return false; }
 
  private:
-  // ---- tone filter (out of the loop): 24 dB HP -> 24 dB LP ---------------
+  // ---- tone filter (in the loop): 24 dB HP -> 24 dB LP -------------------
   void SetFilters(float lo, float hi) {
     lo = MnemClamp(lo, MNEM_FILT_FMIN, MNEM_FILT_FMAX);
     hi = MnemClamp(hi, lo, MNEM_FILT_FMAX);             // keep hi >= lo
-    hp1_.Set(lo, MNEM_FILTER_RES_Q, sr_); hp2_.Set(lo, MNEM_FILTER_RES_Q, sr_);
-    lp1_.Set(hi, MNEM_FILTER_RES_Q, sr_); lp2_.Set(hi, MNEM_FILTER_RES_Q, sr_);
+    hp1_.Set(lo, MNEM_FILTER_RES_Q, sr_); hp2_.CopyCoefFrom(hp1_);  // 1 tanf, both HP stages
+    lp1_.Set(hi, MNEM_FILTER_RES_Q, sr_); lp2_.CopyCoefFrom(lp1_);  // 1 tanf, both LP stages
   }
   inline float Filter(float x) {
     float lp, bp, hp;
     hp1_.Process(x, lp, bp, hp);  x = hp;               // HP stage 1
     hp2_.Process(x, lp, bp, hp);  x = hp;               // HP stage 2 (24 dB/oct)
     lp1_.Process(x, lp, bp, hp);  x = lp;               // LP stage 1
-    lp2_.Process(x, lp, bp, hp);  return lp;            // LP stage 2 (24 dB/oct)
+    lp2_.Process(x, lp, bp, hp);                        // LP stage 2 (24 dB/oct)
+    return lp * makeup_sm_;                             // smoothed narrow-band center makeup
   }
   inline float TapeDrive(float x) {                     // unity small-signal, soft peaks
-    float d = tape_drive_;
+    float d = drive_sm_;
     return tanhf(x * d) / d;
   }
   inline float Degrade(float x) {
@@ -435,11 +464,15 @@ class Mnemonic : public Module {
   float base_delay_ = 0.f, target_eff_ = 0.f, read_delay_ = 0.f;
   bool  snap_ = true;
 
-  // feedback / drive
+  // feedback / drive — targets set at control rate, *_sm_ smoothed at audio rate
   float fb_gain_ = 0.f, tape_drive_ = MNEM_TAPE_DRIVE;
+  float fb_sm_ = 0.f, drive_sm_ = MNEM_TAPE_DRIVE;
 
-  // tone filter (out of loop): 24 dB HP (hp1->hp2) then 24 dB LP (lp1->lp2)
+  // tone filter (in loop): 24 dB HP (hp1->hp2) then 24 dB LP (lp1->lp2) + makeup
   MnemSVF hp1_, hp2_, lp1_, lp2_;
+  float   lo_ = 2000.f, hi_ = 2000.f;          // cutoff targets
+  float   lo_sm_ = 2000.f, hi_sm_ = 2000.f;    // smoothed cutoffs (drive the SVFs)
+  float   filter_makeup_ = 1.f, makeup_sm_ = 1.f;
 
   // degrade
   float tape_amt_ = 0.f, bbd_amt_ = 0.f;
@@ -463,6 +496,7 @@ class Mnemonic : public Module {
   // bypass / send gate
   bool  bypassed_ = false, kill_fired_ = false;
   float send_gain_ = 1.f, send_target_ = 1.f, send_coef_ = 0.f;
+  float param_smooth_ = 0.004f;          // audio-rate smoother for K2-K5 params
 
   // loop (two-slab scratch/playback, pointer-swap commit; REPLACE not overdub)
   float* loop_play_buf_ = nullptr;
