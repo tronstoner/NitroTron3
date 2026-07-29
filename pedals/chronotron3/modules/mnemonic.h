@@ -29,6 +29,7 @@
 #include "mnemonic_constants.h"
 #include "mnemonic_degrade.h"   // K3 bipolar BBD/Tape degradation engine
 #include "ring_buffer.h"   // core/blocks — mono circular buffer with ReadFrac
+#include "grain_voice.h"   // core/blocks — grain player for the freeze voice
 #include <math.h>
 #include <cstring>         // memset (kill)
 
@@ -36,10 +37,17 @@
 // SDRAM storage — delay line + loop capture. File scope (single TU) is safe.
 // ---------------------------------------------------------------------------
 static float DSY_SDRAM_BSS mnem_delay_slab[MNEM_DELAY_SAMPLES];
+// Second delay line — the Edge quarter (support) line (SW2 DOWN only; idle
+// otherwise). Independent feedback loop so the two Edge rhythms don't smear.
+static float DSY_SDRAM_BSS mnem_delay2_slab[MNEM_DELAY_SAMPLES];
 // Two loop slabs: one plays, one records (scratch). Commit = pointer swap, so a
 // short tap that recorded into scratch never disturbs the loop already playing.
 static float DSY_SDRAM_BSS mnem_loop_slab_a[MNEM_LOOP_SAMPLES];
 static float DSY_SDRAM_BSS mnem_loop_slab_b[MNEM_LOOP_SAMPLES];
+// Two freeze slabs: one grain-plays, one captures (circular). Commit = pointer
+// swap, so a re-freeze captures cleanly while the current freeze keeps playing.
+static float DSY_SDRAM_BSS mnem_freeze_slab_a[MNEM_FREEZE_SAMPLES];
+static float DSY_SDRAM_BSS mnem_freeze_slab_b[MNEM_FREEZE_SAMPLES];
 
 static inline float MnemClamp(float v, float lo, float hi) {
   return v < lo ? lo : (v > hi ? hi : v);
@@ -75,16 +83,37 @@ struct MnemSVF {
   void Reset() { ic1 = ic2 = 0.f; }
 };
 
+// Chebyshev waveshaper (secondary "telephone" line): sums T2..T5, each a pure
+// n-th-harmonic generator, so it GROWS harmonics on attacks (percussive) rather
+// than just clipping. Input must be pre-driven and clamped to [-1,1]. The raw
+// value at x=0 is removed so silence stays silent. Adapted from NitroTron3 Mode C.
+static inline float MnemChebyshev(float x) {
+  const float x2 = x * x;
+  const float t2 = 2.f * x2 - 1.f;
+  const float t3 = (4.f * x2 - 3.f) * x;
+  const float t4 = (8.f * x2 - 8.f) * x2 + 1.f;
+  const float t5 = ((16.f * x2 - 20.f) * x2 + 5.f) * x;
+  const float dc = -MNEM_SEC_CHEBY_H2 + MNEM_SEC_CHEBY_H4;   // raw value at x=0
+  return MNEM_SEC_CHEBY_H2 * t2 + MNEM_SEC_CHEBY_H3 * t3 +
+         MNEM_SEC_CHEBY_H4 * t4 + MNEM_SEC_CHEBY_H5 * t5 - dc;
+}
+
 class Mnemonic : public Module {
  public:
   // -------------------------------------------------------------------------
   void Init(float sr) override {
     sr_ = sr;
     delay_.Init(mnem_delay_slab, MNEM_DELAY_SAMPLES);
+    delay2_.Init(mnem_delay2_slab, MNEM_DELAY_SAMPLES);
+    memset(mnem_delay2_slab, 0, MNEM_DELAY_SAMPLES * sizeof(float));
     loop_play_buf_ = mnem_loop_slab_a;
     loop_rec_buf_  = mnem_loop_slab_b;
     memset(mnem_loop_slab_a, 0, MNEM_LOOP_SAMPLES * sizeof(float));
     memset(mnem_loop_slab_b, 0, MNEM_LOOP_SAMPLES * sizeof(float));
+    freeze_play_.Init(mnem_freeze_slab_a, MNEM_FREEZE_SAMPLES);
+    freeze_cap_.Init(mnem_freeze_slab_b, MNEM_FREEZE_SAMPLES);
+    memset(mnem_freeze_slab_a, 0, MNEM_FREEZE_SAMPLES * sizeof(float));
+    memset(mnem_freeze_slab_b, 0, MNEM_FREEZE_SAMPLES * sizeof(float));
 
     base_delay_ = 0.001f * 400.f * sr_;   // 400 ms default
     base_delay_sm_ = base_delay_;
@@ -104,16 +133,22 @@ class Mnemonic : public Module {
     time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K1 delay-time de-jitter
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
-    edge_detune_samps_ = MNEM_EDGE_DETUNE_MS * 0.001f * sr_;
+    freeze_amp_coef_ = 1.f - expf(-1.f / (MNEM_FREEZE_AMP_MS * 0.001f * sr_));
 
     SetFilters(2000.f, 2000.f);   // harmless defaults until first Controls
+    sec_prelp1_.SetLP(MNEM_SEC_PRELP_HZ, sr_); sec_prelp2_.SetLP(MNEM_SEC_PRELP_HZ, sr_);
+    sec_hp_.Set(MNEM_SEC_HP_HZ, 0.707f, sr_);  sec_lp_.Set(MNEM_SEC_LP_HZ, 0.707f, sr_);
+    sec_rms_coef_ = 1.f - expf(-1.f / (MNEM_SEC_RMS_MS * 0.001f * sr_));
     degrade_.Init(sr_);
   }
 
   void Activate() override {
     snap_ = true;                 // snap read tap to target on first Controls (no sweep-in)
     gesture_engaged_ = false; gest_amt_ = 0.f;
+    freeze_capturing_ = false; freeze_playing_ = false; freeze_amp_ = 0.f;
+    for (int g = 0; g < MNEM_FREEZE_GRAINS; g++) freeze_grains_[g].Reset();
     hp1_.Reset(); hp2_.Reset(); lp1_.Reset(); lp2_.Reset();
+    sec_prelp1_.Reset(); sec_prelp2_.Reset(); sec_hp_.Reset(); sec_lp_.Reset(); sec_rms_ = 0.f;
   }
 
   // -------------------------------------------------------------------------
@@ -139,7 +174,10 @@ class Mnemonic : public Module {
     // degrade chains on top (clean-ish dead-zone at centre). Colour is applied in
     // the loop; the tape speed-irregularity modulates the MAIN read tap (Process).
     tape_drive_ = MNEM_TAPE_DRIVE;                  // constant base warmth
-    degrade_.SetDepth((k3 - 0.5f) * 2.f);           // p in [-1,+1] (dead-zone in engine)
+    float k3_depth = (k3 - 0.5f) * 2.f;             // p in [-1,+1]
+    degrade_.SetDepth(k3_depth);                    // (dead-zone in engine)
+    // Edge secondary drive: baseline grit + more toward EITHER K3 extreme.
+    sec_drive_ = MNEM_SEC_DRIVE_BASE + fabsf(k3_depth) * MNEM_SEC_DRIVE_K3;
 
     // ---- K4 tilt/center + K5 narrow (converging 24 dB HP+LP) -------------
     // Wide band edges from K4 (K5=0): CCW lowers the LP (dark), CW raises the HP
@@ -153,6 +191,13 @@ class Mnemonic : public Module {
     float center = sqrtf(lo0 * hi0);
     lo_ = center * powf(lo0 / center, 1.f - k5);       // HP cutoff target (smoothed in Process)
     hi_ = center * powf(hi0 / center, 1.f - k5);       // LP cutoff target
+
+    // Edge secondary telephone band: fixed mids that FOLLOW K4/K5 only slightly
+    // (~25%) — shifts with the main tone but never leaves the mids. Control-rate.
+    float shift = powf(2.f, tilt * MNEM_SEC_FOLLOW_OCT);   // K4 tilt: +-0.5 oct
+    float nar   = 1.f + k5 * MNEM_SEC_FOLLOW_NAR;          // K5 narrows a touch
+    sec_hp_.Set(MNEM_SEC_HP_HZ * shift * nar, 0.707f, sr_);
+    sec_lp_.Set(MNEM_SEC_LP_HZ * shift / nar, 0.707f, sr_);
 
     // Narrow bands lose level at their CENTER through the cascade; in the loop
     // that reads as "silenced". Compensate with a center-gain makeup (rises as K5
@@ -178,14 +223,20 @@ class Mnemonic : public Module {
       int d = QuantizeDivision(k1);
       if (have_tempo_)
         base_delay_ = quarter_ms_ * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-    } else {                                           // Edge dual-tap: A=4/4, B=div
-      edge_div_ratio_ = MNEM_DIV_RATIOS[QuantizeDivision(k1)];
-      if (have_tempo_) base_delay_ = quarter_ms_ * 0.001f * sr_;   // tap A = quarter
+    } else {                                           // Edge: primary = MID, plus a secondary line
+      int d = QuantizeDivision(k1);
+      if (have_tempo_) {
+        base_delay_  = quarter_ms_ * MNEM_DIV_RATIOS[d]           * 0.001f * sr_;  // primary = MID
+        base_delay2_ = quarter_ms_ * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_; // 8ve-up secondary
+      }
     }
     base_delay_ = MnemClamp(base_delay_, 0.001f * MNEM_TIME_MIN_MS * sr_,
                             (float)MNEM_DELAY_SAMPLES - 2.f);
+    base_delay2_ = MnemClamp(base_delay2_, 0.001f * MNEM_TIME_MIN_MS * sr_,
+                             (float)MNEM_DELAY_SAMPLES - 2.f);
     if (snap_) {                                   // first Controls after Activate: no ramp-in
       read_delay_ = base_delay_; base_delay_sm_ = base_delay_;
+      read_delay2_ = base_delay2_; base_delay2_sm_ = base_delay2_;
       lo_sm_ = lo_; hi_sm_ = hi_;
       fb_sm_ = fb_gain_; drive_sm_ = tape_drive_; makeup_sm_ = filter_makeup_;
       snap_ = false;
@@ -206,18 +257,21 @@ class Mnemonic : public Module {
       f1_mode_ = sw1_;                       // latch SW1 for the whole press
       f1_gesture_committed_ = false;
       loop_committed_this_press_ = false;
+      clock_next_ms_ = now;                  // re-align the LED clock blink to this tap (fires now)
       if (f1_mode_ == 1) {                   // MID: start scratch recording now
         loop_scratch_recording_ = true;
         loop_rec_write_ = 0;
         loop_rec_full_ = false;
+      } else if (f1_mode_ == 2) {            // DOWN: start freeze capture (circular)
+        freeze_capturing_ = true;            // keeps only the last WIN_MS; commit on release
       }
     }
     if (f1.down && !f1_gesture_committed_ &&
         (now - f1_down_ms_) >= MNEM_LONGPRESS_MS) {
       f1_gesture_committed_ = true;          // crossed into sustained-gesture land
       if (f1_mode_ == 0) { gesture_engaged_ = true; gest_dir_ = +1; }   // spin-up
-      else if (f1_mode_ == 2) { gesture_engaged_ = true; gest_dir_ = -1; } // slow-down
       // f1_mode_ == 1 (loop): scratch keeps recording; commit on release.
+      // f1_mode_ == 2 (freeze): capture keeps running; commit on release.
     }
     if (loop_rec_full_) {                    // scratch hit the ceiling: auto record-end
       loop_rec_full_ = false;
@@ -231,13 +285,15 @@ class Mnemonic : public Module {
       if (!loop_committed_this_press_) {
         if (f1_gesture_committed_) {
           if (f1_mode_ == 1) CommitLoopFromScratch();       // loop: commit + play
-          // UP/DOWN tape gesture ends via the gesture_engaged_ reset below.
+          else if (f1_mode_ == 2) CommitFreeze();           // freeze: swap + grain-loop
+          // UP tape gesture ends via the gesture_engaged_ reset below.
         } else if (held < MNEM_TAP_RELEASE_MS) {
           if (sw2_ == 1 || sw2_ == 2) RegisterTap(f1_down_ms_);  // TAP (downpress-timed)
         }
         // else: released in the deadzone -> no-op
       }
       loop_scratch_recording_ = false;       // discard any uncommitted scratch
+      freeze_capturing_ = false;             // stop the circular capture
       f1_gesture_committed_ = false;
       loop_committed_this_press_ = false;
       gesture_engaged_ = false;              // release ends the tape gesture (slew back)
@@ -254,6 +310,8 @@ class Mnemonic : public Module {
       panic_active_ = true;             // engage the spin-down-to-silence envelope
       panic_cleared_ = false;
       KillLoop();                       // drop the loop now (silent already); tail fades via env
+      freeze_playing_ = false;          // clear the freeze too (freeze_amp_ ramps it out)
+      freeze_capturing_ = false;
       kill_fired_ = true;
     }
     if (f2.falling) {
@@ -267,6 +325,7 @@ class Mnemonic : public Module {
     // slate with no click (audio thread only raises the request).
     if (panic_clear_req_) {
       memset(mnem_delay_slab, 0, MNEM_DELAY_SAMPLES * sizeof(float));
+      memset(mnem_delay2_slab, 0, MNEM_DELAY_SAMPLES * sizeof(float));  // Edge quarter line
       panic_clear_req_ = false;
     }
 
@@ -277,7 +336,8 @@ class Mnemonic : public Module {
   // Audio-rate: fill `wet` with the mono wet output (shell adds dry via K6).
   // -------------------------------------------------------------------------
   void Process(const float* in, float* wet, size_t size) override {
-    const float wp0 = (float)delay_.GetWritePos();
+    const float wp0  = (float)delay_.GetWritePos();
+    const float wp2_0 = (float)delay2_.GetWritePos();   // Edge quarter line write base
 
     for (size_t i = 0; i < size; i++) {
       // Audio-rate param smoothing — kills the control-tick (~10 ms) zipper on
@@ -287,7 +347,9 @@ class Mnemonic : public Module {
       makeup_sm_ += (filter_makeup_ - makeup_sm_) * param_smooth_;
       lo_sm_     += (lo_ - lo_sm_) * param_smooth_;
       hi_sm_     += (hi_ - hi_sm_) * param_smooth_;
-      base_delay_sm_ += (base_delay_ - base_delay_sm_) * time_smooth_;  // de-jitter K1 before the glide
+      base_delay_sm_  += (base_delay_  - base_delay_sm_)  * time_smooth_;  // de-jitter K1 before the glide
+      base_delay2_sm_ += (base_delay2_ - base_delay2_sm_) * time_smooth_;  // Edge secondary target
+      sec_drive_sm_   += (sec_drive_   - sec_drive_sm_)   * param_smooth_; // Edge secondary drive (K3)
       SetFilters(lo_sm_, hi_sm_);   // recompute SVF coeffs from smoothed cutoffs (2 tanf)
 
       // Loop scratch record (clean input) — capture before any colour. Buffer
@@ -297,17 +359,23 @@ class Mnemonic : public Module {
         if (loop_rec_write_ >= MNEM_LOOP_SAMPLES) loop_rec_full_ = true;
       }
 
-      // Gesture ramp (spin-up / slow-down envelope).
+      // Freeze capture (clean input) — continuous circular write into the cap
+      // ring, so at release it holds exactly the last MNEM_FREEZE_WIN_MS. The
+      // wrap seam is crossfaded by the overlapped grains at playback, not here.
+      if (freeze_capturing_) freeze_cap_.Write(in[i]);
+
+      // Gesture ramp (SW1 UP spin-up envelope; DOWN is freeze, not a tape gesture).
       float gt = gesture_engaged_ ? 1.f : 0.f;
       gest_amt_ += (gt - gest_amt_) * (gesture_engaged_ ? gest_atk_coef_ : gest_rel_coef_);
-      float time_fac = 1.f, fb_target = fb_sm_;
-      if (gest_dir_ == +1) { time_fac = 1.f + gest_amt_ * (MNEM_GEST_UP_TIMEFAC - 1.f);   fb_target = MNEM_GEST_UP_FB; }
-      else                 { time_fac = 1.f + gest_amt_ * (MNEM_GEST_DOWN_TIMEFAC - 1.f); fb_target = MNEM_GEST_DOWN_FB; }
-      target_eff_ = MnemClamp(base_delay_sm_ * time_fac, 1.f, (float)MNEM_DELAY_SAMPLES - 2.f);
+      float time_fac = 1.f + gest_amt_ * (MNEM_GEST_UP_TIMEFAC - 1.f);
+      float fb_target = MNEM_GEST_UP_FB;
+      target_eff_  = MnemClamp(base_delay_sm_  * time_fac, 1.f, (float)MNEM_DELAY_SAMPLES - 2.f);
+      target_eff2_ = MnemClamp(base_delay2_sm_ * time_fac, 1.f, (float)MNEM_DELAY_SAMPLES - 2.f);
       float fb_eff = fb_sm_ + gest_amt_ * (fb_target - fb_sm_);
 
-      // Varispeed glide (THE identity): read tap eases toward its target.
-      read_delay_ += (target_eff_ - read_delay_) * MNEM_GLIDE_COEF;
+      // Varispeed glide (THE identity): read taps ease toward their targets.
+      read_delay_  += (target_eff_  - read_delay_)  * MNEM_GLIDE_COEF;
+      read_delay2_ += (target_eff2_ - read_delay2_) * MNEM_GLIDE_COEF;
 
       // Tape speed-irregularity (cents, from the degrade engine) integrated to a
       // read-tap position offset (speed deviation -> tape displacement), leaky so
@@ -316,17 +384,6 @@ class Mnemonic : public Module {
       flutter_int_ = flutter_int_ * MNEM_FLUTTER_LEAK + cents * MNEM_CENTS_TO_RATE;
       float wobble = flutter_int_;
       const float wp = wp0 + (float)i;
-
-      // Read tap: single, or the Edge dual-tap (4/4 + K1 division, detuned).
-      float delayed;
-      if (edge_) {
-        float a = delay_.ReadFrac(wp - read_delay_ - wobble);
-        float b = delay_.ReadFrac(wp - (read_delay_ * edge_div_ratio_ +
-                                        edge_detune_samps_) - wobble);
-        delayed = a * MNEM_EDGE_A_GAIN + b * MNEM_EDGE_B_GAIN;
-      } else {
-        delayed = delay_.ReadFrac(wp - read_delay_ - wobble);
-      }
 
       // Panic spin-down envelope: only engages on the FS2 long-press. Throttling
       // the RECIRCULATION with it guarantees the tail/oscillation/noise die to
@@ -339,38 +396,95 @@ class Mnemonic : public Module {
         panic_clear_req_ = true; panic_cleared_ = true;
       }
 
-      // Feedback tapped from the read (already filtered on prior laps). A dedicated
-      // saturator compresses the RECIRCULATION only (analog bloom: repeats warm +
-      // even out); the fresh input stays present (only mild K3 tape drive touches
-      // it). Saturating after fb_eff means more feedback -> more bloom.
-      float fb = FbSat(delayed * fb_eff * panic_env_);
-
-      // Loop plays INTO the delay input, parallel with the (gated) dry send.
+      // Fresh-input send gate (ramped) + loop playback into the delay input.
       send_gain_ += (send_target_ - send_gain_) * send_coef_;
       float loop_s = LoopPlay();
 
-      // Bypass noise-duck: follow the trail envelope; in bypass, once it decays
-      // toward the engine's noise floor, duck the injected hiss so it dies WITH
-      // the trail (not after). Threshold rides the floor -> tracks K3. Only in
-      // bypass; during play the tape hiss between notes stays as character.
-      const float ta = fabsf(delayed);
-      trail_env_ += (ta > trail_env_ ? ngate_env_atk_ : ngate_env_rel_) * (ta - trail_env_);
-      float ng_tgt = 1.f;
-      if (bypassed_) {
-        const float thr = degrade_.NoiseFloorLin() * MNEM_NGATE_MARGIN;
-        ng_tgt = (trail_env_ > thr) ? 1.f : 0.f;
+      float delayed;
+      if (edge_) {
+        // Edge = MID + a secondary line, each with its own feedback loop.
+        //   PRIMARY   = quarter x division, IDENTICAL to SW2 MID (full colour).
+        //   SECONDARY = quarter x companion ratio, octave-up (pitch shift on the
+        //               INPUT, outside its loop), NO filter, NO K3, quieter.
+        const float wp2 = wp2_0 + (float)i;
+        float dd = delay_.ReadFrac(wp - read_delay_ - wobble);      // primary (= MID) read
+        float dq = delay2_.ReadFrac(wp2 - read_delay2_);            // secondary read (own delay)
+
+        UpdateNoiseDuck(dd);                             // duck tracks the K3-coloured (primary) line
+
+        float fbd = FbSat(dd * fb_eff * panic_env_);     // primary loop: full colour (= MID)
+        float xd = in[i] * send_gain_ + loop_s + fbd;
+        xd = Filter(xd); xd = TapeDrive(xd); xd = degrade_.ColourProcess(xd);
+        delay_.Write(xd);
+
+        // secondary loop: lo-fi telephone voice on the FRESH input (outside the
+        // feedback). pre-LP -> drive -> Chebyshev -> telephone band -> RMS norm.
+        // (drive/shaper/RMS gated by MNEM_SEC_DRIVE_ENABLE for isolating the band.)
+        float si = in[i];
+        if (MNEM_SEC_DRIVE_ENABLE) {
+          si = sec_prelp2_.LP(sec_prelp1_.LP(si));          // anti-alias
+          si *= sec_drive_sm_;
+          si = si > 1.f ? 1.f : (si < -1.f ? -1.f : si);    // clamp for the shaper
+          si = MnemChebyshev(si);
+        }
+        { float l, b, h; sec_hp_.Process(si, l, b, h); si = h;   // telephone HP
+                         sec_lp_.Process(si, l, b, h); si = l; } // telephone LP
+        if (MNEM_SEC_DRIVE_ENABLE) {
+          // RMS normalize (volume comp): slow detector, floor + max-gain guarded.
+          sec_rms_ += (si * si - sec_rms_) * sec_rms_coef_;
+          float rms = sqrtf(sec_rms_);
+          float ng = MNEM_SEC_RMS_TARGET / (rms > MNEM_SEC_RMS_FLOOR ? rms : MNEM_SEC_RMS_FLOOR);
+          if (ng > MNEM_SEC_RMS_MAXGAIN) ng = MNEM_SEC_RMS_MAXGAIN;
+          si *= ng;
+        }
+        float fbq = FbSat(dq * fb_eff * panic_env_);
+        delay2_.Write(si * send_gain_ + fbq);
+
+        delayed = dd * MNEM_EDGE_DIV_GAIN + dq * MNEM_EDGE_SEC_GAIN;
+      } else {
+        // Single line (SW2 UP knob-time / MID tap-division).
+        float ds = delay_.ReadFrac(wp - read_delay_ - wobble);
+        UpdateNoiseDuck(ds);
+        float fb = FbSat(ds * fb_eff * panic_env_);
+        float x = in[i] * send_gain_ + loop_s + fb;
+        x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
+        x = TapeDrive(x);                               // always-on base tape warmth
+        x = degrade_.ColourProcess(x);                  // K3 BBD/Tape colour — IN the loop
+        delay_.Write(x);
+        delayed = ds;
       }
-      noise_gate_ += (ng_tgt - noise_gate_) * (ng_tgt > noise_gate_ ? ngate_open_ : ngate_close_);
-      degrade_.SetNoiseGate(noise_gate_);
 
-      float x = in[i] * send_gain_ + loop_s + fb;
-      x = Filter(x);                                    // K4/K5 tone — IN the loop (ages repeats)
-      x = TapeDrive(x);                                 // always-on base tape warmth
-      x = degrade_.ColourProcess(x);                    // K3 BBD/Tape colour — IN the loop
-      delay_.Write(x);
+      // Freeze voice: 2 half-overlapped full-Hann grains loop the captured
+      // fragment -> COLA-smooth sustain, wrap seam crossfaded. Summed into wet
+      // OUTSIDE the feedback loop (parallel, does not recirculate). Paused in
+      // bypass via send_gain_ (like the loop); de-clicked by freeze_amp_.
+      float fz = FreezeVoice();
 
-      wet[i] = delayed * panic_env_;                    // raw read, spun down on panic only
+      wet[i] = delayed * panic_env_ + fz;               // delay (panic-gated) + parallel freeze
     }
+  }
+
+  // Grain scheduler + sum for the freeze voice. Returns the summed, level-ramped,
+  // bypass-gated freeze sample (0 when idle).
+  inline float FreezeVoice() {
+    const size_t half = freeze_len_ >> 1;
+    if (freeze_playing_ && half > 0) {
+      if (freeze_sched_ == 0) {                         // trigger next voice every half-period
+        freeze_grains_[freeze_voice_].Trigger(
+            freeze_play_, freeze_len_, freeze_len_,
+            /*reverse*/ false, /*rate*/ 1.f, /*gain*/ 1.f,
+            /*loops*/ 1, /*alpha*/ 1.0f /*full Hann*/, /*attack_scale*/ 1.f);
+        freeze_voice_ ^= 1;
+      }
+      if (++freeze_sched_ >= half) freeze_sched_ = 0;
+    }
+    float fz = 0.f;
+    for (int g = 0; g < MNEM_FREEZE_GRAINS; g++)
+      if (freeze_grains_[g].IsActive()) fz += freeze_grains_[g].Process(freeze_play_);
+    // Level ramp (start/stop de-click) + bypass pause (shared send gate).
+    const float amp_tgt = freeze_playing_ ? 1.f : 0.f;
+    freeze_amp_ += (amp_tgt - freeze_amp_) * freeze_amp_coef_;
+    return fz * freeze_amp_ * MNEM_FREEZE_GAIN * send_gain_;
   }
 
   // mnemonic uses the shell's K6 equal-power mix (dry stays sacrosanct).
@@ -396,6 +510,21 @@ class Mnemonic : public Module {
     float d = drive_sm_;
     return tanhf(x * d) / d;
   }
+  // Bypass noise-duck: follow the (coloured) trail envelope; in bypass, once it
+  // decays toward the engine's noise floor, duck the injected hiss so it dies
+  // WITH the trail. Threshold rides the floor -> tracks K3. Sets the engine gate;
+  // must be called before ColourProcess. Watches the K3-coloured line's read.
+  inline void UpdateNoiseDuck(float trail_sample) {
+    const float ta = fabsf(trail_sample);
+    trail_env_ += (ta > trail_env_ ? ngate_env_atk_ : ngate_env_rel_) * (ta - trail_env_);
+    float ng_tgt = 1.f;
+    if (bypassed_) {
+      const float thr = degrade_.NoiseFloorLin() * MNEM_NGATE_MARGIN;
+      ng_tgt = (trail_env_ > thr) ? 1.f : 0.f;
+    }
+    noise_gate_ += (ng_tgt - noise_gate_) * (ng_tgt > noise_gate_ ? ngate_open_ : ngate_close_);
+    degrade_.SetNoiseGate(noise_gate_);
+  }
   inline float FbSat(float v) {                         // feedback-path compression (bloom)
     return tanhf(v * MNEM_FB_DRIVE) / MNEM_FB_DRIVE;
   }
@@ -411,6 +540,20 @@ class Mnemonic : public Module {
     loop_read_ = 0;
     loop_gain_ = 0.f; loop_gain_target_ = 1.f;          // fade in
     loop_playing_ = true;
+  }
+
+  // ---- freeze (two-slab scratch -> grain playback; EHX-style) ------------
+  // Swap the freshly-captured ring in as the playback ring (so a new capture
+  // can't overwrite what's playing), reset the grain scheduler, latch playing.
+  void CommitFreeze() {
+    RingBuffer tmp = freeze_play_;                      // swap: capture becomes playback
+    freeze_play_ = freeze_cap_;
+    freeze_cap_  = tmp;
+    freeze_len_  = MNEM_FREEZE_SAMPLES;                 // loop the whole captured window
+    freeze_sched_ = 0;                                  // scheduler triggers voice 0 first
+    freeze_voice_ = 0;
+    for (int g = 0; g < MNEM_FREEZE_GRAINS; g++) freeze_grains_[g].Reset();  // drop old freeze's grains
+    freeze_playing_ = true;                             // freeze_amp_ ramps up from here
   }
   inline float LoopPlay() {
     if (!loop_playing_ || loop_len_ == 0 || bypassed_) return 0.f;  // paused in bypass
@@ -496,10 +639,17 @@ class Mnemonic : public Module {
   // ---- state -------------------------------------------------------------
   float sr_ = MNEM_SR;
   RingBuffer delay_;
+  RingBuffer delay2_;                 // Edge quarter (support) line
 
-  // varispeed
+  // varispeed (primary line)
   float base_delay_ = 0.f, base_delay_sm_ = 0.f, target_eff_ = 0.f, read_delay_ = 0.f;
   float time_smooth_ = 0.004f;
+  // Edge secondary line: own delay target + glide (lo-fi telephone support voice)
+  float base_delay2_ = 0.f, base_delay2_sm_ = 0.f, target_eff2_ = 0.f, read_delay2_ = 0.f;
+  MnemOnePole sec_prelp1_, sec_prelp2_;   // anti-alias pre-LP before the shaper
+  MnemSVF     sec_hp_, sec_lp_;           // telephone band-pass (after the shaper)
+  float sec_drive_ = MNEM_SEC_DRIVE_BASE, sec_drive_sm_ = MNEM_SEC_DRIVE_BASE;
+  float sec_rms_ = 0.f, sec_rms_coef_ = 0.f;   // RMS normalize (volume comp)
   bool  snap_ = true;
 
   // feedback / drive — targets set at control rate, *_sm_ smoothed at audio rate
@@ -549,6 +699,16 @@ class Mnemonic : public Module {
   size_t loop_len_ = 0, loop_rec_write_ = 0, loop_read_ = 0, loop_xfade_samps_ = 0;
   float  loop_gain_ = 0.f, loop_gain_target_ = 0.f, loop_fade_coef_ = 0.f;
 
+  // freeze (SW1 DOWN): two-slab pointer-swap; grain-looped sustained voice
+  // summed into wet, OUTSIDE the feedback loop. Latches until re-frozen/panic.
+  RingBuffer freeze_play_, freeze_cap_;         // play = grains read · cap = circular capture
+  GrainVoice freeze_grains_[MNEM_FREEZE_GRAINS];
+  bool   freeze_capturing_ = false, freeze_playing_ = false;
+  size_t freeze_len_ = 0;                        // captured fragment length (samples)
+  size_t freeze_sched_ = 0;                     // half-period grain scheduler counter
+  int    freeze_voice_ = 0;                     // next grain voice to (re)trigger
+  float  freeze_amp_ = 0.f, freeze_amp_coef_ = 0.f;  // start/stop de-click ramp
+
   // tap tempo
   uint32_t last_tap_ms_ = 0;
   uint32_t tap_iv_[MNEM_TAP_MEDIAN_N] = {0};
@@ -559,7 +719,6 @@ class Mnemonic : public Module {
 
   // Edge dual-tap (SW2 DOWN)
   bool  edge_ = false;
-  float edge_div_ratio_ = 1.f, edge_detune_samps_ = 0.f;
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;

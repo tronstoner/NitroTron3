@@ -12,6 +12,7 @@
 class GrainVoice {
 public:
     bool IsActive() const { return active_; }
+    void Reset() { active_ = false; phase_ = 0; loops_left_ = 0; }  // hard-stop this voice
 
     // Start a grain. `loops` = number of times to play the fragment
     // (1 = once, >1 = stutter repeat).

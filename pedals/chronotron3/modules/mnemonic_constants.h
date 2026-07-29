@@ -41,6 +41,10 @@ static constexpr float MNEM_GLIDE_COEF = 0.0007f;   // ~30 ms time-constant
 // Tap-division ratios (K1, SW2 MID). Noon = index 5 = 1/1 (quarter = tap).
 // CCW shorter, CW longer, exact reciprocal mirror. See concept doc table.
 // ---------------------------------------------------------------------------
+// Full 11-stop set, noon-centred (index 5 = 1/1 at 12 o'clock with linear
+// mapping). CCW = subdivisions (incl. the whole DMB tap-divide set: 16th,
+// 8th-triplet, 8th, quarter-triplet, dotted-8th); CW = the reciprocal mirror for
+// delays longer than the tap. Used by SW2 MID and, IDENTICALLY, the Edge primary.
 static constexpr int   MNEM_DIV_COUNT = 11;
 static constexpr int   MNEM_DIV_NOON  = 5;
 static constexpr float MNEM_DIV_RATIOS[MNEM_DIV_COUNT] = {
@@ -55,6 +59,22 @@ static constexpr float MNEM_DIV_RATIOS[MNEM_DIV_COUNT] = {
     2.f,          // 2/1  half
     3.f,          // 3/1  dotted-half
     4.f,          // 4/1  whole
+};
+// Edge secondary ("4th") line: a companion ratio PER K1 stop (octave-up support
+// voice), chosen so the primary division, this secondary, and your quarter-note
+// playing interlock into a 3-layer rhythm. Index-aligned with MNEM_DIV_RATIOS.
+static constexpr float MNEM_EDGE_SECONDARY_RATIOS[MNEM_DIV_COUNT] = {
+    0.5f,   // 1/4 prim  -> 1/2  (16th over straight 8th)
+    0.5f,   // 1/3 prim  -> 1/2  (3-against-2)
+    0.75f,  // 1/2 prim  -> 3/4  (2-against-3 shimmer)
+    1.f,    // 2/3 prim  -> 1/1  (triplet across the beat)
+    0.5f,   // 3/4 prim  -> 1/2  (the Edge cross-rhythm)
+    0.75f,  // 1/1 prim  -> 3/4  (in-time echo + syncopated counter) — NOON
+    1.f,    // 4/3 prim  -> 1/1  (broad triplet vs quarter)
+    1.f,    // 3/2 prim  -> 1/1  (3:2 over two beats)
+    0.75f,  // 2/1 prim  -> 3/4  (long echo + busy 8ve-up fill)
+    1.f,    // 3/1 prim  -> 1/1  (slow primary, quarter keeps time up top)
+    1.5f,   // 4/1 prim  -> 3/2  (ambient primary + dotted-quarter counter)
 };
 static constexpr float MNEM_DIV_HYST = 0.015f;  // knob margin to change division stop
 
@@ -119,14 +139,28 @@ static constexpr uint32_t MNEM_TAP_MIN_MS    = 40;   // ignore faster than this
 static constexpr int      MNEM_TAP_MEDIAN_N  = 4;    // recent intervals for the median
 
 // ---------------------------------------------------------------------------
-// Tape gestures (FS1 hold; SW1 UP spin-up / DOWN slow-down)
+// Tape gesture (FS1 hold; SW1 UP = spin-up). DOWN is now FREEZE (see below).
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_GEST_UP_TIMEFAC   = 0.30f; // spin-up shortens delay -> pitch up
-static constexpr float MNEM_GEST_DOWN_TIMEFAC = 3.0f;  // slow-down lengthens -> pitch down
 static constexpr float MNEM_GEST_UP_FB        = 1.05f; // feedback while spinning up
-static constexpr float MNEM_GEST_DOWN_FB      = 1.08f; // feedback while slowing down (own tuning)
 static constexpr float MNEM_GEST_ATK_MS       = 1100.f;// ramp-in while held (the pitch dive)
 static constexpr float MNEM_GEST_REL_MS       = 1400.f;// slew back on release
+
+// ---------------------------------------------------------------------------
+// Freeze (FS1 hold, SW1 = DOWN). EHX-Freeze-style: while held, the clean input
+// is written continuously into a short circular ring that keeps only the last
+// FREEZE_WIN_MS; on release (past long-press) that fragment is committed and
+// grain-looped as a sustained parallel voice, summed into the wet output OUTSIDE
+// the feedback loop. Two-slab pointer-swap (like the loop) so a re-freeze
+// captures cleanly while the current freeze keeps playing. Playback uses 2
+// half-overlapped full-Hann grains so the ring's wrap seam is crossfaded (no
+// click), NOT avoided. Latches until re-frozen or cleared by FS2 panic.
+// ---------------------------------------------------------------------------
+static constexpr float  MNEM_FREEZE_WIN_MS  = 400.f;   // captured fragment length
+static constexpr size_t MNEM_FREEZE_SAMPLES = (size_t)(MNEM_FREEZE_WIN_MS * 0.001f * MNEM_SR); // 19200
+static constexpr int    MNEM_FREEZE_GRAINS  = 2;       // 2x overlap -> COLA-smooth sustain
+static constexpr float  MNEM_FREEZE_GAIN    = 1.0f;    // freeze voice level into the wet sum
+static constexpr float  MNEM_FREEZE_AMP_MS  = 30.f;    // start/stop de-click ramp on the freeze voice
 
 // ---------------------------------------------------------------------------
 // Hold / loop (SW1 MID)
@@ -161,12 +195,45 @@ static constexpr float MNEM_NGATE_OPEN_MS    = 8.f;   // duck re-opens (noise ba
 static constexpr float MNEM_NGATE_CLOSE_MS   = 250.f; // duck closes slowly so it fades with the tail
 
 // ---------------------------------------------------------------------------
-// Edge dual-tap (SW2 DOWN): tap A = 4/4 (quarter) · tap B = K1 division. A fixed
-// detune keeps them off unison at noon -> chorus; feedback recirculates the sum.
+// Edge mode (SW2 DOWN) = SW2 MID + one secondary line. The PRIMARY (colored) line
+// is bit-identical to SW2 MID (delay = quarter x K1 division, full K4/K5 + drive
+// + K3). Edge literally adds ONE thing: a SECONDARY line whose ratio is the
+// per-stop companion (MNEM_EDGE_SECONDARY_RATIOS), made deliberately distinct —
+// octave-up (granular pitch shifter on its INPUT, outside its feedback so repeats
+// don't keep climbing), NO filter, NO K3, own feedback loop, quieter. Three
+// layers interlock: your quarter playing + primary division + 8ve-up secondary.
 // ---------------------------------------------------------------------------
-static constexpr float MNEM_EDGE_DETUNE_MS = 11.f;  // fixed offset on tap B (chorus near unison)
-static constexpr float MNEM_EDGE_A_GAIN    = 0.75f; // 4/4 tap level
-static constexpr float MNEM_EDGE_B_GAIN    = 0.75f; // division tap level
+static constexpr float MNEM_EDGE_DIV_GAIN = 0.85f;  // primary (division) line level
+static constexpr float MNEM_EDGE_SEC_GAIN = 0.50f;  // secondary line level — quieter
+
+// Secondary line voice: a lo-fi "telephone" delay for rhythmic counterpoint.
+// Chain on the INPUT (outside the feedback loop):
+//   pre-LP (anti-alias) -> drive -> Chebyshev(T2..T5) -> telephone band-pass
+//   -> RMS normalize -> secondary delay (own feedback = K2, no K3).
+// Drive has an always-on baseline + more toward EITHER K3 extreme (K3 = damage
+// macro for both lines). RMS normalize keeps level steady across K3 / dynamics
+// while letting transients poke through (percussive). Band-pass sits AFTER the
+// shaper to contain the metallic harmonics to the mids; its center follows
+// K4/K5 slightly (~25%) for tonal cohesion without leaving the mids.
+// TEST TOGGLE: false = bypass drive+Chebyshev+RMS, secondary = just the clean
+// telephone band-pass at unity (isolate the band & rhythmic feel). true = full chain.
+static constexpr bool  MNEM_SEC_DRIVE_ENABLE = false;
+static constexpr float MNEM_SEC_PRELP_HZ    = 4000.f; // anti-alias pre-LP (2x one-pole) before the shaper
+static constexpr float MNEM_SEC_DRIVE_BASE  = 2.0f;   // always-on baseline grit (K3 centered)
+static constexpr float MNEM_SEC_DRIVE_K3    = 4.0f;   // extra drive at |K3| = 1 (both BBD & Tape sides)
+// Chebyshev harmonic weights — copied from NitroTron3 Mode C (separate pedal, no cross-ref).
+static constexpr float MNEM_SEC_CHEBY_H2 = 1.0f;      // 2nd (octave)
+static constexpr float MNEM_SEC_CHEBY_H3 = 0.3f;      // 3rd
+static constexpr float MNEM_SEC_CHEBY_H4 = 0.7f;      // 4th
+static constexpr float MNEM_SEC_CHEBY_H5 = 0.2f;      // 5th
+static constexpr float MNEM_SEC_HP_HZ       = 350.f;  // telephone band floor (base, pre-follow)
+static constexpr float MNEM_SEC_LP_HZ       = 2500.f; // telephone band ceiling (base, pre-follow)
+static constexpr float MNEM_SEC_FOLLOW_OCT  = 0.5f;   // K4 tilt shifts band +-0.5 oct (~25% of the main travel)
+static constexpr float MNEM_SEC_FOLLOW_NAR  = 0.25f;  // K5 narrows the band a touch (follow)
+static constexpr float MNEM_SEC_RMS_MS      = 50.f;   // RMS detector time (slow enough to pass transients)
+static constexpr float MNEM_SEC_RMS_TARGET  = 0.10f;  // normalized RMS level (by ear)
+static constexpr float MNEM_SEC_RMS_FLOOR   = 0.02f;  // don't normalize quieter than this (noise guard)
+static constexpr float MNEM_SEC_RMS_MAXGAIN = 8.0f;   // cap on the makeup gain
 
 // ---------------------------------------------------------------------------
 // LEDs
