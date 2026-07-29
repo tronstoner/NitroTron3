@@ -134,6 +134,9 @@ static constexpr float MNEM_CENTS_TO_RATE = 0.00057762f;  // ~ ln2/1200 (cents -
 static constexpr uint32_t MNEM_TAP_RELEASE_MS = 300; // released before this = TAP
 static constexpr uint32_t MNEM_LONGPRESS_MS   = 450; // held beyond this = sustained gesture
 static constexpr uint32_t MNEM_TAP_WINDOW_MS = 3000; // group taps into one gesture
+// Until a real tap tempo exists, the division modes seed the quarter from K1's
+// knob-time position x this ratio (1.0 = the knob-time value IS the quarter).
+static constexpr float    MNEM_TAP_INIT_RATIO = 1.0f;
 static constexpr uint32_t MNEM_TAP_MAX_MS    = 2000; // slowest usable tap interval
 static constexpr uint32_t MNEM_TAP_MIN_MS    = 40;   // ignore faster than this
 static constexpr int      MNEM_TAP_MEDIAN_N  = 4;    // recent intervals for the median
@@ -206,34 +209,14 @@ static constexpr float MNEM_NGATE_CLOSE_MS   = 250.f; // duck closes slowly so i
 static constexpr float MNEM_EDGE_DIV_GAIN = 0.85f;  // primary (division) line level
 static constexpr float MNEM_EDGE_SEC_GAIN = 0.50f;  // secondary line level — quieter
 
-// Secondary line voice: a lo-fi "telephone" delay for rhythmic counterpoint.
-// Chain on the INPUT (outside the feedback loop):
-//   pre-LP (anti-alias) -> drive -> Chebyshev(T2..T5) -> telephone band-pass
-//   -> RMS normalize -> secondary delay (own feedback = K2, no K3).
-// Drive has an always-on baseline + more toward EITHER K3 extreme (K3 = damage
-// macro for both lines). RMS normalize keeps level steady across K3 / dynamics
-// while letting transients poke through (percussive). Band-pass sits AFTER the
-// shaper to contain the metallic harmonics to the mids; its center follows
-// K4/K5 slightly (~25%) for tonal cohesion without leaving the mids.
-// TEST TOGGLE: false = bypass drive+Chebyshev+RMS, secondary = just the clean
-// telephone band-pass at unity (isolate the band & rhythmic feel). true = full chain.
-static constexpr bool  MNEM_SEC_DRIVE_ENABLE = false;
-static constexpr float MNEM_SEC_PRELP_HZ    = 4000.f; // anti-alias pre-LP (2x one-pole) before the shaper
-static constexpr float MNEM_SEC_DRIVE_BASE  = 2.0f;   // always-on baseline grit (K3 centered)
-static constexpr float MNEM_SEC_DRIVE_K3    = 4.0f;   // extra drive at |K3| = 1 (both BBD & Tape sides)
-// Chebyshev harmonic weights — copied from NitroTron3 Mode C (separate pedal, no cross-ref).
-static constexpr float MNEM_SEC_CHEBY_H2 = 1.0f;      // 2nd (octave)
-static constexpr float MNEM_SEC_CHEBY_H3 = 0.3f;      // 3rd
-static constexpr float MNEM_SEC_CHEBY_H4 = 0.7f;      // 4th
-static constexpr float MNEM_SEC_CHEBY_H5 = 0.2f;      // 5th
-static constexpr float MNEM_SEC_HP_HZ       = 350.f;  // telephone band floor (base, pre-follow)
-static constexpr float MNEM_SEC_LP_HZ       = 2500.f; // telephone band ceiling (base, pre-follow)
-static constexpr float MNEM_SEC_FOLLOW_OCT  = 0.5f;   // K4 tilt shifts band +-0.5 oct (~25% of the main travel)
-static constexpr float MNEM_SEC_FOLLOW_NAR  = 0.25f;  // K5 narrows the band a touch (follow)
-static constexpr float MNEM_SEC_RMS_MS      = 50.f;   // RMS detector time (slow enough to pass transients)
-static constexpr float MNEM_SEC_RMS_TARGET  = 0.10f;  // normalized RMS level (by ear)
-static constexpr float MNEM_SEC_RMS_FLOOR   = 0.02f;  // don't normalize quieter than this (noise guard)
-static constexpr float MNEM_SEC_RMS_MAXGAIN = 8.0f;   // cap on the makeup gain
+// Secondary line voice: a clean lo-fi "telephone" delay for rhythmic counterpoint.
+// Just a mid band-pass on the fresh input (outside its feedback loop) — the band
+// alone gives the separation; no drive/shaper needed. Band center follows K4/K5
+// slightly (~25%) for tonal cohesion without leaving the mids.
+static constexpr float MNEM_SEC_HP_HZ      = 350.f;  // telephone band floor (base, pre-follow)
+static constexpr float MNEM_SEC_LP_HZ      = 2500.f; // telephone band ceiling (base, pre-follow)
+static constexpr float MNEM_SEC_FOLLOW_OCT = 0.5f;   // K4 tilt shifts band +-0.5 oct (~25% of the main travel)
+static constexpr float MNEM_SEC_FOLLOW_NAR = 0.25f;  // K5 narrows the band a touch (follow)
 
 // ---------------------------------------------------------------------------
 // LEDs

@@ -83,20 +83,6 @@ struct MnemSVF {
   void Reset() { ic1 = ic2 = 0.f; }
 };
 
-// Chebyshev waveshaper (secondary "telephone" line): sums T2..T5, each a pure
-// n-th-harmonic generator, so it GROWS harmonics on attacks (percussive) rather
-// than just clipping. Input must be pre-driven and clamped to [-1,1]. The raw
-// value at x=0 is removed so silence stays silent. Adapted from NitroTron3 Mode C.
-static inline float MnemChebyshev(float x) {
-  const float x2 = x * x;
-  const float t2 = 2.f * x2 - 1.f;
-  const float t3 = (4.f * x2 - 3.f) * x;
-  const float t4 = (8.f * x2 - 8.f) * x2 + 1.f;
-  const float t5 = ((16.f * x2 - 20.f) * x2 + 5.f) * x;
-  const float dc = -MNEM_SEC_CHEBY_H2 + MNEM_SEC_CHEBY_H4;   // raw value at x=0
-  return MNEM_SEC_CHEBY_H2 * t2 + MNEM_SEC_CHEBY_H3 * t3 +
-         MNEM_SEC_CHEBY_H4 * t4 + MNEM_SEC_CHEBY_H5 * t5 - dc;
-}
 
 class Mnemonic : public Module {
  public:
@@ -136,9 +122,7 @@ class Mnemonic : public Module {
     freeze_amp_coef_ = 1.f - expf(-1.f / (MNEM_FREEZE_AMP_MS * 0.001f * sr_));
 
     SetFilters(2000.f, 2000.f);   // harmless defaults until first Controls
-    sec_prelp1_.SetLP(MNEM_SEC_PRELP_HZ, sr_); sec_prelp2_.SetLP(MNEM_SEC_PRELP_HZ, sr_);
     sec_hp_.Set(MNEM_SEC_HP_HZ, 0.707f, sr_);  sec_lp_.Set(MNEM_SEC_LP_HZ, 0.707f, sr_);
-    sec_rms_coef_ = 1.f - expf(-1.f / (MNEM_SEC_RMS_MS * 0.001f * sr_));
     degrade_.Init(sr_);
   }
 
@@ -148,7 +132,7 @@ class Mnemonic : public Module {
     freeze_capturing_ = false; freeze_playing_ = false; freeze_amp_ = 0.f;
     for (int g = 0; g < MNEM_FREEZE_GRAINS; g++) freeze_grains_[g].Reset();
     hp1_.Reset(); hp2_.Reset(); lp1_.Reset(); lp2_.Reset();
-    sec_prelp1_.Reset(); sec_prelp2_.Reset(); sec_hp_.Reset(); sec_lp_.Reset(); sec_rms_ = 0.f;
+    sec_hp_.Reset(); sec_lp_.Reset();
   }
 
   // -------------------------------------------------------------------------
@@ -174,10 +158,7 @@ class Mnemonic : public Module {
     // degrade chains on top (clean-ish dead-zone at centre). Colour is applied in
     // the loop; the tape speed-irregularity modulates the MAIN read tap (Process).
     tape_drive_ = MNEM_TAPE_DRIVE;                  // constant base warmth
-    float k3_depth = (k3 - 0.5f) * 2.f;             // p in [-1,+1]
-    degrade_.SetDepth(k3_depth);                    // (dead-zone in engine)
-    // Edge secondary drive: baseline grit + more toward EITHER K3 extreme.
-    sec_drive_ = MNEM_SEC_DRIVE_BASE + fabsf(k3_depth) * MNEM_SEC_DRIVE_K3;
+    degrade_.SetDepth((k3 - 0.5f) * 2.f);           // p in [-1,+1] (dead-zone in engine)
 
     // ---- K4 tilt/center + K5 narrow (converging 24 dB HP+LP) -------------
     // Wide band edges from K4 (K5=0): CCW lowers the LP (dark), CW raises the HP
@@ -215,19 +196,17 @@ class Mnemonic : public Module {
     // ---- K1 delay time / division, by SW2 --------------------------------
     edge_ = (sw2_ == 2);
     if (sw2_ == 0) {                                   // knob time (free)
-      float kt = powf(k1, MNEM_TIME_CURVE);            // pre-warp: more travel for short delays
-      float ms = MNEM_TIME_MIN_MS *
-                 powf(MNEM_TIME_MAX_MS / MNEM_TIME_MIN_MS, kt);
-      base_delay_ = ms * 0.001f * sr_;
-    } else if (sw2_ == 1) {                            // tap tempo -> division
+      base_delay_ = KnobTimeMs(k1) * 0.001f * sr_;
+    } else {                                           // tap modes (MID division / Edge)
       int d = QuantizeDivision(k1);
-      if (have_tempo_)
-        base_delay_ = quarter_ms_ * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-    } else {                                           // Edge: primary = MID, plus a secondary line
-      int d = QuantizeDivision(k1);
-      if (have_tempo_) {
-        base_delay_  = quarter_ms_ * MNEM_DIV_RATIOS[d]           * 0.001f * sr_;  // primary = MID
-        base_delay2_ = quarter_ms_ * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_; // 8ve-up secondary
+      // Seed the quarter from K1 (as if knob-time) until a tap is tracked, so
+      // there's a sensible tempo instead of a 0/stale leading edge. 1:1 = quarter.
+      float q_ms = have_tempo_ ? quarter_ms_ : KnobTimeMs(k1) * MNEM_TAP_INIT_RATIO;
+      if (sw2_ == 1) {                                 // tap tempo -> division
+        base_delay_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
+      } else {                                         // Edge: primary = MID + secondary line
+        base_delay_  = q_ms * MNEM_DIV_RATIOS[d]            * 0.001f * sr_;  // primary = MID
+        base_delay2_ = q_ms * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_;  // secondary
       }
     }
     base_delay_ = MnemClamp(base_delay_, 0.001f * MNEM_TIME_MIN_MS * sr_,
@@ -270,7 +249,9 @@ class Mnemonic : public Module {
         (now - f1_down_ms_) >= MNEM_LONGPRESS_MS) {
       f1_gesture_committed_ = true;          // crossed into sustained-gesture land
       if (f1_mode_ == 0) { gesture_engaged_ = true; gest_dir_ = +1; }   // spin-up
-      // f1_mode_ == 1 (loop): scratch keeps recording; commit on release.
+      // f1_mode_ == 1 (loop): record confirmed -> duck the currently-playing loop
+      // so the new take isn't recorded/heard against the old one. Commit on release.
+      else if (f1_mode_ == 1 && loop_playing_) loop_gain_target_ = 0.f;
       // f1_mode_ == 2 (freeze): capture keeps running; commit on release.
     }
     if (loop_rec_full_) {                    // scratch hit the ceiling: auto record-end
@@ -349,7 +330,6 @@ class Mnemonic : public Module {
       hi_sm_     += (hi_ - hi_sm_) * param_smooth_;
       base_delay_sm_  += (base_delay_  - base_delay_sm_)  * time_smooth_;  // de-jitter K1 before the glide
       base_delay2_sm_ += (base_delay2_ - base_delay2_sm_) * time_smooth_;  // Edge secondary target
-      sec_drive_sm_   += (sec_drive_   - sec_drive_sm_)   * param_smooth_; // Edge secondary drive (K3)
       SetFilters(lo_sm_, hi_sm_);   // recompute SVF coeffs from smoothed cutoffs (2 tanf)
 
       // Loop scratch record (clean input) — capture before any colour. Buffer
@@ -417,26 +397,12 @@ class Mnemonic : public Module {
         xd = Filter(xd); xd = TapeDrive(xd); xd = degrade_.ColourProcess(xd);
         delay_.Write(xd);
 
-        // secondary loop: lo-fi telephone voice on the FRESH input (outside the
-        // feedback). pre-LP -> drive -> Chebyshev -> telephone band -> RMS norm.
-        // (drive/shaper/RMS gated by MNEM_SEC_DRIVE_ENABLE for isolating the band.)
+        // secondary loop: clean lo-fi telephone voice on the FRESH input (outside
+        // the feedback). Just the mid band-pass — no drive/shaper (the band alone
+        // gives the rhythmic separation; drive wasn't needed).
         float si = in[i];
-        if (MNEM_SEC_DRIVE_ENABLE) {
-          si = sec_prelp2_.LP(sec_prelp1_.LP(si));          // anti-alias
-          si *= sec_drive_sm_;
-          si = si > 1.f ? 1.f : (si < -1.f ? -1.f : si);    // clamp for the shaper
-          si = MnemChebyshev(si);
-        }
         { float l, b, h; sec_hp_.Process(si, l, b, h); si = h;   // telephone HP
                          sec_lp_.Process(si, l, b, h); si = l; } // telephone LP
-        if (MNEM_SEC_DRIVE_ENABLE) {
-          // RMS normalize (volume comp): slow detector, floor + max-gain guarded.
-          sec_rms_ += (si * si - sec_rms_) * sec_rms_coef_;
-          float rms = sqrtf(sec_rms_);
-          float ng = MNEM_SEC_RMS_TARGET / (rms > MNEM_SEC_RMS_FLOOR ? rms : MNEM_SEC_RMS_FLOOR);
-          if (ng > MNEM_SEC_RMS_MAXGAIN) ng = MNEM_SEC_RMS_MAXGAIN;
-          si *= ng;
-        }
         float fbq = FbSat(dq * fb_eff * panic_env_);
         delay2_.Write(si * send_gain_ + fbq);
 
@@ -626,6 +592,13 @@ class Mnemonic : public Module {
     led2.Set(l2);
   }
 
+  // SW2-UP knob-time mapping (ms). Reused to seed the tap tempo from K1 before
+  // any tap is tracked (avoids a 0/stale leading edge in the division modes).
+  inline float KnobTimeMs(float k1) const {
+    float kt = powf(k1, MNEM_TIME_CURVE);
+    return MNEM_TIME_MIN_MS * powf(MNEM_TIME_MAX_MS / MNEM_TIME_MIN_MS, kt);
+  }
+
   int QuantizeDivision(float k1) {
     int raw = (int)(k1 * MNEM_DIV_COUNT);
     if (raw >= MNEM_DIV_COUNT) raw = MNEM_DIV_COUNT - 1;
@@ -646,10 +619,7 @@ class Mnemonic : public Module {
   float time_smooth_ = 0.004f;
   // Edge secondary line: own delay target + glide (lo-fi telephone support voice)
   float base_delay2_ = 0.f, base_delay2_sm_ = 0.f, target_eff2_ = 0.f, read_delay2_ = 0.f;
-  MnemOnePole sec_prelp1_, sec_prelp2_;   // anti-alias pre-LP before the shaper
-  MnemSVF     sec_hp_, sec_lp_;           // telephone band-pass (after the shaper)
-  float sec_drive_ = MNEM_SEC_DRIVE_BASE, sec_drive_sm_ = MNEM_SEC_DRIVE_BASE;
-  float sec_rms_ = 0.f, sec_rms_coef_ = 0.f;   // RMS normalize (volume comp)
+  MnemSVF     sec_hp_, sec_lp_;           // telephone band-pass
   bool  snap_ = true;
 
   // feedback / drive — targets set at control rate, *_sm_ smoothed at audio rate
