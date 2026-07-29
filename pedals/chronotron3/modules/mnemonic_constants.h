@@ -137,6 +137,30 @@ static constexpr float    MNEM_LOOP_XFADE_MS = 6.f;  // seam crossfade at the wr
 static constexpr float    MNEM_LOOP_FADE_MS  = 8.f;  // play start/stop de-click ramp
 
 // ---------------------------------------------------------------------------
+// Panic gesture (FS2 long-press). NORMAL bypass (short tap) lets the delay
+// trail ring out naturally — that's the whole point of a delay. The PANIC
+// long-press is the always-available escape: it forces bypass AND kills the
+// loop + feedback + tail. A panic envelope multiplies BOTH the wet output and
+// the feedback recirculation, spinning down to TRUE silence click-free (works
+// even at fb>=1, because the recirculation itself is throttled). Re-engage
+// (any tap) rises over a fixed short de-click ramp and starts from a clean slate.
+// ---------------------------------------------------------------------------
+static constexpr float MNEM_PANIC_RISE_MS = 15.f;  // re-engage ramp (click-free, near-instant)
+static constexpr float MNEM_PANIC_FADE_MS = 120.f; // panic spin-down to silence (fast but click-free)
+
+// Bypass noise-duck: in NORMAL bypass the trail rings out naturally, but the
+// medium hiss would otherwise sustain a bed forever. A trail-envelope follower
+// watches the wet read; once it decays toward the engine's own noise floor
+// (threshold = floor x MARGIN, so it tracks K3), the degrade engine's noise
+// injection is ducked to zero — the hiss dies WITH the trail, not after it.
+// Only active in bypass (tape character between notes is kept during play).
+static constexpr float MNEM_NGATE_MARGIN     = 4.f;   // open threshold = noise floor x this
+static constexpr float MNEM_NGATE_ENV_ATK_MS = 2.f;   // trail follower attack
+static constexpr float MNEM_NGATE_ENV_REL_MS = 60.f;  // trail follower release
+static constexpr float MNEM_NGATE_OPEN_MS    = 8.f;   // duck re-opens (noise back) fast when trail returns
+static constexpr float MNEM_NGATE_CLOSE_MS   = 250.f; // duck closes slowly so it fades with the tail
+
+// ---------------------------------------------------------------------------
 // Edge dual-tap (SW2 DOWN): tap A = 4/4 (quarter) · tap B = K1 division. A fixed
 // detune keeps them off unison at noon -> chorus; feedback recirculates the sum.
 // ---------------------------------------------------------------------------

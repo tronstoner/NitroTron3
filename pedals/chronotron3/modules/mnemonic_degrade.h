@@ -128,6 +128,17 @@ class MnemDegrade {
     RecomputeControl();
   }
 
+  // Noise-injection duck (0..1), driven by the module's bypass noise gate: in
+  // bypass the module fades this toward 0 as the trail decays, so the medium
+  // hiss dies with the trail instead of sustaining a bed. 1 = full noise.
+  void  SetNoiseGate(float g) { noise_gate_ = g; }
+  // Current injected-noise amplitude (linear) of the active chain — the module
+  // uses it to set the gate threshold just above the hiss floor (tracks K3).
+  float NoiseFloorLin() const {
+    return (active_chain_ == -1) ? bbd_noise_lin_
+         : (active_chain_ == +1) ? tape_noise_lin_ : 0.f;
+  }
+
   // Control-rate (from mnemonic Controls, ~10 ms): set bipolar position.
   void SetDepth(float p) {
     int tgt = (p < -MNEMD_DEADZONE) ? -1 : (p > MNEMD_DEADZONE) ? +1 : 0;
@@ -260,7 +271,7 @@ class MnemDegrade {
     // fractional jitter (see RecomputeControl: quantised f_clk).
     if (++bbd_samp_ctr_ >= bbd_hold_len_) {
       bbd_samp_ctr_ = 0;
-      float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_;
+      float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_ * noise_gate_;
       bbd_hold_ = x + n;
     }
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
@@ -290,7 +301,7 @@ class MnemDegrade {
     float n = (tape_noise_lp1_.LP(Rand() * 2.f - 1.f) * 0.7f +
                tape_noise_lp2_.LP(Rand() * 2.f - 1.f) * 0.3f);
     float nlvl = tape_noise_lin_ * powf(10.f, (tape_noise_env_ * env_) / 20.f);
-    x += n * nlvl;
+    x += n * nlvl * noise_gate_;
     // (modulated read = mnemonic main tap, via TapePitchCents)
     // B.2 loss filters
     x = tape_lp_.LP(x);                                   // HF loss
@@ -331,6 +342,7 @@ class MnemDegrade {
 
   // ---- state -------------------------------------------------------------
   float sr_ = 48000.f;
+  float noise_gate_ = 1.f;                       // bypass noise-duck (1 = full hiss)
   int   active_chain_ = 0, target_chain_ = 0;    // -1 BBD · 0 bypass · +1 tape
   float d_ = 0.f, d_target_ = 0.f, mix_ = 0.f, xfade_coef_ = 0.f;
   int   ctrl_ctr_ = 1;

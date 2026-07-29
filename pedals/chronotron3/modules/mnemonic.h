@@ -94,6 +94,12 @@ class Mnemonic : public Module {
     gest_atk_coef_ = 1.f - expf(-1.f / (MNEM_GEST_ATK_MS * 0.001f * sr_));
     gest_rel_coef_ = 1.f - expf(-1.f / (MNEM_GEST_REL_MS * 0.001f * sr_));
     send_coef_ = 1.f - expf(-1.f / (0.003f * sr_));            // 3 ms send gate ramp
+    panic_rise_coef_ = 1.f - expf(-1.f / (MNEM_PANIC_RISE_MS * 0.001f * sr_));  // re-engage ramp
+    panic_fall_coef_ = 1.f - expf(-1.f / (MNEM_PANIC_FADE_MS * 0.001f * sr_));  // panic spin-down
+    ngate_env_atk_ = 1.f - expf(-1.f / (MNEM_NGATE_ENV_ATK_MS * 0.001f * sr_));
+    ngate_env_rel_ = 1.f - expf(-1.f / (MNEM_NGATE_ENV_REL_MS * 0.001f * sr_));
+    ngate_open_    = 1.f - expf(-1.f / (MNEM_NGATE_OPEN_MS    * 0.001f * sr_));
+    ngate_close_   = 1.f - expf(-1.f / (MNEM_NGATE_CLOSE_MS   * 0.001f * sr_));
     param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // K2-K5 zipper smoother
     time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K1 delay-time de-jitter
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
@@ -237,17 +243,32 @@ class Mnemonic : public Module {
       gesture_engaged_ = false;              // release ends the tape gesture (slew back)
     }
 
-    // ---- FS2: bypass (tap) / kill (hold) ---------------------------------
+    // ---- FS2: bypass (tap) / PANIC (hold) --------------------------------
+    // Short tap  = normal bypass: the delay trail rings out naturally.
+    // Long-press = panic escape: force bypass + kill loop + spin the feedback/
+    //              tail down to true silence (always available, even at fb>=1).
     const FootswitchEvent& f2 = cs.Foot(1);
     if (f2.rising) kill_fired_ = false;
     if (f2.down && f2.held_ms >= MNEM_LONGPRESS_MS && !kill_fired_) {
-      Kill(); kill_fired_ = true;
+      bypassed_ = true;                 // panic always lands in bypass
+      panic_active_ = true;             // engage the spin-down-to-silence envelope
+      panic_cleared_ = false;
+      KillLoop();                       // drop the loop now (silent already); tail fades via env
+      kill_fired_ = true;
     }
     if (f2.falling) {
-      if (!kill_fired_) bypassed_ = !bypassed_;
+      if (!kill_fired_) { bypassed_ = !bypassed_; panic_active_ = false; }  // tap cancels panic
       kill_fired_ = false;
     }
     send_target_ = bypassed_ ? 0.f : 1.f;
+
+    // Deferred delay-buffer wipe: once the panic env has faded the tail to
+    // silence, clear the trail on THIS (control) thread so re-engage is a clean
+    // slate with no click (audio thread only raises the request).
+    if (panic_clear_req_) {
+      memset(mnem_delay_slab, 0, MNEM_DELAY_SAMPLES * sizeof(float));
+      panic_clear_req_ = false;
+    }
 
     UpdateLeds(now, led1, led2);
   }
@@ -307,15 +328,40 @@ class Mnemonic : public Module {
         delayed = delay_.ReadFrac(wp - read_delay_ - wobble);
       }
 
+      // Panic spin-down envelope: only engages on the FS2 long-press. Throttling
+      // the RECIRCULATION with it guarantees the tail/oscillation/noise die to
+      // true silence even at fb>=1. Normal bypass leaves it at 1 (trails ring).
+      const float pe_tgt = panic_active_ ? 0.f : 1.f;
+      panic_env_ += (pe_tgt - panic_env_) *
+                    (pe_tgt > panic_env_ ? panic_rise_coef_ : panic_fall_coef_);
+      // Once faded, ask the control thread to wipe the trail (once) for a clean re-engage.
+      if (panic_active_ && !panic_cleared_ && panic_env_ < 0.01f) {
+        panic_clear_req_ = true; panic_cleared_ = true;
+      }
+
       // Feedback tapped from the read (already filtered on prior laps). A dedicated
       // saturator compresses the RECIRCULATION only (analog bloom: repeats warm +
       // even out); the fresh input stays present (only mild K3 tape drive touches
       // it). Saturating after fb_eff means more feedback -> more bloom.
-      float fb = FbSat(delayed * fb_eff);
+      float fb = FbSat(delayed * fb_eff * panic_env_);
 
       // Loop plays INTO the delay input, parallel with the (gated) dry send.
       send_gain_ += (send_target_ - send_gain_) * send_coef_;
       float loop_s = LoopPlay();
+
+      // Bypass noise-duck: follow the trail envelope; in bypass, once it decays
+      // toward the engine's noise floor, duck the injected hiss so it dies WITH
+      // the trail (not after). Threshold rides the floor -> tracks K3. Only in
+      // bypass; during play the tape hiss between notes stays as character.
+      const float ta = fabsf(delayed);
+      trail_env_ += (ta > trail_env_ ? ngate_env_atk_ : ngate_env_rel_) * (ta - trail_env_);
+      float ng_tgt = 1.f;
+      if (bypassed_) {
+        const float thr = degrade_.NoiseFloorLin() * MNEM_NGATE_MARGIN;
+        ng_tgt = (trail_env_ > thr) ? 1.f : 0.f;
+      }
+      noise_gate_ += (ng_tgt - noise_gate_) * (ng_tgt > noise_gate_ ? ngate_open_ : ngate_close_);
+      degrade_.SetNoiseGate(noise_gate_);
 
       float x = in[i] * send_gain_ + loop_s + fb;
       x = Filter(x);                                    // K4/K5 tone — IN the loop (ages repeats)
@@ -323,7 +369,7 @@ class Mnemonic : public Module {
       x = degrade_.ColourProcess(x);                    // K3 BBD/Tape colour — IN the loop
       delay_.Write(x);
 
-      wet[i] = delayed;                                 // raw read (filtered on prior laps)
+      wet[i] = delayed * panic_env_;                    // raw read, spun down on panic only
     }
   }
 
@@ -409,8 +455,10 @@ class Mnemonic : public Module {
   }
 
   // ---- kill --------------------------------------------------------------
-  void Kill() {
-    memset(mnem_delay_slab, 0, MNEM_DELAY_SAMPLES * sizeof(float));  // clear the trail
+  // Panic drops the loop immediately (already silent in bypass); the delay
+  // trail is NOT wiped here — the panic envelope fades it to silence first,
+  // then the control thread wipes the buffer (deferred, click-free).
+  void KillLoop() {
     loop_len_ = 0; loop_playing_ = false; loop_scratch_recording_ = false;
   }
 
@@ -482,6 +530,15 @@ class Mnemonic : public Module {
   // bypass / send gate
   bool  bypassed_ = false, kill_fired_ = false;
   float send_gain_ = 1.f, send_target_ = 1.f, send_coef_ = 0.f;
+  // panic spin-down envelope (gates wet output + feedback -> true silence).
+  // Engaged ONLY by the FS2 long-press; normal bypass leaves it at 1 (trails ring).
+  bool  panic_active_ = false, panic_cleared_ = false;
+  volatile bool panic_clear_req_ = false;   // audio->control: clear the delay buffer once faded
+  float panic_env_ = 1.f, panic_rise_coef_ = 0.f, panic_fall_coef_ = 0.f;
+  // bypass noise-duck: trail follower -> ducks the degrade engine's hiss to
+  // silence once the trail decays into the noise floor (bypass only).
+  float trail_env_ = 0.f, noise_gate_ = 1.f;
+  float ngate_env_atk_ = 0.f, ngate_env_rel_ = 0.f, ngate_open_ = 0.f, ngate_close_ = 0.f;
   float param_smooth_ = 0.004f;          // audio-rate smoother for K2-K5 params
 
   // loop (two-slab scratch/playback, pointer-swap commit; REPLACE not overdub)
