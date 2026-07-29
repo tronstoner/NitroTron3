@@ -119,12 +119,16 @@ ratio table with boundary hysteresis. New tempo/division **glides** the tap
 (consistent with M1). LED 1 blinks the delay clock. **Milestone: tap a tempo,
 dial divisions, LED tracks.**
 
-### M6 — Bypass / kill + output ownership
-FS2 tap = gate send + gate loop send, **trail rings out and decays** (this is why
-mnemonic likely takes `OwnsOutput()` — it must keep emitting wet while the send
-is muted, and keep dry sacrosanct). FS2 hold = kill (clear buffer + delete loop).
-Decide `OwnsOutput` here. **Milestone: bypass leaves a decaying trail; kill is
-instant and total.**
+### M6 — Bypass / panic + output ownership
+FS2 tap = gate send + gate loop send, **trail rings out and decays**. As built,
+mnemonic keeps `OwnsOutput() == false` and uses the shell K6 equal-power mix (dry
+stays sacrosanct); the wet buffer carries the tail while the send is muted.
+FS2 **long-press = panic**: force bypass, delete loop, spin the feedback + tail +
+noise down to true silence (envelope throttles the recirculation, so it holds
+even at fb ≥ 1), then wipe the delay line. A **bypass noise-duck** (trail-envelope
+follower, threshold tracking the engine noise floor) fades the tape/BBD hiss out
+with the trail so bypass doesn't leave a hiss bed. **Milestone: bypass leaves a
+decaying, self-cleaning trail; panic is instant and total.**
 
 ### M7 — SW1 tape gestures (FS1 hold)
 FS1 tap = tap tempo (M5); FS1 hold, per SW1: UP spin-up (time↓/pitch↑ + fb↑),
@@ -135,7 +139,7 @@ smooth return.**
 ### M8 — Hold / loop (SW1 MID)
 Clean-signal loop recorder. Press = record from down (accurate start), release =
 commit + play. Loop plays **into the delay input** in parallel with live dry.
-Bypass pauses/resumes; kill deletes. **Milestone: Hazarai-style loop feeding the
+Bypass pauses/resumes; panic deletes. **Milestone: Hazarai-style loop feeding the
 delay.** *(Superseded by the FS1 rework below — now a two-buffer scratch→commit,
 REPLACE-not-overdub, buffer-full = auto record-end.)*
 

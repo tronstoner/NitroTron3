@@ -54,7 +54,7 @@ extremes first; safeguards and polish are a later joint stage.
 | SW2 | Time mode — UP knob-time · MID tap-tempo · DOWN rhythmic taps (TBD) | up/mid locked · down open |
 | SW3 | Mode select (shell) | reserved |
 | FS1 | Tap tempo (tap) · SW1 gesture (hold) | locked |
-| FS2 | Bypass (tap = gate send, trail rings) · kill/clear (hold) | locked · pause-vs-restart draft |
+| FS2 | Bypass (tap = gate send, trail rings + hiss ducks) · panic (long-press = force bypass, kill loop + spin tail to silence) | as built |
 | LED 1 | Delay-clock blink (tempo × division) | locked |
 | LED 2 | Bypass / loop-present / loop-in-bypass state | locked · exact patterns draft |
 
@@ -273,20 +273,32 @@ tempo/rhythm, a long hold records a loop (into a scratch buffer, committed only
 when the hold crosses the threshold — see below). A short tap therefore never
 disturbs a loop already playing, and it still registers as a tempo/rhythm tap.
 
-### FS2 — bypass / kill (locked; pause-vs-restart draft)
+### FS2 — bypass / panic (as built)
 
 - **Tap — bypass toggle.** Bypass here does **not** kill the delay trail. It
   **gates the send into the delay** (no new input recirculates) and **gates the
   loop send** (loop stops). The existing tail **rings out and decays** per the
   feedback setting. Dry stays clean and present (sacrosanct). This gives natural
   spillover on bypass.
-- **Hold — kill switch.** Instantly **kills the delay line** (clears the buffer /
-  silences the tail) **and deletes any recorded loop**.
+  - **Bypass noise-duck.** So the ringing tail doesn't leave a *steady hiss bed*
+    once it's gone, a trail-envelope follower watches the wet read; in bypass,
+    as the envelope decays toward the engine's own noise floor (threshold =
+    floor × margin, so it tracks K3), the degrade engine's noise injection is
+    ducked to zero over ~250 ms. The medium hiss dies **with** the trail, not
+    after it — and the tail itself is never gated (it rings out 100 % clean).
+    During normal play the duck is disabled, so inter-note tape hiss stays as
+    character.
+- **Long-press — panic.** The always-at-hand escape: **always** drops into
+  bypass **and** kills everything — deletes any recorded loop, spins the
+  feedback + tail (and injected noise) down to **true silence** via a fast
+  click-free envelope that throttles the *recirculation itself* (so it works
+  even at feedback ≥ 1 / self-oscillation), then wipes the delay line. Any tap
+  cancels the panic and re-engages over a short de-click ramp — no click, effect
+  back immediately.
 
-Loop-vs-bypass detail (brief flags as "do the simple thing first"): a recorded
-loop is **paused** by bypass and **resumes** on un-bypass — a simple signal gate,
-**not** stop/restart. The long-press kill is the only thing that *deletes* the
-loop. *(Pause/resume chosen as simplest; `draft`.)*
+Loop-vs-bypass detail: a recorded loop is **paused** by (tap) bypass and
+**resumes** on un-bypass — a simple signal gate, **not** stop/restart. The
+long-press panic is the only thing that *deletes* the loop.
 
 ---
 
@@ -307,8 +319,8 @@ scratch → commit** model so a short tap can never disturb the loop that's play
   vestige-style, via a `volatile` flag the control loop consumes.
 - The committed loop **plays back *into* the delay line in parallel with the live
   clean input** — feeding the delay/feedback/colour chain just like playing does.
-- Bypass (FS2 tap) pauses the loop; un-bypass resumes it. FS2 hold (kill) deletes
-  it.
+- Bypass (FS2 tap) pauses the loop; un-bypass resumes it. FS2 long-press (panic)
+  deletes it.
 
 *(v1: single loop, REPLACE on each commit — no overdub / sound-on-sound. Open:
 max loop length final value; whether to add overdub later. `draft`.)*
@@ -391,7 +403,7 @@ Notes:
   SW1-latched sustained gesture. Two thresholds with a deadzone
   (`MNEM_TAP_RELEASE_MS` / `MNEM_LONGPRESS_MS`) — values still to tune.
 - **Loop** — **ruled & built: two-buffer scratch→commit, REPLACE not overdub;**
-  buffer-full = auto record-end. Bypass pauses / un-bypass resumes; kill deletes.
+  buffer-full = auto record-end. Bypass pauses / un-bypass resumes; panic deletes.
   Open: final max length; possible later overdub mode.
 - **Output ownership** — **resolved: no `OwnsOutput()`.** The shell K6 equal-power
   mix serves; the wet-trail bypass works because the wet buffer carries the
