@@ -41,4 +41,11 @@ class Module {
   // dry bypass) and fills `wet` with the FINAL output; the shell outputs it
   // directly and skips the K6 crossfade. Default false = shell does the mix.
   virtual bool OwnsOutput() const { return false; }
+
+  // If true, the module is bypassed: the shell must pass the CLEAN signal fully
+  // UNTOUCHED (dry gain forced to unity, ignoring the K6 mix) — there is no
+  // hardware bypass on this pedal, so this is the only guarantee that the clean
+  // path is never attenuated/processed in bypass. Wet (any ringing trail) is
+  // still mixed as usual. Only consulted when OwnsOutput() is false.
+  virtual bool Bypassed() const { return false; }
 };

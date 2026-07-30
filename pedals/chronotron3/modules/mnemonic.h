@@ -455,6 +455,9 @@ class Mnemonic : public Module {
 
   // mnemonic uses the shell's K6 equal-power mix (dry stays sacrosanct).
   bool OwnsOutput() const override { return false; }
+  // In bypass the shell must leave the CLEAN signal fully untouched (K6 must not
+  // attenuate the dry). Only the wet trail rings out; the dry is never processed.
+  bool Bypassed() const override { return bypassed_; }
 
  private:
   // ---- tone filter (in the loop): 24 dB HP -> 24 dB LP -------------------

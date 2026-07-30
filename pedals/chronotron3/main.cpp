@@ -41,6 +41,7 @@ volatile int g_active = CT3_MODE_VESTIGE;
 
 static float wet_buf[CT3_BLOCK_SIZE];
 static float mix_smoothed = 0.f;   // smoothed K6 target (0 = dry, 1 = wet)
+static float dry_bypass = 0.f;     // smoothed bypass dry-lift (0 = K6 mix, 1 = clean untouched)
 
 // ---------------------------------------------------------------------------
 // Audio callback — dispatch to the active module, then K6 dry/wet mix
@@ -59,11 +60,18 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   }
 
   // K6 = mix. Equal-power crossfade, one-pole smoothed to kill zipper noise.
+  // Bypass override: when the module is bypassed the CLEAN signal must pass
+  // fully untouched (there's no hardware bypass), so the dry gain is ramped to
+  // unity regardless of K6 — only the wet trail stays under the mix. Smoothed
+  // so toggling bypass can't click the dry.
   const float mix_target = MixCurve(RemapKnob(cs.Knob(5)));  // K6 → index 5
+  const float byp_target = modules[g_active]->Bypassed() ? 1.f : 0.f;
   for (size_t i = 0; i < size; i++) {
     mix_smoothed += (mix_target - mix_smoothed) * CT3_MIX_SMOOTH;
+    dry_bypass    += (byp_target - dry_bypass)  * CT3_MIX_SMOOTH;
     const float wg = sqrtf(mix_smoothed);
-    const float dg = sqrtf(1.f - mix_smoothed);
+    float dg = sqrtf(1.f - mix_smoothed);
+    dg += (1.f - dg) * dry_bypass;                 // ramp dry -> unity in bypass
     out[0][i] = out[1][i] = in[0][i] * dg + wet_buf[i] * wg;
   }
 }
