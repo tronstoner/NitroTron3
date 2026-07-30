@@ -117,6 +117,7 @@ class Mnemonic : public Module {
     ngate_close_   = 1.f - expf(-1.f / (MNEM_NGATE_CLOSE_MS   * 0.001f * sr_));
     param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // K2-K5 zipper smoother
     time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K1 delay-time de-jitter
+    fb_env_coef_ = 1.f - expf(-1.f / (MNEM_FB_CTL_MS * 0.001f * sr_));
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
     freeze_amp_coef_ = 1.f - expf(-1.f / (MNEM_FREEZE_AMP_MS * 0.001f * sr_));
@@ -384,15 +385,16 @@ class Mnemonic : public Module {
       if (edge_) {
         // Edge = MID + a secondary line, each with its own feedback loop.
         //   PRIMARY   = quarter x division, IDENTICAL to SW2 MID (full colour).
-        //   SECONDARY = quarter x companion ratio, octave-up (pitch shift on the
-        //               INPUT, outside its loop), NO filter, NO K3, quieter.
+        //   SECONDARY = quarter x companion ratio, clean lo-fi telephone band,
+        //               NO K3, quieter.
         const float wp2 = wp2_0 + (float)i;
         float dd = delay_.ReadFrac(wp - read_delay_ - wobble);      // primary (= MID) read
         float dq = delay2_.ReadFrac(wp2 - read_delay2_);            // secondary read (own delay)
 
         UpdateNoiseDuck(dd);                             // duck tracks the K3-coloured (primary) line
 
-        float fbd = FbSat(dd * fb_eff * panic_env_);     // primary loop: full colour (= MID)
+        float fbsc = FbCtl(dd);                          // controlled-decay scale (primary-driven)
+        float fbd = FbSat(dd * fb_eff * fbsc * panic_env_);  // primary loop: full colour (= MID)
         float xd = in[i] * send_gain_ + loop_s + fbd;
         xd = Filter(xd); xd = TapeDrive(xd); xd = degrade_.ColourProcess(xd);
         delay_.Write(xd);
@@ -403,7 +405,7 @@ class Mnemonic : public Module {
         float si = in[i];
         { float l, b, h; sec_hp_.Process(si, l, b, h); si = h;   // telephone HP
                          sec_lp_.Process(si, l, b, h); si = l; } // telephone LP
-        float fbq = FbSat(dq * fb_eff * panic_env_);
+        float fbq = FbSat(dq * fb_eff * fbsc * panic_env_);
         delay2_.Write(si * send_gain_ + fbq);
 
         delayed = dd * MNEM_EDGE_DIV_GAIN + dq * MNEM_EDGE_SEC_GAIN;
@@ -411,7 +413,7 @@ class Mnemonic : public Module {
         // Single line (SW2 UP knob-time / MID tap-division).
         float ds = delay_.ReadFrac(wp - read_delay_ - wobble);
         UpdateNoiseDuck(ds);
-        float fb = FbSat(ds * fb_eff * panic_env_);
+        float fb = FbSat(ds * fb_eff * FbCtl(ds) * panic_env_);
         float x = in[i] * send_gain_ + loop_s + fb;
         x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
         x = TapeDrive(x);                               // always-on base tape warmth
@@ -496,6 +498,14 @@ class Mnemonic : public Module {
   }
   inline float FbSat(float v) {                         // feedback-path compression (bloom)
     return tanhf(v * MNEM_FB_DRIVE) / MNEM_FB_DRIVE;
+  }
+  // Controlled-decay feedback scale: downward expansion driven by the recirculating
+  // signal's envelope. ~1 while loud (strong initial repeats), drops below the knee
+  // so the quiet tail decays faster. `read` = the delay read that feeds back.
+  inline float FbCtl(float read) {
+    fb_env_ += (fabsf(read) - fb_env_) * fb_env_coef_;
+    float ctl = fb_env_ / (fb_env_ + MNEM_FB_CTL_KNEE);   // ->1 loud, ->0 quiet
+    return 1.f - MNEM_FB_CTL_AMT * (1.f - ctl);
   }
 
   // ---- loop (two-slab scratch -> playback; REPLACE, not overdub) ---------
@@ -628,6 +638,8 @@ class Mnemonic : public Module {
   // feedback / drive — targets set at control rate, *_sm_ smoothed at audio rate
   float fb_gain_ = 0.f, tape_drive_ = MNEM_TAPE_DRIVE;
   float fb_sm_ = 0.f, drive_sm_ = MNEM_TAPE_DRIVE;
+  // controlled-decay: envelope of the recirculating signal -> downward expansion
+  float fb_env_ = 0.f, fb_env_coef_ = 0.f;
 
   // tone filter (in loop): 24 dB HP (hp1->hp2) then 24 dB LP (lp1->lp2) + makeup
   MnemSVF hp1_, hp2_, lp1_, lp2_;

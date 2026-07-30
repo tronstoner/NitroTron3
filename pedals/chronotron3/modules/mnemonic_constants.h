@@ -81,7 +81,7 @@ static constexpr float MNEM_DIV_HYST = 0.015f;  // knob margin to change divisio
 // ---------------------------------------------------------------------------
 // Feedback (K2, 0 -> self-oscillation) + always-on tape drive
 // ---------------------------------------------------------------------------
-static constexpr float MNEM_FB_MAX      = 1.15f;  // >1: oscillates; tanh bounds level
+static constexpr float MNEM_FB_MAX      = 1.30f;  // >1: oscillates; tanh bounds level
 static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // always-on base warmth (K3 degrade engine adds colour on top)
 // Dedicated feedback-path saturator (analog bloom): compresses the RECIRCULATION
 // only, so repeats warm + even out while the fresh input (first repeat) stays
@@ -90,6 +90,15 @@ static constexpr float MNEM_FB_DRIVE = 3.0f;
 // No build-up ducker: the in-loop tanh (TapeDrive) is the sole level safety, so
 // feedback regenerates accurately and K1 sweeps don't get ducked. (The Mode-B
 // ducker was the feedback-drown regression — removed.)
+//
+// Controlled-decay shaping: a downward expander on the feedback path. Full
+// feedback while the signal is loud (initial repeats stay strong), but the loop
+// gain drops once the tail falls below the knee -> the tail decays FASTER instead
+// of ringing forever (rhythmically pronounced echoes, no ultra-long trail; good
+// on bass). AMT is the nudge: 0 = pure bloom (as before), higher = more controlled.
+static constexpr float MNEM_FB_CTL_AMT  = 0.30f;  // 0 = off (bloom) · 1 = strongly controlled
+static constexpr float MNEM_FB_CTL_KNEE = 0.08f;  // level below which the tail accelerates
+static constexpr float MNEM_FB_CTL_MS   = 60.f;   // feedback envelope time (decay-rate detector)
 
 // ---------------------------------------------------------------------------
 // Tone filter (K4 tilt/center + K5 narrow) — POST-delay, OUT of the feedback
