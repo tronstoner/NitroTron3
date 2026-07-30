@@ -118,9 +118,8 @@ class Mnemonic : public Module {
     param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // K2-K5 zipper smoother
     time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K1 delay-time de-jitter
     fb_env_coef_ = 1.f - expf(-1.f / (MNEM_FB_CTL_MS * 0.001f * sr_));
-    wet_lim_atk_ = 1.f - expf(-1.f / (MNEM_WET_LIMIT_ATK_MS * 0.001f * sr_));
-    wet_lim_rel_ = 1.f - expf(-1.f / (MNEM_WET_LIMIT_REL_MS * 0.001f * sr_));
-    wet_split_coef_ = 1.f - expf(-2.f * 3.14159265f * MNEM_WET_LIMIT_SPLIT_HZ / sr_);
+    fb_duck_atk_ = 1.f - expf(-1.f / (MNEM_FB_DUCK_ATK_MS * 0.001f * sr_));
+    fb_duck_rel_ = 1.f - expf(-1.f / (MNEM_FB_DUCK_REL_MS * 0.001f * sr_));
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
     freeze_amp_coef_ = 1.f - expf(-1.f / (MNEM_FREEZE_AMP_MS * 0.001f * sr_));
@@ -396,7 +395,7 @@ class Mnemonic : public Module {
 
         UpdateNoiseDuck(dd);                             // duck tracks the K3-coloured (primary) line
 
-        float fbsc = FbCtl(dd);                          // controlled-decay scale (primary-driven)
+        float fbsc = FbCtl(dd) * FbDuck(dd);             // controlled-decay + build-up cap (primary-driven)
         float fbd = FbSat(dd * fb_eff * fbsc * panic_env_);  // primary loop: full colour (= MID)
         float xd = in[i] * send_gain_ + loop_s + fbd;
         xd = Filter(xd); xd = TapeDrive(xd); xd = degrade_.ColourProcess(xd);
@@ -416,7 +415,7 @@ class Mnemonic : public Module {
         // Single line (SW2 UP knob-time / MID tap-division).
         float ds = delay_.ReadFrac(wp - read_delay_ - wobble);
         UpdateNoiseDuck(ds);
-        float fb = FbSat(ds * fb_eff * FbCtl(ds) * panic_env_);
+        float fb = FbSat(ds * fb_eff * FbCtl(ds) * FbDuck(ds) * panic_env_);
         float x = in[i] * send_gain_ + loop_s + fb;
         x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
         x = TapeDrive(x);                               // always-on base tape warmth
@@ -431,9 +430,7 @@ class Mnemonic : public Module {
       // bypass via send_gain_ (like the loop); de-clicked by freeze_amp_.
       float fz = FreezeVoice();
 
-      // Wet safety limiter on the delay before summing (tames self-osc extremes);
-      // freeze added after so it stays pristine. Dry is never touched (shell mix).
-      wet[i] = WetLimit(delayed) * panic_env_ + fz;
+      wet[i] = delayed * panic_env_ + fz;               // delay (panic-gated) + parallel freeze
     }
   }
 
@@ -512,21 +509,17 @@ class Mnemonic : public Module {
     float ctl = fb_env_ / (fb_env_ + MNEM_FB_CTL_KNEE);   // ->1 loud, ->0 quiet
     return 1.f - MNEM_FB_CTL_AMT * (1.f - ctl);
   }
-  // Wet HF safety roll-off: split off the HIGH band and roll ONLY it back when it
-  // gets hot — tames the piercing high-pitched self-osc while low/mid feedback
-  // passes untouched. WET output only; the EQ, makeup and loop are never touched.
-  inline float WetLimit(float w) {
-    wet_lf_ += (w - wet_lf_) * wet_split_coef_;          // low/mid band (one-pole LP)
-    float hf = w - wet_lf_;                              // high band
-    const float ah = fabsf(hf);
-    wet_env_ += ((ah > wet_env_) ? wet_lim_atk_ : wet_lim_rel_) * (ah - wet_env_);
-    float g = 1.f;
-    if (wet_env_ > MNEM_WET_LIMIT_THR) {
-      float target = MNEM_WET_LIMIT_THR +
-                     (wet_env_ - MNEM_WET_LIMIT_THR) * MNEM_WET_LIMIT_RATIO;
-      g = target / wet_env_;
-    }
-    return wet_lf_ + hf * g;                             // low/mid intact; high band rolled off when hot
+  // Feedback build-up ducker (Sprawl-style): a SLOW-attack envelope on the loop
+  // read drives a 1:inf attenuation of the feedback gain once the SUSTAINED loop
+  // level exceeds a threshold — so a runaway/self-oscillation is capped to a
+  // controlled simmer, while transients, normal repeats, and K1 sweeps (all
+  // faster than the ~500 ms attack) pass untouched. This is the level control;
+  // the fast ducker we removed earlier caused the "drown" precisely because its
+  // attack was fast enough to react to those transients.
+  inline float FbDuck(float read) {
+    const float a = fabsf(read);
+    fb_duck_env_ += ((a > fb_duck_env_) ? fb_duck_atk_ : fb_duck_rel_) * (a - fb_duck_env_);
+    return (fb_duck_env_ > MNEM_FB_DUCK_THR) ? (MNEM_FB_DUCK_THR / fb_duck_env_) : 1.f;
   }
 
   // ---- loop (two-slab scratch -> playback; REPLACE, not overdub) ---------
@@ -661,10 +654,8 @@ class Mnemonic : public Module {
   float fb_sm_ = 0.f, drive_sm_ = MNEM_TAPE_DRIVE;
   // controlled-decay: envelope of the recirculating signal -> downward expansion
   float fb_env_ = 0.f, fb_env_coef_ = 0.f;
-  // wet HF safety roll-off (tames only the piercing high band when hot; wet-only,
-  // dry + EQ + loop all untouched)
-  float wet_env_ = 0.f, wet_lim_atk_ = 0.f, wet_lim_rel_ = 0.f;
-  float wet_lf_ = 0.f, wet_split_coef_ = 0.f;
+  // feedback build-up ducker (Sprawl-style, slow attack) -> caps sustained loop level
+  float fb_duck_env_ = 0.f, fb_duck_atk_ = 0.f, fb_duck_rel_ = 0.f;
 
   // tone filter (in loop): 24 dB HP (hp1->hp2) then 24 dB LP (lp1->lp2) + makeup
   MnemSVF hp1_, hp2_, lp1_, lp2_;

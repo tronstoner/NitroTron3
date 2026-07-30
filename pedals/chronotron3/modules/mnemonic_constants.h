@@ -87,9 +87,9 @@ static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // always-on base warmth (K3 d
 // only, so repeats warm + even out while the fresh input (first repeat) stays
 // present. Higher = compresses earlier / more. Unity small-signal, bounded.
 static constexpr float MNEM_FB_DRIVE = 3.0f;
-// No build-up ducker: the in-loop tanh (TapeDrive) is the sole level safety, so
-// feedback regenerates accurately and K1 sweeps don't get ducked. (The Mode-B
-// ducker was the feedback-drown regression — removed.)
+// Level control is the SLOW-attack build-up ducker below (MNEM_FB_DUCK_*). The
+// earlier FAST-attack ducker caused the "feedback-drown" (it reacted to normal
+// repeats + K1 sweeps); the slow attack is what makes it work — see that block.
 //
 // Controlled-decay shaping: a downward expander on the feedback path. Full
 // feedback while the signal is loud (initial repeats stay strong), but the loop
@@ -100,18 +100,17 @@ static constexpr float MNEM_FB_CTL_AMT  = 0.30f;  // 0 = off (bloom) · 1 = stro
 static constexpr float MNEM_FB_CTL_KNEE = 0.08f;  // level below which the tail accelerates
 static constexpr float MNEM_FB_CTL_MS   = 60.f;   // feedback envelope time (decay-rate detector)
 
-// Wet HF safety roll-off — keeps the piercing HIGH-pitched self-oscillation
-// (K5 narrow + its makeup boost) musically viable WITHOUT touching the EQ, the
-// makeup, or the feedback loop. Acts on the WET OUTPUT only (before the shell
-// sums dry — clean is never touched): splits off a HIGH band and rolls ONLY that
-// band back when it gets hot (dynamic, envelope-driven). Low/mid feedback passes
-// completely untouched; it self-scales because it reacts to how loud the highs
-// actually are, not to an absolute ceiling. (A de-esser on the wet output.)
-static constexpr float MNEM_WET_LIMIT_SPLIT_HZ = 1800.f; // crossover: "high" = above this
-static constexpr float MNEM_WET_LIMIT_THR    = 0.35f; // HF-band level above which the roll-off engages
-static constexpr float MNEM_WET_LIMIT_RATIO  = 0.30f; // HF gain-reduction ratio above thr (lower = harder)
-static constexpr float MNEM_WET_LIMIT_ATK_MS = 5.f;   // catch time
-static constexpr float MNEM_WET_LIMIT_REL_MS = 120.f; // recovery
+// Feedback build-up ducker (Sprawl-proven) — the loop level control. A SLOW-attack
+// envelope on the loop read drives a 1:inf attenuation of the feedback gain once
+// the SUSTAINED loop level exceeds THR, so runaway/self-oscillation is capped to a
+// controlled simmer (musical drone, never ear-piercing) at ANY pitch. The slow
+// attack is the whole trick: transients, normal repeats and K1 varispeed sweeps
+// are all faster than it, so they pass untouched (a FAST attack here was the old
+// "drown" regression). Acts on the feedback GAIN, in the loop — not the EQ, not
+// the dry, not a static output ceiling; self-scales with the loop level.
+static constexpr float MNEM_FB_DUCK_THR    = 0.50f;  // sustained loop level the ducker holds to (raise = looser/louder, toward Sprawl's 0.20)
+static constexpr float MNEM_FB_DUCK_ATK_MS = 500.f;  // attack (matches Sprawl; slower = passes more transient before catching)
+static constexpr float MNEM_FB_DUCK_REL_MS = 800.f;  // slow release (loop simmers down between gestures)
 
 // ---------------------------------------------------------------------------
 // Tone filter (K4 tilt/center + K5 narrow) — POST-delay, OUT of the feedback
@@ -166,8 +165,8 @@ static constexpr int      MNEM_TAP_MEDIAN_N  = 4;    // recent intervals for the
 // ---------------------------------------------------------------------------
 // Tape gesture (FS1 hold; SW1 UP = spin-up). DOWN is now FREEZE (see below).
 // ---------------------------------------------------------------------------
-static constexpr float MNEM_GEST_UP_TIMEFAC   = 0.30f; // spin-up shortens delay -> pitch up
-static constexpr float MNEM_GEST_UP_FB        = 1.05f; // feedback while spinning up
+static constexpr float MNEM_GEST_UP_TIMEFAC   = 0.10f; // spin-up shortens delay -> pitch up
+static constexpr float MNEM_GEST_UP_FB        = 1.1f; // feedback while spinning up
 static constexpr float MNEM_GEST_ATK_MS       = 1100.f;// ramp-in while held (the pitch dive)
 static constexpr float MNEM_GEST_REL_MS       = 1400.f;// slew back on release
 
