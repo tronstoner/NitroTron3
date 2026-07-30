@@ -83,6 +83,13 @@ static constexpr float MNEM_DIV_HYST = 0.015f;  // knob margin to change divisio
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_FB_MAX      = 1.30f;  // >1: oscillates; tanh bounds level
 static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // always-on base warmth (K3 degrade engine adds colour on top)
+// BBD output makeup (K3 CCW): the BBD LPF rolloff drops perceived loudness as K3
+// goes deeper. This lifts the WET OUTPUT only (post feedback loop — balance
+// untouched), unity up to KNEE (~9:00 sweetspot) then rising to MAX at full CCW.
+// KNEE is in BBD-depth units (0 = centre .. 1 = full CCW); nudge to align with
+// the 9:00 spot. MAX = gain at full CCW (drastic per taste). Volume only, no EQ.
+static constexpr float MNEM_BBD_OUT_KNEE = 0.33f; // BBD depth where the boost starts (~9:00)
+static constexpr float MNEM_BBD_OUT_MAX  = 1.6f;  // output gain at full CCW (1 = off)
 // Dedicated feedback-path saturator (analog bloom): compresses the RECIRCULATION
 // only, so repeats warm + even out while the fresh input (first repeat) stays
 // present. Higher = compresses earlier / more. Unity small-signal, bounded.

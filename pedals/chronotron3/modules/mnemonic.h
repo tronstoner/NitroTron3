@@ -161,7 +161,16 @@ class Mnemonic : public Module {
     // degrade chains on top (clean-ish dead-zone at centre). Colour is applied in
     // the loop; the tape speed-irregularity modulates the MAIN read tap (Process).
     tape_drive_ = MNEM_TAPE_DRIVE;                  // constant base warmth
-    degrade_.SetDepth((k3 - 0.5f) * 2.f);           // p in [-1,+1] (dead-zone in engine)
+    float p3 = (k3 - 0.5f) * 2.f;                   // p in [-1,+1]
+    degrade_.SetDepth(p3);                          // (dead-zone in engine)
+    // BBD output makeup (K3 CCW only): the BBD LPF rolloff drops perceived
+    // loudness as you go deeper. Compensate on the WET OUTPUT (post-loop — the
+    // feedback / rolloff / ducking balance is NOT touched). Unity up to the knee
+    // (~9:00), rising to MAX at full CCW. Volume only; no EQ (K4/K5 handles tone).
+    float d_bbd = (p3 < -MNEMD_DEADZONE) ? (-p3 - MNEMD_DEADZONE) / (1.f - MNEMD_DEADZONE) : 0.f;
+    bbd_out_gain_ = (d_bbd > MNEM_BBD_OUT_KNEE)
+        ? 1.f + (d_bbd - MNEM_BBD_OUT_KNEE) / (1.f - MNEM_BBD_OUT_KNEE) * (MNEM_BBD_OUT_MAX - 1.f)
+        : 1.f;
 
     // ---- K4 tilt/center + K5 narrow (converging 24 dB HP+LP) -------------
     // Wide band edges from K4 (K5=0): CCW lowers the LP (dark), CW raises the HP
@@ -329,6 +338,7 @@ class Mnemonic : public Module {
       fb_sm_     += (fb_gain_       - fb_sm_)     * param_smooth_;
       drive_sm_  += (tape_drive_    - drive_sm_)  * param_smooth_;
       makeup_sm_ += (filter_makeup_ - makeup_sm_) * param_smooth_;
+      bbd_out_sm_ += (bbd_out_gain_ - bbd_out_sm_) * param_smooth_;   // BBD output makeup (wet-only)
       lo_sm_     += (lo_ - lo_sm_) * param_smooth_;
       hi_sm_     += (hi_ - hi_sm_) * param_smooth_;
       base_delay_sm_  += (base_delay_  - base_delay_sm_)  * time_smooth_;  // de-jitter K1 before the glide
@@ -430,7 +440,9 @@ class Mnemonic : public Module {
       // bypass via send_gain_ (like the loop); de-clicked by freeze_amp_.
       float fz = FreezeVoice();
 
-      wet[i] = delayed * panic_env_ + fz;               // delay (panic-gated) + parallel freeze
+      // BBD output makeup applied to the delay wet only (post-loop, feedback
+      // untouched); freeze stays at unity.
+      wet[i] = delayed * bbd_out_sm_ * panic_env_ + fz;
     }
   }
 
@@ -691,6 +703,8 @@ class Mnemonic : public Module {
   float trail_env_ = 0.f, noise_gate_ = 1.f;
   float ngate_env_atk_ = 0.f, ngate_env_rel_ = 0.f, ngate_open_ = 0.f, ngate_close_ = 0.f;
   float param_smooth_ = 0.004f;          // audio-rate smoother for K2-K5 params
+  // BBD output makeup (K3 CCW): depth-dependent wet-output gain, post-loop
+  float bbd_out_gain_ = 1.f, bbd_out_sm_ = 1.f;
 
   // loop (two-slab scratch/playback, pointer-swap commit; REPLACE not overdub)
   float* loop_play_buf_ = nullptr;
