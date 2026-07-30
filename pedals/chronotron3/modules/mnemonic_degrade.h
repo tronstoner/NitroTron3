@@ -34,7 +34,7 @@ static constexpr float MNEMD_XFADE_MS   = 10.f; // chain-switch crossfade agains
 
 // --- BBD (spec §3) ---
 static constexpr float MNEMD_FCLK_D0  = 48000.f;   // f_clk at d=0
-static constexpr float MNEMD_FCLK_D1  = 2500.f;    // f_clk at d=1 (exp map) — pushed way down so full-CCW is a true lo-fi extreme (old "good" ~5.5k now lands mid-travel)
+static constexpr float MNEMD_FCLK_D1  = 2500.f;    // f_clk at d=1 (exp map) — full-CCW lo-fi extreme (the digital fold artefacts live here; keep low)
 // Anti-alias / reconstruction split (x f_clk). The two levers that set the
 // grit-vs-sizzle balance of the BBD (Memory-Boy character: crude low-mid grit,
 // dark top, nothing hi-fi):
@@ -44,8 +44,14 @@ static constexpr float MNEMD_FCLK_D1  = 2500.f;    // f_clk at d=1 (exp map) —
 //   REC    = reconstruction LPF AFTER the line. Low value darkens the top and
 //            kills the high ZOH imaging = no hi-fi sizzle. Lower = darker/cruder.
 static constexpr float MNEMD_BBD_IN_AA = 0.60f;    // input anti-alias (>0.5 -> fold-down grit)
-static constexpr float MNEMD_BBD_REC   = 0.25f;    // reconstruction LPF (dark, kills high sizzle)
+static constexpr float MNEMD_BBD_REC   = 0.25f;    // reconstruction LPF factor x f_clk (dark, kills high sizzle)
 static constexpr float MNEMD_BBD_LOSS  = 0.28f;    // stage-loss LPF factor x f_clk — more HF roll-off
+// Fixed cutoff FLOOR (Hz) for the reconstruction + stage-loss LPFs. At shallow
+// BBD depths factor*f_clk is well above this (unchanged), but past ~9:00 the clock
+// drops and factor*f_clk would plunge to a telephone-dark ~600 Hz — the floor stops
+// it there, opening ONLY the deep/dark end while the shallow settings are untouched.
+// Higher = the dark end stays brighter (more highs + digital fold through).
+static constexpr float MNEMD_BBD_LPF_FLOOR_HZ = 900.f;
 // Compander removed (was 2x powf/sample and restored the signal each feedback
 // lap, preventing the repeats from crumbling). Its "breathing" is approximated
 // by a cheap amplitude flicker reusing the wow/OU mod block:
@@ -214,10 +220,16 @@ class MnemDegrade {
     // (No folding happens up there anyway — it's the near-clean zone.)
     const float nyq = sr_ * 0.49f;
     float in_fc  = MNEMD_BBD_IN_AA * f_clk_; if (in_fc  > nyq) in_fc  = nyq;
-    float rec_fc = MNEMD_BBD_REC  * f_clk_;  if (rec_fc > nyq) rec_fc = nyq;
+    // Reconstruction + stage-loss LPFs: factor*f_clk, but floored so the deep/dark
+    // end opens up while shallow (>= ~9:00) settings — already above the floor —
+    // stay exactly as they were. Then clamp below Nyquist for filter stability.
+    float rec_fc  = MNEMD_BBD_REC  * f_clk_; if (rec_fc  < MNEMD_BBD_LPF_FLOOR_HZ) rec_fc  = MNEMD_BBD_LPF_FLOOR_HZ;
+    float loss_fc = MNEMD_BBD_LOSS * f_clk_; if (loss_fc < MNEMD_BBD_LPF_FLOOR_HZ) loss_fc = MNEMD_BBD_LPF_FLOOR_HZ;
+    if (rec_fc  > nyq) rec_fc  = nyq;
+    if (loss_fc > nyq) loss_fc = nyq;
     bbd_in_lp_.LP(in_fc,  0.707f, sr_);   // pre-decimation: >0.5 f_clk folds = grit
-    bbd_rec_lp_.LP(rec_fc, 0.707f, sr_);  // post-line: dark, tames high imaging
-    bbd_loss_.SetLP(MNEMD_BBD_LOSS * f_clk_, sr_);
+    bbd_rec_lp_.LP(rec_fc, 0.707f, sr_);  // post-line: floored so the dark end isn't muffled
+    bbd_loss_.SetLP(loss_fc, sr_);
     bbd_noise_lin_ = powf(10.f, (MNEMD_BBD_NOISE_DB0 +
                           (MNEMD_BBD_NOISE_DB1 - MNEMD_BBD_NOISE_DB0) * d_) / 20.f);
     bbd_nl_drive_ = 1.f + MNEMD_BBD_NL_DRIVE * d_;
