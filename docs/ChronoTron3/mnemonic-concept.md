@@ -21,7 +21,7 @@ the new position — you hear the varispeed pitch slur, exactly like nudging a t
 reel or a BBD clock. Repeats colour and degrade as they recirculate (saturation,
 filtering, warble / decimation), so the effect ages the sound the longer it
 rings. On top of the delay sits a **hold / loop** function (EHX Hazarai-style)
-and two **tape-gesture** footswitch moves (spin-up / slow-down).
+a **tape spin-up** gesture and an EHX-style **freeze**.
 
 Roles this module leans on, in one line each:
 
@@ -50,8 +50,8 @@ extremes first; safeguards and polish are a later joint stage.
 | K4 | Tone tilt — bipolar: LPF (CCW) ↔ neutral (noon) ↔ HPF (CW) | locked · curve draft |
 | K5 | Resonance / EQ emphasis at K4's corner (+ BPF blend?) | function draft · topology open |
 | K6 | Dry/wet mix | locked (shell, unless module owns output) |
-| SW1 | FS1 **hold** gesture select — UP spin-up · MID loop · DOWN slow-down | locked |
-| SW2 | Time mode — UP knob-time · MID tap-tempo · DOWN rhythmic taps (TBD) | up/mid locked · down open |
+| SW1 | FS1 **hold** gesture select — UP spin-up · MID loop · DOWN freeze | as built |
+| SW2 | Time mode — UP knob-time · MID tap-tempo · DOWN Edge (two independent lines: MID primary + telephone secondary) | as built |
 | SW3 | Mode select (shell) | reserved |
 | FS1 | Tap tempo (tap) · SW1 gesture (hold) | locked |
 | FS2 | Bypass (tap = gate send, trail rings + hiss ducks) · panic (long-press = force bypass, kill loop + spin tail to silence) | as built |
@@ -215,26 +215,34 @@ Selects what an FS1 **hold** does (FS1 **tap** is always tap-tempo — see FS1):
   Release → slews back to the K1/K2 settings.
 - **MID — loop (hold/loop function).** Press = start loop record; release = stop
   record and start loop playback (Hazarai-style). See *Hold / loop*.
-- **DOWN — tape slow-down.** Same as UP but delay time **increases** (pitch
-  glides *down*) with feedback increasing; slewed return on release.
+- **DOWN — freeze (EHX-style).** *(Replaced the original tape slow-down, which
+  fought the varispeed topology — lengthening the read tap while feedback climbs
+  muddies rather than dives.)* Hold FS1 → the clean input is written continuously
+  into a short circular ring that keeps only the last **~400 ms**. Release (past
+  long-press) commits that fragment and **grain-loops** it as a sustained voice:
+  2 half-overlapped full-Hann grains (the ring's wrap seam is crossfaded, not
+  avoided). The freeze is summed into the wet output **outside the feedback
+  loop** (parallel — it doesn't recirculate or age), so it sits closer to the
+  looper than the delay. Two-slab pointer-swap (like the loop) lets a re-freeze
+  capture cleanly while the current one keeps playing. **Latches** until
+  re-frozen or cleared by FS2 panic; paused in bypass like the loop.
 
-Spin-up and slow-down almost certainly need **different feedback-ramp tunings** —
-separate constants for UP vs DOWN (per brief).
-
-### SW2 — Time mode (up/mid locked · down open)
+### SW2 — Time mode (as built)
 
 - **UP — knob time:** K1 = absolute delay time.
 - **MID — tap tempo:** K1 = division; FS1 taps set the tempo.
-- **DOWN — rhythmic taps.** **Ruling: build "capture-the-rhythm" first.** The
-  tap gesture captures the *rhythm between taps* (not just the average tempo)
-  into a short **multi-tap / pattern** — tap a dotted or syncopated figure and the
-  delay replays it. Two alternatives are kept **in evidence** (not built yet, may
-  layer in later as SW2-DOWN variants or a sub-selection):
-  - **Euclidean rhythms** — K1 (or a knob) selects a Euclidean pattern from a set
-    of preset ratios / (pulses, steps) pairs spread across the knob, scaled to
-    the tapped tempo.
-  - **"The Edge" style multi-tap** — a fixed rhythmic multi-tap (e.g.
-    dotted-eighth + eighth) scaled to tempo, as a simple fallback.
+- **DOWN — Edge (two independent delay lines).** *(As built. Supersedes the
+  original "capture-the-rhythm" ruling and the Euclidean/Edge-multi-tap variants
+  kept in evidence — Edge = MID + one secondary line was the chosen path.)* The
+  **primary** line is bit-identical to SW2-MID (delay = quarter × K1 division,
+  full K4/K5 + tape drive + K3), and Edge *adds one thing*: a **secondary line**
+  whose ratio is a per-K1-stop companion (`MNEM_EDGE_SECONDARY_RATIOS`, chosen so
+  primary + secondary + your quarter-note playing interlock into a 3-layer
+  rhythm). The secondary is a **clean lo-fi "telephone" band-pass** (~350 Hz–2.5
+  kHz, ~25% K4/K5 follow), no K3, quieter, with its **own feedback loop** — two
+  independent lines so the rhythms don't cross-smear as feedback regenerates. See
+  `DESIGN_DECISIONS.md` (Edge section) for the secondary-line journey
+  (octave-up → Chebyshev drive → clean telephone band).
 
 ### SW3 — Mode select (shell, reserved)
 
@@ -252,7 +260,7 @@ and tape gestures never block the taps.
 | Release timing | What it is |
 |---|---|
 | released **before** `MNEM_TAP_RELEASE_MS` (≈300 ms) | **Tap** → tempo (SW2 MID) / rhythm (SW2 DOWN) |
-| held **past** `MNEM_LONGPRESS_MS` (≈450 ms) | **Sustained gesture** (SW1-latched): MID = loop record · UP = spin-up · DOWN = slow-down |
+| held **past** `MNEM_LONGPRESS_MS` (≈450 ms) | **Sustained gesture** (SW1-latched): MID = loop record · UP = spin-up · DOWN = freeze |
 | released **in the deadzone** between | no-op (ambiguous; ignored) |
 
 - **Downpress is the timing reference** for taps even though the tap *commits* on
@@ -387,10 +395,11 @@ Notes:
 
 ## Open items / decisions to collect
 
-- **SW2 DOWN** — **ruled: capture-the-rhythm multi-tap first.** Euclidean-preset
-  and "The Edge" fixed multi-tap kept in evidence as later variants.
-- **K1 knob-time range + taper** (proposed 20 ms–3 s exp) and **tap-max interval**
-  (proposed ~2 s) → together set the delay-buffer size.
+- **SW2 DOWN** — **built as Edge (two independent lines: MID primary + clean
+  telephone secondary).** Capture-the-rhythm and Euclidean variants dropped (not
+  pursued). See SW2-DOWN above and `DESIGN_DECISIONS.md`.
+- **K1 knob-time range + taper** — *resolved as built:* 50 ms–1.5 s, pure
+  exponential (`MNEM_TIME_CURVE = 1.0`). Tap-max interval ~2 s; delay buffer 8 s.
 - **Division steps snap or glide** (proposed glide).
 - **K5 topology** — pure resonant peak vs peak+BPF-blend; and **EQ placement**
   in-loop (proposed) vs post-loop. Build both, decide by ear.

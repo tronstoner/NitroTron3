@@ -130,11 +130,16 @@ follower, threshold tracking the engine noise floor) fades the tape/BBD hiss out
 with the trail so bypass doesn't leave a hiss bed. **Milestone: bypass leaves a
 decaying, self-cleaning trail; panic is instant and total.**
 
-### M7 — SW1 tape gestures (FS1 hold)
-FS1 tap = tap tempo (M5); FS1 hold, per SW1: UP spin-up (time↓/pitch↑ + fb↑),
-DOWN slow-down (time↑/pitch↓ + fb↑), both slewed, separate UP/DOWN ramp
-constants; release slews back to K1/K2. **Milestone: held dive-bomb and swell,
-smooth return.**
+### M7 — SW1 gestures (FS1 hold)
+FS1 tap = tap tempo (M5); FS1 hold, per SW1: UP spin-up (time↓/pitch↑ + fb↑,
+slewed, release slews back to K1/K2). DOWN was originally a tape slow-down but it
+fought the varispeed topology (lengthening the read tap while feedback climbs
+muddies rather than dives), so **as built DOWN is an EHX-style freeze**: hold
+captures the last ~400 ms of clean input into a circular ring, release commits +
+grain-loops it (2 half-overlapped full-Hann grains, wrap seam crossfaded) as a
+sustained voice summed into wet **outside the feedback loop**; two-slab
+pointer-swap; latches until re-frozen or FS2 panic. **Milestone: held spin-up
+dive-bomb with smooth return; freeze captures + sustains cleanly.**
 
 ### M8 — Hold / loop (SW1 MID)
 Clean-signal loop recorder. Press = record from down (accurate start), release =
@@ -143,11 +148,16 @@ Bypass pauses/resumes; panic deletes. **Milestone: Hazarai-style loop feeding th
 delay.** *(Superseded by the FS1 rework below — now a two-buffer scratch→commit,
 REPLACE-not-overdub, buffer-full = auto record-end.)*
 
-### M9 — SW2 DOWN (rhythmic taps): capture-the-rhythm
-**Ruled:** build **capture-the-rhythm** multi-tap first — the tap gesture records
-the inter-tap intervals into a short pattern the delay replays (scaled if the
-tempo is re-tapped). Euclidean-preset and "The Edge" fixed multi-tap are kept in
-evidence as later SW2-DOWN variants, not built now.
+### M9 — SW2 DOWN: Edge (two independent delay lines) — as built
+**Built as Edge**, not capture-the-rhythm (that ruling and the Euclidean/Edge-
+multi-tap variants were dropped — see `DESIGN_DECISIONS.md`). SW2-DOWN = SW2-MID
+**plus one secondary line**: the **primary** is bit-identical to MID (quarter × K1
+division, full colour); the **secondary** runs a per-K1-stop companion ratio
+(`MNEM_EDGE_SECONDARY_RATIOS`) through a clean lo-fi **telephone band-pass**
+(~350 Hz–2.5 kHz, ~25% K4/K5 follow, no K3, quieter) with its **own feedback
+loop**. Two independent lines so the rhythms stay distinct as feedback
+regenerates. The secondary went octave-up → Chebyshev drive → clean telephone
+band (rejections logged in `DESIGN_DECISIONS.md`).
 
 ## Constants (initial `mnemonic_constants.h` sketch — all tune-by-ear)
 
@@ -179,7 +189,7 @@ The stage-1 M5–M8 FS1 handling was reworked after review into one model (see
 - **Downpress is the universal event; press length disambiguates.** Released
   before `MNEM_TAP_RELEASE_MS` (300) = tap (tempo/rhythm, *all* SW1 positions);
   held past `MNEM_LONGPRESS_MS` (450) = SW1-latched sustained gesture (MID loop /
-  UP spin-up / DOWN slow-down); deadzone between = no-op. Taps and the loop/tape
+  UP spin-up / DOWN freeze); deadzone between = no-op. Taps and the loop/tape
   gestures now coexist — the old "loop dedicates FS1" constraint is gone.
 - **Taps commit on release but are timed from the downpress** (`RegisterTap` takes
   the down timestamp), so tempo accuracy is release-independent.

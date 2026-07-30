@@ -44,16 +44,16 @@ Spec: `mnemonic-concept.md` + `mnemonic-impl-plan.md`. As-built first pass
 
 | Control | Function | Notes |
 |---|---|---|
-| KNOB 1 | Delay time / division | **SW2 UP** = absolute delay time (exp 20 ms–3 s), turning it **glides** = varispeed pitch bend. **SW2 MID** = tap division, 11 stops, noon = 1/1 (quarter = tap): CCW 3/4·2/3·1/2·1/3·1/4 shorter · CW 4/3·3/2·2/1·3/1·4/1 longer. **SW2 DOWN** = stretch/shrink the captured rhythm |
+| KNOB 1 | Delay time / division | **SW2 UP** = absolute delay time (exp 50 ms–1.5 s), turning it **glides** = varispeed pitch bend. **SW2 MID** = tap division, 11 stops, noon = 1/1 (quarter = tap): CCW 3/4·2/3·1/2·1/3·1/4 shorter · CW 4/3·3/2·2/1·3/1·4/1 longer. **SW2 DOWN** = Edge: same division as MID on the primary line, plus a per-stop companion ratio on the secondary line |
 | KNOB 2 | Feedback | 0 (CCW) → bounded self-oscillation (CW). Runs into always-on tape saturation + build-up ducker |
 | KNOB 3 | Degrade | Bipolar, clean at noon: **CCW** BBD (sample-rate decimation + gentle crush + rounding) · **CW** tape (extra drive + wow/flutter warble + progressive HF loss) |
 | KNOB 4 | Tone tilt | Bipolar, flat at noon (cut-only): **CCW** LPF (rolls off highs, dark) · **CW** HPF (rolls off lows, thin). Sets where the delay sits |
-| KNOB 5 | Resonance / EQ | Resonant peak at K4's corner (Q rises CCW→CW toward BPF-ish). Emphasises a band into the tape drive. In the feedback loop, so it ages the repeats |
+| KNOB 5 | Narrow (band-limit) | Shrinks the gap between the HP and LP cutoffs toward the geometric centre — band-limit by convergence (not a single resonant peak); a centre-gain makeup keeps a narrow setting from dropping out. In the feedback loop, so it ages the repeats |
 | KNOB 6 | Dry/wet mix | *(shell — equal-power. Dry is never processed/limited)* |
-| SWITCH 1 | FS1 **hold** gesture | **UP** = tape spin-up (hold → time↓/pitch↑ + feedback↑, slewed; release slews back) · **MIDDLE** = hold/loop (press record, release play) · **DOWN** = tape slow-down (hold → time↑/pitch↓ + feedback↑) |
-| SWITCH 2 | Time mode | **UP** = knob time · **MIDDLE** = tap tempo (FS1 taps) · **DOWN** = rhythmic taps (capture-the-rhythm multi-tap) |
+| SWITCH 1 | FS1 **hold** gesture | **UP** = tape spin-up (hold → time↓/pitch↑ + feedback↑, slewed; release slews back) · **MIDDLE** = hold/loop (press record, release play) · **DOWN** = freeze (hold captures the last ~400 ms of clean input; release commits + grain-loops it as a sustained parallel voice, summed to wet outside the feedback loop; latches until re-frozen or FS2 panic) |
+| SWITCH 2 | Time mode | **UP** = knob time · **MIDDLE** = tap tempo (FS1 taps) · **DOWN** = Edge — two independent delay lines: MID primary + a clean lo-fi telephone secondary at a per-stop companion ratio |
 | SWITCH 3 | Mode select | *(shell)* |
-| FOOTSWITCH 1 | Tap / gesture (hold-then-commit) | **Short tap** (release < ~300 ms) = tempo/rhythm tap — works in *every* SW1 position · **Long hold** (> ~450 ms) = the SW1-latched sustained gesture: MID loop record · UP spin-up · DOWN slow-down. Downpress is the timing reference; deadzone between = no-op |
+| FOOTSWITCH 1 | Tap / gesture (hold-then-commit) | **Short tap** (release < ~300 ms) = tempo/rhythm tap — works in *every* SW1 position · **Long hold** (> ~450 ms) = the SW1-latched sustained gesture: MID loop record · UP spin-up · DOWN freeze. Downpress is the timing reference; deadzone between = no-op |
 | FOOTSWITCH 2 | Bypass / panic | **Tap** = bypass toggle — gates the send + loop, but the delay **trail rings out** naturally (in bypass the tape/BBD hiss ducks away as the trail decays, so it doesn't leave a noise bed) · **Long-press** = panic — *always* drops into bypass and kills everything: loop deleted, feedback + tail spun down to true silence (click-free, even during self-oscillation), delay line wiped. The always-at-hand escape |
 | LED 1 | Delay clock | Blinks at the effective delay timing (tempo × division) |
 | LED 2 | Bypass / loop state | Active = solid · bypassed = off · recording = solid · loop armed = rapid flash · loop running while bypassed = dim slow flash |
