@@ -100,6 +100,19 @@ static constexpr float MNEM_FB_CTL_AMT  = 0.30f;  // 0 = off (bloom) · 1 = stro
 static constexpr float MNEM_FB_CTL_KNEE = 0.08f;  // level below which the tail accelerates
 static constexpr float MNEM_FB_CTL_MS   = 60.f;   // feedback envelope time (decay-rate detector)
 
+// Wet HF safety roll-off — keeps the piercing HIGH-pitched self-oscillation
+// (K5 narrow + its makeup boost) musically viable WITHOUT touching the EQ, the
+// makeup, or the feedback loop. Acts on the WET OUTPUT only (before the shell
+// sums dry — clean is never touched): splits off a HIGH band and rolls ONLY that
+// band back when it gets hot (dynamic, envelope-driven). Low/mid feedback passes
+// completely untouched; it self-scales because it reacts to how loud the highs
+// actually are, not to an absolute ceiling. (A de-esser on the wet output.)
+static constexpr float MNEM_WET_LIMIT_SPLIT_HZ = 1800.f; // crossover: "high" = above this
+static constexpr float MNEM_WET_LIMIT_THR    = 0.35f; // HF-band level above which the roll-off engages
+static constexpr float MNEM_WET_LIMIT_RATIO  = 0.30f; // HF gain-reduction ratio above thr (lower = harder)
+static constexpr float MNEM_WET_LIMIT_ATK_MS = 5.f;   // catch time
+static constexpr float MNEM_WET_LIMIT_REL_MS = 120.f; // recovery
+
 // ---------------------------------------------------------------------------
 // Tone filter (K4 tilt/center + K5 narrow) — POST-delay, OUT of the feedback
 // loop. Two 24 dB/oct filters (2x cascaded SVF each): a high-pass at `lo` and a

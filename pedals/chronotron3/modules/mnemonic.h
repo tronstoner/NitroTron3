@@ -118,6 +118,9 @@ class Mnemonic : public Module {
     param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // K2-K5 zipper smoother
     time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K1 delay-time de-jitter
     fb_env_coef_ = 1.f - expf(-1.f / (MNEM_FB_CTL_MS * 0.001f * sr_));
+    wet_lim_atk_ = 1.f - expf(-1.f / (MNEM_WET_LIMIT_ATK_MS * 0.001f * sr_));
+    wet_lim_rel_ = 1.f - expf(-1.f / (MNEM_WET_LIMIT_REL_MS * 0.001f * sr_));
+    wet_split_coef_ = 1.f - expf(-2.f * 3.14159265f * MNEM_WET_LIMIT_SPLIT_HZ / sr_);
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
     freeze_amp_coef_ = 1.f - expf(-1.f / (MNEM_FREEZE_AMP_MS * 0.001f * sr_));
@@ -428,7 +431,9 @@ class Mnemonic : public Module {
       // bypass via send_gain_ (like the loop); de-clicked by freeze_amp_.
       float fz = FreezeVoice();
 
-      wet[i] = delayed * panic_env_ + fz;               // delay (panic-gated) + parallel freeze
+      // Wet safety limiter on the delay before summing (tames self-osc extremes);
+      // freeze added after so it stays pristine. Dry is never touched (shell mix).
+      wet[i] = WetLimit(delayed) * panic_env_ + fz;
     }
   }
 
@@ -506,6 +511,22 @@ class Mnemonic : public Module {
     fb_env_ += (fabsf(read) - fb_env_) * fb_env_coef_;
     float ctl = fb_env_ / (fb_env_ + MNEM_FB_CTL_KNEE);   // ->1 loud, ->0 quiet
     return 1.f - MNEM_FB_CTL_AMT * (1.f - ctl);
+  }
+  // Wet HF safety roll-off: split off the HIGH band and roll ONLY it back when it
+  // gets hot — tames the piercing high-pitched self-osc while low/mid feedback
+  // passes untouched. WET output only; the EQ, makeup and loop are never touched.
+  inline float WetLimit(float w) {
+    wet_lf_ += (w - wet_lf_) * wet_split_coef_;          // low/mid band (one-pole LP)
+    float hf = w - wet_lf_;                              // high band
+    const float ah = fabsf(hf);
+    wet_env_ += ((ah > wet_env_) ? wet_lim_atk_ : wet_lim_rel_) * (ah - wet_env_);
+    float g = 1.f;
+    if (wet_env_ > MNEM_WET_LIMIT_THR) {
+      float target = MNEM_WET_LIMIT_THR +
+                     (wet_env_ - MNEM_WET_LIMIT_THR) * MNEM_WET_LIMIT_RATIO;
+      g = target / wet_env_;
+    }
+    return wet_lf_ + hf * g;                             // low/mid intact; high band rolled off when hot
   }
 
   // ---- loop (two-slab scratch -> playback; REPLACE, not overdub) ---------
@@ -640,6 +661,10 @@ class Mnemonic : public Module {
   float fb_sm_ = 0.f, drive_sm_ = MNEM_TAPE_DRIVE;
   // controlled-decay: envelope of the recirculating signal -> downward expansion
   float fb_env_ = 0.f, fb_env_coef_ = 0.f;
+  // wet HF safety roll-off (tames only the piercing high band when hot; wet-only,
+  // dry + EQ + loop all untouched)
+  float wet_env_ = 0.f, wet_lim_atk_ = 0.f, wet_lim_rel_ = 0.f;
+  float wet_lf_ = 0.f, wet_split_coef_ = 0.f;
 
   // tone filter (in loop): 24 dB HP (hp1->hp2) then 24 dB LP (lp1->lp2) + makeup
   MnemSVF hp1_, hp2_, lp1_, lp2_;
