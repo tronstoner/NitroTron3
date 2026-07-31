@@ -30,6 +30,7 @@
 #include "mnemonic_degrade.h"   // K3 bipolar BBD/Tape degradation engine
 #include "ring_buffer.h"   // core/blocks — mono circular buffer with ReadFrac
 #include "grain_voice.h"   // core/blocks — grain player for the freeze voice
+#include "mnemonic_multiband_freeze.h"   // multiband incommensurate granular freeze (SW1 DOWN)
 #include <math.h>
 #include <cstring>         // memset (kill)
 
@@ -48,6 +49,11 @@ static float DSY_SDRAM_BSS mnem_loop_slab_b[MNEM_LOOP_SAMPLES];
 // swap, so a re-freeze captures cleanly while the current freeze keeps playing.
 static float DSY_SDRAM_BSS mnem_freeze_slab_a[MNEM_FREEZE_SAMPLES];
 static float DSY_SDRAM_BSS mnem_freeze_slab_b[MNEM_FREEZE_SAMPLES];
+// Multiband freeze: 3 SDRAM band buffers + a chronological extract of the capture.
+static float DSY_SDRAM_BSS mnem_mb_low[MNEM_FREEZE_SAMPLES];
+static float DSY_SDRAM_BSS mnem_mb_mid[MNEM_FREEZE_SAMPLES];
+static float DSY_SDRAM_BSS mnem_mb_high[MNEM_FREEZE_SAMPLES];
+static float DSY_SDRAM_BSS mnem_freeze_chrono[MNEM_FREEZE_SAMPLES];
 
 static inline float MnemClamp(float v, float lo, float hi) {
   return v < lo ? lo : (v > hi ? hi : v);
@@ -123,6 +129,12 @@ class Mnemonic : public Module {
     loop_fade_coef_ = 1.f - expf(-1.f / (MNEM_LOOP_FADE_MS * 0.001f * sr_));
     loop_xfade_samps_ = (size_t)(MNEM_LOOP_XFADE_MS * 0.001f * sr_);
     freeze_amp_coef_ = 1.f - expf(-1.f / (MNEM_FREEZE_AMP_MS * 0.001f * sr_));
+    multiband_freeze_.Init(sr_, mnem_mb_low, mnem_mb_mid, mnem_mb_high, (int)MNEM_FREEZE_SAMPLES);
+    multiband_freeze_.SetXovers(MNEM_MB_XLO, MNEM_MB_XHI);
+    multiband_freeze_.SetLoopLens(MNEM_MB_LOOP_LO, MNEM_MB_LOOP_MID, MNEM_MB_LOOP_HI);
+    multiband_freeze_.SetGrain(0, MNEM_MB_GLEN_LO,  MNEM_MB_OVERLAP, MNEM_MB_SPRAY_LO);
+    multiband_freeze_.SetGrain(1, MNEM_MB_GLEN_MID, MNEM_MB_OVERLAP, MNEM_MB_SPRAY_MID);
+    multiband_freeze_.SetGrain(2, MNEM_MB_GLEN_HI,  MNEM_MB_OVERLAP, MNEM_MB_SPRAY_HI);
 
     SetFilters(2000.f, 2000.f);   // harmless defaults until first Controls
     sec_hp_.Set(MNEM_SEC_HP_HZ, 0.707f, sr_);  sec_lp_.Set(MNEM_SEC_LP_HZ, 0.707f, sr_);
@@ -134,6 +146,7 @@ class Mnemonic : public Module {
     gesture_engaged_ = false; gest_amt_ = 0.f;
     freeze_capturing_ = false; freeze_playing_ = false; freeze_amp_ = 0.f;
     for (int g = 0; g < MNEM_FREEZE_GRAINS; g++) freeze_grains_[g].Reset();
+    multiband_freeze_.Stop();
     hp1_.Reset(); hp2_.Reset(); lp1_.Reset(); lp2_.Reset();
     sec_hp_.Reset(); sec_lp_.Reset();
   }
@@ -177,10 +190,12 @@ class Mnemonic : public Module {
     // (thin), noon = 20 Hz .. 20 kHz. K5 shrinks both toward the geometric center
     // => a band-limit by convergence, resonant at both cutoffs (no single peak).
     float tilt = (k4 - 0.5f) * 2.f;                    // -1 .. +1
+    // Curve |tilt| for more sensitivity around noon (see MNEM_FILT_TILT_CURVE).
+    float tmag = powf(tilt < 0.f ? -tilt : tilt, MNEM_FILT_TILT_CURVE);
     float lo0 = MNEM_FILT_FMIN * powf(MNEM_FILT_HP_MAX / MNEM_FILT_FMIN,
-                                      tilt > 0.f ? tilt : 0.f);
+                                      tilt > 0.f ? tmag : 0.f);
     float hi0 = MNEM_FILT_FMAX * powf(MNEM_FILT_LP_MIN / MNEM_FILT_FMAX,
-                                      tilt < 0.f ? -tilt : 0.f);
+                                      tilt < 0.f ? tmag : 0.f);
     float center = sqrtf(lo0 * hi0);
     lo_ = center * powf(lo0 / center, 1.f - k5);       // HP cutoff target (smoothed in Process)
     hi_ = center * powf(hi0 / center, 1.f - k5);       // LP cutoff target
@@ -449,16 +464,28 @@ class Mnemonic : public Module {
   // Grain scheduler + sum for the freeze voice. Returns the summed, level-ramped,
   // bypass-gated freeze sample (0 when idle).
   inline float FreezeVoice() {
-    const size_t half = freeze_len_ >> 1;
-    if (freeze_playing_ && half > 0) {
-      if (freeze_sched_ == 0) {                         // trigger next voice every half-period
+    // Multiband granular freeze: same amp de-click ramp + send gate as the grain
+    // path; stops synthesising once fully faded out.
+    if (MNEM_FREEZE_MODE != 0) {
+      const float amp_tgt = freeze_playing_ ? 1.f : 0.f;
+      freeze_amp_ += (amp_tgt - freeze_amp_) * freeze_amp_coef_;
+      if (!freeze_playing_ && freeze_amp_ < 1e-4f) { multiband_freeze_.Stop(); return 0.f; }
+      float fz = multiband_freeze_.NextSample();
+      return fz * freeze_amp_ * MNEM_FREEZE_GAIN * send_gain_;
+    }
+    // N overlapping full-Hann grains loop the captured window. hop = window / N,
+    // so N grains overlap at once; more grains average out the inter-grain beating
+    // (the subtle flutter/tremolo of the 2-grain version).
+    const size_t hop = freeze_len_ / (size_t)MNEM_FREEZE_GRAINS;
+    if (freeze_playing_ && hop > 0) {
+      if (freeze_sched_ == 0) {                         // trigger next voice every hop
         freeze_grains_[freeze_voice_].Trigger(
             freeze_play_, freeze_len_, freeze_len_,
-            /*reverse*/ false, /*rate*/ 1.f, /*gain*/ 1.f,
+            /*reverse*/ false, /*rate*/ 1.f, /*gain*/ 2.f / (float)MNEM_FREEZE_GRAINS,
             /*loops*/ 1, /*alpha*/ 1.0f /*full Hann*/, /*attack_scale*/ 1.f);
-        freeze_voice_ ^= 1;
+        freeze_voice_ = (freeze_voice_ + 1) % MNEM_FREEZE_GRAINS;
       }
-      if (++freeze_sched_ >= half) freeze_sched_ = 0;
+      if (++freeze_sched_ >= hop) freeze_sched_ = 0;
     }
     float fz = 0.f;
     for (int g = 0; g < MNEM_FREEZE_GRAINS; g++)
@@ -551,6 +578,14 @@ class Mnemonic : public Module {
   // Swap the freshly-captured ring in as the playback ring (so a new capture
   // can't overwrite what's playing), reset the grain scheduler, latch playing.
   void CommitFreeze() {
+    // Multiband freeze: extract the whole captured window chronologically
+    // (oldest→newest from the ring's write pos) and hand it to the grain clouds.
+    if (MNEM_FREEZE_MODE != 0) {
+      const size_t wp = freeze_cap_.GetWritePos();
+      for (int i = 0; i < (int)MNEM_FREEZE_SAMPLES; i++)
+        mnem_freeze_chrono[i] = freeze_cap_.ReadAbs(wp + (size_t)i);
+      multiband_freeze_.Commit(mnem_freeze_chrono, (int)MNEM_FREEZE_SAMPLES);
+    }
     RingBuffer tmp = freeze_play_;                      // swap: capture becomes playback
     freeze_play_ = freeze_cap_;
     freeze_cap_  = tmp;
@@ -718,6 +753,7 @@ class Mnemonic : public Module {
   // summed into wet, OUTSIDE the feedback loop. Latches until re-frozen/panic.
   RingBuffer freeze_play_, freeze_cap_;         // play = grains read · cap = circular capture
   GrainVoice freeze_grains_[MNEM_FREEZE_GRAINS];
+  MultibandFreeze multiband_freeze_;                    // the freeze engine (SW1 DOWN)
   bool   freeze_capturing_ = false, freeze_playing_ = false;
   size_t freeze_len_ = 0;                        // captured fragment length (samples)
   size_t freeze_sched_ = 0;                     // half-period grain scheduler counter

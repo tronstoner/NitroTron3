@@ -10,7 +10,7 @@
 //   K1   = voice count / topology (CCW 6 voices … noon 1 voice … CW frippertronics).
 //   K2   = auto-capture threshold (spare in manual).
 //   K3   = smoothness macro (looper CCW → freeze CW).
-//   K4   = texture (bipolar: tape saturation CCW ↔ decimation/crush CW).
+//   K4   = degradation colour (bipolar: BBD lo-fi CCW ↔ tape saturation CW).
 //   K5   = loop fade in/out time (CCW instant → CW 3 s).
 //   K6   = mix (shell-owned).
 //
@@ -30,6 +30,7 @@
 #include "module.h"
 #include "vestige_constants.h"
 #include "grain_voice.h"   // core/blocks — pulls in ring_buffer.h
+#include "mnemonic_degrade.h" // BBD/Tape degradation engine (folded in on K4)
 #include <cmath>
 #include <cstring>         // memcpy (commit copies record scratch → target slot)
 
@@ -39,6 +40,8 @@
 //                  [loop_len .. +GUARD) = copy of the loop head (wrap-guard)
 // ---------------------------------------------------------------------------
 static float DSY_SDRAM_BSS vestige_slab[VESTIGE_SLOTS][VESTIGE_VOICE_CAP];
+// Post-grain warble modulated-delay line (K4 tape/BBD pitch modulation).
+static float DSY_SDRAM_BSS vestige_warble_slab[VESTIGE_WARBLE_LEN];
 
 // xorshift32 RNG for grain scatter (audio-thread only).
 static uint32_t vestige_rng = 0x1234567u;
@@ -58,6 +61,10 @@ class Vestige : public Module {
   // -------------------------------------------------------------------------
   void Init(float sr) override {
     sr_ = sr;
+    degrade_.Init(sr_);   // BBD/Tape degradation engine (K4)
+    warble_ring_.Init(vestige_warble_slab, VESTIGE_WARBLE_LEN);  // post-grain pitch warble
+    warble_base_ = VESTIGE_WARBLE_BASE_MS * 0.001f * sr_;
+    warble_int_  = 0.f;
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
@@ -186,18 +193,19 @@ class Vestige : public Module {
       freeze_pos_frac_ = (s - 0.5f) * 2.f;  // 0 = centre (noon) → 1 = end (CW)
     }
 
-    // ---- K4 = tape varispeed (pitch + speed coupled) ----------------------
-    // Bipolar exp around noon; unity dead-zone detent. Grains read at this rate
-    // and the loop head advances at it (see EmitGrain / ServiceSlot /
-    // AdvanceFripHead) → the whole loop transposes AND changes period, tape-style.
-    // Texture (tape sat / digi crush) is parked while K4 is the pitch knob.
-    tape_amt_ = 0.f; digi_amt_ = 0.f;
-    // Quantise K4 to the fixed ratio table (rotary switch). Equal knob travel per
-    // stop; noon (k4=0.5) lands exactly on unity (the centre entry).
-    int pidx = (int)(k4 * (float)(VESTIGE_PITCH_NSTEPS - 1) + 0.5f);
-    if (pidx < 0) pidx = 0;
-    if (pidx >= VESTIGE_PITCH_NSTEPS) pidx = VESTIGE_PITCH_NSTEPS - 1;
-    pitch_rate_ = VESTIGE_PITCH_STEPS[pidx];
+    // ---- K4 = degradation colour: BBD (CCW) / Tape (CW) -------------------
+    // Folded in from mnemonic (MnemDegrade). Bipolar around noon with the
+    // engine's own dead-zone clean centre: CCW = BBD lo-fi grit, CW = tape
+    // saturation/wow/dropouts. Colours ONLY the looper output in Process; the
+    // routed dry stays clean (hard rule G1). The old tape varispeed pitch-
+    // shifter that lived here is retired — pitch stays at unity.
+    degrade_.SetDepth(k4 * 2.f - 1.f);   // k4 [0..1] → bipolar [-1..+1]
+    // Idle-hiss guard: with no loop captured the engine's injected noise would
+    // add a hiss bed to the output, so duck it to 0 until there is content.
+    bool degrade_has_content = false;
+    for (int s = 0; s < VESTIGE_SLOTS; s++) if (active_[s]) { degrade_has_content = true; break; }
+    degrade_.SetNoiseGate(degrade_has_content ? 1.f : 0.f);
+    pitch_rate_ = 1.f;                    // K4 no longer transposes
 
     // ---- K2: auto-capture threshold ---------------------------------------
     auto_thresh_ = Mapf(k2, VESTIGE_AUTO_THRESH_MIN, VESTIGE_AUTO_THRESH_MAX);
@@ -454,22 +462,26 @@ class Vestige : public Module {
         }
       }
 
-      // ---- Texture (K4) ---------------------------------------------------
-      if (tape_amt_ > 0.001f) {
-        // Tape saturation: tanh grit with makeup gain — colors, doesn't boost.
-        float driven = tanhf(y * tape_drive_) * tape_makeup_;
-        y = y * (1.f - tape_amt_) + driven * tape_amt_;
-      }
-      if (digi_amt_ > 0.001f) {
-        // Sample-rate reduction + bit-crush → glitch / overrun mayhem.
-        decim_phase_ += 1.f;
-        if (decim_phase_ >= decim_hold_) {
-          decim_phase_ -= decim_hold_;
-          float step = powf(2.f, crush_bits_);
-          decim_hold_val_ = floorf(y * step + 0.5f) / step;
-        }
-        y = y * (1.f - digi_amt_) + decim_hold_val_ * digi_amt_;
-      }
+      // ---- Post-grain tape/BBD warble: PITCH modulation -------------------
+      // The degrade engine's wow/flutter/snag/BBD-drift is a playback-SPEED
+      // modulation; on the continuous looper stream that's a short modulated
+      // delay tap (mnemonic's wobbled read tap, here as a post insert). Leaky-
+      // integrate cents → sample displacement, clamp so the tap stays in the
+      // past (never reads the future), then read the delay line at that tap.
+      float w_cents = degrade_.TapePitchCents();
+      warble_int_ = warble_int_ * VESTIGE_WARBLE_LEAK
+                  + w_cents * VESTIGE_WARBLE_CENTS_TO_RATE;
+      const float w_max = warble_base_ - 2.f;
+      if (warble_int_ >  w_max) warble_int_ =  w_max;
+      else if (warble_int_ < -w_max) warble_int_ = -w_max;
+      warble_ring_.Write(y);
+      y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
+                                - warble_base_ - warble_int_);
+
+      // ---- Degradation colour (K4): BBD (CCW) / Tape (CW) -----------------
+      // Colour the wet looper sum only (dry x summed clean below → G1). Runs
+      // AFTER the warble = tape speed first, then head/electronics colour.
+      y = degrade_.ColourProcess(y);
 
       // Vestige owns its output: looper (y) at K6 volume + routed dry (x).
       // Both gains one-pole smoothed so K6 moves and the dry gate don't zip.
@@ -1120,10 +1132,14 @@ class Vestige : public Module {
   float pitch_rate_   = 1.f;   // target rate (1 = unity)
   float pitch_rate_s_ = 1.f;   // smoothed (audio-rate tape glide)
 
-  // Texture (K4 — parked while K4 is the pitch knob)
-  float tape_amt_ = 0.f, digi_amt_ = 0.f;
-  float tape_drive_ = 1.f, tape_makeup_ = 1.f, decim_hold_ = 1.f, crush_bits_ = 16.f;
-  float decim_phase_ = 0.f, decim_hold_val_ = 0.f;
+  // Degradation colour (K4): mnemonic's BBD/Tape engine, applied to the wet
+  // looper output. Depth set from K4 in Controls; per-sample in Process.
+  MnemDegrade degrade_;
+  // Post-grain warble: short modulated delay line carrying the engine's tape/BBD
+  // pitch modulation (wow/flutter/snag/drift) on the continuous looper output.
+  RingBuffer warble_ring_;
+  float      warble_base_ = 0.f;   // fixed base delay (samples) = tap centre
+  float      warble_int_  = 0.f;   // leaky-integrated cents → sample displacement
 
   // Recording
   volatile bool recording_ = false;

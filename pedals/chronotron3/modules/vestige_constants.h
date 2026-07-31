@@ -104,6 +104,21 @@ static constexpr float VESTIGE_PITCH_SMOOTH = 0.0006f;   // ~35 ms tape-glide be
 static constexpr size_t VESTIGE_FRIP_HEAD_GAP  = 240;    // ~5 ms head gap
 
 // ---------------------------------------------------------------------------
+// Post-grain tape/BBD warble (K4 degrade). The degrade engine's wow / flutter /
+// snag / BBD-clock-drift is a PLAYBACK-SPEED (pitch) modulation — the part a
+// static grain sum can't show. On a continuous stream that IS a short modulated
+// delay tap: write the looper sum in, read at a tap displaced by the engine's
+// cents (leaky-integrated to a sample displacement, exactly like mnemonic's
+// wobbled read tap). A small fixed base delay gives the tap room to swing both
+// ways; the displacement is clamped so it never reads the future. Base is a few
+// ms — inaudible, but note it is a fixed latency on the wet looper path.
+// ---------------------------------------------------------------------------
+static constexpr size_t VESTIGE_WARBLE_LEN     = 4800;      // 100 ms modulated-delay line (SDRAM)
+static constexpr float  VESTIGE_WARBLE_BASE_MS = 3.f;       // fixed base delay = tap centre (~3 ms)
+static constexpr float  VESTIGE_WARBLE_LEAK    = 0.99999f;  // leaky integrator (cents->displacement HP)
+static constexpr float  VESTIGE_WARBLE_CENTS_TO_RATE = 0.00057762f; // ln2/1200 (cents -> fractional speed)
+
+// ---------------------------------------------------------------------------
 // Texture (K4 — PARKED): bipolar, clean at centre
 //   analogue side (CCW) = tape saturation → extreme; digital side (CW) = decimate/crush → glitch
 // ---------------------------------------------------------------------------

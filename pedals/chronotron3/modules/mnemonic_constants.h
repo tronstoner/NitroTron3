@@ -131,6 +131,11 @@ static constexpr float MNEM_FILT_FMIN    = 20.f;    // band floor
 static constexpr float MNEM_FILT_FMAX    = 20000.f; // band ceiling
 static constexpr float MNEM_FILT_HP_MAX  = 4000.f;  // HP cutoff at full K4-CW (thin)
 static constexpr float MNEM_FILT_LP_MIN  = 180.f;   // LP cutoff at full K4-CCW (dark)
+// K4 tilt response curve: applied to |tilt| before the exponential cutoff map.
+// >1 = FINE DETAIL around noon (little cutoff movement per degree near centre)
+// and MORE travel out toward CW/CCW; 1.0 = even-in-octaves; <1 = the opposite
+// (coarse/twitchy near noon). 2.0 = squared (strong noon detail).
+static constexpr float MNEM_FILT_TILT_CURVE = 1.6f;
 static constexpr float MNEM_FILTER_RES_Q = 0.707f;  // per-stage Q: 0.707 = flat/no resonance; raise for "nasal" formant (~1.6 = +9 dB)
 static constexpr float MNEM_FILT_MAKEUP_XS  = 2.0f; // narrow-band over-compensation: 1 = level-restore only, >1 = narrow K5 sits louder
 static constexpr float MNEM_FILT_MAKEUP_MAX = 16.f; // cap on the center-gain makeup (~+24 dB)
@@ -189,9 +194,27 @@ static constexpr float MNEM_GEST_REL_MS       = 1400.f;// slew back on release
 // ---------------------------------------------------------------------------
 static constexpr float  MNEM_FREEZE_WIN_MS  = 400.f;   // captured fragment length
 static constexpr size_t MNEM_FREEZE_SAMPLES = (size_t)(MNEM_FREEZE_WIN_MS * 0.001f * MNEM_SR); // 19200
-static constexpr int    MNEM_FREEZE_GRAINS  = 2;       // 2x overlap -> COLA-smooth sustain
-static constexpr float  MNEM_FREEZE_GAIN    = 1.0f;    // freeze voice level into the wet sum
+static constexpr int    MNEM_FREEZE_GRAINS  = 3;       // overlapping grains at freeze (2 fluttered; 3+ averages
+                                                      // out the inter-grain beating — user's ear + research).
+                                                      // hop = window / GRAINS. Try 4 if 3 still ripples.
+static constexpr float  MNEM_FREEZE_GAIN    = 1.5f;    // freeze voice level (multiband makeup; tune by ear)
 static constexpr float  MNEM_FREEZE_AMP_MS  = 30.f;    // start/stop de-click ramp on the freeze voice
+// Freeze engine: 0 = grain (original overlap freeze, kept as fallback),
+// 1 = MULTIBAND incommensurate GRANULAR (the winner — mnemonic_multiband_freeze.h).
+static constexpr int    MNEM_FREEZE_MODE     = 1;
+// Multiband freeze tuning (evolving/phasing). Crossovers + per-band loop lengths.
+// Loop lengths are COPRIME (mutually incommensurate) so the bands never re-sync →
+// the freeze never audibly repeats. Long lows → short highs. Tune by ear.
+static constexpr float  MNEM_MB_XLO = 250.f, MNEM_MB_XHI = 2000.f;    // Hz crossovers
+static constexpr int    MNEM_MB_LOOP_LO = 11987;  // low  scan-loop length (coprime, incommensurate)
+static constexpr int    MNEM_MB_LOOP_MID = 8419;  // mid  scan-loop length
+static constexpr int    MNEM_MB_LOOP_HI = 4099;   // high scan-loop length
+// Per-band grain cloud (DENSITY = grains playing back). Grain length: long lows →
+// short highs. OVERLAP = grains per band at once — raise for MORE grains/denser.
+// Spray = position scatter (movement/shimmer). Tune by ear.
+static constexpr int    MNEM_MB_GLEN_LO = 7200, MNEM_MB_GLEN_MID = 3840, MNEM_MB_GLEN_HI = 1920; // 150/80/40 ms
+static constexpr float  MNEM_MB_OVERLAP = 4.0f;   // grains per band (density) — the "more grains" knob
+static constexpr int    MNEM_MB_SPRAY_LO = 480, MNEM_MB_SPRAY_MID = 240, MNEM_MB_SPRAY_HI = 120;   // samples
 
 // ---------------------------------------------------------------------------
 // Hold / loop (SW1 MID)

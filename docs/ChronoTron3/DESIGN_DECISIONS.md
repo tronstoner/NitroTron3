@@ -151,5 +151,29 @@ role in this module*; the underlying technique remains valid elsewhere.
 - **Doc map / `PROJECT.md`** — per AGENTS.md a doc-map entry should be added when a new
   doc is created; this file was **not** added there (per the user's "update docs only
   when told" rule). Flag for the user if a PROJECT.md entry is wanted.
+
+---
+
+## Shared tuning vocabulary
+
+The builder is a sound designer / modular-synth veteran; use his terms exactly.
+Getting the *direction* of a knob-feel request wrong wastes time and trust.
+
+| He says | He means | How to implement |
+|---|---|---|
+| "more **detail / sensible / sensitive / finer** around noon (or any point)" | more **resolution** there — **less** change per knob-degree near that point, **more** travel pushed toward the extremes. NOT "more effect near noon." | response-curve exponent **> 1** on \|control − centre\| (e.g. `MNEM_FILT_TILT_CURVE`); higher = finer centre / more edge-cramming |
+| "too **coarse**" / "sweep range too **big** around noon" | same — the centre needs finer resolution | exponent **> 1** |
+| "less **dense / crammed** in the outer regions" | the extremes change too abruptly | **lower** the exponent toward 1.0 (1.0 = perfectly even); trade-off is slightly less centre detail |
+| "**louder / more presence**" (a level, not a feel) | raw gain | a makeup/output gain — and mind WHERE (in-loop changes feedback; wet-output doesn't) |
+
+**Rule:** for any request about how a control *feels across its travel*
+(resolution / taper / where the action sits), restate the direction in one line
+and confirm if ambiguous **before** editing. Endpoints (the extremes) stay put; a
+response curve only redistributes *where along the travel* the change happens.
+
+**Session-wide working principles** (hard-won): one change at a time, verify by
+ear before the next; never touch what already works or what the user tuned; the
+clean/dry signal and the K4/K5 EQ are sacrosanct; pedal levels are relative to
+the chain (no absolute output ceilings) — tame feedback in the loop.
 </content>
 </invoke>
