@@ -35,6 +35,17 @@ public:
         return buf_[idx] * (1.f - frac) + buf_[next] * frac;
     }
 
+    // Fast fractional read for callers that already keep `pos` in [0, len_)
+    // (e.g. GrainVoice, which wraps read_pos_ every sample). Skips the fmodf in
+    // ReadFrac — a slow libm call that dominates per-grain cost when unneeded.
+    float ReadFracFast(float pos) const {
+        size_t idx = static_cast<size_t>(pos);
+        if (idx >= len_) idx = len_ - 1;                 // float-edge safety
+        size_t next = (idx + 1 < len_) ? idx + 1 : 0;
+        float frac = pos - static_cast<float>(idx);
+        return buf_[idx] * (1.f - frac) + buf_[next] * frac;
+    }
+
     // Read from `delay` samples behind current write head
     float ReadDelay(size_t delay) const {
         size_t pos = (write_pos_ + len_ - delay) % len_;

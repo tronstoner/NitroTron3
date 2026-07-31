@@ -67,6 +67,7 @@ public:
         gain_ = gain;
         loops_left_ = loops - 1;
         active_ = true;
+        filt_on_ = false;   // band filter off unless SetBandFilter() is called after Trigger
 
         // Tukey alpha: forced override (smooth grains → full Hann), else
         // length-based (long grains → full Hann, short grains → mostly flat).
@@ -86,6 +87,15 @@ public:
         attack_taper_ = static_cast<size_t>(taper_samples_ * attack_scale);
     }
 
+    // Optional per-grain band filter (2-pole biquad), applied to the read sample
+    // BEFORE windowing — so band-limiting a grain == granulating a pre-filtered
+    // buffer (host-verified identical; the Hann fade-in masks the filter's start
+    // transient). Call AFTER Trigger. Used by the multiband granular freeze.
+    void SetBandFilter(float b0, float b1, float b2, float a1, float a2) {
+        f_b0_ = b0; f_b1_ = b1; f_b2_ = b2; f_a1_ = a1; f_a2_ = a2;
+        f_z1_ = f_z2_ = 0.f; filt_on_ = true;
+    }
+
     float Process(const RingBuffer& buf) {
         if (!active_) return 0.f;
 
@@ -103,7 +113,21 @@ public:
             window = 1.f;
         }
 
-        float sample = buf.ReadFrac(read_pos_f_);
+        // read_pos_f_ is kept in [0, buf_len_f_) below, so use the wrap-free read
+        // (ReadFrac's fmodf is redundant here and was a big per-grain cost).
+        float sample = buf.ReadFracFast(read_pos_f_);
+        if (filt_on_) {   // band-limit before windowing (TDF-II biquad)
+            float y = f_b0_ * sample + f_z1_;
+            f_z1_ = f_b1_ * sample - f_a1_ * y + f_z2_;
+            f_z2_ = f_b2_ * sample - f_a2_ * y;
+            // Anti-denormal: a grain's filter decays to ~0 every fade-out; without
+            // this the states go denormal → huge software-FP penalty on the M7 that
+            // scales with grain count (the multi-voice freeze overload). Flush the
+            // sub-audible tail to zero. FPSCR.FZ alone isn't reliable in the IRQ.
+            if (fabsf(f_z1_) < 1e-25f) f_z1_ = 0.f;
+            if (fabsf(f_z2_) < 1e-25f) f_z2_ = 0.f;
+            sample = y;
+        }
 
         read_pos_f_ += rate_;
         if (read_pos_f_ >= buf_len_f_) read_pos_f_ -= buf_len_f_;
@@ -137,4 +161,7 @@ private:
     int loops_left_ = 0;
     bool active_ = false;
     size_t attack_taper_ = 1;   // fade-in taper length (scaled; release uses taper_samples_)
+    // Optional per-grain band filter (off by default → zero cost, existing callers unchanged)
+    bool  filt_on_ = false;
+    float f_b0_ = 1.f, f_b1_ = 0.f, f_b2_ = 0.f, f_a1_ = 0.f, f_a2_ = 0.f, f_z1_ = 0.f, f_z2_ = 0.f;
 };

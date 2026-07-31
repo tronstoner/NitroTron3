@@ -30,7 +30,7 @@ static constexpr int    VESTIGE_SLOTS        = VESTIGE_VOICE_SLABS + 2;  // tota
 // K1 mapping: padded noon = 1 voice; CCW adds voices to 6; CW = frippertronics.
 static constexpr float  VESTIGE_K1_NOON_LO  = 0.44f;  // below → voiced, more voices toward CCW
 static constexpr float  VESTIGE_K1_NOON_HI  = 0.56f;  // above → frippertronics region
-static constexpr int    VESTIGE_GRAINS      = 32;    // shared grain pool (bounds CPU; headroom for spares)
+static constexpr int    VESTIGE_GRAINS      = 48;    // shared grain pool (multiband freeze = 3 bands/voice → more grains)
 
 // ---------------------------------------------------------------------------
 // Grain smoothness macro (K3): looper (CCW / 0) → freeze (CW / 1)
@@ -57,6 +57,36 @@ static constexpr float  VESTIGE_CCW_OVERLAP   = 2.0f;   // Hann overlap-add sums
 static constexpr float  VESTIGE_CW_OVERLAP    = 3.0f;   // denser cloud so short grains fuse
 static constexpr size_t VESTIGE_MIN_INTERVAL  = 32;     // scheduler floor (samples)
 static constexpr size_t VESTIGE_MIN_LOOP_SAMPLES = 240; // 5 ms shortest capture (short FS2 tap)
+
+// ---------------------------------------------------------------------------
+// Multiband granular freeze (K3 CW freeze region) — the EHX-style evolving freeze
+// ported from mnemonic, made POLY (per voice). In the freeze region each voice's
+// single loop buffer is granulated in 3 bands (low/mid/high) via PER-GRAIN band
+// filters (no extra band buffers — host-verified identical to pre-filtering, so
+// memory stays flat and loops keep full length). Each band scans at a COPRIME
+// length so the bands never re-sync → dense, continuously evolving freeze. The K3
+// freeze-point sweep still sets WHERE in the buffer (base position); the bands add
+// the incommensurate movement + spectral split. Flag off = the old single-stream
+// pinned-anchor freeze (fallback). Tune by ear.
+static constexpr bool   VESTIGE_MB_FREEZE   = true;
+static constexpr float  VESTIGE_MB_XLO = 250.f, VESTIGE_MB_XHI = 2000.f;   // Hz crossovers
+static constexpr size_t VESTIGE_MB_GLEN_LO = 7200, VESTIGE_MB_GLEN_MID = 3840, VESTIGE_MB_GLEN_HI = 1920; // 150/80/40 ms
+static constexpr float  VESTIGE_MB_OVERLAP = 2.0f;      // grains per band (Hann @2x = COLA-smooth, lowest CPU).
+                                                        // NOTE: total freeze grains = voices x 3 bands x overlap.
+                                                        // Multiband is 3x grain-dense vs the old 1-stream freeze.
+static constexpr size_t VESTIGE_MB_SCAN_LO = 11987, VESTIGE_MB_SCAN_MID = 8419, VESTIGE_MB_SCAN_HI = 4099; // coprime scan lengths
+static constexpr size_t VESTIGE_MB_SPRAY_LO = 480, VESTIGE_MB_SPRAY_MID = 240, VESTIGE_MB_SPRAY_HI = 120;   // samples
+// Hard cap on concurrent freeze grains = the CPU ceiling. Above it, grains drop
+// (freeze thins) instead of the callback overrunning. Measured: baseline ~24% +
+// ~2.8%/grain, so ~20 grains keeps steady load ~80% (safe). SDRAM is cached, so
+// the cost is compute (grain count), not memory.
+static constexpr int    VESTIGE_MB_GRAIN_CAP = 16;
+// Adaptive bands by voice count (poly CPU scaling): 3 bands (rich) up to
+// 3BAND_MAX voices, 2 bands (low+high) up to 2BAND_MAX, then 1 full-band cloud
+// (no filter — essentially the old single-stream freeze) above that. Keeps every
+// voice audible within budget. Overlap stays 2 (min for click-free Hann OLA).
+static constexpr int    VESTIGE_MB_3BAND_MAX_VOICES = 2;
+static constexpr int    VESTIGE_MB_2BAND_MAX_VOICES = 4;
 
 // ---------------------------------------------------------------------------
 // Footswitch timing (FS1 stop)
