@@ -160,6 +160,12 @@ class MnemDegrade {
     d_target_ = (tgt == 0) ? 0.f : (fabsf(p) - MNEMD_DEADZONE) / (1.f - MNEMD_DEADZONE);
   }
 
+  // True once fully disengaged (K4 in the clean centre deadzone AND any chain-
+  // switch crossfade has finished). While idle the host can SKIP TapePitchCents()
+  // and ColourProcess() entirely — they do audible nothing but still cost 3 sinf
+  // + control-rate powf per sample, which is wasted CPU when K4 is clean.
+  bool Idle() const { return active_chain_ == 0 && target_chain_ == 0 && mix_ < 1e-3f; }
+
   // Per-sample, called BEFORE the main read: advances the modulation and returns
   // the tape pitch offset in cents (0 unless the tape chain is active).
   float TapePitchCents() {

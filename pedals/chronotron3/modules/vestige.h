@@ -462,26 +462,29 @@ class Vestige : public Module {
         }
       }
 
-      // ---- Post-grain tape/BBD warble: PITCH modulation -------------------
-      // The degrade engine's wow/flutter/snag/BBD-drift is a playback-SPEED
-      // modulation; on the continuous looper stream that's a short modulated
-      // delay tap (mnemonic's wobbled read tap, here as a post insert). Leaky-
-      // integrate cents → sample displacement, clamp so the tap stays in the
-      // past (never reads the future), then read the delay line at that tap.
-      float w_cents = degrade_.TapePitchCents();
-      warble_int_ = warble_int_ * VESTIGE_WARBLE_LEAK
-                  + w_cents * VESTIGE_WARBLE_CENTS_TO_RATE;
-      const float w_max = warble_base_ - 2.f;
-      if (warble_int_ >  w_max) warble_int_ =  w_max;
-      else if (warble_int_ < -w_max) warble_int_ = -w_max;
+      // ---- Post-grain tape/BBD warble + degrade colour (K4) ---------------
+      // GATED: when K4 is clean (degrade idle), the modulation (3 sinf/sample in
+      // TapePitchCents) and the colour chain (control-rate powf + filters in
+      // ColourProcess) do audible NOTHING but still burn CPU — so skip them.
+      // This is why K4-at-noon didn't relieve the overload before: the always-on
+      // cost wasn't gated. The cheap fixed-base-delay tap stays on both paths so
+      // engaging/disengaging K4 doesn't step the wet delay.
       warble_ring_.Write(y);
-      y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
-                                - warble_base_ - warble_int_);
-
-      // ---- Degradation colour (K4): BBD (CCW) / Tape (CW) -----------------
-      // Colour the wet looper sum only (dry x summed clean below → G1). Runs
-      // AFTER the warble = tape speed first, then head/electronics colour.
-      y = degrade_.ColourProcess(y);
+      if (degrade_.Idle()) {
+        warble_int_ += (0.f - warble_int_) * VESTIGE_ROUTING_SMOOTH;   // ease wobble to 0
+        y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
+                                  - warble_base_ - warble_int_);
+      } else {
+        float w_cents = degrade_.TapePitchCents();            // wow/flutter/snag/drift
+        warble_int_ = warble_int_ * VESTIGE_WARBLE_LEAK
+                    + w_cents * VESTIGE_WARBLE_CENTS_TO_RATE;
+        const float w_max = warble_base_ - 2.f;
+        if (warble_int_ >  w_max) warble_int_ =  w_max;
+        else if (warble_int_ < -w_max) warble_int_ = -w_max;
+        y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
+                                  - warble_base_ - warble_int_);
+        y = degrade_.ColourProcess(y);   // tape speed first, then head/electronics
+      }
 
       // Vestige owns its output: looper (y) at K6 volume + routed dry (x).
       // Both gains one-pole smoothed so K6 moves and the dry gate don't zip.

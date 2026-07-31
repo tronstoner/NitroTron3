@@ -7,6 +7,27 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+// Shared raised-cosine (half-Hann) lookup: HannRise(t) = 0.5*(1-cos(pi*t)),
+// t in [0,1]. The grain window is the dominant per-grain CPU cost (a cosf every
+// sample); this replaces it with an interpolated LUT (512 pts → error < 1e-4,
+// audibly identical). One-time fill on first call.
+static constexpr int GRAIN_WIN_LUT_N = 512;
+inline float GrainHannRise(float t) {
+    static float lut[GRAIN_WIN_LUT_N + 1];
+    static bool  init = false;
+    if (!init) {
+        for (int i = 0; i <= GRAIN_WIN_LUT_N; i++)
+            lut[i] = 0.5f * (1.f - cosf((float)M_PI * (float)i / (float)GRAIN_WIN_LUT_N));
+        init = true;
+    }
+    if (t <= 0.f) return lut[0];
+    if (t >= 1.f) return lut[GRAIN_WIN_LUT_N];
+    float x = t * (float)GRAIN_WIN_LUT_N;
+    int   i = (int)x;
+    float f = x - (float)i;
+    return lut[i] * (1.f - f) + lut[i + 1] * f;
+}
+
 // Single grain voice: reads from a ring buffer with adaptive Tukey window.
 // Supports pitch shift, reverse, and looping (stutter).
 class GrainVoice {
@@ -73,12 +94,11 @@ public:
         // immediately; the fade-OUT still uses the full taper_samples_.
         float window;
         if (phase_ < attack_taper_) {
-            float t = static_cast<float>(phase_) / static_cast<float>(attack_taper_);
-            window = 0.5f * (1.f - cosf(static_cast<float>(M_PI) * t));
+            window = GrainHannRise(static_cast<float>(phase_)
+                                   / static_cast<float>(attack_taper_));
         } else if (phase_ >= grain_len_ - taper_samples_) {
-            float t = static_cast<float>(grain_len_ - 1 - phase_)
-                      / static_cast<float>(taper_samples_);
-            window = 0.5f * (1.f - cosf(static_cast<float>(M_PI) * t));
+            window = GrainHannRise(static_cast<float>(grain_len_ - 1 - phase_)
+                                   / static_cast<float>(taper_samples_));
         } else {
             window = 1.f;
         }
