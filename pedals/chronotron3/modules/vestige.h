@@ -79,6 +79,7 @@ class Vestige : public Module {
       fade_gain_[s]   = 0.f;
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
+      fwd_[s]      = 0.f;
       if (s < VESTIGE_VOICE_SLABS) { dying_[s] = false; stolen_[s] = false; }
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) { grain_src_[g] = &ring_[0]; grain_slot_[g] = 0; }
@@ -167,21 +168,38 @@ class Vestige : public Module {
     rel_inc_ = 1.f / (rel_s * sr_);
 
     // ---- K3 smoothness macro ----------------------------------------------
-    const float s = k3;                    // 0 = looper (CCW), 1 = freeze (CW)
+    const float s = k3;                    // 0 = clean loop (CCW), 1 = freeze sweep (CW)
     float glen_f = Mapf(s, (float)VESTIGE_CCW_GRAIN_LEN, (float)VESTIGE_CW_GRAIN_LEN);
     grain_len_ = (size_t)glen_f;
     if (grain_len_ < VESTIGE_GRAIN_MIN_LEN) grain_len_ = VESTIGE_GRAIN_MIN_LEN;
     overlap_ = Mapf(s, VESTIGE_CCW_OVERLAP, VESTIGE_CW_OVERLAP);
     spray_  = s * (float)VESTIGE_FREEZE_SPRAY;
     jitter_ = s * VESTIGE_FREEZE_JITTER;
-    // Position/direction: a small CCW zone plays the loop forward; above it the
-    // head auto-scrubs BACKWARD, decelerating to a deterministic freeze anchored
-    // toward the END. Anchor + deceleration scale with K3 travel.
     k3_amt_ = s;                  // first-grain attack softening toward freeze
-    // Position / direction across the K3 travel:
-    //   CCW zone  → normal forward loop.
-    //   zone→noon → backward auto-scrub, decelerating to a HALT at noon.
-    //   noon→CW   → frozen; the freeze point sweeps the WHOLE buffer, 0 → END (live).
+
+    // ---- K3 unified engine params (order → chaos → focus → sweep) ----------
+    // One granular engine across the whole travel (see vestige_constants.h). At
+    // s>=0.5 these reduce to the prior multiband freeze exactly.
+    //   dev:    the break-up development, 0 (CCW clean loop) → 1 (noon), front-
+    //           loaded by DEVELOP_CURVE so it gets interesting early; 1 across the
+    //           freeze half. Drives BOTH grain-shorten/band-split (chaos) and the
+    //           motion handover forward-head → evolving scan (focus). Motion stays
+    //           rate-1.0 throughout = no slapback.
+    //   gscale: grain-length ×, long at CCW (clean COLA loop) → 1 at noon+.
+    //   frozen: s>=0.5 → grains clamp to the safe range + head pinned (freeze);
+    //           below noon they wrap the loop seam (forward loop / smear).
+    float prog = (s < 0.5f) ? (s * 2.f) : 1.f;      // linear break-up progress
+    float dev  = powf(prog, VESTIGE_K3_DEVELOP_CURVE);
+    k3_chaos_        = dev;
+    k3_focus_        = dev;
+    k3_gscale_       = Mapf(k3_chaos_, VESTIGE_K3_GSCALE_CCW, 1.f);
+    k3_frozen_       = (s >= 0.5f);
+    freeze_pos_frac_ = (s > 0.5f) ? (s - 0.5f) * 2.f : 0.f;  // 0 = start (noon) → 1 = end (CW)
+    // Bands split in as chaos builds (capped later by the voice budget).
+    k3_bands_chaos_  = (k3_chaos_ < VESTIGE_K3_CHAOS_2BAND) ? 1
+                     : (k3_chaos_ < VESTIGE_K3_CHAOS_3BAND) ? 2 : 3;
+
+    // Legacy single-stream fallback (VESTIGE_MB_FREEZE=false) still uses k3_mode_.
     if (s < VESTIGE_K3_LOOP_ZONE) {
       k3_mode_ = kLooper;
     } else if (s < 0.5f) {
@@ -191,7 +209,6 @@ class Vestige : public Module {
     } else {
       k3_mode_ = kFreeze;
       scrub_back_frac_ = 0.f;
-      freeze_pos_frac_ = (s - 0.5f) * 2.f;  // 0 = centre (noon) → 1 = end (CW)
     }
 
     // ---- K4 = degradation colour: BBD (CCW) / Tape (CW) -------------------
@@ -278,13 +295,16 @@ class Vestige : public Module {
     if (sw2 == 2) dry_gain_ = 0.f;
     else if (sw2 == 1 && (recording_ || auto_armed_)) dry_gain_ = 0.f;
 
-    // ---- Adaptive multiband freeze bands (poly CPU) ------------------------
-    // Full 3 bands up to N voices; above that drop to 2 (low+high) so every voice
-    // still gets grains without blowing the CPU budget at high poly counts.
+    // ---- Adaptive multiband bands (poly CPU) ∩ chaos-driven split ----------
+    // Voice budget: full 3 bands up to N voices, else drop to 2 (low+high), else 1
+    // — so every voice gets grains without blowing CPU at high poly. The K3 chaos
+    // ramp splits bands IN as the loop breaks up (1 band at the clean-loop end),
+    // so the effective count is the lesser of the two: min(voice-budget, chaos).
     int nv = 0;
     for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (active_[v] && !dying_[v]) nv++;
-    mb_nbands_ = (nv <= VESTIGE_MB_3BAND_MAX_VOICES) ? 3
-               : (nv <= VESTIGE_MB_2BAND_MAX_VOICES) ? 2 : 1;
+    int bands_voice = (nv <= VESTIGE_MB_3BAND_MAX_VOICES) ? 3
+                    : (nv <= VESTIGE_MB_2BAND_MAX_VOICES) ? 2 : 1;
+    mb_nbands_ = (bands_voice < k3_bands_chaos_) ? bands_voice : k3_bands_chaos_;
 
     // ---- LEDs --------------------------------------------------------------
     UpdateLeds(led1, led2, auto_mode);
@@ -429,16 +449,17 @@ class Vestige : public Module {
       // ---- Grain scheduler + per-slot sum + fade envelope -----------------
       // Mute/unmute rides the per-slot fade (K5), so the scheduler runs even
       // while muted so the fade-out tail can play; fully-faded slots sum to 0.
-      // In the freeze region, route to the multiband granular freeze (3 band
-      // grain-clouds per voice) instead of the single-stream pinned-anchor freeze.
-      const bool mb_freeze = (VESTIGE_MB_FREEZE && k3_mode_ == kFreeze);
+      // Unified engine: ServiceMBFreeze is now the ONE granular engine across the
+      // whole K3 travel (order→chaos→focus→sweep) — its params morph, so the clean
+      // loop, the break-up and the freeze are one continuous cloud (no noon seam).
+      // Legacy single-stream looper/scrub/freeze stays behind VESTIGE_MB_FREEZE=0.
       if (fripp_mode_) {
-        if (mb_freeze) ServiceMBFreeze(VESTIGE_FRIP_SLOT);
-        else           ServiceSlot(VESTIGE_FRIP_SLOT);
+        if (VESTIGE_MB_FREEZE) ServiceMBFreeze(VESTIGE_FRIP_SLOT);
+        else                   ServiceSlot(VESTIGE_FRIP_SLOT);
       } else {
         for (int v = 0; v < VESTIGE_VOICE_SLABS; v++)
-          if (mb_freeze) ServiceMBFreeze(v);
-          else           ServiceSlot(v);
+          if (VESTIGE_MB_FREEZE) ServiceMBFreeze(v);
+          else                   ServiceSlot(v);
       }
       float slot_sum[VESTIGE_SLOTS] = {0.f};
       for (int g = 0; g < VESTIGE_GRAINS; g++) {
@@ -542,14 +563,16 @@ class Vestige : public Module {
     // forward through the buffer even while playback scrubs or freezes.
     frip_rec_ += 1.f;
     while (frip_rec_ >= (float)L) frip_rec_ -= (float)L;
-    // Playback tap: K3 scans it. CCW tracks the record phase (overdub lands in
-    // time); CCW→noon scrubs backward; noon→CW pins to the live freeze point.
-    if (k3_mode_ == kFreeze) {
+    // Playback tap: K3 scans it. Unified engine (VESTIGE_MB_FREEZE): the head
+    // ALWAYS advances forward — the freeze pinning + break-up scatter now live in
+    // the grain emit (base = head → freeze point via focus). Legacy fallback keeps
+    // the old kFreeze pin / kScrub backward-scrub head motion.
+    if (!VESTIGE_MB_FREEZE && k3_mode_ == kFreeze) {
       size_t glen = SlotGrainLen(L);
       float end_anchor = (float)L - ((float)glen + spray_);
       if (end_anchor < 0.f) end_anchor = 0.f;
       frip_head_ = end_anchor * freeze_pos_frac_;          // pinned freeze point
-    } else if (k3_mode_ == kScrub) {
+    } else if (!VESTIGE_MB_FREEZE && k3_mode_ == kScrub) {
       frip_head_ -= scrub_back_frac_;
       while (frip_head_ >= (float)L) frip_head_ -= (float)L;
       while (frip_head_ < 0.f)      frip_head_ += (float)L;
@@ -679,20 +702,39 @@ class Vestige : public Module {
   }
 
   // -------------------------------------------------------------------------
-  // Multiband granular freeze (K3 CW). Per band (low/mid/high): a grain cloud
-  // scanning the slot's loop at a COPRIME length, each grain band-limited by a
-  // per-grain filter (no band buffers). Bands never re-sync → evolving freeze.
-  // The K3 freeze point (freeze_pos_frac_) sweeps the base read position.
+  // Unified K3 granular engine: order → chaos → focus → sweep (one cloud).
+  // Per band (low/mid/high): a grain cloud, each grain band-limited by a per-grain
+  // filter (no band buffers), scanning at a COPRIME length so bands never re-sync.
+  // K3 morphs the cloud continuously (see vestige_constants.h):
+  //   • grain length ×k3_gscale_ : long clean-loop grains → freeze size.
+  //   • read base = forward head, pulled onto the swept freeze point as focus→1.
+  //   • coprime scan faded in with focus (0 = clean loop, 1 = evolving freeze).
+  //   • scatter 0 at CCW → wide through the break-up → collapses to the band spray
+  //     as focus→1 (the "focusing brings order").
+  //   • band count grows with chaos (1 at the clean end), capped by the voice CPU
+  //     budget in Controls.
+  // At s>=0.5 every lever reduces to the prior multiband freeze exactly.
   // -------------------------------------------------------------------------
   void ServiceMBFreeze(int s) {
     const size_t L = loop_len_[s];
     if (!active_[s] || L < VESTIGE_GRAIN_MIN_LEN) return;
+
+    // Forward read head (clean-loop / break-up anchor). Frip advances its own head
+    // per-sample in AdvanceFripHead; voiced slots advance here (once per sample).
+    const bool is_frip = (s == VESTIGE_FRIP_SLOT);
+    if (!is_frip) {
+      fwd_[s] += pitch_rate_s_;
+      while (fwd_[s] >= (float)L) fwd_[s] -= (float)L;
+      while (fwd_[s] < 0.f)       fwd_[s] += (float)L;
+    }
+    const float head = is_frip ? frip_head_ : fwd_[s];
+
     for (int bi = 0; bi < mb_nbands_; bi++) {
       // Band index for glen/scan/spray state: 3-band = 0/1/2; 2-band = low(0)+
       // high(2); 1-band = low(0) params, full-band (no filter).
       const int b = (mb_nbands_ == 3) ? bi
                   : (mb_nbands_ == 2) ? (bi == 0 ? 0 : 2) : 0;
-      size_t glen = mb_glen_[b];
+      size_t glen = (size_t)((float)mb_glen_[b] * k3_gscale_);
       if (glen > L) glen = L;
       if (glen > VESTIGE_GUARD_SAMPLES) glen = VESTIGE_GUARD_SAMPLES;
       if (glen < VESTIGE_GRAIN_MIN_LEN) glen = (L < VESTIGE_GRAIN_MIN_LEN) ? L : VESTIGE_GRAIN_MIN_LEN;
@@ -701,11 +743,20 @@ class Vestige : public Module {
       mb_scan_[s][b] += 1.f;
       if (mb_scan_[s][b] >= (float)scanlen) mb_scan_[s][b] -= (float)scanlen;
       if (--mb_timer_[s][b] <= 0) {
-        // base swept by K3 within the safe range; scan adds the incommensurate move
+        // Base = forward head → swept freeze point as focus→1; scan fades in with
+        // focus so the clean loop has no scan and the freeze has full scan.
         float span = (float)L - (float)glen - (float)scanlen; if (span < 0.f) span = 0.f;
+        float freeze_base = span * freeze_pos_frac_;
+        float base = head + (freeze_base - head) * k3_focus_;
+        float posf = base + mb_scan_[s][b] * k3_focus_;
+        // Position spray = the small freeze phasing spray ONLY, faded in with focus.
+        // NO random break-up scatter: displaced grains on the moving head read as
+        // slapback echoes. The break-up decorrelates via grain-shortening + band-
+        // split + the motion-conserving scan (base rate stays 1.0), never a jump.
+        float spray_width = (float)mb_spray_[b] * k3_focus_;
         const float* coef = (mb_nbands_ == 3) ? mb_coef_[b]
                           : (mb_nbands_ == 2) ? mb_coef2_[bi] : nullptr;  // 1-band = full range
-        EmitBandGrain(s, glen, span * freeze_pos_frac_ + mb_scan_[s][b], b, coef);
+        EmitBandGrain(s, glen, posf, b, coef, spray_width, k3_frozen_);
         int hop = (int)((float)glen / mb_overlap_[b]);
         if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
         mb_timer_[s][b] = hop;
@@ -713,7 +764,12 @@ class Vestige : public Module {
     }
   }
 
-  void EmitBandGrain(int s, size_t glen, float posf, int band, const float* coef) {
+  // Emit one band grain. frozen=true (freeze half): clamp the read inside the safe
+  // [0, L-glen] range (pinned point stays exact). frozen=false (loop/break-up): wrap
+  // the loop seam so the forward head + scatter read across the loop point (the
+  // wrap-guard holds the seamless head-continuation copy).
+  void EmitBandGrain(int s, size_t glen, float posf, int band, const float* coef,
+                     float spray_width, bool frozen) {
     // hard cap on concurrent grains (CPU guard for multi-voice freeze)
     int nactive = 0;
     for (int k = 0; k < VESTIGE_GRAINS; k++) if (grains_[k].IsActive()) nactive++;
@@ -725,12 +781,18 @@ class Vestige : public Module {
     }
     if (g < 0) return;
     const size_t L = loop_len_[s];
-    float sprayf = (float)mb_spray_[band];
+    float sprayf = spray_width;
     if (L < VESTIGE_SHORT_LEN) { float cap = (float)L * 0.125f; if (sprayf > cap) sprayf = cap; }
     float pos = posf + (VestigeRand() * 2.f - 1.f) * sprayf;
-    float hi = (float)L - (float)glen; if (hi < 0.f) hi = 0.f;
-    if (pos < 0.f) pos = 0.f; else if (pos > hi) pos = hi;
-    size_t posi = (size_t)pos;
+    size_t posi;
+    if (frozen) {
+      float hi = (float)L - (float)glen; if (hi < 0.f) hi = 0.f;
+      if (pos < 0.f) pos = 0.f; else if (pos > hi) pos = hi;
+      posi = (size_t)pos;
+    } else {
+      pos = fmodf(pos, (float)L); if (pos < 0.f) pos += (float)L;
+      posi = (size_t)pos;
+    }
     const size_t wp  = ring_[s].GetWritePos();
     const size_t cap = VESTIGE_VOICE_CAP;
     size_t delay = (wp + cap - posi) % cap;
@@ -896,6 +958,7 @@ class Vestige : public Module {
     WriteGuard(target, L);      // crossfades the overhang into the loop head
     loop_len_[target] = L;
     play_pos_[target] = 0;
+    fwd_[target]      = 0.f;     // unified engine: forward head starts at the loop head
     timer_[target]    = 0;      // fire the first grain immediately
     active_[target]   = true;
     dying_[target]    = false;
@@ -1198,6 +1261,14 @@ class Vestige : public Module {
   size_t mb_spray_[3]    = {0};
   float  mb_overlap_[3]  = {3.f, 3.f, 3.f};
   int    mb_nbands_ = 3;                        // adaptive: 3 bands ≤ N voices, else 2 (low+high)
+
+  // K3 unified-engine params (per block; see the K3 macro in Controls).
+  float  k3_chaos_       = 0.f;   // 0 = clean loop (CCW) → 1 = noon/freeze
+  float  k3_focus_       = 0.f;   // 0 = break-up → 1 = focused freeze (collapses scatter, pins base)
+  float  k3_gscale_      = VESTIGE_K3_GSCALE_CCW;  // grain-length × (long clean loop → 1 at freeze)
+  bool   k3_frozen_      = false; // s>=0.5: grains clamp (freeze) vs wrap the loop seam (loop/break-up)
+  int    k3_bands_chaos_ = 1;     // band count the chaos ramp wants (∩ voice budget)
+  float  fwd_[VESTIGE_SLOTS] = {0.f};   // per-slot forward read head (voiced; frip uses frip_head_)
 
   // Per-slot loop state (slots 0..5 voiced, slot 6 frippertronics)
   RingBuffer ring_[VESTIGE_SLOTS];

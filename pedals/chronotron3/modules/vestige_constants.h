@@ -89,6 +89,32 @@ static constexpr int    VESTIGE_MB_3BAND_MAX_VOICES = 2;
 static constexpr int    VESTIGE_MB_2BAND_MAX_VOICES = 4;
 
 // ---------------------------------------------------------------------------
+// K3 unified engine: order -> chaos -> focus -> sweep (one granular engine).
+// ---------------------------------------------------------------------------
+// The multiband granular engine now spans the WHOLE K3 travel (not just the CW
+// freeze). K3 morphs ONE cloud continuously — no engine switch at noon:
+//   CCW  (chaos 0): 1 full-band cloud, long grains, read head follows the loop
+//                   forward, no scatter  ->  the CLEAN loop.
+//   ->noon (chaos rises to 1): grains shrink + multiply (density up), bands split
+//                   in, positions scatter across the buffer  ->  dense multiband
+//                   chaos, the loop breaking up.
+//   noon (focus -> 1): scatter COLLAPSES onto the loop start + the coprime scan
+//                   engages  ->  order from chaos = the evolving freeze at start.
+//   noon->CW: freeze point sweeps start->end (unchanged; freeze half is identical
+//                   to the old, loved multiband freeze).
+// Derived params: chaos = min(s/0.5, 1); focus = smoothstep over [FOCUS_START,0.5]
+// then 1; freeze_frac = (s-0.5)*2 above noon else 0. At s>=0.5 every lever below
+// reduces to the prior freeze exactly, so the CW half is byte-for-byte preserved.
+// Break-up development curve over CCW->noon. prog = s*2 (linear 0->1); the actual
+// development (grain-shorten + band-split + focus/scan smear) = prog^CURVE. CURVE<1
+// front-loads it so it gets interesting EARLY (near 9:00) instead of a dull first
+// third; the very CCW corner still starts clean. 1 = linear, >1 = later/duller.
+static constexpr float  VESTIGE_K3_DEVELOP_CURVE    = 0.5f;
+static constexpr float  VESTIGE_K3_GSCALE_CCW      = 2.667f; // grain-len x at CCW (low band 7200 -> ~19200 = clean loop)
+static constexpr float  VESTIGE_K3_CHAOS_2BAND     = 0.33f; // chaos below this = 1 band; above = 2 bands split in
+static constexpr float  VESTIGE_K3_CHAOS_3BAND     = 0.66f; // chaos above this = 3 bands (all capped by voice budget)
+
+// ---------------------------------------------------------------------------
 // Footswitch timing (FS1 stop)
 // ---------------------------------------------------------------------------
 static constexpr uint32_t VESTIGE_FS1_TAP_MAX_MS    = 350;  // <= this on release = tap (mute/pause)
