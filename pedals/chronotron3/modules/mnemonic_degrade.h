@@ -249,16 +249,22 @@ class MnemDegrade {
     bbd_hold_len_ = (int)(sr_ / f_target + 0.5f);
     if (bbd_hold_len_ < 1) bbd_hold_len_ = 1;
     f_clk_ = sr_ / (float)bbd_hold_len_;              // the actual, quantised clock
-    // Clamp cutoffs safely below Nyquist: near K3-centre f_clk approaches the
-    // system rate, so IN_AA*f_clk can exceed sr/2 and blow up the RBJ biquad.
+    // Filter cutoffs track the SMOOTH target clock, NOT the quantised f_clk_. The
+    // ZOH hold length stays integer (no ratio sizzle), but the reconstruction /
+    // loss / anti-alias LPFs glide continuously as the knob turns — otherwise
+    // f_clk_ steps at each integer boundary and the biquads recompute coeffs
+    // instantly, which reads as a click between settings. They only roll off
+    // imaging; they don't need to lock to the exact quantised clock.
+    // Clamp cutoffs safely below Nyquist: near K3-centre the clock approaches the
+    // system rate, so IN_AA*f can exceed sr/2 and blow up the RBJ biquad.
     // (No folding happens up there anyway — it's the near-clean zone.)
     const float nyq = sr_ * 0.49f;
-    float in_fc  = MNEMD_BBD_IN_AA * f_clk_; if (in_fc  > nyq) in_fc  = nyq;
-    // Reconstruction + stage-loss LPFs: factor*f_clk, but floored so the deep/dark
+    float in_fc  = MNEMD_BBD_IN_AA * f_target; if (in_fc  > nyq) in_fc  = nyq;
+    // Reconstruction + stage-loss LPFs: factor*f_target, but floored so the deep/dark
     // end opens up while shallow (>= ~9:00) settings — already above the floor —
     // stay exactly as they were. Then clamp below Nyquist for filter stability.
-    float rec_fc  = MNEMD_BBD_REC  * f_clk_; if (rec_fc  < MNEMD_BBD_LPF_FLOOR_HZ) rec_fc  = MNEMD_BBD_LPF_FLOOR_HZ;
-    float loss_fc = MNEMD_BBD_LOSS * f_clk_; if (loss_fc < MNEMD_BBD_LPF_FLOOR_HZ) loss_fc = MNEMD_BBD_LPF_FLOOR_HZ;
+    float rec_fc  = MNEMD_BBD_REC  * f_target; if (rec_fc  < MNEMD_BBD_LPF_FLOOR_HZ) rec_fc  = MNEMD_BBD_LPF_FLOOR_HZ;
+    float loss_fc = MNEMD_BBD_LOSS * f_target; if (loss_fc < MNEMD_BBD_LPF_FLOOR_HZ) loss_fc = MNEMD_BBD_LPF_FLOOR_HZ;
     if (rec_fc  > nyq) rec_fc  = nyq;
     if (loss_fc > nyq) loss_fc = nyq;
     bbd_in_lp_.LP(in_fc,  0.707f, sr_);   // pre-decimation: >0.5 f_clk folds = grit
