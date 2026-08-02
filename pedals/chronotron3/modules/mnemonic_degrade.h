@@ -29,6 +29,18 @@ static constexpr float MNEMD_DEADZONE = 0.03f;
 // shared (spec §2)
 static constexpr float MNEMD_ENV_ATK_MS = 5.f;
 static constexpr float MNEMD_ENV_REL_MS = 80.f;
+
+// Signal-keyed noise gate (shared by BBD + tape): the injected hiss follows what
+// you play — opens fast so noise arrives WITH the note (no swell-in lag), releases
+// gently so the hiss tail decays naturally when you stop. A smooth one-pole slew on
+// the gain IS the gate (no hard threshold curve). Threshold tracks the injected-noise
+// floor so it closes right when the signal drops to hiss level.
+static constexpr float MNEMD_NGATE_ATK_MS = 2.f;   // gate-gain open time  (short = noise not delayed)
+static constexpr float MNEMD_NGATE_REL_MS = 6000.f; // LINEAR fade-out time, full 1->0 (no early lurch)
+static constexpr float MNEMD_NGATE_DET_MS = 40.f;  // input follower release (anti-chatter; attack is instant)
+static constexpr float MNEMD_NGATE_THR    = 3.f;   // fully-open threshold = injected noise floor x this
+static constexpr float MNEMD_NGATE_KNEE   = 0.35f; // soft-knee floor: fully CLOSED below THR x this (0..1).
+                                                   // Wider band (smaller) = smoother glide, less flutter.
 static constexpr float MNEMD_DCBLOCK_HZ = 20.f;
 static constexpr float MNEMD_XFADE_MS   = 10.f; // chain-switch crossfade against bypass
 
@@ -157,6 +169,9 @@ class MnemDegrade {
     sr_ = sr;
     env_atk_ = 1.f - expf(-1.f / (MNEMD_ENV_ATK_MS * 0.001f * sr_));
     env_rel_ = 1.f - expf(-1.f / (MNEMD_ENV_REL_MS * 0.001f * sr_));
+    ngate_atk_      = 1.f - expf(-1.f / (MNEMD_NGATE_ATK_MS * 0.001f * sr_));
+    ngate_rel_step_ = 1.f / (MNEMD_NGATE_REL_MS * 0.001f * sr_);   // linear per-sample decrement
+    ngate_det_rel_  = 1.f - expf(-1.f / (MNEMD_NGATE_DET_MS * 0.001f * sr_));
     jitter_smooth_ = 1.f - expf(-1.f / (MNEMD_JITTER_TAU_MS * 0.001f * sr_));
     xfade_coef_ = 1.f - expf(-1.f / (MNEMD_XFADE_MS * 0.001f * sr_));
     drop_coef_ = 1.f - expf(-1.f / (0.004f * sr_));                  // ~4 ms dropout declick
@@ -229,6 +244,26 @@ class MnemDegrade {
     }
     mix_ += (mix_tgt - mix_) * xfade_coef_;
     d_ += (d_target_ - d_) * xfade_coef_;
+
+    // Signal-keyed noise gate: peak-follow the input (instant attack, gentle
+    // release = anti-chatter presence detector), open/close the gain fast/slow.
+    // Threshold tracks the injected-noise floor so it shuts once the signal
+    // drops to hiss level. Applied to BOTH chains' injected noise below.
+    float ax = fabsf(x);
+    if (ax > nz_det_) nz_det_ = ax;
+    else              nz_det_ += (ax - nz_det_) * ngate_det_rel_;
+    // Soft knee: glide 0..1 across [KNEE..1]xTHR instead of a hard flip, so a
+    // decaying note easing through the threshold doesn't chatter the gate.
+    const float thr_hi = NoiseFloorLin() * MNEMD_NGATE_THR;
+    const float thr_lo = thr_hi * MNEMD_NGATE_KNEE;
+    float ng_tgt;
+    if      (nz_det_ <= thr_lo) ng_tgt = 0.f;
+    else if (nz_det_ >= thr_hi) ng_tgt = 1.f;
+    else { float u = (nz_det_ - thr_lo) / (thr_hi - thr_lo); ng_tgt = u * u * (3.f - 2.f * u); } // smoothstep
+    // Fast one-pole attack (noise arrives with the note); slow LINEAR release
+    // (even, unhurried fade-out — no exponential early lurch).
+    if (ng_tgt > noise_sgate_) noise_sgate_ += (ng_tgt - noise_sgate_) * ngate_atk_;
+    else { noise_sgate_ -= ngate_rel_step_; if (noise_sgate_ < ng_tgt) noise_sgate_ = ng_tgt; }
 
     float colored = x;
     if (active_chain_ == -1)      colored = Bbd(x);
@@ -345,7 +380,7 @@ class MnemDegrade {
     // counter -> exactly bbd_hold_len_ samples/hold (quantised f_clk, no jitter).
     if (++bbd_samp_ctr_ >= bbd_hold_len_) {
       bbd_samp_ctr_ = 0;
-      float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_ * noise_gate_;
+      float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_ * noise_gate_ * noise_sgate_;
       bbd_hold_ = x + n;                                   // raw noise -> accumulates in feedback
     }
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
@@ -384,7 +419,7 @@ class MnemDegrade {
     float n = (tape_noise_lp1_.LP(Rand() * 2.f - 1.f) * 0.7f +
                tape_noise_lp2_.LP(Rand() * 2.f - 1.f) * 0.3f);
     float nlvl = tape_noise_lin_ * powf(10.f, (tape_noise_env_ * env_) / 20.f);
-    x += n * nlvl * noise_gate_;
+    x += n * nlvl * noise_gate_ * noise_sgate_;
     // (modulated read = mnemonic main tap, via TapePitchCents)
     // B.2 loss filters
     x = tape_lp_.LP(x);                                   // HF loss
@@ -426,6 +461,9 @@ class MnemDegrade {
   // ---- state -------------------------------------------------------------
   float sr_ = 48000.f;
   float noise_gate_ = 1.f;                       // bypass noise-duck (1 = full hiss)
+  float noise_sgate_ = 0.f;                      // signal-keyed noise gate gain (0 closed .. 1 open)
+  float nz_det_ = 0.f;                           // input presence follower (peak, gentle release)
+  float ngate_atk_ = 0.f, ngate_rel_step_ = 0.f, ngate_det_rel_ = 0.f;
   int   active_chain_ = 0, target_chain_ = 0;    // -1 BBD · 0 bypass · +1 tape
   float d_ = 0.f, d_target_ = 0.f, mix_ = 0.f, xfade_coef_ = 0.f;
   int   ctrl_ctr_ = 1;

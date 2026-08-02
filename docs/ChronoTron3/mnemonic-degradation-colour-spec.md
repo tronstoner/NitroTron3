@@ -39,6 +39,10 @@ Instantiated once, used by whichever chain is active:
 
 Noise is injected **upstream of the loss filtering and upstream of the delay / read stage**. Noise summed at the chain output reads as a separate hiss generator sitting on top of clean audio; injected upstream it is filtered and pitch-modulated with the material and reads as part of the medium.
 
+### Signal-keyed noise gate (both chains)
+
+The injected hiss is scaled by a shared, signal-keyed gate so the medium noise follows what you play instead of sitting on continuously. One presence detector (peak-follow of the block input: instant attack, slow release) drives a soft-knee target — fully open above `floor × THR`, gliding to closed across a knee band below it, so a decaying note easing through the threshold never chatters the gate. The gate gain has a **fast one-pole attack** (noise arrives *with* the note, no swell-in lag) and a **slow linear release** (an even, unhurried fade-out over several seconds — a linear ramp rather than an exponential one-pole, which would lurch downward early then crawl). The bypass noise-duck multiplies on top of this, so the trail-tail behaviour is unchanged. Constants: `MNEMD_NGATE_{ATK_MS, REL_MS, DET_MS, THR, KNEE}`.
+
 ---
 
 ## 3. Chain A — BBD (CCW)
@@ -236,6 +240,8 @@ Never remove: `f_clk` coupling, ZOH decimation, compander (BBD); speed irregular
 | Hysteresis dropped entirely | Wow/flutter + loss + level-dependent noise carry the tape identity at a small fraction of the cost |
 | Sines + jitter + random walk rather than filtered noise | Pure sines read as chorus; pure noise reads as malfunction; the mix reads as a transport |
 | Head bump prioritised over saturation refinement | One biquad, large perceptual return |
+| Signal-keyed noise gate with linear (not exponential) release | Faithful always-on hiss can be tamed without a hard gate; a linear multi-second fade reads as the medium dying away, where an exponential one-pole lurches down early then crawls |
+| BBD reconstruction/loss LPF cutoffs driven by the smooth target clock, not the quantised `f_clk` | Integer ZOH hold length kills fractional-ratio decimator sizzle, but stepping the filter cutoffs at each integer boundary clicked; the filters only roll off imaging and need not lock to the exact quantised clock |
 
 ---
 
