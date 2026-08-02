@@ -62,6 +62,33 @@ static constexpr float MNEMD_BBD_NOISE_DB0 = -78.f, MNEMD_BBD_NOISE_DB1 = -56.f;
 // SLOW pitch wander (fraction of the tape depth) so repeats aren't dead-steady.
 static constexpr float MNEMD_BBD_WANDER_SC = 0.45f;
 static constexpr float MNEMD_BBD_NL_DRIVE  = 4.5f; // tanh drive = 1 + NL_DRIVE*d (Tier 2) — unity-gain, so more grind at same level
+// --- Dynamic sine-fold (restores mids/highs the dark BBD LPF removes) ---
+// Models aging BBD stages that no longer hold their value: past a KNEE the darkened
+// signal is tapped, run through a sine wavefolder, HIGH-PASSED (so it adds only
+// restored mids/highs, never low-end mud), and blended back IN PARALLEL. The fold
+// REGENERATES harmonics locked to the note (warm, not fizzy) instead of just
+// re-opening the filter.
+//
+// DYNAMICS-REACTIVE by construction: the raw post-LPF BBD signal drives the sine
+// folder through a fixed pre-GAIN. Soft playing barely reaches the first fold (near
+// clean); digging in drives deeper -> more folds -> brighter/richer. The wide bass
+// dynamic range IS the reactivity. GAIN sets where that transition sits. The fold
+// return is HIGH-PASSED (adds only restored mids/highs) and blended in parallel; the
+// dark BBD body is untouched. Blend ramps in only past KNEE (~9:00). Tune by ear.
+static constexpr float MNEMD_FOLD_KNEE       = 0.15f; // BBD depth (0=centre..1=full CCW) where fold begins (~9:00)
+static constexpr float MNEMD_FOLD_BLEND_MAX  = 0.3f;  // max parallel fold blend at full CCW (0 = off). in-loop, so this also feeds feedback — keep modest
+static constexpr float MNEMD_FOLD_GAIN       = 80.f;  // DRIVE at FULL CCW = the fold CHARACTER reference. NOT loudness — set the sound here, adjust volume with MAKEUP.
+static constexpr float MNEMD_FOLD_GAIN_MIN   = 10.f;  // DRIVE at the knee (K3 onset). drive ramps GAIN_MIN..GAIN with K3 depth -> shallow folds gently, deep gets gnarly.
+static constexpr float MNEMD_FOLD_DRIVE_CURVE = 2.0f; // exponent on K3 depth for the DRIVE ramp: 1 = linear, >1 = stays low longer then ramps hard toward full CCW
+static constexpr float MNEMD_FOLD_MAKEUP     = 1.5f;  // LEVEL, compensated RELATIVE to gain: fold out = sin(GAIN*x) * MAKEUP/GAIN -> ceiling MAKEUP/GAIN (=0.05). raising GAIN won't get louder; MAKEUP sets loudness.
+static constexpr bool  MNEMD_FOLD_HP_ON      = false; // HP the fold return? applied AFTER the folder. OFF = hear the full fold (raw overtones)
+static constexpr float MNEMD_FOLD_HP_HZ      = 400.f; // HP corner (only used when HP_ON) — keep only the restored mids/highs
+// DEBUG: solo the folded signal — the BBD wet becomes ONLY the HP'd fold return, so
+// you can hear the folder in isolation (and its dynamics) and tune GAIN by ear. Turn
+// K4(vestige)/K3(mnemonic) CCW past the knee to engage. Keep feedback/K2 LOW while
+// soloing in mnemonic (the solo sits in the loop). Set false for normal.
+static constexpr bool  MNEMD_FOLD_SOLO       = false;
+static constexpr float MNEMD_FOLD_SOLO_GAIN  = 1.f;   // monitor gain for the soloed fold
 
 // --- Tape (spec §4) ---
 static constexpr float MNEMD_TAPE_DEV_CENTS = 70.f;  // max ± speed deviation at d=1
@@ -136,6 +163,7 @@ class MnemDegrade {
     snag_keep_ = expf(-1.f / (MNEMD_SNAG_REC_MS * 0.001f * sr_));    // snag pitch recovery
     dc_.Set(MNEMD_DCBLOCK_HZ, sr_);
     bbd_noise_lp_.SetLP(MNEMD_BBD_NOISE_LP_HZ, sr_);
+    fold_hp_lp_.SetLP(MNEMD_FOLD_HP_HZ, sr_);   // fold-return HP (subtract this LP)
     tape_noise_lp1_.SetLP(2000.f, sr_);
     tape_noise_lp2_.SetLP(200.f, sr_);
     for (int i = 0; i < 3; i++) sine_amp_[i] = sine_amp_tgt_[i] = base_share_[i];
@@ -239,6 +267,16 @@ class MnemDegrade {
     bbd_noise_lin_ = powf(10.f, (MNEMD_BBD_NOISE_DB0 +
                           (MNEMD_BBD_NOISE_DB1 - MNEMD_BBD_NOISE_DB0) * d_) / 20.f);
     bbd_nl_drive_ = 1.f + MNEMD_BBD_NL_DRIVE * d_;
+    // Sine-fold: 0 up to KNEE (shallow BBD untouched), ramps to MAX at full CCW.
+    // K3 depth scales BOTH the mix (fold_blend_) AND the drive (fold_drive_): gentle
+    // at the knee, gnarly at full CCW. Relative comp divides by the LIVE drive so the
+    // level stays controlled across the sweep (full CCW == the approved fixed voicing).
+    float fbp = (d_ - MNEMD_FOLD_KNEE) / (1.f - MNEMD_FOLD_KNEE);
+    if (fbp < 0.f) fbp = 0.f;
+    fold_blend_ = fbp * MNEMD_FOLD_BLEND_MAX;
+    float dp = powf(fbp, MNEMD_FOLD_DRIVE_CURVE);   // shape the drive ramp (>1 = low longer, hard near CCW)
+    fold_drive_ = MNEMD_FOLD_GAIN_MIN + (MNEMD_FOLD_GAIN - MNEMD_FOLD_GAIN_MIN) * dp;
+    fold_out_   = MNEMD_FOLD_MAKEUP / fold_drive_;
 
     // Tape coeffs
     tape_lp_.SetLP(MNEMD_TAPE_LP_D0 * powf(MNEMD_TAPE_LP_D1 / MNEMD_TAPE_LP_D0, d_), sr_);
@@ -307,6 +345,17 @@ class MnemDegrade {
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
     x = bbd_loss_.LP(x);                                   // stage loss (darkening; compounds)
     x = bbd_rec_lp_.Process(x);                            // reconstruction LP (dark, tames imaging)
+    // Parallel sine-fold (aging stages overflow): regenerate mids/highs the dark
+    // LPF removed and blend on top by K3 depth. Dynamics-reactive by construction —
+    // the raw signal level drives the fold depth (louder in = more overtones).
+    if (fold_blend_ > 1e-4f || MNEMD_FOLD_SOLO) {
+      float f = sinf(x * fold_drive_);                     // sine wavefold — K3-scaled drive; signal level drives fold depth (dynamics-reactive)
+      if (MNEMD_FOLD_HP_ON) f -= fold_hp_lp_.LP(f);        // optional high-pass, AFTER the folder (keep only restored mids/highs)
+      f *= fold_out_;                                      // level compensated RELATIVE to the live drive (drive harder without getting louder)
+      if (MNEMD_FOLD_SOLO)                                 // DEBUG: hear ONLY the folded signal
+        return f * MNEMD_FOLD_SOLO_GAIN * bbd_makeup_;
+      x += fold_blend_ * f;                                // add on top; BBD body untouched
+    }
     // "Breathing": a subtle amplitude flicker driven by the shared wow/OU
     // fluctuation (same slow signal as the BBD clock drift) — approximates the
     // compander's level breathing for ~1 mult, no powf, and does NOT restore.
@@ -387,6 +436,10 @@ class MnemDegrade {
   int   bbd_hold_len_ = 1, bbd_samp_ctr_ = 0;
   float bbd_noise_lin_ = 0.f, bbd_nl_drive_ = 1.f;
   float bbd_breath_ = 0.f;                        // slow amplitude flicker (from the wow/OU mod block)
+  MnemdOnePole fold_hp_lp_;                        // fold-return HP (via subtract-LP)
+  float fold_blend_ = 0.f;                         // parallel sine-fold mix (0 until past KNEE)
+  float fold_drive_ = MNEMD_FOLD_GAIN;             // K3-scaled fold drive (GAIN_MIN..GAIN)
+  float fold_out_   = MNEMD_FOLD_MAKEUP / MNEMD_FOLD_GAIN; // relative level comp = MAKEUP/fold_drive_
   float bbd_makeup_ = 1.25f;                      // level match — raised after compander removal (restores loop gain / self-osc)
 
   // Tape
