@@ -484,13 +484,18 @@ class Vestige : public Module {
           // reaches 1 the gain is constant, so steady-state playback does NO trig
           // here (this was the bulk of the idle CPU baseline).
           const float p = fade_phase_[s];
+          // EQUAL-POWER crossfade curves: rise = sin(0.5*pi*p), fall = cos(0.5*pi*p),
+          // so rise^2 + fall^2 == 1. A steal crossfades TWO uncorrelated loops (old
+          // out / new in) whose POWERS add — linear-complementary (1-cos / 1-sin)
+          // Hann curves dip ~7.7 dB mid-fade, heard as a duck/hiccup. Equal-power
+          // holds level constant. Still LUT-only (no per-sample trig) via the
+          // identities sin(0.5*pi*p)=sqrt(GrainHannRise(p)), cos=sqrt(1-that); both
+          // ends keep a finite slope (click-free).
           if (rising) {
-            // 1 - cos(0.5*pi*p) == 2*GrainHannRise(p/2) → reuse the grain LUT (no trig)
-            float sh = 2.f * GrainHannRise(0.5f * p);        // convex swell
+            float sh = sqrtf(GrainHannRise(p));              // = sin(0.5*pi*p)
             fade_gain_[s] = fade_from_[s] + (1.f - fade_from_[s]) * sh;
           } else {
-            // 1 - sin(0.5*pi*p) == 2*GrainHannRise((1-p)/2) → swell time-reversed
-            float sh = 2.f * GrainHannRise(0.5f * (1.f - p));
+            float sh = sqrtf(1.f - GrainHannRise(p));        // = cos(0.5*pi*p)
             fade_gain_[s] = fade_from_[s] * sh;
           }
         }
@@ -799,7 +804,12 @@ class Vestige : public Module {
     grain_src_[g]  = &ring_[s];
     grain_slot_[g] = s;
     float ov_comp = 2.f / mb_overlap_[band];
-    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s] * ov_comp, 1, 1.0f, 1.f);
+    // First grain of a fresh loop starts (near-)instantly, softened toward freeze
+    // by k3_amt_ (0 at K3 CCW = instant). Without this the long CCW grains fade in
+    // over their full Hann rise = an audible slow attack on loop start.
+    float atk_scale = first_grain_[s] ? k3_amt_ : 1.f;
+    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
+    first_grain_[s] = false;
     if (coef) grains_[g].SetBandFilter(coef[0], coef[1], coef[2], coef[3], coef[4]);
     // coef == nullptr → 1-band full-range grain (no filter): the old-style freeze.
   }
@@ -960,6 +970,10 @@ class Vestige : public Module {
     play_pos_[target] = 0;
     fwd_[target]      = 0.f;     // unified engine: forward head starts at the loop head
     timer_[target]    = 0;      // fire the first grain immediately
+    // Reset the unified engine's per-band scan/timers for this (possibly reused)
+    // slot. A stale mb_timer_ delays the first band grain by up to a full hop while
+    // fwd_ keeps advancing — so playback would start mid-buffer, not at the head.
+    for (int b = 0; b < 3; b++) { mb_timer_[target][b] = 0; mb_scan_[target][b] = 0.f; }
     active_[target]   = true;
     dying_[target]    = false;
     age_[target]      = ++age_counter_;
