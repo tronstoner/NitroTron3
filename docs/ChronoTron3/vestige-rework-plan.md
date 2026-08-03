@@ -53,6 +53,69 @@ displacement is clamped to stay in the past. Order: warble (speed) → `ColourPr
 
 ## 2. Freeze character — kill the tremolo, get a slow morph
 
+> **AS-BUILT (current) — read this first.** The exploration history below (§2 "Plan"
+> onward) is kept for context but is **superseded**: vestige did *not* stay on the
+> old pinned-anchor grain freeze. It adopted mnemonic's **multiband incommensurate
+> granular** winner and generalised it into ONE engine spanning the whole K3 sweep.
+> The as-built architecture is in the box immediately below; trust it over the
+> narrative that follows.
+
+### 2.0 As-built: the unified multiband granular engine
+
+Vestige's K3 knob is a single granular cloud morphing continuously from clean loop
+(CCW) → break-up → evolving freeze (CW) — **no engine switch at noon**. The freeze
+half (s≥0.5) is the multiband freeze ported from mnemonic; the CCW half is the same
+engine with the levers relaxed (long grains, 1 band, head follows the loop, no
+scatter). Legacy single-stream looper/scrub/freeze survives only behind
+`VESTIGE_MB_FREEZE=false` (fallback, not used).
+
+**The phasing mechanism (the whole point).** The captured buffer is split into N
+bands by **per-grain** biquads (no separate band buffers — memory stays flat). Each
+band is its own grain cloud that scans the buffer at a **coprime scan length**, so
+the bands drift against each other and never re-sync → a dense, continuously
+evolving, phasing freeze. Coprimality (distinct primes) is what makes it "never
+repeat"; the *ratios* between the scan lengths set the character of the phasing.
+
+**Adaptive band count** = `min(voice budget, K3 chaos ramp)`:
+- *Voice budget* (CPU-safe schedule, `VESTIGE_MB_*BAND_MAX_VOICES`): 1 voice → 5
+  bands, 2 → 3, 3–4 → 2, 5–6 → 1. More voices = fewer bands so every voice gets
+  grains under the `VESTIGE_MB_GRAIN_CAP` (16) ceiling. Only the 1-voice freeze
+  uncaps to the full 5.
+- *K3 chaos ramp* (`k3_bands_chaos_`, thresholds `VESTIGE_K3_CHAOS_{2,3,4,5}BAND`):
+  1 band at the clean-loop end, splitting in to 5 as chaos → 1.0. Chaos pins at 1.0
+  through the whole freeze half, so the freeze runs the full (voice-capped) count.
+  The 2/3-band split points are unchanged, so the ≤3-band break-up feel is preserved.
+
+**The filterbank** is generated at init from `VESTIGE_MB_XLO..XHI` (250 Hz–2 kHz),
+**log-spaced**, N−1 crossovers: band 0 = LP, mids = BP (centre = geomean of its two
+crossovers, Q = centre/bandwidth), band N−1 = HP. This reproduces the original
+1/2/3-band splits **byte-for-byte** and extends cleanly to 4/5. Low & high bands are
+pinned at 250/2000 for every N≥3 — adding bands only subdivides the mids.
+
+**Per-band grain length / scan length / spray** are the tunable tables in
+`vestige_constants.h`, indexed `[N-1][band]` (low→high). Grain-window ms per band:
+low band pinned at 150 ms (holds bass wavelengths), high band at 40 ms (denser,
+livelier; the floor before the grain-rate flutter `2/T` = 50 Hz climbs into audible
+AM roughness), mids interpolate. 5-band scan primes: `{11987, 9973, 8419, 6113,
+4099}`. Bump `VESTIGE_MAX_BANDS` past 5 by adding matching table rows.
+
+**Code map** (all in `pedals/chronotron3/modules/`):
+- `vestige.h` `ServiceMBFreeze(slot)` — per-band scan + scheduler, the K3 lever math
+  (base head → swept freeze point via `k3_focus_`, coprime scan faded in with focus).
+- `vestige.h` `EmitBandGrain(...)` — allocates a grain from the shared pool, applies
+  the band biquad (`SetBandFilter`), enforces `VESTIGE_MB_GRAIN_CAP`.
+- `vestige.h` `MBBuildBank(n)` / `MBInit()` — build the log-spaced filterbank for
+  every band count into `mb_bank_coef_[N-1][band][5]`.
+- `vestige.h` `Controls()` — computes `mb_nbands_ = min(bands_voice, k3_bands_chaos_)`.
+- `vestige_constants.h` — the `VESTIGE_MB_{GLEN,SCAN,SPRAY}[MAX_BANDS][MAX_BANDS]`
+  tables, crossovers, voice/chaos thresholds, `VESTIGE_MAX_BANDS`, grain cap.
+
+CPU is bounded by the grain cap regardless of band count (5 bands × 1 voice ×
+overlap 2 = 10 grains, under 16). Overlap is a uniform 2 (`VESTIGE_MB_OVERLAP`,
+min for click-free Hann OLA).
+
+---
+
 **Plan:** the two freezes get **different** mechanisms so they can be A/B'd —
 vestige stays time-domain grain, mnemonic gets a spectral phase-vocoder freeze.
 

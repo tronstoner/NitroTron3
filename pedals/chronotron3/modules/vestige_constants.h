@@ -64,30 +64,64 @@ static constexpr float  VESTIGE_BBD_FOLD_SCALE = 2.0f;
 // ---------------------------------------------------------------------------
 // Multiband granular freeze (K3 CW freeze region) — the EHX-style evolving freeze
 // ported from mnemonic, made POLY (per voice). In the freeze region each voice's
-// single loop buffer is granulated in 3 bands (low/mid/high) via PER-GRAIN band
-// filters (no extra band buffers — host-verified identical to pre-filtering, so
-// memory stays flat and loops keep full length). Each band scans at a COPRIME
-// length so the bands never re-sync → dense, continuously evolving freeze. The K3
-// freeze-point sweep still sets WHERE in the buffer (base position); the bands add
-// the incommensurate movement + spectral split. Flag off = the old single-stream
-// pinned-anchor freeze (fallback). Tune by ear.
+// single loop buffer is granulated in N bands via PER-GRAIN band filters (no extra
+// band buffers — host-verified identical to pre-filtering, so memory stays flat and
+// loops keep full length). Each band scans at a COPRIME length so the bands never
+// re-sync → dense, continuously evolving freeze. The K3 freeze-point sweep still
+// sets WHERE in the buffer (base position); the bands add the incommensurate
+// movement + spectral split. Flag off = the old single-stream pinned-anchor freeze
+// (fallback). Tune by ear.
+//
+// Band count is adaptive: up to VESTIGE_MAX_BANDS, scaled down by live-voice CPU
+// budget and by the K3 chaos ramp (see below). The filterbank for each band count
+// N is built at init from the XLO..XHI crossovers, log-spaced (N-1 crossovers):
+// band 0 = LP, mids = BP, band N-1 = HP. This reproduces the old 1/2/3-band splits
+// exactly and extends to 4/5. Per-band grain length / scan length / spray are the
+// tunable tables below, indexed [N-1][band] (low band first).
 static constexpr bool   VESTIGE_MB_FREEZE   = true;
-static constexpr float  VESTIGE_MB_XLO = 250.f, VESTIGE_MB_XHI = 2000.f;   // Hz crossovers
-static constexpr size_t VESTIGE_MB_GLEN_LO = 7200, VESTIGE_MB_GLEN_MID = 3840, VESTIGE_MB_GLEN_HI = 1920; // 150/80/40 ms
+static constexpr int    VESTIGE_MAX_BANDS   = 5;    // ceiling for the freeze filterbank
+static constexpr float  VESTIGE_MB_XLO = 250.f, VESTIGE_MB_XHI = 2000.f;   // Hz crossover span (log-spaced within)
 static constexpr float  VESTIGE_MB_OVERLAP = 2.0f;      // grains per band (Hann @2x = COLA-smooth, lowest CPU).
-                                                        // NOTE: total freeze grains = voices x 3 bands x overlap.
-                                                        // Multiband is 3x grain-dense vs the old 1-stream freeze.
-static constexpr size_t VESTIGE_MB_SCAN_LO = 11987, VESTIGE_MB_SCAN_MID = 8419, VESTIGE_MB_SCAN_HI = 4099; // coprime scan lengths
-static constexpr size_t VESTIGE_MB_SPRAY_LO = 480, VESTIGE_MB_SPRAY_MID = 240, VESTIGE_MB_SPRAY_HI = 120;   // samples
+                                                        // NOTE: total freeze grains = voices x bands x overlap.
+
+// Per-band grain length (samples @48k). Row = band count N-1, col = band (low→high).
+// N=1..3 rows preserve the original LO/MID/HI values exactly; 4/5 interpolate.
+static constexpr size_t VESTIGE_MB_GLEN[VESTIGE_MAX_BANDS][VESTIGE_MAX_BANDS] = {
+    {7200,    0,    0,    0,    0},   // 1 band : 150 ms
+    {7200, 1920,    0,    0,    0},   // 2 bands: 150 / 40 ms
+    {7200, 3840, 1920,    0,    0},   // 3 bands: 150 / 80 / 40 ms
+    {7200, 4320, 2880, 1920,    0},   // 4 bands: 150 / 90 / 60 / 40 ms
+    {7200, 5280, 3840, 2640, 1920},   // 5 bands: 150 / 110 / 80 / 55 / 40 ms
+};
+// Coprime scan lengths — THE phasing ratios. Distinct primes so the bands can never
+// re-sync (combined period = product of the lengths). Low band = longest scan.
+// N=1..3 rows preserve the original values; 4/5 add primes between the extremes.
+static constexpr size_t VESTIGE_MB_SCAN[VESTIGE_MAX_BANDS][VESTIGE_MAX_BANDS] = {
+    {11987,     0,     0,     0,     0},
+    {11987,  4099,     0,     0,     0},
+    {11987,  8419,  4099,     0,     0},
+    {11987,  9973,  6113,  4099,     0},
+    {11987,  9973,  8419,  6113,  4099},
+};
+// Per-band phasing spray (samples). Low band = widest. N=1..3 rows preserve originals.
+static constexpr size_t VESTIGE_MB_SPRAY[VESTIGE_MAX_BANDS][VESTIGE_MAX_BANDS] = {
+    {480,   0,   0,   0,   0},
+    {480, 120,   0,   0,   0},
+    {480, 240, 120,   0,   0},
+    {480, 320, 200, 120,   0},
+    {480, 360, 240, 180, 120},
+};
 // Hard cap on concurrent freeze grains = the CPU ceiling. Above it, grains drop
 // (freeze thins) instead of the callback overrunning. Measured: baseline ~24% +
 // ~2.8%/grain, so ~20 grains keeps steady load ~80% (safe). SDRAM is cached, so
-// the cost is compute (grain count), not memory.
+// the cost is compute (grain count), not memory. 5 bands x 1 voice x overlap 2 = 10.
 static constexpr int    VESTIGE_MB_GRAIN_CAP = 16;
-// Adaptive bands by voice count (poly CPU scaling): 3 bands (rich) up to
-// 3BAND_MAX voices, 2 bands (low+high) up to 2BAND_MAX, then 1 full-band cloud
-// (no filter — essentially the old single-stream freeze) above that. Keeps every
-// voice audible within budget. Overlap stays 2 (min for click-free Hann OLA).
+// Adaptive bands by live-voice count (poly CPU scaling) — CPU-safe schedule: only
+// the 1-voice freeze gets the full 5 bands. <=5BAND_MAX voices → 5, <=3BAND_MAX → 3,
+// <=2BAND_MAX → 2, else 1 full-band cloud (no filter). Keeps every voice audible
+// within budget. Overlap stays 2 (min for click-free Hann OLA). The effective count
+// is min(this budget, the K3 chaos ramp below).
+static constexpr int    VESTIGE_MB_5BAND_MAX_VOICES = 1;
 static constexpr int    VESTIGE_MB_3BAND_MAX_VOICES = 2;
 static constexpr int    VESTIGE_MB_2BAND_MAX_VOICES = 4;
 
@@ -114,8 +148,14 @@ static constexpr int    VESTIGE_MB_2BAND_MAX_VOICES = 4;
 // third; the very CCW corner still starts clean. 1 = linear, >1 = later/duller.
 static constexpr float  VESTIGE_K3_DEVELOP_CURVE    = 0.5f;
 static constexpr float  VESTIGE_K3_GSCALE_CCW      = 2.667f; // grain-len x at CCW (low band 7200 -> ~19200 = clean loop)
-static constexpr float  VESTIGE_K3_CHAOS_2BAND     = 0.33f; // chaos below this = 1 band; above = 2 bands split in
-static constexpr float  VESTIGE_K3_CHAOS_3BAND     = 0.66f; // chaos above this = 3 bands (all capped by voice budget)
+// Chaos-ramp band-split thresholds (all capped by the voice budget). The 2/3-band
+// points are unchanged so the CCW->noon break-up feels identical at <=3 bands; the
+// 4th/5th split in near noon so the freeze half (chaos pinned at 1.0) reaches the
+// full band count. Only the 1-voice freeze actually uncaps to 5.
+static constexpr float  VESTIGE_K3_CHAOS_2BAND     = 0.33f; // above this = 2 bands
+static constexpr float  VESTIGE_K3_CHAOS_3BAND     = 0.66f; // above this = 3 bands
+static constexpr float  VESTIGE_K3_CHAOS_4BAND     = 0.80f; // above this = 4 bands
+static constexpr float  VESTIGE_K3_CHAOS_5BAND     = 0.92f; // above this = 5 bands
 
 // ---------------------------------------------------------------------------
 // Footswitch timing (FS1 stop)

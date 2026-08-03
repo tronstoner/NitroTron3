@@ -379,6 +379,7 @@ any of these as current behaviour.
 
 - `ChronoTron3/IMPLEMENTATION_PLAN.md` — stage-1 implementation plan for the ChronoTron3 bundle.
 - `ChronoTron3/dynamic-looper-concept.md` — working spec for the grain-based dynamic looper module (*vestige*).
+- `ChronoTron3/vestige-rework-plan.md` — *vestige* rework/discovery notes. **§2.0 is the as-built reference for the multiband granular freeze** (unified K3 engine, coprime-scan phasing, adaptive up-to-5 band count, filterbank). `ChronoTron3/freeze-research.md` — cited EHX-Freeze recreation research behind it.
 - `ChronoTron3/impulse resonator - armitage/IMPULSE_SYNTH_SPEC.md` — working spec for the impulse-resonator synth module (*armitage*), with `saturation.py` / `validate.py` alongside it.
 - `ChronoTron3/mnemonic-concept.md` — working spec for the tap-tempo tape/BBD delay module (*mnemonic*): varispeed core, feedback→oscillation, in-loop tone/EQ/degrade, hold/loop, tape gestures.
 - `ChronoTron3/mnemonic-impl-plan.md` — staged (M0–M9) implementation plan for *mnemonic*, with firmware-translation notes and a reuse map.

@@ -198,7 +198,9 @@ class Vestige : public Module {
     freeze_pos_frac_ = (s > 0.5f) ? (s - 0.5f) * 2.f : 0.f;  // 0 = start (noon) → 1 = end (CW)
     // Bands split in as chaos builds (capped later by the voice budget).
     k3_bands_chaos_  = (k3_chaos_ < VESTIGE_K3_CHAOS_2BAND) ? 1
-                     : (k3_chaos_ < VESTIGE_K3_CHAOS_3BAND) ? 2 : 3;
+                     : (k3_chaos_ < VESTIGE_K3_CHAOS_3BAND) ? 2
+                     : (k3_chaos_ < VESTIGE_K3_CHAOS_4BAND) ? 3
+                     : (k3_chaos_ < VESTIGE_K3_CHAOS_5BAND) ? 4 : 5;
 
     // Legacy single-stream fallback (VESTIGE_MB_FREEZE=false) still uses k3_mode_.
     if (s < VESTIGE_K3_LOOP_ZONE) {
@@ -297,13 +299,14 @@ class Vestige : public Module {
     else if (sw2 == 1 && (recording_ || auto_armed_)) dry_gain_ = 0.f;
 
     // ---- Adaptive multiband bands (poly CPU) ∩ chaos-driven split ----------
-    // Voice budget: full 3 bands up to N voices, else drop to 2 (low+high), else 1
+    // Voice budget (CPU-safe): 5 bands only at 1 voice, then 3 / 2 / 1 as poly rises
     // — so every voice gets grains without blowing CPU at high poly. The K3 chaos
     // ramp splits bands IN as the loop breaks up (1 band at the clean-loop end),
     // so the effective count is the lesser of the two: min(voice-budget, chaos).
     int nv = 0;
     for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (active_[v] && !dying_[v]) nv++;
-    int bands_voice = (nv <= VESTIGE_MB_3BAND_MAX_VOICES) ? 3
+    int bands_voice = (nv <= VESTIGE_MB_5BAND_MAX_VOICES) ? 5
+                    : (nv <= VESTIGE_MB_3BAND_MAX_VOICES) ? 3
                     : (nv <= VESTIGE_MB_2BAND_MAX_VOICES) ? 2 : 1;
     mb_nbands_ = (bands_voice < k3_bands_chaos_) ? bands_voice : k3_bands_chaos_;
 
@@ -740,37 +743,37 @@ class Vestige : public Module {
     }
     const float head = is_frip ? frip_head_ : fwd_[s];
 
+    // Per-band-count tables are indexed [mb_nbands_-1][band]: the log-spaced
+    // filterbank (built in MBInit) plus the tunable glen/scan/spray rows. The band
+    // index bi maps straight through — no remap — so every band count 1..MAX gets
+    // its own full-spectrum split. 1-band = no filter (coef nullptr).
+    const int row = mb_nbands_ - 1;
     for (int bi = 0; bi < mb_nbands_; bi++) {
-      // Band index for glen/scan/spray state: 3-band = 0/1/2; 2-band = low(0)+
-      // high(2); 1-band = low(0) params, full-band (no filter).
-      const int b = (mb_nbands_ == 3) ? bi
-                  : (mb_nbands_ == 2) ? (bi == 0 ? 0 : 2) : 0;
-      size_t glen = (size_t)((float)mb_glen_[b] * k3_gscale_);
+      size_t glen = (size_t)((float)VESTIGE_MB_GLEN[row][bi] * k3_gscale_);
       if (glen > L) glen = L;
       if (glen > VESTIGE_GUARD_SAMPLES) glen = VESTIGE_GUARD_SAMPLES;
       if (glen < VESTIGE_GRAIN_MIN_LEN) glen = (L < VESTIGE_GRAIN_MIN_LEN) ? L : VESTIGE_GRAIN_MIN_LEN;
       size_t maxscan = (L > glen + 1) ? (L - glen - 1) : 1;
-      size_t scanlen = mb_scanlen_[b]; if (scanlen > maxscan) scanlen = maxscan; if (scanlen < 1) scanlen = 1;
-      mb_scan_[s][b] += 1.f;
-      if (mb_scan_[s][b] >= (float)scanlen) mb_scan_[s][b] -= (float)scanlen;
-      if (--mb_timer_[s][b] <= 0) {
+      size_t scanlen = VESTIGE_MB_SCAN[row][bi]; if (scanlen > maxscan) scanlen = maxscan; if (scanlen < 1) scanlen = 1;
+      mb_scan_[s][bi] += 1.f;
+      if (mb_scan_[s][bi] >= (float)scanlen) mb_scan_[s][bi] -= (float)scanlen;
+      if (--mb_timer_[s][bi] <= 0) {
         // Base = forward head → swept freeze point as focus→1; scan fades in with
         // focus so the clean loop has no scan and the freeze has full scan.
         float span = (float)L - (float)glen - (float)scanlen; if (span < 0.f) span = 0.f;
         float freeze_base = span * freeze_pos_frac_;
         float base = head + (freeze_base - head) * k3_focus_;
-        float posf = base + mb_scan_[s][b] * k3_focus_;
+        float posf = base + mb_scan_[s][bi] * k3_focus_;
         // Position spray = the small freeze phasing spray ONLY, faded in with focus.
         // NO random break-up scatter: displaced grains on the moving head read as
         // slapback echoes. The break-up decorrelates via grain-shortening + band-
         // split + the motion-conserving scan (base rate stays 1.0), never a jump.
-        float spray_width = (float)mb_spray_[b] * k3_focus_;
-        const float* coef = (mb_nbands_ == 3) ? mb_coef_[b]
-                          : (mb_nbands_ == 2) ? mb_coef2_[bi] : nullptr;  // 1-band = full range
-        EmitBandGrain(s, glen, posf, b, coef, spray_width, k3_frozen_);
-        int hop = (int)((float)glen / mb_overlap_[b]);
+        float spray_width = (float)VESTIGE_MB_SPRAY[row][bi] * k3_focus_;
+        const float* coef = (mb_nbands_ == 1) ? nullptr : mb_bank_coef_[row][bi];
+        EmitBandGrain(s, glen, posf, coef, spray_width, k3_frozen_);
+        int hop = (int)((float)glen / VESTIGE_MB_OVERLAP);
         if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
-        mb_timer_[s][b] = hop;
+        mb_timer_[s][bi] = hop;
       }
     }
   }
@@ -779,7 +782,7 @@ class Vestige : public Module {
   // [0, L-glen] range (pinned point stays exact). frozen=false (loop/break-up): wrap
   // the loop seam so the forward head + scatter read across the loop point (the
   // wrap-guard holds the seamless head-continuation copy).
-  void EmitBandGrain(int s, size_t glen, float posf, int band, const float* coef,
+  void EmitBandGrain(int s, size_t glen, float posf, const float* coef,
                      float spray_width, bool frozen) {
     // hard cap on concurrent grains (CPU guard for multi-voice freeze)
     int nactive = 0;
@@ -809,7 +812,7 @@ class Vestige : public Module {
     size_t delay = (wp + cap - posi) % cap;
     grain_src_[g]  = &ring_[s];
     grain_slot_[g] = s;
-    float ov_comp = 2.f / mb_overlap_[band];
+    float ov_comp = 2.f / VESTIGE_MB_OVERLAP;
     // First grain of a fresh loop starts (near-)instantly, softened toward freeze
     // by k3_amt_ (0 at K3 CCW = instant). Without this the long CCW grains fade in
     // over their full Hann rise = an audible slow attack on loop start.
@@ -833,22 +836,29 @@ class Vestige : public Module {
     float w = 6.2831853f * fc / sr_, cs = cosf(w), sn = sinf(w), al = sn / (2.f * Q), a0 = 1 + al;
     c[0] = al / a0; c[1] = 0.f; c[2] = -al / a0; c[3] = -2 * cs / a0; c[4] = (1 - al) / a0;
   }
+  // Build the crossover filterbank for a band count N into mb_bank_coef_[N-1][].
+  // N-1 crossovers, log-spaced across [XLO, XHI] inclusive: band 0 = LP, mids = BP
+  // (centre = geomean of its two crossovers, Q = centre/bandwidth), band N-1 = HP.
+  // Reproduces the old 2-band (single fmid crossover) and 3-band (250/2000) splits
+  // exactly, and generalises to 4/5. N=1 is a full-band cloud → no filter.
+  void MBBuildBank(int n) {
+    if (n <= 1) return;
+    float x[VESTIGE_MAX_BANDS - 1];               // crossover frequencies (n-1 of them)
+    if (n == 2) x[0] = sqrtf(VESTIGE_MB_XLO * VESTIGE_MB_XHI);
+    else for (int i = 0; i < n - 1; i++)
+      x[i] = VESTIGE_MB_XLO * powf(VESTIGE_MB_XHI / VESTIGE_MB_XLO, (float)i / (float)(n - 2));
+    float (*bank)[5] = mb_bank_coef_[n - 1];
+    MBSetLP(bank[0], x[0]);                        // low band
+    for (int b = 1; b < n - 1; b++) {              // mid bands (bandpass)
+      float lo = x[b - 1], hi = x[b], c = sqrtf(lo * hi);
+      MBSetBP(bank[b], c, c / (hi - lo));
+    }
+    MBSetHP(bank[n - 1], x[n - 2]);                // high band
+  }
   void MBInit() {
-    mb_glen_[0]=VESTIGE_MB_GLEN_LO; mb_glen_[1]=VESTIGE_MB_GLEN_MID; mb_glen_[2]=VESTIGE_MB_GLEN_HI;
-    mb_scanlen_[0]=VESTIGE_MB_SCAN_LO; mb_scanlen_[1]=VESTIGE_MB_SCAN_MID; mb_scanlen_[2]=VESTIGE_MB_SCAN_HI;
-    mb_spray_[0]=VESTIGE_MB_SPRAY_LO; mb_spray_[1]=VESTIGE_MB_SPRAY_MID; mb_spray_[2]=VESTIGE_MB_SPRAY_HI;
-    mb_overlap_[0]=mb_overlap_[1]=mb_overlap_[2]=VESTIGE_MB_OVERLAP;
-    float fmid = sqrtf(VESTIGE_MB_XLO * VESTIGE_MB_XHI);
-    // 3-band split (low/mid/high).
-    MBSetLP(mb_coef_[0], VESTIGE_MB_XLO);
-    MBSetBP(mb_coef_[1], fmid, fmid / (VESTIGE_MB_XHI - VESTIGE_MB_XLO));
-    MBSetHP(mb_coef_[2], VESTIGE_MB_XHI);
-    // 2-band split (low+high) — a single crossover at fmid so the two bands COVER
-    // the whole spectrum (no missing mids). Used at high voice counts.
-    MBSetLP(mb_coef2_[0], fmid);
-    MBSetHP(mb_coef2_[1], fmid);
+    for (int n = 1; n <= VESTIGE_MAX_BANDS; n++) MBBuildBank(n);
     for (int s = 0; s < VESTIGE_SLOTS; s++)
-      for (int b = 0; b < 3; b++) { mb_scan_[s][b] = (float)((s * 2 + b) * 373 % 4096); mb_timer_[s][b] = 0; }
+      for (int b = 0; b < VESTIGE_MAX_BANDS; b++) { mb_scan_[s][b] = (float)((s * 2 + b) * 373 % 4096); mb_timer_[s][b] = 0; }
   }
 
   // -------------------------------------------------------------------------
@@ -979,7 +989,7 @@ class Vestige : public Module {
     // Reset the unified engine's per-band scan/timers for this (possibly reused)
     // slot. A stale mb_timer_ delays the first band grain by up to a full hop while
     // fwd_ keeps advancing — so playback would start mid-buffer, not at the head.
-    for (int b = 0; b < 3; b++) { mb_timer_[target][b] = 0; mb_scan_[target][b] = 0.f; }
+    for (int b = 0; b < VESTIGE_MAX_BANDS; b++) { mb_timer_[target][b] = 0; mb_scan_[target][b] = 0.f; }
     active_[target]   = true;
     dying_[target]    = false;
     age_[target]      = ++age_counter_;
@@ -1227,7 +1237,7 @@ class Vestige : public Module {
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
       if (s < VESTIGE_VOICE_SLABS) { dying_[s] = false; stolen_[s] = false; }
-      for (int b = 0; b < 3; b++) mb_timer_[s][b] = 0;   // re-freeze fires promptly
+      for (int b = 0; b < VESTIGE_MAX_BANDS; b++) mb_timer_[s][b] = 0;   // re-freeze fires promptly
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
@@ -1279,17 +1289,14 @@ class Vestige : public Module {
   int              grain_slot_[VESTIGE_GRAINS] = {0};  // which slot emitted grain g
   int              next_grain_ = 0;
 
-  // Multiband granular freeze: per-slot per-band scan pointer + scheduler timer,
-  // band filter coeffs, and cached band params. (VESTIGE_MB_FREEZE.)
-  float  mb_scan_[VESTIGE_SLOTS][3]  = {};
-  int    mb_timer_[VESTIGE_SLOTS][3] = {};
-  float  mb_coef_[3][5]  = {};        // 3-band split coeffs (low/mid/high)
-  float  mb_coef2_[2][5] = {};        // 2-band split coeffs (low/high @ single crossover)
-  size_t mb_glen_[3]     = {0};
-  size_t mb_scanlen_[3]  = {0};
-  size_t mb_spray_[3]    = {0};
-  float  mb_overlap_[3]  = {3.f, 3.f, 3.f};
-  int    mb_nbands_ = 3;                        // adaptive: 3 bands ≤ N voices, else 2 (low+high)
+  // Multiband granular freeze: per-slot per-band scan pointer + scheduler timer, and
+  // the crossover filterbank indexed [band count-1][band]. Per-band grain length /
+  // scan length / spray live in the VESTIGE_MB_{GLEN,SCAN,SPRAY} constexpr tables.
+  // (VESTIGE_MB_FREEZE.)
+  float  mb_scan_[VESTIGE_SLOTS][VESTIGE_MAX_BANDS]  = {};
+  int    mb_timer_[VESTIGE_SLOTS][VESTIGE_MAX_BANDS] = {};
+  float  mb_bank_coef_[VESTIGE_MAX_BANDS][VESTIGE_MAX_BANDS][5] = {};  // [N-1][band] RBJ coeffs
+  int    mb_nbands_ = 3;                        // adaptive: min(voice budget, K3 chaos ramp)
 
   // K3 unified-engine params (per block; see the K3 macro in Controls).
   float  k3_chaos_       = 0.f;   // 0 = clean loop (CCW) → 1 = noon/freeze
