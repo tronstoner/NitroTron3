@@ -363,8 +363,12 @@ class Vestige : public Module {
                 float in = frip_in_prev_ + (x - frip_in_prev_) * t;
                 m[c] = m[c] * eff_decay + in * frip_od_gain_;
                 // Keep the wrap-guard in lock-step at AUDIO rate (a control-rate
-                // refresh lags the fast decay → seam mismatch = a click).
-                if (c >= xf && c < VESTIGE_GUARD_SAMPLES) m[frip_len_ + c] = m[c];
+                // refresh lags the fast decay → seam mismatch = a click). The seam
+                // crossfade region (c < xf) is refreshed as a live tail→head blend
+                // so it tracks the decaying body instead of lagging a full pass —
+                // that lag is the short-loop overdub click.
+                if (c < xf)                          FrippSeamCell(m, frip_len_, xf, c);
+                else if (c < VESTIGE_GUARD_SAMPLES)   m[frip_len_ + c] = m[c];
                 if (c + 1 == frip_len_) FrippSeamXfade(m, frip_len_, xf);
               }
               frip_rec_prev_idx_ = cur;
@@ -382,7 +386,8 @@ class Vestige : public Module {
               do {
                 c++; if (c >= frip_len_) c = 0;
                 m[c] = m[c] * eff_decay + in_avg * frip_od_gain_;
-                if (c >= xf && c < VESTIGE_GUARD_SAMPLES) m[frip_len_ + c] = m[c];
+                if (c < xf)                          FrippSeamCell(m, frip_len_, xf, c);
+                else if (c < VESTIGE_GUARD_SAMPLES)   m[frip_len_ + c] = m[c];
                 if (c + 1 == frip_len_) FrippSeamXfade(m, frip_len_, xf);
               } while (c != cur);
               frip_rec_prev_idx_ = cur;
@@ -1023,6 +1028,15 @@ class Vestige : public Module {
       float t = (float)(k + 1) / (float)(xf + 1);        // 0→1
       m[L + k] = tail * cosf(t * 1.5707963f) + m[k] * sinf(t * 1.5707963f);
     }
+  }
+  // Refresh ONE seam-crossfade guard cell (c < xf) at AUDIO rate: a live equal-
+  // power tail→head blend so the seam tracks the decaying loop body instead of
+  // lagging a full pass (the short-loop overdub click). Trig-free via the LUT
+  // (cos(t·π/2)=√(1-GrainHannRise), sin=√GrainHannRise) — same curve as above.
+  static inline void FrippSeamCell(float* m, size_t L, size_t xf, size_t c) {
+    float t = (float)(c + 1) / (float)(xf + 1);
+    float g = GrainHannRise(t);
+    m[L + c] = m[L - 1] * sqrtf(1.f - g) + m[c] * sqrtf(g);
   }
   void RefreshFrippGuard(size_t L) {
     if (L == 0) return;
