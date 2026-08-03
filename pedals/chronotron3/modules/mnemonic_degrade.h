@@ -189,6 +189,10 @@ class MnemDegrade {
   // bypass the module fades this toward 0 as the trail decays, so the medium
   // hiss dies with the trail instead of sustaining a bed. 1 = full noise.
   void  SetNoiseGate(float g) { noise_gate_ = g; }
+  // Per-instance BBD fold brightness: scales how much regenerated fold (mids/
+  // highs + grit) is mixed on top of the dark body. 1 = default (mnemonic);
+  // vestige raises it for more clarity in the looper without losing distortion.
+  void  SetFoldScale(float s) { fold_scale_ = s; }
   // Current injected-noise amplitude (linear) of the active chain — the module
   // uses it to set the gate threshold just above the hiss floor (tracks K3).
   float NoiseFloorLin() const {
@@ -395,7 +399,9 @@ class MnemDegrade {
       f *= fold_out_;                                      // level compensated RELATIVE to the live drive (drive harder without getting louder)
       if (MNEMD_FOLD_SOLO)                                 // DEBUG: hear ONLY the folded signal
         return f * MNEMD_FOLD_SOLO_GAIN * bbd_makeup_;
-      x += fold_blend_ * f;                                // add on top; BBD body untouched
+      x += fold_blend_ * fold_scale_ * f;                  // add on top; BBD body untouched.
+                                                           // fold_scale_ = per-instance brightness
+                                                           // (1 = default; vestige boosts for clarity)
     }
     // "Breathing": a subtle amplitude flicker driven by the shared wow/OU
     // fluctuation (same slow signal as the BBD clock drift) — approximates the
@@ -484,6 +490,7 @@ class MnemDegrade {
   float fold_blend_ = 0.f;                         // parallel sine-fold mix (0 until past KNEE)
   float fold_drive_ = MNEMD_FOLD_GAIN;             // K3-scaled fold drive (GAIN_MIN..GAIN)
   float fold_out_   = MNEMD_FOLD_MAKEUP / MNEMD_FOLD_GAIN; // relative level comp = MAKEUP/fold_drive_
+  float fold_scale_ = 1.f;                         // per-instance fold brightness (SetFoldScale; 1 = default)
   float bbd_makeup_ = 1.25f;                      // level match — raised after compander removal (restores loop gain / self-osc)
 
   // Tape

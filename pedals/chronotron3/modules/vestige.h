@@ -62,6 +62,7 @@ class Vestige : public Module {
   void Init(float sr) override {
     sr_ = sr;
     degrade_.Init(sr_);   // BBD/Tape degradation engine (K4)
+    degrade_.SetFoldScale(VESTIGE_BBD_FOLD_SCALE);  // brighter BBD fold in the looper (clarity, keeps grit)
     MBInit();             // multiband granular freeze coeffs + band params
     warble_ring_.Init(vestige_warble_slab, VESTIGE_WARBLE_LEN);  // post-grain pitch warble
     warble_base_ = VESTIGE_WARBLE_BASE_MS * 0.001f * sr_;
