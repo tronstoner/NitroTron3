@@ -39,6 +39,12 @@ Do not jump into code or propose changes without first understanding the project
 - `docs/ARCHITECTURE.md` — the platform/pedal/module seams and the block/module/mode/shell vocabulary.
 - `docs/ChronoTron3/` — specs and plans for the ChronoTron3 bundle (in progress).
 
+**Working on a ChronoTron3 module** (`pedals/chronotron3/modules/`) — spec = design intent, **as-built = what the code does (read first):**
+- ***armitage*** (SW3 DOWN — impulse-synth / chord-detect resonator): **`docs/ChronoTron3/impulse resonator - armitage/ARMITAGE_AS_BUILT.md`** for detection / onset / excitation / portamento / voice — read before touching any of those. Spec + research + `saturation.py`/`validate.py` in the same folder.
+- ***vestige*** (SW3 UP — granular looper/freeze): `docs/ChronoTron3/vestige-rework-plan.md` **§2.0** is the as-built multiband granular freeze; `dynamic-looper-concept.md` + `freeze-research.md`.
+- ***mnemonic*** (SW3 MIDDLE — tape/BBD delay): `docs/ChronoTron3/mnemonic-concept.md` + `mnemonic-impl-plan.md`.
+- Tuning values are never in the docs — they live in each module's `*_constants.h` (source of truth).
+
 **Any other topic:** `docs/PROJECT.md` § Document Map indexes every doc in the
 repo and marks each one current or historical. Check it before assuming a doc
 doesn't exist — and add an entry there whenever you add a doc.
