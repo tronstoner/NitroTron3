@@ -1,149 +1,191 @@
-# armitage — as-built architecture (detection, onset, excitation, portamento)
+# armitage — as-built architecture (detection, onset, excitation, voicing, portamento)
 
 **Read this first when touching armitage's note detection, triggering, or voicing.**
 `IMPULSE_SYNTH_SPEC.md` is the original design intent; **this** file is what the code
-actually does, discovered by ear + serial-log debugging on hardware. Exact values live
-in `pedals/chronotron3/modules/armitage_constants.h` (the source of truth) — this doc
-explains the *model* and *why*, and names the constant that tunes each part.
+actually does, discovered by ear + serial-log debugging on hardware (bass & guitar,
+one instrument-agnostic build). Exact values live in `armitage_constants.h` (the source
+of truth) — this doc explains the *model* and *why*, and names the constant per part.
 
 Files: `pedals/chronotron3/modules/armitage.h` (+ `armitage_constants.h`). SW3 DOWN.
+**ChronoTron3 is instrument-agnostic — one firmware for bass AND guitar. Never add an
+instrument #ifdef or per-instrument constants** (see memory `chronotron3-instrument-agnostic`).
 
 ## What armitage is
 
-A polyphonic **synthesized-chord** voice: you play a note/chord, it detects the pitches,
-and rings a bank of tuned comb resonators driven by your input. The character is a
-**driven near-unity comb resonator + feedback-FM "gnarl"** (NOT self-oscillation — that
-was tried and rejected as static/dynamics-free). Reference: Chase Bliss Lost+Found
-Impulse Synthesizer. See memory `project_armitage_character`.
+A polyphonic **synthesized-chord** voice: you play a note/chord, an onset-triggered
+detector estimates the pitches, and a bank of tuned comb resonators — **driven by your
+input signal** — rings them. Character = **driven near-unity comb + feedback-FM "gnarl"**
+(NOT self-oscillation — tried, rejected as static/dynamics-free). Reference: Chase Bliss
+Lost+Found Impulse Synthesizer. See memory `project_armitage_character`.
+
+Key architectural fact that shapes everything: **the resonators only ring at frequencies
+the input actually contains** (they're excited by the played signal). This is why you
+cannot cheaply "add" chord tones as extra resonators — see §4.
 
 ## Signal chain (audio thread, per sample)
 
 ```
-in ─► onset env (full-band, env_val_) ──────────────┐  (gate / LED / level)
-  │                                                  │
-  ├─► chord filterbank (36→48 bins) ─► [snapshot on onset+settle] ─► note set
-  │                                                  │
-  └─► PRE-conditioning (tanh drive, asym) ─► × excitation-envelope guardrail ─► e
-                                                      │
-   note set ─► sub-harmonic fundamental filter ─► voice-leading ─► portamento targets
-                                                      │
-   e ─► comb resonator bank (per-voice: KS comb + feedback-FM) ─► Σ ─► ×COMB_MAKEUP·norm
-                                                      │
-        ─► POST-loop drive (K4, outside the loop) ─► K5 gated 4-pole LP ─► limiter ─► wet
+in ─► onset env (full-band, env_val_)  ─────────────► K5 gate (open/close) + LED
+  │
+  ├─► HPF ─► onset/attack detector ─► schedules the chord SNAPSHOT
+  │
+  ├─► chord filterbank (48 bins) ─► [blank attack, average settled window] ─► SNAPSHOT
+  │        └► peak-pick + fundamental filter ─► voice-leading ─► glide targets
+  │
+  └─► PRE-conditioning (tanh drive, asym) ─► × excitation guardrail (duck/attack) ─► e
+                                                    │
+   e ─► comb bank (per voice: KS comb + feedback-FM, delay smoothed) × fade gain
+        ─► Σ ─► ×COMB_MAKEUP·voice_norm(smoothed) ─► POST-drive (fixed) ─► K5 4-pole LP
+        ─► limiter ─► wet
 ```
 
-## 1. Chord detection (the hard part)
+Controls today: **K1 register · K2 T60 · K3 FM depth · K4 portamento · K5 filter A/R ·
+K6 mix.** (K4 was post-drive during development; the post-drive is now locked at its old
+K4-noon value and K4 is the glide-time control.)
 
-A chromatic **bandpass filterbank** (`CHORD_N_BINS` bins from `CHORD_BASE_MIDI`, RBJ
-biquads, `CHORD_Q`) runs continuously, each bin tracking a per-band energy envelope. On
-an onset (below) a **snapshot** is scheduled after `CHORD_SNAP_DELAY_MS` — deliberately
-LONG (~180 ms) so we grab the *settled* harmonic tone, not the broadband pick transient.
-`ChordDetector::Snapshot()`:
+## 1. Chord detection
 
-1. **Candidates** = local maxima above `CHORD_CAND_THR × peak` (LOW gate — a real
-   fundamental is often quieter than its own 2nd harmonic and must still qualify).
-2. **Fundamental filter (sub-harmonic)** — THE key idea. Each plucked string lights up
-   its whole harmonic series and the **2nd harmonic (octave) is often LOUDER than the
-   fundamental**. So we cannot pick "loudest = note", nor drop overtones *above* an
-   accepted note. Instead: a candidate is an **overtone → dropped** if a sub-multiple
-   below it (−12/−19/−24/−28 semitones = f/2, f/3, f/4, f/5) carries `> CHORD_SUBHARM_REL`
-   of its energy. This collapses each string's series to one fundamental.
-3. **Fine pitch** — parabolic sub-bin interpolation on log energies (skipped at the array
-   edges, or it pins a bogus ±50 c).
+A chromatic **bandpass filterbank** (`CHORD_N_BINS = 48` from `CHORD_BASE_MIDI = 28` = E1,
+RBJ biquads, `CHORD_Q`) runs continuously. On an onset (§2) the detector:
 
-**Range MUST cover the instrument's fundamentals.** `CHORD_BASE_MIDI = 28` (E1, 41 Hz)
-reaches bass open strings; the old E2 (82 Hz) floor left E/A/D fundamentals invisible so
-the detector latched their harmonics → octave-up garbage. 5-string low B0 = 23 → lower
-BASE if needed.
+1. **Blanks the attack** for `CHORD_ATTACK_BLANK_MS` (~70 ms) — the pick transient is
+   broadband noise with no pitch info, so it is never measured.
+2. **Averages** each band's rectified output over the settled window (blank → snapshot).
+   NOT an instant-attack peak-hold (that latched the attack and biased toward the loudest
+   transient — it made chords "dull / 1–2 notes"). A clean sustained-level average.
+3. At `CHORD_SNAP_DELAY_MS` (~180 ms) takes the **snapshot** and peak-picks:
+   - **Candidates** = local maxima above `CHORD_CAND_THR × peak` (low gate — a fundamental
+     is often quieter than its own 2nd harmonic and must still qualify).
+   - **Fundamental filter (sub-harmonic).** Each plucked string lights up its whole
+     harmonic series and the octave (2nd harmonic) is often LOUDER than the fundamental —
+     so "loudest = note" and "drop overtones above" both fail. Instead a candidate is a
+     **harmonic → dropped** if a sub-multiple below it carries `> CHORD_SUBHARM_REL` of its
+     energy. **Only −19 (12th) and −28 (2 oct + major 3rd) are collapsed; octaves (−12) and
+     2-octaves (−24) are deliberately KEPT** so octave-doubled chord voicings survive
+     (dropping octaves left only ~3 distinct pitches = thin). A bass single note therefore
+     also rings its octave — consonant fatness, fine post range-fix.
+   - **Fine pitch** — parabolic sub-bin interpolation on log energies (skipped at array
+     edges or it pins a bogus ±50 c).
 
-**Tradeoffs / tuning:** `CHORD_SUBHARM_REL` up = keep more (octave-up ghosts risk return);
-down = collapse harder (a played octave folds to its root — acceptable, voicing comes from
-register not detection). `CHORD_CAND_THR` up = fewer low-bin noise / sympathetic-string
-ghosts but risks missing quiet real notes. `CHORD_MAX_NOTES` caps the set (6; 16 admitted
-junk). Sympathetic open-string ringing is real energy — no detector can tell it from a
-played note; mute unused strings when testing.
+**Range MUST reach the instrument's fundamentals.** E1 base covers bass open strings; the
+old E2 floor left E/A/D invisible → the detector latched their harmonics → octave-up
+garbage. 5-string low B0 = 23 → lower `CHORD_BASE_MIDI` if needed.
+
+**Tuning:** `CHORD_SUBHARM_REL` up = keep more (octave-up ghosts risk return), down =
+collapse harder. `CHORD_CAND_THR` up = fewer low-bin / sympathetic-string ghosts, but
+risks missing quiet notes. `CHORD_ATTACK_BLANK_MS` longer = more attack dropped.
+`CHORD_MAX_NOTES` caps the set (6). Sympathetic open-string ring is *real* energy — no
+detector can tell it from a played note; mute unused strings when testing.
 
 ## 2. Onset / peak detection — SEPARATE from the gate
 
-Two different things share the input but must not be conflated:
+- **Gate** (`ONSET_ON/OFF` hysteresis on full-band `env_val_`) — only opens/closes the K5
+  filter; needs near-silence to re-arm.
+- **Peak/onset detector** — fires the **snapshot** on every NEW ATTACK, even mid-ring, so
+  a fresh strum always re-detects. Fires when the attack envelope spikes above a slow
+  adaptive baseline (`ONSET_RISE_RATIO`), gated by `ONSET_HP_FLOOR` + `ONSET_REFRACTORY_MS`.
 
-- **Gate** (`ONSET_ON/OFF` hysteresis on the full-band `env_val_`) — only opens/closes the
-  **K5 filter**. Needs near-silence to re-arm.
-- **Peak/onset detector** — fires the **chord snapshot** on every NEW ATTACK, even while a
-  previous chord still rings (so a fresh strum always re-detects). Fires when the attack
-  envelope spikes above a slow adaptive baseline (`ONSET_RISE_RATIO`), gated by an absolute
-  floor (`ONSET_HP_FLOOR`) and a `ONSET_REFRACTORY_MS` guard.
+**Runs on a HIGH-PASSED copy of the input** (`ONSET_HP_HZ ≈ 800 Hz`; classic HFC onset
+detection): a pick attack is broadband/HF, the sustained tone + its low-fundamental ripple
+are LOW — high-passing emphasises transients AND removes the ripple. `onset_fast_`
+rectifies + smooths |HPF|; `onset_ref_` is its slow baseline.
 
-**The onset detector runs on a HIGH-PASSED copy of the input** (`ONSET_HP_HZ ≈ 800 Hz`,
-one-pole; classic high-frequency-content onset detection): a pick attack is broadband/HF
-while the sustained tone + its low-fundamental ripple are LOW. High-passing emphasises the
-transient AND removes the ripple at the source. `onset_fast_` rectifies + smooths |HPF|
-into the attack envelope; `onset_ref_` is its slow baseline.
+**Hard-won gotcha (do not regress):** a flux detector on the *raw* full-band envelope
+retriggers every cycle on a low fundamental (the ~41 Hz ripple keeps crossing the ratio);
+stacked with the excitation duck that starved the snapshot and made low notes go SILENT.
+The HPF fixes it at the source. Fingerstyle bass has less HF than a pick — if soft notes
+miss, lower `ONSET_HP_FLOOR` or `ONSET_HP_HZ`.
 
-**Hard-won gotcha (do not regress):** a flux onset detector on a *raw* (full-band)
-envelope **retriggers every cycle on a low fundamental** — the 41 Hz ripple keeps exceeding
-the ratio. Stacked with the excitation duck (below), that starved the snapshot and made low
-notes go **silent**. The HPF fixes it at the source (the earlier `ONSET_FAST_MS` smoothing
-was a band-aid, now just the envelope stage). Fingerstyle bass has less HF than a pick — if
-soft notes miss, lower `ONSET_HP_FLOOR` or `ONSET_HP_HZ`.
+## 3. Excitation-envelope guardrail
 
-## 3. Excitation-envelope guardrail (feed around chord changes)
+The input drives the combs continuously, which bursts around chord changes: a new pluck
+blasts the OLD/mistuned chord during the settle, and keeps driving voices while they glide.
+So the feed `e` is × an envelope: **DUCK to `EXC_DUCK_LEVEL` on each onset** (`EXC_DUCK_MS`,
+fast), then **ATTACK back once the chord locks** (`EXC_ATTACK_MS`) at the snapshot. Net:
+pluck → brief hush → the chord swells in on-pitch. `EXC_DUCK_LEVEL = 1` disables it. Peak
+level unchanged — only the attack envelope is reshaped.
 
-The input drives the combs continuously, which BURSTS: a new pluck blasts the OLD/mistuned
-chord during the settle window, and keeps driving resonators while they GLIDE. So the feed
-`e` is multiplied by an envelope: **DUCK to `EXC_DUCK_LEVEL` on each onset** (fast,
-`EXC_DUCK_MS`), then **ATTACK back to 1 once the new chord locks** (`EXC_ATTACK_MS`, ≈ glide
-time) at the snapshot. Net: pluck → brief hush → the new chord swells in already on-pitch.
-`EXC_DUCK_LEVEL = 1` disables it (continuous feed = pre-guardrail behaviour). Independent of
-the K5 gate. Peak level unchanged — it only reshapes the attack envelope.
+## 4. Voicing — currently UNISON (and a documented dead end)
 
-## 4. Voice-leading + portamento
+**Each detected note = ONE resonator at that pitch (unison). The synth adds no intervals.**
+Density comes only from what you actually play (or the chord the detector catches).
 
-On each snapshot the note set is assigned to voices by **nearest-note voice-leading**
-(`AssignVoices`, greedy, n ≤ 6): each currently-ringing voice glides to the *nearest* new
-note (minimal musical movement), not slot-by-index (which leapt arbitrarily). Extra notes
-enter at pitch; dropped notes fall silent. Then per voice the pitch **glides fixed-TIME**
-(one-pole toward target, `GLIDE_COEFF`) — any interval takes the same time (not fixed rate).
+**Auto-voicing was tried and REVERTED — dead end, do not retry as-is.** Adding resonators
+at intervals (octaves / fifths / stacked-fifths per detected note, on K1) sounded *weaker*,
+not denser, because **an added resonator has nothing exciting it** — the input has no real
+energy at that pitch, so it sits thin/starved. Confirmed by ear: playing a stacked-fifth
+chord (A2·E3·B3) sounds like L+F, but auto-generating the same stack does not.
+Also `1/√n` normalization thins the core as voices are added, and dense stacks hit the CPU
+ceiling (~3 voices/note max).
 
-## 5. Resonator, FM, drive (the voice)
+→ **The L+F density is pitch-shifting, not resonator-voicing.** See §"Directions parked".
+
+## 5. Voice-leading, portamento, and declicking
+
+- **Voice-leading** (`AssignVoices`, greedy, n ≤ MAX): on each snapshot every ringing voice
+  is reassigned to the **nearest** new note (minimal musical movement), not slot-by-index.
+  Extra notes are new voices; fewer notes drop voices.
+- **Portamento — true LINEAR fixed-time on K4.** At each retarget a constant per-update step
+  = distance / (glide-time in control ticks) is set; the voice marches at constant velocity
+  and STOPS exactly on the target. Every glide takes the same time regardless of interval and
+  *arrives* cleanly (no exponential creep). K4 = `GLIDE_TIME_MIN_MS … GLIDE_TIME_MAX_MS`.
+  `GLIDE_CTRL_MS` MUST match the shell's main-loop `DelayMs` (converts ms → step count).
+- **Audio-rate delay smoothing** (`DELAY_SMOOTH_MS`, per-sample one-pole on the read delay):
+  a control-rate `dfrac` jump would step a ringing line → broadband click. This micro-glides
+  every retune → click-free regardless of K4. (Portamento rides on top.)
+- **Per-voice fade in/out** (`FADE_MS`) + **smoothed `voice_norm`** (`VNORM_SMOOTH_MS`):
+  declick voice-count changes. A dropped voice fades out (keeps ringing, then retires +
+  `Silence()`s its buffer clean for reuse); an added voice fades in. The `1/√n` level ramps
+  instead of stepping. Both directions click-free.
+
+## 6. Resonator, FM, drive (the voice)
 
 - **Comb bank** — extended Karplus-Strong, per-voice `Dtot = fs/f`, two-point-average loop
   filter, loop gain `g` from the T60 relation (`K2`, up to `T60_MAX_S ≈ 30 s`). In-loop tanh
   saturator bounds it; `LOOP_BOOST = 1` = driven (breathes), not self-oscillating.
-- **Feedback FM (`K3` = depth)** — each comb self-modulates its own delay-read position by
-  its last output → inharmonic sidebands + a period-doubled sub. The modulator is
-  **lowpassed with a PER-VOICE cutoff that tracks pitch** (`FM_MOD_TRACK_MULT × fundamental`)
-  — a fixed cutoff fizzed highs and starved lows. In-loop drive is locked off; the modulator
-  cutoff tracking + depth were mapped with a one-axis-at-a-time exploration pass.
-- **Post-loop drive (`K4`)** — asymmetric waveshaper on the resonator OUTPUT, *outside* the
-  feedback loop (so it can be pushed hard with zero stability risk — in-loop drive ran away),
-  before the K5 filter. `1/√drive` auto level-compensation so K4 adds grit not volume.
+- **Feedback FM (`K3` = depth)** — each comb self-modulates its own delay-read position →
+  inharmonic sidebands + a period-doubled sub. Modulator is lowpassed with a **per-voice
+  cutoff that tracks pitch** (`FM_MOD_TRACK_MULT × fundamental`; ~1.0 = on the fundamental)
+  — a fixed cutoff fizzed highs / starved lows. In-loop drive locked off.
+- **Post-loop drive** — asymmetric waveshaper on the resonator OUTPUT, *outside* the loop
+  (push hard, zero stability risk — in-loop drive ran away), before K5, with `1/√drive`
+  auto level-comp. **Locked at its former K4-noon value** (K4 is portamento now); revive as
+  a control by re-mapping a free knob if wanted.
 
 ## Controls (chord-detect build)
 
 | CONTROL | FUNCTION |
 |-|-|
-| KNOB 1 | Register — quantised octave/fifth steps (`REGISTER_STEPS_SEMI`) |
+| KNOB 1 | Register — quantised octave/fifth steps (`REGISTER_STEPS_SEMI`, −1 oct centre) |
 | KNOB 2 | Damping / T60 (0.08 s … ~30 s) |
 | KNOB 3 | FM depth (gnarl) |
-| KNOB 4 | Post-loop drive |
+| KNOB 4 | **Portamento — glide time** (fixed-time, `GLIDE_TIME_*`); CCW ≈ instant, CW = long slide |
 | KNOB 5 | Filter attack/release (bipolar: noon = snappy; CCW = slow attack, CW = long release) |
 | KNOB 6 | Dry/wet mix (shell) |
-| SWITCH 1 | Free (was the FM exploration-axis selector; retired after tuning) |
+| SWITCH 1 | Free |
 | SWITCH 2 | Note-set behaviour (bypassed while `CHORD_DETECT`) |
 | SWITCH 3 | Module select (shell) — DOWN = armitage |
 
 ## Debug logging
 
-`armitage_k::DEBUG_LOG` logs each snapshot's detected note set (note name + cents) over USB
-serial **from the main loop** (`main.cpp`), so you can compare detected vs played. NO
-USB-state guard — libDaisy's logger is non-blocking until a terminal syncs. **Turn
-`DEBUG_LOG` off for normal use.** Serial on this sealed pedal is one-shot + power-cycle pain
-— see memory `reference_daisy_serial`; prefer audio-domain debugging where possible.
+`armitage_k::DEBUG_LOG` logs each snapshot's note set (name + cents) over USB serial **from
+the main loop** (`main.cpp`) — compare detected vs played. NO USB-state guard (libDaisy's
+logger is non-blocking until a terminal syncs). **Turn `DEBUG_LOG` off for normal use.**
+Serial on this sealed pedal is one-shot + power-cycle pain — see memory `reference_daisy_serial`;
+prefer audio-domain debugging where possible. (`cat -u`/`screen` on the `usbmodem` port.)
 
-## The input signal-strength model (recurring gotcha)
+## Directions tried / parked (for future increments)
 
-Onset/energy thresholds live on the fast-env scale (see the block in `armitage_constants.h`
-and memory `passive-bass-env-scaling`): passive bass ~0.02–0.10, **guitar much lower
-(~0.0015–0.03)**. Default thresholds LOW or the effect won't trigger. The HPF onset path has
-its own (smaller) scale → `ONSET_HP_FLOOR`, not `ONSET_ON`.
+- **Self-oscillation** (`LOOP_BOOST > 1`) — rejected: sustains forever but static, no
+  dynamics. The keeper is a *driven* near-unity comb + FM gnarl.
+- **Auto-voicing / interval stacks on K1** — rejected (see §4): added resonators aren't
+  excited → thin; CPU-bound; `1/√n` thins the core.
+- **Density via ensemble/chorus** — considered, not the ask; the target is harmonic content,
+  not detuned unison.
+- **PITCH-SHIFTING for density (the real L+F path)** — a polyphonic interval generator
+  (POG/HOG-style) makes the fifth/octave as *pitch-shifted copies of the input*, which carry
+  real harmonics, instead of unexcited resonators. Earmarked as a **separate module**, not
+  bolted onto the resonator. Notes for that effort: fifths + octave only has advantages
+  (cheaper, cleaner); shifting **only the exciter path** may swallow/soften shift artifacts;
+  combining with FM feedback may open new territory. Project already has POG groundwork
+  (see memory `project_overdrive_parked` — Mode C ERB-PS2 filterbank POG).
