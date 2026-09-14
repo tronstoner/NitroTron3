@@ -378,6 +378,7 @@ any of these as current behaviour.
 ### Next pedal — ChronoTron3 (in progress)
 
 - `ChronoTron3/IMPLEMENTATION_PLAN.md` — stage-1 implementation plan for the ChronoTron3 bundle.
+- `ChronoTron3/CONTROLS.md` — as-built control layout for all three modules (*vestige* / *mnemonic* / *sprawl*), plus *armitage*'s last layout kept as the archived record.
 - `ChronoTron3/sprawl-port-plan.md` — plan + firmware-translation notes for porting NitroTron3's Mode B (*Sprawl*) onto the Module interface as the SW3-DOWN slot (replaces *armitage*); lists the deliberate deviations (trail bypass, agnostic tracker profile).
 - `ChronoTron3/dynamic-looper-concept.md` — working spec for the grain-based dynamic looper module (*vestige*).
 - `ChronoTron3/vestige-rework-plan.md` — *vestige* rework/discovery notes. **§2.0 is the as-built reference for the multiband granular freeze** (unified K3 engine, coprime-scan phasing, adaptive up-to-5 band count, filterbank). `ChronoTron3/freeze-research.md` — cited EHX-Freeze recreation research behind it.

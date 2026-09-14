@@ -39,16 +39,22 @@ dedicated bypass footswitch yet (K6 fully dry = effectively bypassed).
 
 ## mnemonic — SW3 MIDDLE · tap-tempo tape/BBD delay
 
-Spec: `mnemonic-concept.md` + `mnemonic-impl-plan.md`. As-built first pass
-(M0–M9) — every value is a starting bracket, untested by ear.
+Spec: `mnemonic-concept.md` + `mnemonic-impl-plan.md`.
+
+> **Knob layout changed 2026-09-14** to align with sprawl: K2 = time, K4 =
+> character, K5 = feedback now mean the same thing on both modules (and K4 =
+> texture on vestige). The physical knobs did not move, so a saved pedal
+> position means something different than it used to — in particular K1 is now
+> the tone tilt and K3 the band-limit, both of which sit INSIDE the feedback
+> loop and will starve the repeats at their extremes.
 
 | Control | Function | Notes |
 |---|---|---|
-| KNOB 1 | Delay time / division | **SW2 UP** = absolute delay time (exp 50 ms–1.5 s), turning it **glides** = varispeed pitch bend. **SW2 MID** = tap division, 11 stops, noon = 1/1 (quarter = tap): CCW 3/4·2/3·1/2·1/3·1/4 shorter · CW 4/3·3/2·2/1·3/1·4/1 longer. **SW2 DOWN** = Edge: same division as MID on the primary line, plus a per-stop companion ratio on the secondary line |
-| KNOB 2 | Feedback | 0 (CCW) → bounded self-oscillation (CW). Runs into always-on tape saturation + build-up ducker |
-| KNOB 3 | Degrade | Bipolar, clean at noon: **CCW** BBD (sample-rate decimation + gentle crush + rounding) · **CW** tape (extra drive + wow/flutter warble + progressive HF loss) |
-| KNOB 4 | Tone tilt | Bipolar, flat at noon (cut-only): **CCW** LPF (rolls off highs, dark) · **CW** HPF (rolls off lows, thin). Sets where the delay sits |
-| KNOB 5 | Narrow (band-limit) | Shrinks the gap between the HP and LP cutoffs toward the geometric centre — band-limit by convergence (not a single resonant peak); a centre-gain makeup keeps a narrow setting from dropping out. In the feedback loop, so it ages the repeats |
+| KNOB 1 | Tone tilt | Bipolar, flat at noon (cut-only): **CCW** LPF (rolls off highs, dark) · **CW** HPF (rolls off lows, thin). Sets where the delay sits. **In the feedback loop** — at the extremes it removes most of the loop's energy, so the repeats die off much faster |
+| KNOB 2 | Delay time / division | **SW2 UP** = absolute delay time (exp 50 ms–1.5 s), turning it **glides** = varispeed pitch bend. **SW2 MID** = tap division, 11 stops, noon = 1/1 (quarter = tap): CCW 3/4·2/3·1/2·1/3·1/4 shorter · CW 4/3·3/2·2/1·3/1·4/1 longer. **SW2 DOWN** = Edge: same division as MID on the primary line, plus a per-stop companion ratio on the secondary line |
+| KNOB 3 | Narrow (band-limit) | Shrinks the gap between the HP and LP cutoffs toward the geometric centre — band-limit by convergence (not a single resonant peak); a centre-gain makeup keeps a narrow setting from dropping out. **In the feedback loop**, so it ages the repeats — and, like K1, a hard setting starves them |
+| KNOB 4 | Degrade | Bipolar, clean at noon: **CCW** BBD (sample-rate decimation + gentle crush + rounding) · **CW** tape (extra drive + wow/flutter warble + progressive HF loss) |
+| KNOB 5 | Reverb / Feedback | **Bipolar**, ±5% deadzone at noon = neither. **CW** = feedback, 0 → bounded self-oscillation, into the always-on tape saturation + build-up ducker. **CCW** = reverb: blend and decay both open with travel, *and* the feedback ramp is mirrored from the CW side but **clamped** below oscillation, so the wash has decaying repeats underneath it. The two sides are NOT exclusive here (unlike sprawl, where the grain engine self-sustains and CCW is feedback-free) |
 | KNOB 6 | Dry/wet mix | *(shell — equal-power. Dry is never processed/limited)* |
 | SWITCH 1 | FS1 **hold** gesture | **UP** = tape spin-up (hold → time↓/pitch↑ + feedback↑, slewed; release slews back) · **MIDDLE** = hold/loop (press record, release play) · **DOWN** = freeze (hold captures the last ~400 ms of clean input; release commits + grain-loops it as a sustained parallel voice, summed to wet outside the feedback loop; latches until re-frozen or FS2 panic) |
 | SWITCH 2 | Time mode | **UP** = knob time · **MIDDLE** = tap tempo (FS1 taps) · **DOWN** = Edge — two independent delay lines: MID primary + a clean lo-fi telephone secondary at a per-stop companion ratio |
@@ -64,6 +70,37 @@ disturbs a playing loop; a long hold records into a scratch buffer and **commits
 on release** (pointer-swap, **replaces** the old loop — no overdub). Recording
 starts on down-press for an accurate start; buffer-full auto-ends. Bypass pauses
 the loop, panic (FS2 long-press) deletes it.
+
+---
+
+## sprawl — SW3 DOWN · granular delay / glitch texture
+
+Ported 1:1 from NitroTron3's Mode B; port contract and deviations in
+`sprawl-port-plan.md`. The control/DSP seam is `DeriveParams()` — re-assigning
+a control is an edit there and nowhere else.
+
+| Control | Function | Notes |
+|---|---|---|
+| KNOB 1 | Pitch | Meaning follows SW2. **UP** = fixed interval, ±12 semitones. **MIDDLE** = harmonic-cloud pick, K1 spans the ±36-semitone scan. **DOWN** = Bode SSB frequency shifter on the wet bus, bipolar with a ±2% deadzone, exponential to ±1 kHz; grain pitch is forced to unison so K1 isn't doing two jobs |
+| KNOB 2 | Buffer — length + direction | **Noon (±6%)** = live: the grain engine runs on the write head, near-zero latency. Off noon the **magnitude** is buffer depth (100 ms → 8 s) and timescale, the **sign** is playback direction: CW forward, CCW backward. Length is overridden by a tap until K2 is moved again |
+| KNOB 3 | Character | Bipolar, single coherent stream at noon (±6%). **CCW** = cloud: grains stretch ~0.3 → 2 s with the emission rate falling, a long slow smear on the deep buffer. **CW** = glitch: per-grain length variation (audio-rate stutter buzzes), scatter, jitter, random reverse, note-on bursts |
+| KNOB 4 | Texture amount | Meaning follows SW1; bipolar (clean at noon) for UP and MIDDLE, unipolar for DOWN |
+| KNOB 5 | Reverb / Feedback | **Bipolar**, ±5% deadzone at noon. **CCW** = Clouds reverb blend, 0 → 1, decay fixed. **CW** = ring-buffer feedback, tanh-saturated with build-up and on-play duckers so it self-limits into a controlled drone. Mutually exclusive: CCW is feedback-free, which works here because the grain engine keeps generating on its own |
+| KNOB 6 | Dry/wet mix | *(shell — equal-power)* |
+| SWITCH 1 | Texture mode | **UP** = decimator (K4 CCW) / wavefolder (K4 CW) · **MIDDLE** = event-driven digital glitch (K4 CCW bit-flip events / CW timing events) · **DOWN** = ringmod (K4 below 30% = tremolo 1–15 Hz, above = bell partials with a keytracked LPF) |
+| SWITCH 2 | Harmony source | **UP** = fixed interval · **MIDDLE** = harmonic cloud (grains scatter across nearby harmonics) · **DOWN** = Bode SSB frequency shifter, inside the feedback loop so each pass cascades the shift |
+| SWITCH 3 | Mode select | *(shell)* |
+| FOOTSWITCH 1 | Tap tempo / Freeze | **Tap** (release < ~300 ms) = tap tempo: one interval **is** the echo time, no subdivisions. Solved against the real read-back depth per block, so it stays accurate as K3 moves; exact 100 ms – 7 s at K3 noon/CW, upper end limited in deep cloud by the grain size itself. **Hold** (≥ 450 ms) = freeze toggle: the ring stops being written, so the grains keep playing the held material. Released in between = no-op |
+| FOOTSWITCH 2 | Bypass / Panic | **Tap** = trail bypass: the input send is gated but the wet keeps running, feedback included, so a K5-CW drone rings on through bypass. The clean path is never touched. **Hold** (≥ 450 ms) = panic: lands in bypass and fades recirculation *and* wet output to true silence, then wipes the ring and stops the grain voices; also releases a freeze |
+| LED 1 | Echo clock | One flash per echo (the read-back depth, not the buffer span). Re-syncs on each tap. **Inverted while frozen** — mostly lit with a brief gap on the beat |
+| LED 2 | State | Solid = active · off = bypassed |
+
+**Freeze side-effect worth knowing.** With the write head parked, consecutive
+grains replay the same slice. At K3-CW the per-grain scatter shuffles chunks out
+of the held buffer, so it stays varied; at K3 noon/CCW scatter is zero, so
+overlapping identical copies comb — a static, metallic hold. That is inherent to
+a literal freeze of this engine (see `sprawl-port-plan.md`); a scanning read
+offset would change it, and is deliberately not built.
 
 ---
 
