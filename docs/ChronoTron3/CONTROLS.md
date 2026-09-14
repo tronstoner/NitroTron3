@@ -8,8 +8,8 @@
 
 | Control | Function |
 |---|---|
-| **SW3** | **Mode select** — UP = *vestige* · MIDDLE = *mnemonic* · DOWN = *Armitage* |
-| **K6** | **Dry/wet mix** — equal-power (mnemonic, Armitage). *vestige overrides it as looper volume — see below.* |
+| **SW3** | **Mode select** — UP = *vestige* · MIDDLE = *mnemonic* · DOWN = *sprawl* (granular delay; replaced *armitage* 2026-09-14) |
+| **K6** | **Dry/wet mix** — equal-power (mnemonic, sprawl). *vestige overrides it as looper volume — see below.* |
 | **Both footswitches held ~2 s** | Enter Daisy bootloader (DFU). The only entry path (sealed pedal). |
 
 The mode owns everything else — including both footswitches. There is no
@@ -67,7 +67,17 @@ the loop, panic (FS2 long-press) deletes it.
 
 ---
 
-## Armitage — SW3 DOWN · impulse synth / resonator / drone
+## ~~Armitage~~ — ARCHIVED, no longer in the build
+
+> Removed from the bundle 2026-09-14 (`6e0afbb`); **sprawl** (granular delay,
+> ported from NitroTron3 Mode B) holds SW3 DOWN now. The table below is kept
+> as the record of armitage's last control layout — see
+> `impulse resonator - armitage/ARMITAGE_ARCHIVED.md`. **sprawl's own control
+> table is deliberately not written here yet: its UI phase (knob/switch
+> re-assignment) is the next work.** Until then the as-built surface is the
+> header comment of `pedals/chronotron3/modules/sprawl.h`.
+
+### armitage's last layout (historical)
 
 | Control | Function | Notes |
 |---|---|---|

@@ -1,5 +1,12 @@
 # armitage — as-built architecture (detection, onset, excitation, voicing, portamento)
 
+> **ARCHIVED 2026-09-14 — armitage is not in any build.** The code is intact
+> but unwired; sprawl holds the SW3-DOWN slot. Why, and how to revive it:
+> **`ARMITAGE_ARCHIVED.md`** (same folder). The model below is still the
+> accurate as-built reference — but note the verdict was *the voice landed,
+> the RESPONSE did not*, so a revival starts at detection/onset, not the
+> resonator.
+
 **Read this first when touching armitage's note detection, triggering, or voicing.**
 `IMPULSE_SYNTH_SPEC.md` is the original design intent; **this** file is what the code
 actually does, discovered by ear + serial-log debugging on hardware (bass & guitar,

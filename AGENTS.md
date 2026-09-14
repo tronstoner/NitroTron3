@@ -40,7 +40,8 @@ Do not jump into code or propose changes without first understanding the project
 - `docs/ChronoTron3/` — specs and plans for the ChronoTron3 bundle (in progress).
 
 **Working on a ChronoTron3 module** (`pedals/chronotron3/modules/`) — spec = design intent, **as-built = what the code does (read first):**
-- ***armitage*** (SW3 DOWN — impulse-synth / chord-detect resonator): **`docs/ChronoTron3/impulse resonator - armitage/ARMITAGE_AS_BUILT.md`** for detection / onset / excitation / portamento / voice — read before touching any of those. Spec + research + `saturation.py`/`validate.py` in the same folder.
+- ***sprawl*** (SW3 DOWN — granular delay, ported 1:1 from NitroTron3's Mode B): `docs/ChronoTron3/sprawl-port-plan.md` — the port contract (per-sample order, component seams), the firmware-translation notes, and every deliberate deviation (FS1 tap tempo + freeze, FS2 trail bypass + panic). The control/DSP seam is `SprawlControls -> DeriveParams() -> SprawlParams`: re-assigning a control means editing `DeriveParams`, nothing else.
+- ***armitage*** (**ARCHIVED** — was SW3 DOWN, impulse-synth / chord-detect resonator): out of the build since `6e0afbb`, source kept intact. Read `docs/ChronoTron3/impulse resonator - armitage/ARMITAGE_ARCHIVED.md` first (why it was shelved + how to revive); `ARMITAGE_AS_BUILT.md` is still the accurate model for detection / onset / excitation / portamento / voice. Spec + research + `saturation.py`/`validate.py` in the same folder.
 - ***vestige*** (SW3 UP — granular looper/freeze): `docs/ChronoTron3/vestige-rework-plan.md` **§2.0** is the as-built multiband granular freeze; `dynamic-looper-concept.md` + `freeze-research.md`.
 - ***mnemonic*** (SW3 MIDDLE — tape/BBD delay): `docs/ChronoTron3/mnemonic-concept.md` + `mnemonic-impl-plan.md`.
 - Tuning values are never in the docs — they live in each module's `*_constants.h` (source of truth).

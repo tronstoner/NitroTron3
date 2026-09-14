@@ -1,5 +1,9 @@
 # Impulse Synth — Concept (working spec)
 
+> **ARCHIVED 2026-09-14 — design intent only, and the module is out of the
+> build.** See `ARMITAGE_ARCHIVED.md` for the archive record and
+> `ARMITAGE_AS_BUILT.md` for what the code actually does.
+
 Platform: Hothouse (Daisy Seed). 6 knobs, 3× 3-position toggles, 2 footswitches, 2 LEDs. Toggle switch 3 is reserved for module selection. This document covers one module.
 
 Design reference: the Impulse Synthesizer mode of the Chase Bliss Lost + Found. Behaviour there was established from documentation, demos and owner reports; the mechanism is not published and the architecture below is an independent design, not a recreation.
