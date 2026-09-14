@@ -5,17 +5,18 @@
 //
 // Analog-style delay: changing the delay time (knob, tap, or tape gesture) glides
 // the read tap, so the pitch bends while it moves (varispeed) — never a
-// clean-digital crossfade. Colour (K4/K5 filter + tape drive + K3 degrade) sits
-// INSIDE the feedback loop, so repeats progressively age. K2 feedback runs into
+// clean-digital crossfade. Colour (K1/K3 filter + tape drive + K4 degrade) sits
+// INSIDE the feedback loop, so repeats progressively age. K5 feedback runs into
 // the always-on tape saturation up to a bounded self-oscillation (no ducker).
 // On top: a Hazarai-style hold/loop, and FS1-hold tape gestures (spin-up /
 // slow-down).
 //
-//   K1 = delay time (SW2 UP) / tap division (SW2 MID) / Edge division tap (DOWN)
-//   K2 = feedback (0 -> self-oscillation)
-//   K3 = degrade — bipolar: CCW BBD/decimate · noon clean · CW tape warble/drive
-//   K4 = tone tilt / center — bipolar: CCW toward LPF · noon flat · CW toward HPF
-//   K5 = narrow — shrinks the gap between the 24 dB HP & LP cutoffs (band-limit)
+//   K1 = tone tilt / center — bipolar: CCW toward LPF · noon flat · CW toward HPF
+//   K2 = delay time (SW2 UP) / tap division (SW2 MID) / Edge division tap (DOWN)
+//   K3 = narrow — shrinks the gap between the 24 dB HP & LP cutoffs (band-limit)
+//   K4 = degrade — bipolar: CCW BBD/decimate · noon clean · CW tape warble/drive
+//   K5 = bipolar: CCW reverb (blend + decay sweep + capped feedback) · noon off
+//        · CW feedback (0 -> self-oscillation)
 //   K6 = dry/wet mix (shell-owned equal-power; mnemonic does NOT own output)
 //   SW1 = FS1-hold gesture: UP spin-up · MID loop record/play · DOWN slow-down
 //   SW2 = time mode: UP knob-time · MID tap-tempo · DOWN Edge dual-tap (4/4 + div)
@@ -27,10 +28,12 @@
 //
 #include "module.h"
 #include "mnemonic_constants.h"
-#include "mnemonic_degrade.h"   // K3 bipolar BBD/Tape degradation engine
+#include "mnemonic_degrade.h"   // K4 bipolar BBD/Tape degradation engine
 #include "ring_buffer.h"   // core/blocks — mono circular buffer with ReadFrac
 #include "grain_voice.h"   // core/blocks — grain player for the freeze voice
 #include "mnemonic_multiband_freeze.h"   // multiband incommensurate granular freeze (SW1 DOWN)
+#include "constants.h"          // pedals/chronotron3 — CT3_BLOCK_SIZE
+#include "clouds_reverb_48k.h"  // core/blocks — K5-CCW reverb (shared with sprawl)
 #include <math.h>
 #include <cstring>         // memset (kill)
 
@@ -54,6 +57,8 @@ static float DSY_SDRAM_BSS mnem_mb_low[MNEM_FREEZE_SAMPLES];
 static float DSY_SDRAM_BSS mnem_mb_mid[MNEM_FREEZE_SAMPLES];
 static float DSY_SDRAM_BSS mnem_mb_high[MNEM_FREEZE_SAMPLES];
 static float DSY_SDRAM_BSS mnem_freeze_chrono[MNEM_FREEZE_SAMPLES];
+// K5-CCW reverb: Clouds FDN storage (12-bit companded uint16_t).
+static uint16_t DSY_SDRAM_BSS mnem_reverb_slab[16384];
 
 static inline float MnemClamp(float v, float lo, float hi) {
   return v < lo ? lo : (v > hi ? hi : v);
@@ -121,8 +126,8 @@ class Mnemonic : public Module {
     ngate_env_rel_ = 1.f - expf(-1.f / (MNEM_NGATE_ENV_REL_MS * 0.001f * sr_));
     ngate_open_    = 1.f - expf(-1.f / (MNEM_NGATE_OPEN_MS    * 0.001f * sr_));
     ngate_close_   = 1.f - expf(-1.f / (MNEM_NGATE_CLOSE_MS   * 0.001f * sr_));
-    param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // K2-K5 zipper smoother
-    time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K1 delay-time de-jitter
+    param_smooth_ = 1.f - expf(-1.f / (MNEM_SMOOTH_MS * 0.001f * sr_));  // feedback/EQ/degrade zipper smoother
+    time_smooth_  = 1.f - expf(-1.f / (MNEM_TIME_SMOOTH_MS * 0.001f * sr_));  // K2 delay-time de-jitter
     fb_env_coef_ = 1.f - expf(-1.f / (MNEM_FB_CTL_MS * 0.001f * sr_));
     fb_duck_atk_ = 1.f - expf(-1.f / (MNEM_FB_DUCK_ATK_MS * 0.001f * sr_));
     fb_duck_rel_ = 1.f - expf(-1.f / (MNEM_FB_DUCK_REL_MS * 0.001f * sr_));
@@ -138,6 +143,8 @@ class Mnemonic : public Module {
 
     SetFilters(2000.f, 2000.f);   // harmless defaults until first Controls
     sec_hp_.Set(MNEM_SEC_HP_HZ, 0.707f, sr_);  sec_lp_.Set(MNEM_SEC_LP_HZ, 0.707f, sr_);
+    reverb_.Init(mnem_reverb_slab, MNEM_RESAMPLER_CUTOFF_HZ, MNEM_RESAMPLER_PROTO_FS_HZ,
+                 MNEM_REVERB_IN_GAIN, MNEM_REVERB_TIME_MIN, MNEM_REVERB_AMT_SMOOTH);
     degrade_.Init(sr_);
   }
 
@@ -160,36 +167,72 @@ class Mnemonic : public Module {
     sw1_ = cs.Switch(0);
     sw2_ = cs.Switch(1);
 
-    const float k1 = RemapKnob(cs.Knob(0));
-    const float k2 = RemapKnob(cs.Knob(1));
-    const float k3 = RemapKnob(cs.Knob(2));
-    const float k4 = RemapKnob(cs.Knob(3));
-    const float k5 = RemapKnob(cs.Knob(4));
+    // Knob layout aligned across the three time-based modules (2026-09-14):
+    // K2 = time/length, K4 = character/texture, K5 = feedback on both mnemonic
+    // and sprawl (and K4 = texture on vestige too). Named by FUNCTION here so a
+    // future re-map is one line each and the code below never lies about which
+    // physical knob it reads. Hardware index in the comment.
+    const float knob_tilt    = RemapKnob(cs.Knob(0));  // K1 (was K4)
+    const float knob_time    = RemapKnob(cs.Knob(1));  // K2 (was K1)
+    const float knob_narrow  = RemapKnob(cs.Knob(2));  // K3 (was K5)
+    const float knob_degrade = RemapKnob(cs.Knob(3));  // K4 (was K3)
+    const float knob_fb      = RemapKnob(cs.Knob(4));  // K5 (was K2)
 
-    // ---- K2 feedback ------------------------------------------------------
-    fb_gain_ = k2 * MNEM_FB_MAX;
+    // ---- K5 bipolar: reverb (CCW) / feedback (CW) -------------------------
+    // Same shape as sprawl's K5, mutually exclusive with a centre deadzone.
+    // CCW opens the DECAY as it opens the blend, and ramps in a capped amount
+    // of feedback so the wash has repeats underneath it instead of a single
+    // repeat. Unlike sprawl, the two sides are therefore not exclusive.
+    {
+      const float k5c = knob_fb - 0.5f;                    // [-0.5, +0.5]
+      const float span = 0.5f - MNEM_K5_DEADZONE;
+      if (k5c > MNEM_K5_DEADZONE) {                        // CW = feedback
+        fb_gain_     = ((k5c - MNEM_K5_DEADZONE) / span) * MNEM_FB_MAX;
+        reverb_amt_  = 0.f;
+      } else if (k5c < -MNEM_K5_DEADZONE) {                // CCW = reverb
+        const float r = (-k5c - MNEM_K5_DEADZONE) / span;  // 0 at the edge, 1 full CCW
+        // Taper per axis (MNEM_REVERB_*_CURVE): blend is curved so the wash
+        // arrives early, decay is linear. 1.0 on either = linear.
+        const float r_amt  = powf(r, MNEM_REVERB_AMT_CURVE);
+        const float r_time = powf(r, MNEM_REVERB_TIME_CURVE);
+        // Feedback under the wash MIRRORS the CW side exactly (same distance
+        // from noon -> same gain), then CLAMPS at the top so this side cannot
+        // self-oscillate. A clamp, deliberately — scaling the ramp instead
+        // weakens every position, which is not what "cap the top end" means.
+        fb_gain_     = r * MNEM_FB_MAX;
+        if (fb_gain_ > MNEM_REVERB_FB_CEIL) fb_gain_ = MNEM_REVERB_FB_CEIL;
+        // Capped: the blend is a crossfade, so a full-wet extreme would remove
+        // the very repeats the feedback above is adding (see MNEM_REVERB_AMT_MAX).
+        reverb_amt_  = r_amt * MNEM_REVERB_AMT_MAX;
+        reverb_.SetTime(MNEM_REVERB_TIME_MIN +
+                        r_time * (MNEM_REVERB_TIME_MAX - MNEM_REVERB_TIME_MIN));
+      } else {                                             // deadzone = neither
+        fb_gain_     = 0.f;
+        reverb_amt_  = 0.f;
+      }
+    }
 
-    // ---- K3 degrade: bipolar BBD (CCW) / Tape (CW) engine ----------------
-    // Base tape warmth stays always-on (TapeDrive, constant); K3 drives the
+    // ---- K4 degrade: bipolar BBD (CCW) / Tape (CW) engine ----------------
+    // Base tape warmth stays always-on (TapeDrive, constant); K4 drives the
     // degrade chains on top (clean-ish dead-zone at centre). Colour is applied in
     // the loop; the tape speed-irregularity modulates the MAIN read tap (Process).
     tape_drive_ = MNEM_TAPE_DRIVE;                  // constant base warmth
-    float p3 = (k3 - 0.5f) * 2.f;                   // p in [-1,+1]
+    float p3 = (knob_degrade - 0.5f) * 2.f;         // p in [-1,+1]
     degrade_.SetDepth(p3);                          // (dead-zone in engine)
-    // BBD output makeup (K3 CCW only): the BBD LPF rolloff drops perceived
+    // BBD output makeup (K4 CCW only): the BBD LPF rolloff drops perceived
     // loudness as you go deeper. Compensate on the WET OUTPUT (post-loop — the
     // feedback / rolloff / ducking balance is NOT touched). Unity up to the knee
-    // (~9:00), rising to MAX at full CCW. Volume only; no EQ (K4/K5 handles tone).
+    // (~9:00), rising to MAX at full CCW. Volume only; no EQ (K1/K3 handles tone).
     float d_bbd = (p3 < -MNEMD_DEADZONE) ? (-p3 - MNEMD_DEADZONE) / (1.f - MNEMD_DEADZONE) : 0.f;
     bbd_out_gain_ = (d_bbd > MNEM_BBD_OUT_KNEE)
         ? 1.f + (d_bbd - MNEM_BBD_OUT_KNEE) / (1.f - MNEM_BBD_OUT_KNEE) * (MNEM_BBD_OUT_MAX - 1.f)
         : 1.f;
 
-    // ---- K4 tilt/center + K5 narrow (converging 24 dB HP+LP) -------------
-    // Wide band edges from K4 (K5=0): CCW lowers the LP (dark), CW raises the HP
-    // (thin), noon = 20 Hz .. 20 kHz. K5 shrinks both toward the geometric center
+    // ---- K1 tilt/center + K3 narrow (converging 24 dB HP+LP) -------------
+    // Wide band edges from K1 (K3=0): CCW lowers the LP (dark), CW raises the HP
+    // (thin), noon = 20 Hz .. 20 kHz. K3 shrinks both toward the geometric center
     // => a band-limit by convergence, resonant at both cutoffs (no single peak).
-    float tilt = (k4 - 0.5f) * 2.f;                    // -1 .. +1
+    float tilt = (knob_tilt - 0.5f) * 2.f;             // -1 .. +1
     // Curve |tilt| for more sensitivity around noon (see MNEM_FILT_TILT_CURVE).
     float tmag = powf(tilt < 0.f ? -tilt : tilt, MNEM_FILT_TILT_CURVE);
     float lo0 = MNEM_FILT_FMIN * powf(MNEM_FILT_HP_MAX / MNEM_FILT_FMIN,
@@ -197,13 +240,13 @@ class Mnemonic : public Module {
     float hi0 = MNEM_FILT_FMAX * powf(MNEM_FILT_LP_MIN / MNEM_FILT_FMAX,
                                       tilt < 0.f ? tmag : 0.f);
     float center = sqrtf(lo0 * hi0);
-    lo_ = center * powf(lo0 / center, 1.f - k5);       // HP cutoff target (smoothed in Process)
-    hi_ = center * powf(hi0 / center, 1.f - k5);       // LP cutoff target
+    lo_ = center * powf(lo0 / center, 1.f - knob_narrow);  // HP cutoff target (smoothed in Process)
+    hi_ = center * powf(hi0 / center, 1.f - knob_narrow);  // LP cutoff target
 
-    // Edge secondary telephone band: fixed mids that FOLLOW K4/K5 only slightly
+    // Edge secondary telephone band: fixed mids that FOLLOW K1/K3 only slightly
     // (~25%) — shifts with the main tone but never leaves the mids. Control-rate.
     float shift = powf(2.f, tilt * MNEM_SEC_FOLLOW_OCT);   // K4 tilt: +-0.5 oct
-    float nar   = 1.f + k5 * MNEM_SEC_FOLLOW_NAR;          // K5 narrows a touch
+    float nar   = 1.f + knob_narrow * MNEM_SEC_FOLLOW_NAR; // K3 narrows a touch
     sec_hp_.Set(MNEM_SEC_HP_HZ * shift * nar, 0.707f, sr_);
     sec_lp_.Set(MNEM_SEC_LP_HZ * shift / nar, 0.707f, sr_);
 
@@ -223,12 +266,12 @@ class Mnemonic : public Module {
     // ---- K1 delay time / division, by SW2 --------------------------------
     edge_ = (sw2_ == 2);
     if (sw2_ == 0) {                                   // knob time (free)
-      base_delay_ = KnobTimeMs(k1) * 0.001f * sr_;
+      base_delay_ = KnobTimeMs(knob_time) * 0.001f * sr_;
     } else {                                           // tap modes (MID division / Edge)
-      int d = QuantizeDivision(k1);
+      int d = QuantizeDivision(knob_time);
       // Seed the quarter from K1 (as if knob-time) until a tap is tracked, so
       // there's a sensible tempo instead of a 0/stale leading edge. 1:1 = quarter.
-      float q_ms = have_tempo_ ? quarter_ms_ : KnobTimeMs(k1) * MNEM_TAP_INIT_RATIO;
+      float q_ms = have_tempo_ ? quarter_ms_ : KnobTimeMs(knob_time) * MNEM_TAP_INIT_RATIO;
       if (sw2_ == 1) {                                 // tap tempo -> division
         base_delay_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
       } else {                                         // Edge: primary = MID + secondary line
@@ -457,8 +500,20 @@ class Mnemonic : public Module {
 
       // BBD output makeup applied to the delay wet only (post-loop, feedback
       // untouched); freeze stays at unity.
-      wet[i] = delayed * bbd_out_sm_ * panic_env_ + fz;
+      // The panic gate is NOT applied here any more — it is applied after the
+      // reverb below, so a panic kills the reverb tail too instead of leaving
+      // it ringing. Recirculation is still throttled by panic_env_ inside the
+      // loop (the FbSat terms above), which is what guarantees true silence.
+      wet[i] = delayed * bbd_out_sm_ + fz;
+      panic_blk_[i] = panic_env_;
     }
+
+    // K5-CCW reverb: parallel to the delay, OUTSIDE the feedback loop (it must
+    // not recirculate — G6). Run unconditionally so the tail never snaps off
+    // when the knob leaves the reverb zone; the blend is gated by reverb_amt_
+    // and smoothed per sample inside the block. In-place is safe here.
+    reverb_.ProcessBlock(wet, size, reverb_amt_, wet);
+    for (size_t i = 0; i < size; i++) wet[i] *= panic_blk_[i];
   }
 
   // Grain scheduler + sum for the freeze voice. Returns the summed, level-ramped,
@@ -668,18 +723,18 @@ class Mnemonic : public Module {
 
   // SW2-UP knob-time mapping (ms). Reused to seed the tap tempo from K1 before
   // any tap is tracked (avoids a 0/stale leading edge in the division modes).
-  inline float KnobTimeMs(float k1) const {
-    float kt = powf(k1, MNEM_TIME_CURVE);
+  inline float KnobTimeMs(float knob) const {
+    float kt = powf(knob, MNEM_TIME_CURVE);
     return MNEM_TIME_MIN_MS * powf(MNEM_TIME_MAX_MS / MNEM_TIME_MIN_MS, kt);
   }
 
-  int QuantizeDivision(float k1) {
-    int raw = (int)(k1 * MNEM_DIV_COUNT);
+  int QuantizeDivision(float knob) {
+    int raw = (int)(knob * MNEM_DIV_COUNT);
     if (raw >= MNEM_DIV_COUNT) raw = MNEM_DIV_COUNT - 1;
     if (raw < 0) raw = 0;
     float stepw = 1.f / MNEM_DIV_COUNT;
     float lo = div_idx_ * stepw, hi = (div_idx_ + 1) * stepw;
-    if (k1 < lo - MNEM_DIV_HYST || k1 > hi + MNEM_DIV_HYST) div_idx_ = raw;
+    if (knob < lo - MNEM_DIV_HYST || knob > hi + MNEM_DIV_HYST) div_idx_ = raw;
     return div_idx_;
   }
 
@@ -698,6 +753,10 @@ class Mnemonic : public Module {
 
   // feedback / drive — targets set at control rate, *_sm_ smoothed at audio rate
   float fb_gain_ = 0.f, tape_drive_ = MNEM_TAPE_DRIVE;
+  // K5-CCW reverb (shared core block; decay swept in Controls).
+  CloudsReverb48k<CT3_BLOCK_SIZE> reverb_;
+  float reverb_amt_ = 0.f;
+  float panic_blk_[CT3_BLOCK_SIZE] = {};   // per-sample panic env, applied post-reverb
   float fb_sm_ = 0.f, drive_sm_ = MNEM_TAPE_DRIVE;
   // controlled-decay: envelope of the recirculating signal -> downward expansion
   float fb_env_ = 0.f, fb_env_coef_ = 0.f;

@@ -1,6 +1,8 @@
 #pragma once
 //
-// mnemonic_degrade.h — K3 degradation colour: bipolar BBD (CCW) / Tape (CW).
+// mnemonic_degrade.h — degradation colour: bipolar BBD (CCW) / Tape (CW).
+// Driven by K4 on BOTH hosts (mnemonic degrade, vestige texture) since the
+// 2026-09-14 knob alignment; `depth` below is that knob's bipolar position.
 // Spec: docs/ChronoTron3/mnemonic-degradation-colour-spec.md
 //
 // Two self-contained chains, one active at a time, clean dead-zone at centre, no
@@ -90,14 +92,14 @@ static constexpr float MNEMD_BBD_NL_DRIVE  = 4.5f; // tanh drive = 1 + NL_DRIVE*
 static constexpr float MNEMD_FOLD_KNEE       = 0.15f; // BBD depth (0=centre..1=full CCW) where fold begins (~9:00)
 static constexpr float MNEMD_FOLD_BLEND_MAX  = 0.3f;  // max parallel fold blend at full CCW (0 = off). in-loop, so this also feeds feedback — keep modest
 static constexpr float MNEMD_FOLD_GAIN       = 80.f;  // DRIVE at FULL CCW = the fold CHARACTER reference. NOT loudness — set the sound here, adjust volume with MAKEUP.
-static constexpr float MNEMD_FOLD_GAIN_MIN   = 10.f;  // DRIVE at the knee (K3 onset). drive ramps GAIN_MIN..GAIN with K3 depth -> shallow folds gently, deep gets gnarly.
-static constexpr float MNEMD_FOLD_DRIVE_CURVE = 2.0f; // exponent on K3 depth for the DRIVE ramp: 1 = linear, >1 = stays low longer then ramps hard toward full CCW
+static constexpr float MNEMD_FOLD_GAIN_MIN   = 10.f;  // DRIVE at the knee (knob onset). drive ramps GAIN_MIN..GAIN with depth -> shallow folds gently, deep gets gnarly.
+static constexpr float MNEMD_FOLD_DRIVE_CURVE = 2.0f; // exponent on depth for the DRIVE ramp: 1 = linear, >1 = stays low longer then ramps hard toward full CCW
 static constexpr float MNEMD_FOLD_MAKEUP     = 1.5f;  // LEVEL, compensated RELATIVE to gain: fold out = sin(GAIN*x) * MAKEUP/GAIN -> ceiling MAKEUP/GAIN (=0.05). raising GAIN won't get louder; MAKEUP sets loudness.
 static constexpr bool  MNEMD_FOLD_HP_ON      = false; // HP the fold return? applied AFTER the folder. OFF = hear the full fold (raw overtones)
 static constexpr float MNEMD_FOLD_HP_HZ      = 400.f; // HP corner (only used when HP_ON) — keep only the restored mids/highs
 // DEBUG: solo the folded signal — the BBD wet becomes ONLY the HP'd fold return, so
 // you can hear the folder in isolation (and its dynamics) and tune GAIN by ear. Turn
-// K4(vestige)/K3(mnemonic) CCW past the knee to engage. Keep feedback/K2 LOW while
+// K4 (vestige + mnemonic) CCW past the knee to engage. Keep mnemonic feedback (K5) LOW while
 // soloing in mnemonic (the solo sits in the loop). Set false for normal.
 static constexpr bool  MNEMD_FOLD_SOLO       = false;
 static constexpr float MNEMD_FOLD_SOLO_GAIN  = 1.f;   // monitor gain for the soloed fold
@@ -194,7 +196,7 @@ class MnemDegrade {
   // vestige raises it for more clarity in the looper without losing distortion.
   void  SetFoldScale(float s) { fold_scale_ = s; }
   // Current injected-noise amplitude (linear) of the active chain — the module
-  // uses it to set the gate threshold just above the hiss floor (tracks K3).
+  // uses it to set the gate threshold just above the hiss floor (tracks depth).
   float NoiseFloorLin() const {
     return (active_chain_ == -1) ? bbd_noise_lin_
          : (active_chain_ == +1) ? tape_noise_lin_ : 0.f;
@@ -283,7 +285,7 @@ class MnemDegrade {
     // the sample rate so the ZOH holds a whole number of samples at every knob
     // position — otherwise sr/f_clk lands between integers and the hold length
     // jitters N<->N+1, which reads as digital-decimator sizzle (the artefact
-    // that fluctuates in/out as K3 moves). Integer hold = the clean "correct" tone.
+    // that fluctuates in/out as the knob moves). Integer hold = the clean "correct" tone.
     float f_target = MNEMD_FCLK_D0 * powf(MNEMD_FCLK_D1 / MNEMD_FCLK_D0, d_);
     bbd_hold_len_ = (int)(sr_ / f_target + 0.5f);
     if (bbd_hold_len_ < 1) bbd_hold_len_ = 1;
@@ -294,7 +296,7 @@ class MnemDegrade {
     // f_clk_ steps at each integer boundary and the biquads recompute coeffs
     // instantly, which reads as a click between settings. They only roll off
     // imaging; they don't need to lock to the exact quantised clock.
-    // Clamp cutoffs safely below Nyquist: near K3-centre the clock approaches the
+    // Clamp cutoffs safely below Nyquist: near the clean centre the clock approaches the
     // system rate, so IN_AA*f can exceed sr/2 and blow up the RBJ biquad.
     // (No folding happens up there anyway — it's the near-clean zone.)
     const float nyq = sr_ * 0.49f;
@@ -313,7 +315,7 @@ class MnemDegrade {
                           (MNEMD_BBD_NOISE_DB1 - MNEMD_BBD_NOISE_DB0) * d_) / 20.f);
     bbd_nl_drive_ = 1.f + MNEMD_BBD_NL_DRIVE * d_;
     // Sine-fold: 0 up to KNEE (shallow BBD untouched), ramps to MAX at full CCW.
-    // K3 depth scales BOTH the mix (fold_blend_) AND the drive (fold_drive_): gentle
+    // depth scales BOTH the mix (fold_blend_) AND the drive (fold_drive_): gentle
     // at the knee, gnarly at full CCW. Relative comp divides by the LIVE drive so the
     // level stays controlled across the sweep (full CCW == the approved fixed voicing).
     float fbp = (d_ - MNEMD_FOLD_KNEE) / (1.f - MNEMD_FOLD_KNEE);
@@ -328,7 +330,7 @@ class MnemDegrade {
     tape_hp_hz_ = MNEMD_TAPE_HP_D0 + (MNEMD_TAPE_HP_D1 - MNEMD_TAPE_HP_D0) * d_;
     tape_hp_.Set(tape_hp_hz_, sr_);
     head_bump_.Peak(MNEMD_HEADBUMP_HZ, MNEMD_HEADBUMP_Q, MNEMD_HEADBUMP_DB1 * d_, sr_);
-    // Saturation + noise use a shaped depth (sqrt) so they ramp in SOONER on K3
+    // Saturation + noise use a shaped depth (sqrt) so they ramp in SOONER on
     // than the wow/flutter/snag terms (which stay linear in d_).
     float ds = sqrtf(d_);
     sat_k_ = 1.f + MNEMD_SAT_K * ds;
@@ -391,10 +393,10 @@ class MnemDegrade {
     x = bbd_loss_.LP(x);                                   // stage loss (darkening; compounds)
     x = bbd_rec_lp_.Process(x);                            // reconstruction LP (dark, tames imaging)
     // Parallel sine-fold (aging stages overflow): regenerate mids/highs the dark
-    // LPF removed and blend on top by K3 depth. Dynamics-reactive by construction —
+    // LPF removed and blend on top by depth. Dynamics-reactive by construction —
     // the raw signal level drives the fold depth (louder in = more overtones).
     if (fold_blend_ > 1e-4f || MNEMD_FOLD_SOLO) {
-      float f = sinf(x * fold_drive_);                     // sine wavefold — K3-scaled drive; signal level drives fold depth (dynamics-reactive)
+      float f = sinf(x * fold_drive_);                     // sine wavefold — depth-scaled drive; signal level drives fold depth (dynamics-reactive)
       if (MNEMD_FOLD_HP_ON) f -= fold_hp_lp_.LP(f);        // optional high-pass, AFTER the folder (keep only restored mids/highs)
       f *= fold_out_;                                      // level compensated RELATIVE to the live drive (drive harder without getting louder)
       if (MNEMD_FOLD_SOLO)                                 // DEBUG: hear ONLY the folded signal
@@ -488,7 +490,7 @@ class MnemDegrade {
   float bbd_breath_ = 0.f;                        // slow amplitude flicker (from the wow/OU mod block)
   MnemdOnePole fold_hp_lp_;                        // fold-return HP (via subtract-LP)
   float fold_blend_ = 0.f;                         // parallel sine-fold mix (0 until past KNEE)
-  float fold_drive_ = MNEMD_FOLD_GAIN;             // K3-scaled fold drive (GAIN_MIN..GAIN)
+  float fold_drive_ = MNEMD_FOLD_GAIN;             // depth-scaled fold drive (GAIN_MIN..GAIN)
   float fold_out_   = MNEMD_FOLD_MAKEUP / MNEMD_FOLD_GAIN; // relative level comp = MAKEUP/fold_drive_
   float fold_scale_ = 1.f;                         // per-instance fold brightness (SetFoldScale; 1 = default)
   float bbd_makeup_ = 1.25f;                      // level match — raised after compander removal (restores loop gain / self-osc)

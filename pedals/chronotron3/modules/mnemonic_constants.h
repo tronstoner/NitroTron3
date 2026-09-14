@@ -273,3 +273,86 @@ static constexpr float MNEM_SEC_FOLLOW_NAR = 0.25f;  // K5 narrows the band a to
 // LEDs
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_LED_CLOCK_ON_MS = 40.f;  // LED1 delay-clock blink width
+
+// ---------------------------------------------------------------------------
+// K5 bipolar — feedback (CW) / reverb (CCW), 2026-09-14.
+// Mirrors sprawl's K5 so the knob reads the same across both time-based
+// modules: past the CW deadzone = feedback exactly as before, past the CCW
+// deadzone = reverb, the deadzone itself = neither.
+//
+// DEVIATION from sprawl (deliberate): the CCW side is NOT feedback-free. Sprawl
+// can afford that because its grain engine generates texture on its own; a
+// delay at zero feedback has exactly one repeat, which left the wash with
+// nothing underneath it. So CCW also ramps in a CAPPED amount of feedback —
+// musical repeats, never near self-oscillation. See MNEM_REVERB_FB_AT_CW.
+//
+// Difference from sprawl: sprawl leaves the decay fixed and sweeps only the
+// blend. Here the knob sweeps BOTH — blend 0..1 and decay TIME_MIN..TIME_MAX —
+// because with feedback at zero a delay has only ONE repeat, so the reverb's
+// own tail has to take over the job the repeats were doing. This is the A/B
+// against sprawl's fixed-decay version; if it wins, port it there.
+//
+// NOTE: feedback now lives on HALF the knob travel, so its sweet spots have
+// moved — the old K2-at-noon feedback is roughly K5 three-quarters CW now.
+// ---------------------------------------------------------------------------
+static constexpr float MNEM_K5_DEADZONE    = 0.05f;  // +-5% around noon = neither
+// Gain into the Clouds FDN. This — not the blend — is what sets how LOUD the
+// reverb is: the blend only decides how much of that level replaces the direct
+// delay. At sprawl's 0.40 the reverb reached only ~0.3x the signal even at a
+// 0.75 blend, which read as 'too quiet overall' no matter where the blend went.
+// Bracketed by ear: 0.40 too quiet, 0.90 far too much, 0.65 masked the delay's
+// own repeats -> 0.50. The window here is narrow because the reverb and the
+// repeats compete for the same space: too low and the wash disappears, too high
+// and it swallows the feedback it is supposed to sit under. Pushing much past
+// 1.0 also risks distortion inside the FDN's 12-bit companded storage, so if
+// more level is ever needed, add makeup on the reverb OUTPUT instead.
+static constexpr float MNEM_REVERB_IN_GAIN = 0.50f;
+// 48<->32 kHz polyphase resampling around the FDN (same values as sprawl).
+static constexpr float MNEM_RESAMPLER_CUTOFF_HZ   = 15000.f;
+static constexpr float MNEM_RESAMPLER_PROTO_FS_HZ = 96000.f;
+static constexpr float MNEM_REVERB_TIME_MIN = 0.60f; // decay at the CCW deadzone edge (short room)
+static constexpr float MNEM_REVERB_TIME_MAX = 0.92f; // decay at full CCW (long wash; < 1 stays bounded)
+// Taper on the two CCW axes. 1.0 = linear; < 1 = fast rise then flatten.
+// BLEND is curved (0.5) so the wash establishes itself EARLY in the travel;
+// paired with the lowered MNEM_REVERB_AMT_MAX that gives "more reverb earlier,
+// more delay later" — reverb owns the first half, the repeats own the far end.
+// DECAY stays linear: curving BOTH was tried and rolled back once the capped
+// feedback (MNEM_REVERB_FB_AT_CW) supplied the body that was actually missing
+// near noon. Curve the decay only if the TAILS, not the level, arrive late.
+static constexpr float MNEM_REVERB_AMT_CURVE  = 0.5f; // blend taper (lower = wetter sooner)
+static constexpr float MNEM_REVERB_TIME_CURVE = 1.0f; // decay taper (lower = longer tails sooner)
+static constexpr float MNEM_REVERB_AMT_SMOOTH = 0.002f; // one-pole on the blend, per sample
+// The blend is a CROSSFADE (out = delay*(1-amt) + reverb*amt), so amt = 1 means
+// the direct delay — repeats included — is fully removed from the output and
+// you only hear it through the reverb. That is why added CCW feedback gets
+// harder to hear the further CCW you go: the two ramps fight each other.
+// Capping the blend below 1.0 keeps some direct delay present at the extreme,
+// so the CCW feedback stays AUDIBLE all the way out instead of being crossfaded
+// away exactly as it grows. 1.0 = sprawl's behaviour (full wet at the extreme,
+// fine there because its grain engine keeps generating). This scales the WHOLE
+// curve, so raising it lifts the reverb across the entire CCW travel, not just
+// at the extreme. 0.75 = full CCW is 75% reverb over 25% direct delay: the
+// reverb leads throughout, the repeats stay present underneath it rather than
+// being crossfaded away (which is what a 1.0 ceiling does).
+static constexpr float MNEM_REVERB_AMT_MAX = 0.75f;
+// Feedback under the CCW wash. Expressed as a FRACTION OF THE CW TRAVEL whose
+// feedback amount the full-CCW extreme matches, so the two halves stay legible
+// against each other: 0.5 = "full CCW feels like the CW side at 2:30" =
+// 0.5 * MNEM_FB_MAX = 0.65 gain — repeats that decay, well under the 1.0
+// oscillation threshold. Ramped LINEARLY across the CCW travel (deliberately
+// more gradual than the curved blend/decay, so it fills in under the wash
+// rather than arriving with it).
+// CCW feedback CEILING — a clamp on the top of the ramp, NOT a scale on it.
+// The CCW ramp MIRRORS the CW side (same distance from noon -> same feedback,
+// r * MNEM_FB_MAX); this only flattens it once it would reach oscillation.
+// Everything below the ceiling is therefore identical to the CW side.
+//
+// Do NOT turn this back into a multiplier. It was one briefly, and 'lowering
+// the cap' then squashed the WHOLE ramp: every position got weaker, the far
+// end ended up below a setting already judged too weak, and the repeats
+// vanished. A cap flattens the top; it must not touch the rest.
+//
+// 0.98 self-oscillated on hardware (the loop also passes the filter makeup,
+// the always-on 1.4 tape drive and the degrade colour, so nominal gain
+// understates loop gain). 0.90 is the clamp that stays short of it.
+static constexpr float MNEM_REVERB_FB_CEIL = 0.90f;
