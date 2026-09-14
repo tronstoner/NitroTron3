@@ -4,8 +4,8 @@
 //
 // Only things that are genuinely shell-wide live here. Per-module tuning lives
 // in each module's own constants file (modules/<name>_constants.h). ChronoTron3
-// is instrument-agnostic by design (armitage: "one control set for all
-// instruments"), so there is no INSTRUMENT profile here.
+// is instrument-agnostic by design ("one control set for all instruments"),
+// so there is no INSTRUMENT profile here.
 
 #include <cstdint>
 
@@ -17,11 +17,11 @@ static constexpr float CT3_SAMPLE_RATE_HZ  = 48000.f; // nominal; real value fro
 static constexpr uint32_t CT3_BOOTLOADER_HOLD_MS = 2000;
 
 // Mode slots on SW3 (UP / MIDDLE / DOWN). Order per project decision
-// (2026-07-26): A=vestige, B=mnemonic, C=armitage.
+// (2026-07-26): A=vestige, B=mnemonic, C=sprawl (armitage's former slot).
 enum Ct3Mode {
   CT3_MODE_VESTIGE  = 0,  // SW3 UP
   CT3_MODE_MNEMONIC = 1,  // SW3 MIDDLE
-  CT3_MODE_ARMITAGE = 2,  // SW3 DOWN
+  CT3_MODE_SPRAWL   = 2,  // SW3 DOWN
   CT3_MODE_COUNT    = 3
 };
 
@@ -29,12 +29,13 @@ enum Ct3Mode {
 static constexpr float CT3_MIX_SMOOTH = 0.002f;
 
 // ---------------------------------------------------------------------------
-// Pitch-tracker profile. Used by Armitage's tracked behaviours through
-// core/blocks/pitch_tracker.h, which `#include "constants.h"` and reads these
-// global TRACK_* names. ChronoTron3 is instrument-agnostic, so it defines ONE
-// broad profile: ~30–600 Hz fundamentals (full bass + low/mid guitar).
-// Fundamentals above ~600 Hz won't lock — acceptable for a resonator voice;
-// tunable. `NT3_GUITAR` here is NOT an instrument switch — it just enables the
+// Pitch-tracker profile. Used through core/blocks/pitch_tracker.h, which
+// `#include "constants.h"` and reads these global TRACK_* names. The consumer
+// is Sprawl's ringmod keytracking (SW1 DOWN, K4 >= 30%: the bell-partial
+// carrier and its keytracked LPF). ChronoTron3 is instrument-agnostic, so it
+// defines ONE broad profile: ~30–600 Hz fundamentals (full bass + low/mid
+// guitar). Fundamentals above ~600 Hz won't lock — acceptable for a tracked
+// carrier; tunable. `NT3_GUITAR` here is NOT an instrument switch — it just enables the
 // tracker's robust path (parabolic sub-lag refine + global-minimum fallback).
 // Constraint (pitch_tracker.h static_assert): TRACK_WINDOW + TRACK_MAX_LAG ≤ 1024.
 // ---------------------------------------------------------------------------

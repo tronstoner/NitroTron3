@@ -1,6 +1,6 @@
 // ChronoTron3 — bundle shell.
 //
-// A curated bundle of three modules (vestige / mnemonic / armitage) on the shared
+// A curated bundle of three modules (vestige / mnemonic / sprawl) on the shared
 // NitroTron3 platform (src/core/). The shell owns only: SW3 mode selection
 // (uniform across the family), the K6 dry/wet mix, and the reserved both-
 // footswitch bootloader gesture. Each active module owns everything else on the
@@ -17,7 +17,7 @@
 
 #include "modules/vestige.h"
 #include "modules/mnemonic.h"
-#include "modules/armitage.h"
+#include "modules/sprawl.h"
 
 #include <math.h>
 
@@ -33,8 +33,8 @@ Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 
 Vestige  vestige;
 Mnemonic mnemonic;
-Armitage    armitage;
-Module*  modules[CT3_MODE_COUNT] = { &vestige, &mnemonic, &armitage };
+Sprawl   sprawl;
+Module*  modules[CT3_MODE_COUNT] = { &vestige, &mnemonic, &sprawl };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
 volatile int g_active = CT3_MODE_VESTIGE;
@@ -82,7 +82,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 // ---------------------------------------------------------------------------
 int main() {
   hw.Init();
-  hw.seed.StartLog(false);   // non-blocking USB serial (armitage chord-detect debug log)
+  hw.seed.StartLog(false);   // non-blocking USB serial log, available for module debugging
   // Enable FPU flush-to-zero: denormals on the Cortex-M7 hit a slow software path
   // that spikes the audio callback (starving the UI/main loop) once many filters
   // decay toward zero — e.g. the per-grain band biquads in the multiband freeze.
@@ -98,7 +98,7 @@ int main() {
 
   for (int i = 0; i < CT3_MODE_COUNT; i++) modules[i]->Init(sr);
 
-  // SW3 (toggle index 2): 0=UP=vestige, 1=MIDDLE=mnemonic, 2=DOWN=armitage.
+  // SW3 (toggle index 2): 0=UP=vestige, 1=MIDDLE=mnemonic, 2=DOWN=sprawl.
   int sel = cs.Switch(2);
   if (sel < 0 || sel >= CT3_MODE_COUNT) sel = 0;
   g_active = sel;
@@ -123,28 +123,6 @@ int main() {
     modules[g_active]->Controls(cs, led1, led2);
     led1.Update();
     led2.Update();
-
-    // Debug: log each armitage chord snapshot (detected note set) as note names + cents,
-    // so we can compare detected vs played. Main-loop context. NO USB-state guard —
-    // libDaisy's logger is non-blocking until a terminal syncs (drops harmlessly when no
-    // host), so a guard is unneeded AND the hUsbDeviceFS handle it would read is never
-    // updated by the logger (that guard silently ate every print). See armitage_k::DEBUG_LOG.
-    if (armitage_k::DEBUG_LOG && g_active == CT3_MODE_ARMITAGE) {
-      static float dbg[armitage_k::MAX_VOICES];
-      int dn = 0;
-      if (armitage.DebugTakeSnapshot(dbg, armitage_k::MAX_VOICES, dn)) {
-        static const char* kNoteNames[12] =
-            {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
-        hw.seed.PrintLine("CHORD n=%d", dn);
-        for (int i = 0; i < dn; i++) {
-          const int m     = (int)lroundf(dbg[i]);
-          const int cents = (int)lroundf((dbg[i] - (float)m) * 100.f);
-          int oct = m / 12 - 1, idx = m % 12;
-          if (idx < 0) { idx += 12; oct -= 1; }
-          hw.seed.PrintLine("  %s%d %+dc", kNoteNames[idx], oct, cents);
-        }
-      }
-    }
 
     // Reserved gesture: both footswitches held → Daisy bootloader (DFU).
     // The pedal is sealed; this is the only entry path.
