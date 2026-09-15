@@ -327,6 +327,11 @@ points). Each entry is marked **current** (trust it as a reference) or
 banner says how). Keep this list complete: a doc that isn't listed here is a doc
 nobody will find.
 
+- `IDEAS.md` — running notepad of platform / product-direction ideas (module
+  interchangeability, UI surface economy, one-module firmwares + presets, the
+  footswitch budget). Provisional by definition — nothing there is decided until
+  it lands in `ARCHITECTURE.md`, a module spec, or a decision log.
+
 ### Entry points
 
 - `AGENTS.md` (repo root) — **current.** AI agent entry point; routes to the right doc per task. `CLAUDE.md` just includes it.
