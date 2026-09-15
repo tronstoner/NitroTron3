@@ -145,6 +145,7 @@ class Mnemonic : public Module {
     sec_hp_.Set(MNEM_SEC_HP_HZ, 0.707f, sr_);  sec_lp_.Set(MNEM_SEC_LP_HZ, 0.707f, sr_);
     reverb_.Init(mnem_reverb_slab, MNEM_RESAMPLER_CUTOFF_HZ, MNEM_RESAMPLER_PROTO_FS_HZ,
                  MNEM_REVERB_IN_GAIN, MNEM_REVERB_TIME_MIN, MNEM_REVERB_AMT_SMOOTH);
+    ring_dc_c_ = 1.f - expf(-2.f * 3.14159265f * MNEM_RING_DC_HZ / sr_);
     degrade_.Init(sr_);
   }
 
@@ -166,6 +167,11 @@ class Mnemonic : public Module {
     const uint32_t now = daisy::System::GetNow();
     sw1_ = cs.Switch(0);
     sw2_ = cs.Switch(1);
+    // SW2 time mode, decided here because the EQ block below branches on it:
+    // UP = tap divisions · MIDDLE = Edge · DOWN = cross-ring (an Edge variant,
+    // so it wants the same two lines). Knob-time is retired.
+    ring_ = (sw2_ == 2);
+    edge_ = (sw2_ == 1) || ring_;                    // "two delay lines"
 
     // Knob layout aligned across the three time-based modules (2026-09-14):
     // K2 = time/length, K4 = character/texture, K5 = feedback on both mnemonic
@@ -232,7 +238,18 @@ class Mnemonic : public Module {
     // Wide band edges from K1 (K3=0): CCW lowers the LP (dark), CW raises the HP
     // (thin), noon = 20 Hz .. 20 kHz. K3 shrinks both toward the geometric center
     // => a band-limit by convergence, resonant at both cutoffs (no single peak).
-    float tilt = (knob_tilt - 0.5f) * 2.f;             // -1 .. +1
+    // Cross-ring reassigns K1 (blend) and K3 (ring drive), so the EQ runs from
+    // FIXED NEUTRAL values there — widest band, unity makeup. The stage stays in
+    // the loop rather than being skipped, so loop gain (and therefore how K5
+    // feels) stays comparable to Edge, and the stage is free for later ideas.
+    const float eq_tilt   = ring_ ? MNEM_RING_EQ_TILT   : knob_tilt;
+    const float eq_narrow = ring_ ? MNEM_RING_EQ_NARROW : knob_narrow;
+    // Ring controls (only meaningful when ring_; smoothed in Process).
+    ring_blend_ = knob_tilt;                                  // K1: primary <-> product
+    ring_drive_ = MNEM_RING_DRIVE_MIN *
+                  powf(MNEM_RING_DRIVE_MAX / MNEM_RING_DRIVE_MIN, knob_narrow);  // K3
+
+    float tilt = (eq_tilt - 0.5f) * 2.f;               // -1 .. +1
     // Curve |tilt| for more sensitivity around noon (see MNEM_FILT_TILT_CURVE).
     float tmag = powf(tilt < 0.f ? -tilt : tilt, MNEM_FILT_TILT_CURVE);
     float lo0 = MNEM_FILT_FMIN * powf(MNEM_FILT_HP_MAX / MNEM_FILT_FMIN,
@@ -240,13 +257,13 @@ class Mnemonic : public Module {
     float hi0 = MNEM_FILT_FMAX * powf(MNEM_FILT_LP_MIN / MNEM_FILT_FMAX,
                                       tilt < 0.f ? tmag : 0.f);
     float center = sqrtf(lo0 * hi0);
-    lo_ = center * powf(lo0 / center, 1.f - knob_narrow);  // HP cutoff target (smoothed in Process)
-    hi_ = center * powf(hi0 / center, 1.f - knob_narrow);  // LP cutoff target
+    lo_ = center * powf(lo0 / center, 1.f - eq_narrow);    // HP cutoff target (smoothed in Process)
+    hi_ = center * powf(hi0 / center, 1.f - eq_narrow);    // LP cutoff target
 
     // Edge secondary telephone band: fixed mids that FOLLOW K1/K3 only slightly
     // (~25%) — shifts with the main tone but never leaves the mids. Control-rate.
     float shift = powf(2.f, tilt * MNEM_SEC_FOLLOW_OCT);   // K4 tilt: +-0.5 oct
-    float nar   = 1.f + knob_narrow * MNEM_SEC_FOLLOW_NAR; // K3 narrows a touch
+    float nar   = 1.f + eq_narrow * MNEM_SEC_FOLLOW_NAR;   // K3 narrows a touch
     sec_hp_.Set(MNEM_SEC_HP_HZ * shift * nar, 0.707f, sr_);
     sec_lp_.Set(MNEM_SEC_LP_HZ * shift / nar, 0.707f, sr_);
 
@@ -264,20 +281,18 @@ class Mnemonic : public Module {
     filter_makeup_ = MnemClamp(comp, 1.f, MNEM_FILT_MAKEUP_MAX);
 
     // ---- K1 delay time / division, by SW2 --------------------------------
-    edge_ = (sw2_ == 2);
-    if (sw2_ == 0) {                                   // knob time (free)
-      base_delay_ = KnobTimeMs(knob_time) * 0.001f * sr_;
-    } else {                                           // tap modes (MID division / Edge)
+    // SW2 is all tap-derived now (knob-time retired): UP = divisions,
+    // MIDDLE = Edge, DOWN = cross-ring. Cross-ring is a VARIANT OF EDGE and
+    // takes the same two lines and the same division + companion ratio.
+    {
       int d = QuantizeDivision(knob_time);
-      // Seed the quarter from K1 (as if knob-time) until a tap is tracked, so
-      // there's a sensible tempo instead of a 0/stale leading edge. 1:1 = quarter.
+      // Seed the quarter from the knob (via the retired knob-time curve) until
+      // a tap is tracked, so there's a sensible tempo instead of a 0/stale
+      // leading edge. 1:1 = quarter.
       float q_ms = have_tempo_ ? quarter_ms_ : KnobTimeMs(knob_time) * MNEM_TAP_INIT_RATIO;
-      if (sw2_ == 1) {                                 // tap tempo -> division
-        base_delay_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-      } else {                                         // Edge: primary = MID + secondary line
-        base_delay_  = q_ms * MNEM_DIV_RATIOS[d]            * 0.001f * sr_;  // primary = MID
-        base_delay2_ = q_ms * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_;  // secondary
-      }
+      base_delay_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
+      if (edge_)                                       // + companion line
+        base_delay2_ = q_ms * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_;
     }
     base_delay_ = MnemClamp(base_delay_, 0.001f * MNEM_TIME_MIN_MS * sr_,
                             (float)MNEM_DELAY_SAMPLES - 2.f);
@@ -288,6 +303,7 @@ class Mnemonic : public Module {
       read_delay2_ = base_delay2_; base_delay2_sm_ = base_delay2_;
       lo_sm_ = lo_; hi_sm_ = hi_;
       fb_sm_ = fb_gain_; drive_sm_ = tape_drive_; makeup_sm_ = filter_makeup_;
+      ring_blend_sm_ = ring_blend_; ring_drive_sm_ = ring_drive_;
       snap_ = false;
     }
 
@@ -339,7 +355,9 @@ class Mnemonic : public Module {
           else if (f1_mode_ == 2) CommitFreeze();           // freeze: swap + grain-loop
           // UP tape gesture ends via the gesture_engaged_ reset below.
         } else if (held < MNEM_TAP_RELEASE_MS) {
-          if (sw2_ == 1 || sw2_ == 2) RegisterTap(f1_down_ms_);  // TAP (downpress-timed)
+          RegisterTap(f1_down_ms_);   // TAP (downpress-timed). Unconditional now:
+                                      // every SW2 position is tap-derived since
+                                      // knob-time was retired.
         }
         // else: released in the deadzone -> no-op
       }
@@ -396,6 +414,8 @@ class Mnemonic : public Module {
       fb_sm_     += (fb_gain_       - fb_sm_)     * param_smooth_;
       drive_sm_  += (tape_drive_    - drive_sm_)  * param_smooth_;
       makeup_sm_ += (filter_makeup_ - makeup_sm_) * param_smooth_;
+      ring_blend_sm_ += (ring_blend_ - ring_blend_sm_) * param_smooth_;
+      ring_drive_sm_ += (ring_drive_ - ring_drive_sm_) * param_smooth_;
       bbd_out_sm_ += (bbd_out_gain_ - bbd_out_sm_) * param_smooth_;   // BBD output makeup (wet-only)
       lo_sm_     += (lo_ - lo_sm_) * param_smooth_;
       hi_sm_     += (hi_ - hi_sm_) * param_smooth_;
@@ -452,7 +472,47 @@ class Mnemonic : public Module {
       float loop_s = LoopPlay();
 
       float delayed;
-      if (edge_) {
+      if (ring_) {
+        // ---- CROSS-RING (SW2 DOWN) — a variant of Edge -------------------
+        // Two lines, own feedback loops, same source, both at UNISON. They are
+        // multiplied AFTER both loops; no product is ever written back, so the
+        // spectrum cannot collapse toward noise across successive repeats.
+        const float wp2 = wp2_0 + (float)i;
+        float a = delay_.ReadFrac(wp - read_delay_ - wobble);   // primary
+        float b = delay2_.ReadFrac(wp2 - read_delay2_);         // companion (modulator)
+
+        UpdateNoiseDuck(a);
+        float fbsc = FbCtl(a) * FbDuck(a);
+
+        // Primary loop — identical to Edge's primary (EQ at fixed neutral).
+        float fba = FbSat(a * fb_eff * fbsc * panic_env_);
+        float xa = in[i] * send_gain_ + loop_s + fba;
+        xa = Filter(xa); xa = TapeDrive(xa); xa = degrade_.ColourProcess(xa);
+        delay_.Write(xa);
+
+        // Companion loop — CLEAN, as Edge's secondary is: no telephone band, no
+        // drive, no degrade. It is a modulator, not a voice, and is never
+        // audible on its own.
+        float fbb = FbSat(b * fb_eff * fbsc * panic_env_);
+        delay2_.Write(in[i] * send_gain_ + fbb);
+
+        // Shaper: driven hard into tanh with a FIXED trim. Near-square at high
+        // drive, which holds modulation depth up as the companion's tail decays
+        // (the bare product would die at both envelopes multiplied) and sets how
+        // strong the sidebands are. K3.
+        float m = tanhf(ring_drive_sm_ * b) * MNEM_RING_TRIM;
+
+        // K1 blends the primary against the product. The companion's rhythmic
+        // ratio survives as a pulsing in the wet level — no clock, no onset
+        // detection, no pattern state; the multiply evaluates the two lines'
+        // coincidence continuously.
+        float y = a + ring_blend_sm_ * (a * m - a);
+
+        // The product carries DC proportional to the instantaneous correlation
+        // of the two lines. Block it.
+        ring_dc_z_ += (y - ring_dc_z_) * ring_dc_c_;
+        delayed = y - ring_dc_z_;
+      } else if (edge_) {
         // Edge = MID + a secondary line, each with its own feedback loop.
         //   PRIMARY   = quarter x division, IDENTICAL to SW2 MID (full colour).
         //   SECONDARY = quarter x companion ratio, clean lo-fi telephone band,
@@ -828,7 +888,13 @@ class Mnemonic : public Module {
   int   div_idx_ = MNEM_DIV_NOON;
 
   // Edge dual-tap (SW2 DOWN)
-  bool  edge_ = false;
+  bool  edge_ = false;      // two delay lines (Edge or cross-ring)
+  bool  ring_ = false;      // SW2 DOWN: cross-ring (implies edge_)
+  // Cross-ring: K1 blend + K3 drive (smoothed — audio-rate gains), and the
+  // wet-path DC blocker that removes the product's correlation term.
+  float ring_blend_ = 0.f, ring_blend_sm_ = 0.f;
+  float ring_drive_ = MNEM_RING_DRIVE_MIN, ring_drive_sm_ = MNEM_RING_DRIVE_MIN;
+  float ring_dc_z_ = 0.f, ring_dc_c_ = 0.f;
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;

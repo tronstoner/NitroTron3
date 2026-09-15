@@ -356,3 +356,36 @@ static constexpr float MNEM_REVERB_AMT_MAX = 0.75f;
 // the always-on 1.4 tape drive and the degrade colour, so nominal gain
 // understates loop gain). 0.90 is the clamp that stays short of it.
 static constexpr float MNEM_REVERB_FB_CEIL = 0.90f;
+
+// ---------------------------------------------------------------------------
+// SW2 DOWN — cross-ring mode (2026-09-15). A VARIANT OF EDGE: same two delay
+// lines, same K2 division table + per-stop companion ratio, same K5 feedback on
+// both loops. What changes is the signal path — the companion line stops being
+// an audible "telephone" voice and becomes the MODULATOR, multiplied against
+// the primary AFTER both loops. No product is ever written back, so the
+// spectrum cannot collapse toward noise across repeats.
+//
+// Both lines run at unison, so sum/difference terms land back on harmonics of
+// the played fundamental: single notes stay in key with no pitch tracking
+// anywhere. Chords give inharmonic cross terms — expected here, not a defect.
+//
+// The knob-time SW2 position is retired; all three positions are tap-derived.
+// ---------------------------------------------------------------------------
+// K3 drives the companion into tanh BEFORE the multiply. Driven hard the tanh
+// approaches a square, which does both jobs the mode needs from one control:
+// it holds modulation DEPTH up as the companion's tail decays (the product
+// would otherwise die at the product of both envelopes, roughly twice as fast
+// as either line), and it strengthens the sidebands. Post-trim is FIXED —
+// never 1/drive, which would undo exactly the level-independence we want.
+static constexpr float MNEM_RING_DRIVE_MIN = 2.0f;   // K3 CCW: gentle, follows the tail
+static constexpr float MNEM_RING_DRIVE_MAX = 40.0f;  // K3 CW: near-square, constant depth
+static constexpr float MNEM_RING_TRIM      = 1.0f;   // fixed post-saturator trim
+// The product carries DC proportional to the instantaneous correlation of the
+// two lines; block it on the wet path.
+static constexpr float MNEM_RING_DC_HZ     = 20.0f;
+// The EQ is bypassed AS A CONTROL in this mode (K1/K3 are reassigned), but the
+// filter stays IN the path at fixed neutral values — widest band, unity makeup.
+// That keeps the loop gain comparable to Edge instead of silently changing how
+// K5 feels, and leaves the stage available for later ideas.
+static constexpr float MNEM_RING_EQ_TILT   = 0.5f;   // noon = flat
+static constexpr float MNEM_RING_EQ_NARROW = 0.0f;   // fully CCW = no narrowing
