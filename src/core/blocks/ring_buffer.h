@@ -29,6 +29,19 @@ public:
     float ReadFrac(float pos) const {
         float wrapped = fmodf(pos, static_cast<float>(len_));
         if (wrapped < 0.f) wrapped += static_cast<float>(len_);
+        // Float-edge guard, NOT redundant. Float spacing at len_=4800 is
+        // ~0.000488, so for pos in (-0.000488, 0) the addition above rounds UP
+        // to EXACTLY len_ — idx then equals len_ and buf_[idx] reads one element
+        // PAST the slab, i.e. whatever the linker placed next in SDRAM. In
+        // ChronoTron3 sprawl that neighbour was the Clouds reverb's companded
+        // uint16 store, reinterpreted as a float: occasionally NaN (which sticks
+        // in the reverb FDN), usually a huge FINITE value (which poisons the
+        // feedback ducker's slow envelope for ~40 s — inaudible feedback, and
+        // invisible to any isfinite() guard), sometimes small (a click). Latent
+        // for EVERY ReadFrac caller; it only became audible where the neighbour
+        // was not float audio. Root cause of the intermittent sprawl fault,
+        // found 2026-09-17 via the serial-diag heartbeat. Test: tools/host.
+        if (wrapped >= static_cast<float>(len_)) wrapped -= static_cast<float>(len_);
         size_t idx = static_cast<size_t>(wrapped);
         size_t next = (idx + 1 < len_) ? idx + 1 : 0;
         float frac = wrapped - static_cast<float>(idx);
