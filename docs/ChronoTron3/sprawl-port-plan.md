@@ -5,6 +5,17 @@
 > (Sprawl, granular delay). UI (knob/switch re-assignment, FS1 tap tempo) is a
 > *later* design phase — this pass only moves the mode onto the Module interface
 > and cuts it into swappable pieces so that phase can shuffle components freely.
+>
+> **Since (2026-09-17):** SW1 MIDDLE is no longer the event-driven glitch — it is
+> now the **shared tape/BBD colour engine** (mnemonic's degrade engine, in vestige's
+> post-stage-warble adaptation) on bipolar K4; `GlitchEvents` is unwired but kept in
+> core (deviation 8). That warble delay line exposed a pre-existing
+> `RingBuffer::ReadFrac` one-past-the-end read that leaked reverb bytes in as huge
+> finite floats (~once per several minutes, "feedback gone"); fixed in
+> `src/core/blocks/ring_buffer.h` — see DESIGN_DECISIONS.md *Wrong paths / lessons*
+> and guardrail G10. Found with the serial DIAG build
+> (`make PEDAL=chronotron3 DIAG=1`, constexpr `CT3_DIAG`; skill
+> `.agents/skills/serial-diag/`).
 
 ## Goal / non-goals
 
@@ -217,6 +228,19 @@ history stays in git (`pedals/nitrotron3/main.cpp`).
 7. **Armitage is unlinked, not deleted.** `armitage.h`/`armitage_constants.h`
    stay on disk out of the build until the user says delete. The debug-log
    block for it leaves `main.cpp`.
+8. **SW1 MIDDLE = tape/BBD colour instead of the event-driven glitch — 2026-09-17.**
+   The zoned `GlitchEvents` texture (bit-flip / timing events on note-on) is
+   replaced by the **shared degrade engine** already used by mnemonic, in
+   vestige's adaptation (colour stage followed by a post-stage warble delay
+   line). K4 stays bipolar with a clean noon: **CCW** = BBD decimation + crush,
+   **CW** = tape drive + wow/flutter + HF loss. `GlitchEvents` is left in
+   `src/core/blocks/` and simply not instantiated by sprawl.
+   - **Per-instance voicing** (sprawl's own scalars, in `sprawl_constants.h`):
+     `SPRAWL_BBD_FOLD_SCALE`, `SPRAWL_BBD_LPF_SCALE` (floor only — it lifts the
+     LPF floor, it does not scale the whole sweep), `SPRAWL_TAPE_DRIVE_SCALE`,
+     `SPRAWL_TAPE_LEVEL`; engine noise is gated in bypass.
+   - **Placement:** the colour sits **inside** sprawl's feedback loop, like the
+     other shapers, so repeats age through it (bundle guardrail G6).
 
 ## Shell changes
 
@@ -240,7 +264,7 @@ history stays in git (`pedals/nitrotron3/main.cpp`).
    arithmetic and order.
 4. On hardware (user): SW3 DOWN; K2 noon = live grain passthrough at unison
    (dry-like); K2 CW/CCW = echo forward/backward; K3 CCW smear / CW glitch;
-   SW1 UP K4 sweep; SW1 MID glitch events on note-on; SW1 DOWN tremolo→bell;
+   SW1 UP K4 sweep; SW1 MID tape/BBD colour on bipolar K4; SW1 DOWN tremolo→bell;
    SW2 DOWN K1 shift; K5 CCW reverb / CW feedback self-limits; FS2 tap bypass
    with trail.
 

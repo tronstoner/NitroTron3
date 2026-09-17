@@ -59,6 +59,7 @@ Reusable task recipes live in `.agents/skills/`. Each subdirectory contains a `S
 - **release** — cut a tagged GitHub release (build, stage artifacts, assemble `THIRD_PARTY_LICENSES.md`, draft release notes, tag, push, `gh release create`); gates irreversible steps on explicit user confirmation
 - **tune** — view / edit compile-time DSP constants in `pedals/nitrotron3/constants.h` and rebuild
 - **update-controls** — regenerate README control/LED tables from source
+- **serial-diag** — build a DIAG firmware, capture the timestamped USB-serial heartbeat/fault log, tabulate it (the workflow that found the `ReadFrac` fault)
 
 ## Repository structure
 
@@ -73,6 +74,7 @@ NitroTron3/
 │   ├── constants.h             #   compile-time config + INSTRUMENT profile
 │   └── preset_system.h         #   (nitrotron3) pedal-level footswitch policy
 ├── docs/                       # specs, plans, research (see ARCHITECTURE.md)
+├── tools/                      # host-side tests + diag capture/analysis scripts
 ├── .agents/skills/             # reusable agent task recipes
 ├── lib/HothouseExamples/       # submodule (libDaisy + DaisySP)
 ├── build/                      # compiled output (gitignored)

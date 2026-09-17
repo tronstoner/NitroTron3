@@ -39,3 +39,5 @@ When writing an implementation plan from a prototype, add a **"Firmware translat
 - DaisySP is the preferred DSP library. The Huovilainen ladder and parabolic oscillator shaper are implemented directly because DaisySP does not ship them.
 - Tuning mode is part of the main binary, not a separate build. No `#ifdef DEV_MODE` guards.
 - Stages are incremental. When working on Stage N, assume stages 0 through N-1 are complete and tested. If unclear, ask the user.
+- **Buffer reads indexed from a float must clamp at BOTH ends.** Wrapping only one way is not enough — float rounding can land the index exactly on `len` (`RingBuffer::ReadFrac`, fixed 2026-09-17). When adding a `DSY_SDRAM_BSS` slab, remember its neighbour is arbitrary data: a one-past-the-end read is undefined *audio*, not a crash, so it hides.
+- **Intermittent fault → measure before theorising.** Use the serial diagnostics skill (`.agents/skills/serial-diag/`) to get a heartbeat + interrupt-time fault snapshot first. Never bolt recovery / auto-repair logic onto an unexplained fault — observe, don't intervene.

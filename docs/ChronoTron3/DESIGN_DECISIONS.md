@@ -38,6 +38,7 @@ Sources distilled: ChronoTron3/mnemonic commit bodies (`b08bb42` … `96c360c`),
 | G7 | **The FS2 long-press panic must reach TRUE silence even at feedback ≥ 1 / self-oscillation** — the envelope throttles the *recirculation itself*, not just the output. It is the always-available escape and always also deletes the loop. | `211ed96`, concept §FS2, `MNEM_PANIC_*`. |
 | G8 | **A short FS1 tap must never disturb a playing loop / running gesture.** Downpress is the universal event; press *length* disambiguates (tap vs sustained). Loop records to a scratch buffer, commits only once the press is confirmed a gesture. | `117e465` (unified hold-then-commit rework). |
 | G9 | **Don't run `make` after pure tuning edits; one DSP change per build by default.** User flashes himself and watches the instrument profile. | Bundle workflow (impl-plan staging note; user memory). |
+| G10 | **Float→index conversions on ring/delay reads must be clamped at BOTH ends; a slab's SDRAM neighbour is arbitrary data.** Run `tools/host` tests after touching `ring_buffer.h` / `grain_voice.h`. | `RingBuffer::ReadFrac` one-past-the-end read, 2026-09-17 (see *Wrong paths / lessons*). |
 
 ---
 
@@ -151,6 +152,41 @@ role in this module*; the underlying technique remains valid elsewhere.
 | **`^2`-warped 20 ms–3 s knob-time taper** | Double-log → dead CCW half | Pure exponential is the correct delay-knob law |
 | **Single-glide delay time (no pre-smooth)** | ~100 Hz pitch lurch on each 10 ms control tick | Cascading a 12 ms pre-smooth before the glide makes read-tap velocity (pitch) continuous |
 | **Capture-the-rhythm / single-buffer Edge dual-tap** | Superseded by the two-independent-lines Edge | The idea was ruled then rebuilt; not a failure so much as an iteration |
+
+### ReadFrac one-past-the-end / layout-dependent fault (2026-09-17)
+
+**Bug.** `RingBuffer::ReadFrac` (`src/core/blocks/ring_buffer.h`) wrapped a negative
+read position with `wrapped += len`. At len 4800 the float32 spacing is 0.000488, so
+any position in (-0.000488, 0) rounds to *exactly* `len` → index == len → the read lands
+one element **past** the slab. Pre-existing core bug, latent in every ChronoTron3 module
+(mnemonic delay taps with wobble, vestige warble, sprawl warble). NitroTron3 never calls
+`ReadFrac`. Fixed by folding `wrapped >= len` back by `len`.
+
+**Why only sprawl showed it.** SDRAM slabs are laid out by the linker. The new
+`sprawl_warble_slab` landed directly *before* `sprawl_reverb_slab`, the Clouds reverb's
+12-bit companded `uint16` store, so the leaked read reinterpreted reverb bytes as a float:
+occasionally NaN (one observed LED fault), usually a huge *finite* value (poisoned the
+feedback ducker's 800 ms envelope → feedback inaudible for ~40 s, reported as "feedback
+gone"), sometimes small (a click). vestige's and mnemonic's neighbours are float audio, so
+their leaks were inaudible. Rate: roughly once per several minutes with the warble active
+(SW1 MIDDLE, K4 off centre) — never reproducible on demand.
+
+**How it was found.** A serial DIAG build (2 s heartbeat of all module state + an
+interrupt-time fault snapshot, captured to a timestamped file). The 16:06:58 heartbeat
+showed grain sum 0.118 while the texture output and the degrade engine's input peak
+follower read >= 2e15 with every filter state small → the value entered at the warble read.
+
+**Lessons.**
+1. Finiteness is not sanity — check **magnitude**, not just `isfinite`. The host harness
+   only checked finiteness and so passed.
+2. A `DSY_SDRAM_BSS` slab's neighbour is arbitrary data; a one-past-the-end read is
+   undefined *audio*, not a crash, so it hides.
+3. Layout-dependent bugs are invisible to host harnesses (the host neighbour is benign).
+4. An interrupt-time state snapshot + periodic heartbeat over serial was the only thing
+   that localised it — now a reusable skill, `.agents/skills/serial-diag/`, built with
+   `make PEDAL=chronotron3 DIAG=1` (constexpr `CT3_DIAG`).
+5. **Don't add recovery / auto-repair on top of an unexplained fault.** An earlier attempt
+   rebuilt state under the running ISR and made the behaviour worse. Observe, don't intervene.
 
 ---
 
