@@ -232,6 +232,12 @@ class Sprawl : public Module {
     const SprawlParams p = DeriveParams(controls_);
     if (CT3_DIAG) last_p_ = p;   // diagnostics: what this block ran with
     texture_.Block(p);          // control-rate part of the SW1-MID colour engine
+    // Slip events scale to the echo time (K2 noon has no read-back, so the
+    // grain length stands in). See SPRAWL_BBD_SLIP_SYNC.
+    {
+      const size_t ref = p.base_delay ? p.base_delay : p.grain_len;
+      texture_.SetSlipTimeRef((float)ref * 1000.f / sr_, SPRAWL_BBD_SLIP_SYNC);
+    }
 
     // Per-sample wet bus capture (used by the block-based reverb pipeline below).
     float wet_block[CT3_BLOCK_SIZE];

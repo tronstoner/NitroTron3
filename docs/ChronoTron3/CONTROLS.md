@@ -84,16 +84,27 @@ a control is an edit there and nowhere else.
 | KNOB 1 | Pitch | Meaning follows SW2. **UP** = fixed interval, ±12 semitones. **MIDDLE** = harmonic-cloud pick, K1 spans the ±36-semitone scan. **DOWN** = Bode SSB frequency shifter on the wet bus, bipolar with a ±2% deadzone, exponential to ±1 kHz; grain pitch is forced to unison so K1 isn't doing two jobs |
 | KNOB 2 | Buffer — length + direction | **Noon (±6%)** = live: the grain engine runs on the write head, near-zero latency. Off noon the **magnitude** is buffer depth (100 ms → 8 s) and timescale, the **sign** is playback direction: CW forward, CCW backward. Length is overridden by a tap until K2 is moved again |
 | KNOB 3 | Character | Bipolar, single coherent stream at noon (±6%). **CCW** = cloud: grains stretch ~0.3 → 2 s with the emission rate falling, a long slow smear on the deep buffer. **CW** = glitch: per-grain length variation (audio-rate stutter buzzes), scatter, jitter, random reverse, note-on bursts |
-| KNOB 4 | Texture amount | Meaning follows SW1; bipolar (clean at noon) for UP (decimate/fold) and MIDDLE (BBD/tape colour), unipolar for DOWN |
+| KNOB 4 | Texture amount | Meaning follows SW1; bipolar (clean at noon) for UP (decimate/fold) and MIDDLE (BBD ← CCW · clean at noon · tape → CW), unipolar for DOWN |
 | KNOB 5 | Reverb / Feedback | **Bipolar**, ±5% deadzone at noon. **CCW** = Clouds reverb blend, 0 → 1, decay fixed. **CW** = ring-buffer feedback, tanh-saturated with build-up and on-play duckers so it self-limits into a controlled drone. Mutually exclusive: CCW is feedback-free, which works here because the grain engine keeps generating on its own |
 | KNOB 6 | Dry/wet mix | *(shell — equal-power)* |
-| SWITCH 1 | Texture mode | **UP** = decimator (K4 CCW) / wavefolder (K4 CW) · **MIDDLE** = tape/BBD colour — the shared degrade engine on bipolar K4 (CCW BBD decimation/crush, noon clean, CW tape drive + wow/flutter + HF loss), vestige's post-stage-warble adaptation; replaced the event-driven glitch 2026-09-17 · **DOWN** = ringmod (K4 below 30% = tremolo 1–15 Hz, above = bell partials with a keytracked LPF) |
+| SWITCH 1 | Texture mode | **UP** = decimator (K4 CCW) / wavefolder (K4 CW) · **MIDDLE** = tape/BBD colour — the shared degrade engine on bipolar K4, vestige's post-stage-warble adaptation; replaced the event-driven glitch 2026-09-17. **CCW = BBD**: decimation + crush + rounding, and the decimator clock is deliberately UNSTABLE — a continuous random walk on the (fractional) clock plus Poisson "slip" events that jam it at another rate for a while and snap back. Slips start only past ~9 o'clock and their length scales with the current echo time, so the wobble keeps its character as you sweep K2 or tap a new tempo. Random timing throughout: it scales to the music's time-world, it never locks to the grid. **CW = tape**: drive, wow/flutter, HF loss, head bump, hiss and dropouts, on a travel extended past the shared engine's stock endpoint so the far end keeps going · **DOWN** = ringmod (K4 below 30% = tremolo 1–15 Hz, above = bell partials with a keytracked LPF) |
 | SWITCH 2 | Harmony source | **UP** = fixed interval · **MIDDLE** = harmonic cloud (grains scatter across nearby harmonics) · **DOWN** = Bode SSB frequency shifter, inside the feedback loop so each pass cascades the shift |
 | SWITCH 3 | Mode select | *(shell)* |
 | FOOTSWITCH 1 | Tap tempo / Freeze | **Tap** (release < ~300 ms) = tap tempo: one interval **is** the echo time, no subdivisions. Solved against the real read-back depth per block, so it stays accurate as K3 moves; exact 100 ms – 7 s at K3 noon/CW, upper end limited in deep cloud by the grain size itself. **Hold** (≥ 450 ms) = freeze toggle: the ring stops being written, so the grains keep playing the held material. Released in between = no-op |
 | FOOTSWITCH 2 | Bypass / Panic | **Tap** = trail bypass: the input send is gated but the wet keeps running, feedback included, so a K5-CW drone rings on through bypass. The clean path is never touched. **Hold** (≥ 450 ms) = panic: lands in bypass and fades recirculation *and* wet output to true silence, then wipes the ring and stops the grain voices; also releases a freeze |
 | LED 1 | Echo clock | One flash per echo (the read-back depth, not the buffer span). Re-syncs on each tap. **Inverted while frozen** — mostly lit with a brief gap on the beat |
 | LED 2 | State | Solid = active · off = bypassed |
+
+**SW1-MIDDLE voicing lives in `sprawl_constants.h`.** The shared degrade engine
+is voiced per host through setters that default to 1, so mnemonic and vestige
+are untouched by any of it: `SPRAWL_BBD_LEVEL` / `SPRAWL_TAPE_LEVEL` (output
+level per side), `SPRAWL_BBD_FOLD_SCALE` + `SPRAWL_BBD_LPF_SCALE` (BBD
+brightness — the LPF one raises the FLOOR only, see G10 and the Nyquist note in
+the engine), `SPRAWL_TAPE_DRIVE_SCALE` (grit, level-compensated) and
+`SPRAWL_TAPE_DEPTH_SCALE` (extends the whole CW travel past stock).
+Instability: `SPRAWL_BBD_SLIP` (event rate), `SPRAWL_BBD_DRIFT` (continuous
+clock walk) and `SPRAWL_BBD_SLIP_SYNC` (0 = fixed-ms event length, 1 = scaled
+to the echo time).
 
 **Freeze side-effect worth knowing.** With the write head parked, consecutive
 grains replay the same slice. At K3-CW the per-grain scatter shuffles chunks out

@@ -27,6 +27,10 @@ class SprawlTexture {
     degrade_.SetBbdLpfScale(SPRAWL_BBD_LPF_SCALE);
     degrade_.SetTapeDriveScale(SPRAWL_TAPE_DRIVE_SCALE);
     degrade_.SetTapeLevel(SPRAWL_TAPE_LEVEL);
+    degrade_.SetBbdLevel(SPRAWL_BBD_LEVEL);
+    degrade_.SetTapeDepthScale(SPRAWL_TAPE_DEPTH_SCALE);
+    degrade_.SetBbdSlip(SPRAWL_BBD_SLIP);
+    degrade_.SetBbdDrift(SPRAWL_BBD_DRIFT);
     warble_ring_.Init(warble_slab, SPRAWL_WARBLE_LEN);
     warble_base_ = SPRAWL_WARBLE_BASE_MS * 0.001f * sr;
   }
@@ -34,6 +38,12 @@ class SprawlTexture {
   void DebugFill(SprawlDebug& d) const {
     degrade_.DebugFill(d.deg);
     d.warble_int = warble_int_; d.decim_hold = decim_hold_; d.ringmod_lp = ringmod_lp_state_;
+  }
+
+  // Scale the colour engine's slip events to the module's current echo time
+  // (see MNEMD_BBD_SLIP_REF_*). Per block, from Sprawl::Process.
+  void SetSlipTimeRef(float ref_ms, float blend) {
+    degrade_.SetBbdSlipTimeRef(ref_ms, blend);
   }
 
   // Once per audio block (the engine's chain switching is control-rate work).

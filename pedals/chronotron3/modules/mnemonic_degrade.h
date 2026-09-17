@@ -128,6 +128,44 @@ static constexpr float MNEMD_DROP_MIN_MS = 5.f,  MNEMD_DROP_MAX_MS = 40.f;
 static constexpr float MNEMD_DROP_DB_MIN = 2.f,  MNEMD_DROP_DB_MAX = 10.f;  // capped: waver, not silence
 static constexpr float MNEMD_DROP_FALL_MS = 3.f, MNEMD_DROP_REC_MS = 12.f;
 static constexpr float MNEMD_SNAG_RATE_SC = 1.0f; // snag rate = 1.0 x drop rate
+
+// --- BBD clock slip (CCW instability) -------------------------------------
+// The BBD clock is deliberately quantised to an exact integer divisor of the
+// sample rate, because a clock that wanders CONTINUOUSLY between N and N+1
+// samples/hold reads as digital-decimator sizzle (see RecomputeControl). That
+// stays true — this is the tape side's EVENT model instead: a Poisson "slip"
+// that jams the hold at a different INTEGER length for a few tens of ms, then
+// snaps back. The clock momentarily runs slow: aliasing imaging shifts down and
+// the grit lurches, without the between-integers sizzle.
+// The reconstruction/loss filters keep tracking the SMOOTH f_target, not the
+// slipped clock — moving them too would recompute biquad coefficients on every
+// event edge, which clicks.
+// Off unless a host opts in with SetBbdSlip(); mnemonic and vestige do not.
+static constexpr float MNEMD_BBD_SLIP_KNEE   = 0.5f;  // depth below which nothing happens (~9 o'clock)
+static constexpr float MNEMD_BBD_SLIP_RATE   = 3.0f;  // events/s at full CCW, x the host's slip amount
+// Event LENGTH. Short events read as blips/bloops — the clock jumps and snaps
+// back before the ear hears it as movement. Longer ones read as the clock
+// having genuinely wandered off and come back. Note the scheduler blocks a new
+// event while one runs, so raising these also thins the effective rate.
+static constexpr float MNEMD_BBD_SLIP_MIN_MS = 80.f;
+static constexpr float MNEMD_BBD_SLIP_MAX_MS = 500.f;
+// Optional: derive the event length from the HOST's time reference (sprawl's
+// echo time) instead of these fixed ms, as a fraction of it. The TIMING stays
+// Poisson — this scales the instability to the music's time-world without ever
+// locking to the grid, which is the point: a failing medium does not know what
+// you are playing. Capped so a multi-second echo does not give multi-second
+// events. Inactive unless the host calls SetBbdSlipTimeRef with blend > 0.
+static constexpr float MNEMD_BBD_SLIP_REF_MIN  = 0.15f;   // x the reference time
+static constexpr float MNEMD_BBD_SLIP_REF_MAX  = 0.80f;
+static constexpr float MNEMD_BBD_SLIP_REF_CAP_MS = 1500.f;
+static constexpr float MNEMD_BBD_SLIP_MULT   = 3.0f;  // max hold-length stretch (clock down to 1/3 speed)
+// Continuous clock drift: a per-instance random walk on the hold length, so the
+// decimator never sits at the same clock twice and the slip events below ride a
+// moving target instead of repeating. Driven by the engine's OU random walk
+// (NOT the wow/flutter sines — those are periodic and would sound like a cycle).
+// This is the "between integers" region the integer quantisation used to avoid;
+// hosts that want the clean quantised tone simply leave it at 0.
+static constexpr float MNEMD_BBD_DRIFT_MAX = 0.60f;   // +-60 % hold at amount 1
 static constexpr float MNEMD_SNAG_CENTS_MIN = 50.f, MNEMD_SNAG_CENTS_MAX = 200.f;
 static constexpr float MNEMD_SNAG_FALL_MS = 15.f, MNEMD_SNAG_REC_MS = 60.f;
 
@@ -213,6 +251,29 @@ class MnemDegrade {
   void  SetTapeDriveScale(float s) { tape_drive_scale_ = s; }
   // Per-instance tape output level. 1 = default (mnemonic, vestige).
   void  SetTapeLevel(float g) { tape_level_ = g; }
+  // Per-instance BBD output level (the CCW chain's counterpart to
+  // SetTapeLevel). 1 = default (mnemonic, vestige).
+  void  SetBbdLevel(float g) { bbd_level_ = g; }
+  // Per-instance EXTENSION of the tape (CW) travel. The whole CW side is
+  // driven by one depth value, so scaling it past 1 extrapolates EVERY tape
+  // parameter together — HF loss, the high-pass, head bump, drive, hiss,
+  // wow/flutter depth and dropout rate — keeping their relative balance and
+  // simply reaching further than the stock endpoint. 1 = default
+  // (mnemonic, vestige stop exactly where they always did).
+  void  SetTapeDepthScale(float s) { tape_depth_scale_ = s; }
+  // Per-instance BBD clock-slip amount (0 = off = default; 1 = full rate).
+  // Scales the event rate only; the knee and the slip depth are fixed.
+  void  SetBbdSlip(float a) { bbd_slip_amt_ = a; }
+  // Per-instance continuous BBD clock drift, 0..1 (0 = off = default, i.e. the
+  // exact integer clock mnemonic and vestige have always had).
+  void  SetBbdDrift(float a) { bbd_drift_amt_ = a; }
+  // Host time reference for slip-event LENGTH (control rate). `ref_ms` is the
+  // host's musical time (sprawl: the echo time); `blend` crossfades from the
+  // fixed MNEMD_BBD_SLIP_*_MS (0) to fully reference-scaled (1). Default 0,
+  // so mnemonic and vestige keep fixed timings.
+  void  SetBbdSlipTimeRef(float ref_ms, float blend) {
+    slip_ref_ms_ = ref_ms; slip_ref_blend_ = blend;
+  }
 
   // Read-only state snapshot for diagnostics (host or serial). No behaviour.
   struct DebugState {
@@ -248,6 +309,9 @@ class MnemDegrade {
     int tgt = (p < -MNEMD_DEADZONE) ? -1 : (p > MNEMD_DEADZONE) ? +1 : 0;
     target_chain_ = tgt;
     d_target_ = (tgt == 0) ? 0.f : (fabsf(p) - MNEMD_DEADZONE) / (1.f - MNEMD_DEADZONE);
+    // Tape side only: extend the travel past the stock endpoint (see
+    // SetTapeDepthScale). The BBD side keeps its 0..1 range.
+    if (tgt == +1) d_target_ *= tape_depth_scale_;
   }
 
   // True once fully disengaged (K4 in the clean centre deadzone AND any chain-
@@ -328,8 +392,14 @@ class MnemDegrade {
     // jitters N<->N+1, which reads as digital-decimator sizzle (the artefact
     // that fluctuates in/out as the knob moves). Integer hold = the clean "correct" tone.
     float f_target = MNEMD_FCLK_D0 * powf(MNEMD_FCLK_D1 / MNEMD_FCLK_D0, d_);
-    bbd_hold_len_ = (int)(sr_ / f_target + 0.5f);
-    if (bbd_hold_len_ < 1) bbd_hold_len_ = 1;
+    // Hold length is FRACTIONAL (see the ZOH in Bbd()): the drift below moves it
+    // continuously, so quantising to an integer would both defeat the drift and
+    // make the slip events land on a small repeating set of clocks. With
+    // drift = 0 and no slip this is the integer value it always was.
+    bbd_hold_f_ = sr_ / f_target * bbd_slip_mult_
+                * (1.f + MNEMD_BBD_DRIFT_MAX * bbd_drift_amt_ * ou_);
+    if (bbd_hold_f_ < 1.f) bbd_hold_f_ = 1.f;
+    bbd_hold_len_ = (int)(bbd_hold_f_ + 0.5f);   // reported only (diagnostics)
     f_clk_ = sr_ / (float)bbd_hold_len_;              // the actual, quantised clock
     // Filter cutoffs track the SMOOTH target clock, NOT the quantised f_clk_. The
     // ZOH hold length stays integer (no ratio sizzle), but the reconstruction /
@@ -373,6 +443,11 @@ class MnemDegrade {
     // Tape coeffs
     tape_lp_.SetLP(MNEMD_TAPE_LP_D0 * powf(MNEMD_TAPE_LP_D1 / MNEMD_TAPE_LP_D0, d_), sr_);
     tape_hp_hz_ = MNEMD_TAPE_HP_D0 + (MNEMD_TAPE_HP_D1 - MNEMD_TAPE_HP_D0) * d_;
+    // d_ can exceed 1 (SetTapeDepthScale), so bound the HP: MnemdDCBlock's
+    // R = 1 - 2*pi*fc/sr goes negative (unstable) above sr/2pi ~= 7.6 kHz.
+    // 5 % of sr = 2.4 kHz is far above any musical setting and never reached
+    // at the stock endpoint (45 Hz), so this changes nothing today.
+    if (tape_hp_hz_ > sr_ * 0.05f) tape_hp_hz_ = sr_ * 0.05f;
     tape_hp_.Set(tape_hp_hz_, sr_);
     head_bump_.Peak(MNEMD_HEADBUMP_HZ, MNEMD_HEADBUMP_Q, MNEMD_HEADBUMP_DB1 * d_, sr_);
     // Saturation + noise use a shaped depth (sqrt) so they ramp in SOONER on
@@ -400,6 +475,21 @@ class MnemDegrade {
     if (ou_ > 1.f) ou_ = 1.f;
     else if (ou_ < -1.f) ou_ = -1.f;
 
+    // Poisson clock-slip events, BBD only, above the knee. Same shape as the
+    // tape dropout/snag scheduler below.
+    if (active_chain_ == -1) {
+      if (bbd_slip_left_ > 0) {
+        bbd_slip_left_ -= MNEMD_CTRL;
+        if (bbd_slip_left_ <= 0) bbd_slip_mult_ = 1.f;      // snap back
+      } else if (bbd_slip_amt_ > 0.f && d_ > MNEMD_BBD_SLIP_KNEE) {
+        const float dd = (d_ - MNEMD_BBD_SLIP_KNEE) / (1.f - MNEMD_BBD_SLIP_KNEE);
+        const float pblk = (float)MNEMD_CTRL / sr_;
+        if (Rand() < MNEMD_BBD_SLIP_RATE * bbd_slip_amt_ * dd * pblk) StartBbdSlip(dd);
+      }
+    } else {
+      bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f;
+    }
+
     // Poisson events (dropout + snag), tape only
     if (active_chain_ == +1) {
       float pblk = (float)MNEMD_CTRL / sr_;
@@ -412,7 +502,8 @@ class MnemDegrade {
 
   void ResetChain() {
     bbd_in_lp_.Reset(); bbd_rec_lp_.Reset(); bbd_loss_.Reset(); bbd_noise_lp_.Reset();
-    bbd_samp_ctr_ = 0; bbd_hold_ = 0.f;
+    bbd_samp_ctr_ = 0; bbd_phase_ = 0.f; bbd_hold_ = 0.f;
+    bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f;
     tape_lp_.Reset(); tape_hp_.Reset(); head_bump_.Reset();
     tape_noise_lp1_.Reset(); tape_noise_lp2_.Reset(); sat_x1_ = 0.f;
     env_ = 0.f; drop_left_ = 0; drop_gain_ = drop_g_cur_ = 1.f; snag_cents_ = 0.f;
@@ -429,8 +520,13 @@ class MnemDegrade {
     x = bbd_in_lp_.Process(x);                             // input anti-alias (fold-down grit)
     // decimate ZOH @ f_clk (collapsed line, in-place) + noise. Integer sample
     // counter -> exactly bbd_hold_len_ samples/hold (quantised f_clk, no jitter).
-    if (++bbd_samp_ctr_ >= bbd_hold_len_) {
-      bbd_samp_ctr_ = 0;
+    // Fractional-phase ZOH: accumulate 1 per sample and fire when the phase
+    // passes the (moving, fractional) hold length, carrying the remainder over.
+    // At a constant integer hold this is exactly the old integer counter.
+    bbd_phase_ += 1.f;
+    if (bbd_phase_ >= bbd_hold_f_) {
+      bbd_phase_ -= bbd_hold_f_;
+      if (bbd_phase_ >= bbd_hold_f_) bbd_phase_ = 0.f;   // hold shrank under us
       float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_ * noise_gate_ * noise_sgate_;
       bbd_hold_ = x + n;                                   // raw noise -> accumulates in feedback
     }
@@ -454,7 +550,7 @@ class MnemDegrade {
     // fluctuation (same slow signal as the BBD clock drift) — approximates the
     // compander's level breathing for ~1 mult, no powf, and does NOT restore.
     x *= 1.f + MNEMD_BBD_BREATH * bbd_breath_ * d_;
-    return x * bbd_makeup_;
+    return x * bbd_makeup_ * bbd_level_;
   }
 
   // ---- Tape chain (spec §4) ---------------------------------------------
@@ -501,6 +597,23 @@ class MnemDegrade {
     float dB = (MNEMD_DROP_DB_MIN + Rand() * (MNEMD_DROP_DB_MAX - MNEMD_DROP_DB_MIN)) * d_;
     drop_gain_ = powf(10.f, -dB / 20.f);                   // (envelope simplified to a hold dip)
   }
+  void StartBbdSlip(float dd) {                           // dd = 0..1 above the knee
+    float lo = MNEMD_BBD_SLIP_MIN_MS, hi = MNEMD_BBD_SLIP_MAX_MS;
+    if (slip_ref_blend_ > 0.f && slip_ref_ms_ > 0.f) {
+      float rlo = slip_ref_ms_ * MNEMD_BBD_SLIP_REF_MIN;
+      float rhi = slip_ref_ms_ * MNEMD_BBD_SLIP_REF_MAX;
+      if (rhi > MNEMD_BBD_SLIP_REF_CAP_MS) rhi = MNEMD_BBD_SLIP_REF_CAP_MS;
+      if (rlo > rhi) rlo = rhi;
+      lo += (rlo - lo) * slip_ref_blend_;
+      hi += (rhi - hi) * slip_ref_blend_;
+    }
+    const float dur = lo + Rand() * (hi - lo);
+    bbd_slip_left_ = (int)(dur * 0.001f * sr_);
+    bbd_slip_mult_ = 1.f + Rand() * (MNEMD_BBD_SLIP_MULT - 1.f) * dd;
+    // (A bidirectional version — the clock lurching faster as well as slower —
+    //  was tried and pulled back out while isolating variables. It is a one-line
+    //  change here if the slip ever needs more variety.)
+  }
   void StartSnag() {                                     // pitch bump, decays via snag_keep_
     snag_cents_ = (MNEMD_SNAG_CENTS_MIN +
                    Rand() * (MNEMD_SNAG_CENTS_MAX - MNEMD_SNAG_CENTS_MIN)) * d_;
@@ -541,6 +654,16 @@ class MnemDegrade {
   float bbd_lpf_scale_    = 1.f;                   // per-instance BBD brightness (SetBbdLpfScale)
   float tape_drive_scale_ = 1.f;                   // per-instance tape drive (SetTapeDriveScale)
   float tape_level_       = 1.f;                   // per-instance tape output level (SetTapeLevel)
+  float bbd_level_        = 1.f;                   // per-instance BBD output level (SetBbdLevel)
+  float tape_depth_scale_ = 1.f;                   // per-instance CW travel extension (SetTapeDepthScale)
+  float bbd_slip_amt_  = 0.f;                      // per-instance BBD clock-slip amount (SetBbdSlip)
+  float bbd_slip_mult_ = 1.f;                      // active slip: hold-length stretch (1 = none)
+  int   bbd_slip_left_ = 0;                        // samples remaining in the current slip
+  float bbd_drift_amt_ = 0.f;                      // per-instance continuous clock drift (SetBbdDrift)
+  float slip_ref_ms_    = 0.f;                     // host time reference for slip length
+  float slip_ref_blend_ = 0.f;                     // 0 = fixed ms, 1 = fully reference-scaled
+  float bbd_hold_f_    = 1.f;                      // fractional hold length (the live clock)
+  float bbd_phase_     = 0.f;                      // ZOH phase accumulator
   float bbd_makeup_ = 1.25f;                      // level match — raised after compander removal (restores loop gain / self-osc)
 
   // Tape

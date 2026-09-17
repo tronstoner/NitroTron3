@@ -201,7 +201,7 @@ constexpr size_t GRAIN_MIN_LEN = 64;
 // ---------------------------------------------------------------------------
 constexpr uint32_t SPRAWL_LONGPRESS_MS  = 450;   // FS2 held beyond this = panic
 constexpr float    SPRAWL_PANIC_RISE_MS = 15.f;  // re-engage ramp (click-free, near-instant)
-constexpr float    SPRAWL_PANIC_FADE_MS = 120.f; // panic spin-down to silence (fast but click-free)
+constexpr float    SPRAWL_PANIC_FADE_MS = 60.f;  // panic spin-down to silence (fast but click-free)
 
 // ---------------------------------------------------------------------------
 // ChronoTron3-only: FS1 tap tempo (not in NitroTron3, which had the preset
@@ -241,7 +241,31 @@ static constexpr float  SPRAWL_BBD_LPF_SCALE   = 3.0f;  // CCW: open the BBD low
                                                         // default voicing is far too dark on the grain bus
 static constexpr float  SPRAWL_TAPE_DRIVE_SCALE = 2.5f; // CW: harder into the tape saturator (grit —
                                                         // Shape() normalises by drive, so level is flat)
-static constexpr float  SPRAWL_TAPE_LEVEL      = 2.0f;  // CW: and louder with it
+static constexpr float  SPRAWL_TAPE_LEVEL      = 1.6f;  // CW: and louder with it (2.0 was hot once
+                                                        // SPRAWL_TAPE_DEPTH_SCALE extended the travel)
+static constexpr float  SPRAWL_BBD_LEVEL       = 1.5f;  // CCW: BBD output level (the CW side's
+                                                        // SPRAWL_TAPE_LEVEL counterpart)
+// CW: extend the tape travel past its stock endpoint. One knob on the shared
+// engine's depth, so every tape parameter reaches further in the same
+// proportion — the character at a given position is unchanged, the far end
+// just goes on. 1.0 = stock. See MnemDegrade::SetTapeDepthScale.
+static constexpr float  SPRAWL_TAPE_DEPTH_SCALE = 1.5f;
+// CCW: BBD clock-slip instability — Poisson events that jam the decimator
+// clock at a longer integer hold for a few tens of ms, so the static
+// decimator lurches like the tape side's dropouts. Starts only past ~9
+// o'clock (MNEMD_BBD_SLIP_KNEE) and scales in from there. 0 = off.
+static constexpr float  SPRAWL_BBD_SLIP        = 1.0f;
+// CCW: continuous clock drift on top of the slip events — a random walk on the
+// decimator clock so it never repeats. This is the 'between integers' region
+// the engine used to quantise away; wanted here, off for the other hosts.
+static constexpr float  SPRAWL_BBD_DRIFT       = 0.25f;
+// CCW: scale the slip-event LENGTH to the current echo time instead of fixed
+// milliseconds. 0 = fixed (MNEMD_BBD_SLIP_*_MS), 1 = fully scaled. The timing
+// stays random either way — this is scale, NOT sync: the wobble keeps the same
+// character whether the echo is 200 ms or 3 s, without landing on the grid.
+// Reference = the grain read-back depth, or the grain length at K2 noon where
+// there is no read-back.
+static constexpr float  SPRAWL_BBD_SLIP_SYNC   = 1.0f;
 static constexpr size_t SPRAWL_WARBLE_LEN     = 4800;   // 100 ms modulated-delay line (SDRAM)
 static constexpr float  SPRAWL_WARBLE_BASE_MS = 3.f;    // fixed base delay = tap centre (~3 ms)
 static constexpr float  SPRAWL_WARBLE_LEAK    = 0.99999f;    // leaky integrator (cents->displacement HP)
