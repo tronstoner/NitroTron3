@@ -18,6 +18,11 @@ class SprawlFeedback {
     on_play_rel_g_ = 1.f - expf(-1.f / (ON_PLAY_RELEASE_MS * 0.001f * sr));
   }
 
+  void DebugFill(float& duck_env, float& onplay_env, float& hp0, float& hp1) const {
+    duck_env = fb_duck_env_; onplay_env = on_play_env_;
+    hp0 = wet_hp_state_[0]; hp1 = wet_hp_state_[1];
+  }
+
   // Returns the saturated feedback sample to add to the dry before the ring
   // write. `prev_wet` = previous sample's wet output, `env` = grain_env.
   float Inject(float prev_wet, float feedback_amt, float env) {

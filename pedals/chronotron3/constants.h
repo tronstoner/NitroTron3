@@ -29,6 +29,21 @@ enum Ct3Mode {
 static constexpr float CT3_MIX_SMOOTH = 0.002f;
 
 // ---------------------------------------------------------------------------
+// Diagnostics build. OFF in the shipping firmware; `make PEDAL=chronotron3
+// DIAG=1` turns it on (the Makefile defines CT3_DIAG_BUILD). It enables the USB
+// serial heartbeat / fault dump in main.cpp plus sprawl's non-finite guard, its
+// peak meters and the LED2 fault strobe. Every site is gated with a plain
+// `if (CT3_DIAG)` on this constexpr bool, so with DIAG=0 the compiler deletes
+// the code outright — no runtime cost, no branch. See
+// .agents/skills/serial-diag/SKILL.md for how to capture a log.
+// ---------------------------------------------------------------------------
+#ifdef CT3_DIAG_BUILD
+constexpr bool CT3_DIAG = true;
+#else
+constexpr bool CT3_DIAG = false;
+#endif
+
+// ---------------------------------------------------------------------------
 // Pitch-tracker profile. Used through core/blocks/pitch_tracker.h, which
 // `#include "constants.h"` and reads these global TRACK_* names. The consumer
 // is Sprawl's ringmod keytracking (SW1 DOWN, K4 >= 30%: the bell-partial

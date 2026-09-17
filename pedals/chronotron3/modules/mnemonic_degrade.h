@@ -195,6 +195,47 @@ class MnemDegrade {
   // highs + grit) is mixed on top of the dark body. 1 = default (mnemonic);
   // vestige raises it for more clarity in the looper without losing distortion.
   void  SetFoldScale(float s) { fold_scale_ = s; }
+  // Per-instance BBD brightness: raises the reconstruction + stage-loss LPF
+  // FLOOR. 1 = default (mnemonic, vestige).
+  //
+  // The floor is deliberately the only thing scaled. Those cutoffs are
+  // REC/LOSS x f_clk, and f_clk runs to 48 kHz at the clean end, so scaling the
+  // proportional term shoves both biquads into the Nyquist clamp near the
+  // deadzone — the exact thing the clamp below exists to prevent, and it did
+  // blow up (a huge sample poisoned sprawl's always-on reverb FDN, which then
+  // stayed silent). It also bought nothing there: both land on the same clamp.
+  // The deep-CCW end is where the darkness actually lives — REC/LOSS x f_clk
+  // falls to ~700 Hz and BOTH pin to the floor — so the floor is the control
+  // that matters, and it is inherently safe.
+  void  SetBbdLpfScale(float s) { bbd_lpf_scale_ = s; }
+  // Per-instance tape drive: scales the saturator's drive and its asymmetry.
+  // Shape() normalises by sat_k, so this buys DISTORTION, not level. 1 = default.
+  void  SetTapeDriveScale(float s) { tape_drive_scale_ = s; }
+  // Per-instance tape output level. 1 = default (mnemonic, vestige).
+  void  SetTapeLevel(float g) { tape_level_ = g; }
+
+  // Read-only state snapshot for diagnostics (host or serial). No behaviour.
+  struct DebugState {
+    int   chain, tgt_chain, hold_len;
+    float mix, d, d_tgt, noise_gate, noise_sgate, nz_det, env;
+    float bbd_hold, in_z1, in_z2, rec_z1, rec_z2, loss_z, dc_x1, dc_y1;
+    float sat_x1, tape_lp_z, hp_x1, hp_y1, hb_z1, hb_z2, drop_g, snag;
+    float f_clk, fold_blend, fold_drive;
+  };
+  void DebugFill(DebugState& o) const {
+    o.chain = active_chain_; o.tgt_chain = target_chain_; o.hold_len = bbd_hold_len_;
+    o.mix = mix_; o.d = d_; o.d_tgt = d_target_;
+    o.noise_gate = noise_gate_; o.noise_sgate = noise_sgate_; o.nz_det = nz_det_; o.env = env_;
+    o.bbd_hold = bbd_hold_;
+    o.in_z1 = bbd_in_lp_.z1;  o.in_z2 = bbd_in_lp_.z2;
+    o.rec_z1 = bbd_rec_lp_.z1; o.rec_z2 = bbd_rec_lp_.z2;
+    o.loss_z = bbd_loss_.z; o.dc_x1 = dc_.x1; o.dc_y1 = dc_.y1;
+    o.sat_x1 = sat_x1_; o.tape_lp_z = tape_lp_.z;
+    o.hp_x1 = tape_hp_.x1; o.hp_y1 = tape_hp_.y1;
+    o.hb_z1 = head_bump_.z1; o.hb_z2 = head_bump_.z2;
+    o.drop_g = drop_g_cur_; o.snag = snag_cents_;
+    o.f_clk = f_clk_; o.fold_blend = fold_blend_; o.fold_drive = fold_drive_;
+  }
   // Current injected-noise amplitude (linear) of the active chain — the module
   // uses it to set the gate threshold just above the hiss floor (tracks depth).
   float NoiseFloorLin() const {
@@ -304,8 +345,12 @@ class MnemDegrade {
     // Reconstruction + stage-loss LPFs: factor*f_target, but floored so the deep/dark
     // end opens up while shallow (>= ~9:00) settings — already above the floor —
     // stay exactly as they were. Then clamp below Nyquist for filter stability.
-    float rec_fc  = MNEMD_BBD_REC  * f_target; if (rec_fc  < MNEMD_BBD_LPF_FLOOR_HZ) rec_fc  = MNEMD_BBD_LPF_FLOOR_HZ;
-    float loss_fc = MNEMD_BBD_LOSS * f_target; if (loss_fc < MNEMD_BBD_LPF_FLOOR_HZ) loss_fc = MNEMD_BBD_LPF_FLOOR_HZ;
+    // Floor only (see SetBbdLpfScale), and hard-capped well clear of Nyquist so
+    // no per-instance value can ever walk these biquads to the edge.
+    float lpf_floor = MNEMD_BBD_LPF_FLOOR_HZ * bbd_lpf_scale_;
+    if (lpf_floor > sr_ * 0.25f) lpf_floor = sr_ * 0.25f;
+    float rec_fc  = MNEMD_BBD_REC  * f_target; if (rec_fc  < lpf_floor) rec_fc  = lpf_floor;
+    float loss_fc = MNEMD_BBD_LOSS * f_target; if (loss_fc < lpf_floor) loss_fc = lpf_floor;
     if (rec_fc  > nyq) rec_fc  = nyq;
     if (loss_fc > nyq) loss_fc = nyq;
     bbd_in_lp_.LP(in_fc,  0.707f, sr_);   // pre-decimation: >0.5 f_clk folds = grit
@@ -333,8 +378,8 @@ class MnemDegrade {
     // Saturation + noise use a shaped depth (sqrt) so they ramp in SOONER on
     // than the wow/flutter/snag terms (which stay linear in d_).
     float ds = sqrtf(d_);
-    sat_k_ = 1.f + MNEMD_SAT_K * ds;
-    sat_a_ = MNEMD_SAT_A * ds;
+    sat_k_ = 1.f + MNEMD_SAT_K * tape_drive_scale_ * ds;
+    sat_a_ = MNEMD_SAT_A * tape_drive_scale_ * ds;
     sat_bias_ = MNEMD_SAT_BIAS * ds;
     tape_noise_lin_ = powf(10.f, (MNEMD_TAPE_NOISE_DB0 +
                             (MNEMD_TAPE_NOISE_DB1 - MNEMD_TAPE_NOISE_DB0) * ds) / 20.f);
@@ -438,7 +483,7 @@ class MnemDegrade {
     float dtgt = (drop_left_ > 0) ? drop_gain_ : 1.f;
     drop_g_cur_ += (dtgt - drop_g_cur_) * drop_coef_;
     x *= drop_g_cur_;
-    return x * tape_makeup_;
+    return x * tape_makeup_ * tape_level_;
   }
   inline float Shape(float x) {                            // asym waveshaper + bias deadzone
     // Normalise to unity small-signal gain (d/dx at 0 = sat_k) so the shaper
@@ -493,6 +538,9 @@ class MnemDegrade {
   float fold_drive_ = MNEMD_FOLD_GAIN;             // depth-scaled fold drive (GAIN_MIN..GAIN)
   float fold_out_   = MNEMD_FOLD_MAKEUP / MNEMD_FOLD_GAIN; // relative level comp = MAKEUP/fold_drive_
   float fold_scale_ = 1.f;                         // per-instance fold brightness (SetFoldScale; 1 = default)
+  float bbd_lpf_scale_    = 1.f;                   // per-instance BBD brightness (SetBbdLpfScale)
+  float tape_drive_scale_ = 1.f;                   // per-instance tape drive (SetTapeDriveScale)
+  float tape_level_       = 1.f;                   // per-instance tape output level (SetTapeLevel)
   float bbd_makeup_ = 1.25f;                      // level match — raised after compander removal (restores loop gain / self-osc)
 
   // Tape

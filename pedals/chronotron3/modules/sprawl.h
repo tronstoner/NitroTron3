@@ -18,7 +18,7 @@
 //   K4 = texture amount (meaning set by SW1)
 //   K5 = bipolar — CCW reverb mix · noon off · CW ring-buffer feedback
 //   K6 = dry/wet mix (shell-owned equal-power; sprawl does NOT own output)
-//   SW1 = texture mode: UP decimate/fold · MID glitch events · DOWN ringmod
+//   SW1 = texture mode: UP decimate/fold · MID tape/BBD colour · DOWN ringmod
 //   SW2 = harmony mode: UP fixed interval · MID resonance table · DOWN freq shift
 //   FS1 = tap tempo (tap: one interval = the echo time, no divisions; overrides
 //         K2's length until K2 is moved again, EHX-style last-wins)
@@ -27,11 +27,13 @@
 //   FS2 = bypass (tap: gate the send, trail + feedback ring on) / PANIC (hold:
 //         bypass + spin recirculation and wet down to silence, wipe ring)
 //   LED1 = echo clock (flashes once per echo; INVERTED while frozen) ·
-//   LED2 = active / off when bypassed
+//   LED2 = active / off when bypassed (in DIAG builds only, LED2 also strobes
+//          for ~1 s on a caught non-finite fault — see CT3_DIAG in constants.h)
 //
 // Requires daisy.h + hothouse.h + control_surface.h + knob_map.h included first.
 //
 #include "module.h"
+#include "constants.h"           // pedals/chronotron3 — CT3_DIAG, CT3_BLOCK_SIZE
 // sprawl_constants.h MUST come before glitch_zones.h (pulled in by
 // sprawl_texture.h): glitch_zones.h does `#include "constants.h"` and reads the
 // GLITCH_* names as plain globals, which for this pedal resolves to
@@ -43,16 +45,32 @@
 #include "sprawl_texture.h"      // includes glitch_zones.h (see note above)
 #include "sprawl_feedback.h"
 #include "sprawl_reverb.h"
+#include "sprawl_debug.h"
 #include "env_follower.h"        // core/blocks
 #include "pitch_tracker.h"       // core/blocks — TRACK_* from chronotron3/constants.h
 #include "freq_shifter.h"        // core/blocks — Bode SSB shifter (SW2 DOWN)
 #include <math.h>
+#include <cmath>       // std::isfinite (the non-finite guard; no -ffast-math in this build)
 
 // ---------------------------------------------------------------------------
 // SDRAM storage — 8 s grain ring + Clouds reverb buffer. File scope (single TU).
 // ---------------------------------------------------------------------------
 static float    DSY_SDRAM_BSS sprawl_ring_slab[GRAIN_BUF_SAMPLES];
 static uint16_t DSY_SDRAM_BSS sprawl_reverb_slab[16384];
+// SW1-MIDDLE colour: post-stage warble modulated-delay line.
+static float DSY_SDRAM_BSS sprawl_warble_slab[SPRAWL_WARBLE_LEN];
+
+// A non-finite sample is not a glitch here, it is permanent: it circulates in
+// the grain ring, the feedback filters and above all the reverb FDN, and every
+// clamp in the module is a > / < comparison, all of which are false against
+// NaN. One escape therefore silences the module until power-cycle.
+//
+// The known source (RingBuffer::ReadFrac reading one element past the warble
+// slab on a float-edge case) is FIXED at the source, so the guard below is no
+// longer part of the shipping signal path: it — and the meters, the snapshots
+// and the LED2 strobe — are compiled only in DIAG builds (`if (CT3_DIAG)`,
+// a constexpr false otherwise, so the code is dead-code eliminated).
+static inline bool SprawlBad(float x) { return !std::isfinite(x); }
 
 class Sprawl : public Module {
  public:
@@ -66,7 +84,7 @@ class Sprawl : public Module {
     b_shifter_.Init(sr);
     feedback_.Init(sr);
     reverb_.Init(sprawl_reverb_slab);
-    texture_.Init();
+    texture_.Init(sr, sprawl_warble_slab);
     send_coef_ = 1.f - expf(-1.f / (0.003f * sr_));   // 3 ms send gate ramp
     panic_rise_coef_ = 1.f - expf(-1.f / (SPRAWL_PANIC_RISE_MS * 0.001f * sr_));
     panic_fall_coef_ = 1.f - expf(-1.f / (SPRAWL_PANIC_FADE_MS * 0.001f * sr_));
@@ -159,6 +177,17 @@ class Sprawl : public Module {
     }
     send_target_ = bypassed_ ? 0.f : 1.f;
 
+    // Non-finite fault: OBSERVATION ONLY, and only in a DIAG build. No state is
+    // rebuilt — an earlier recovery changed post-fault behaviour in ways we
+    // could not account for. The guard substitutes silence for the offending
+    // samples; this just counts and lights LED2 so the event can be correlated
+    // with the serial log.
+    if (CT3_DIAG && recover_req_) {
+      recover_req_ = false;
+      recover_count_++;
+      fault_led_ms_ = SPRAWL_FAULT_LED_MS;
+    }
+
     // Deferred wipe: once the panic envelope has faded the wet to silence, clear
     // the ring / voices on THIS (control) thread — the audio thread only raises
     // the request. Reverb + feedback-return state are left to decay (already
@@ -179,8 +208,21 @@ class Sprawl : public Module {
     const bool flash = (led1_phase_ms_ < SPRAWL_LED1_FLASH_MS);
     // Frozen = inverted (mostly lit, brief gap on the beat): the clock stays
     // readable and the held state is unmistakable.
+    // Colour engine: mute its noise injection while bypassed (trail bypass keeps
+    // the wet path running, so hiss would otherwise never stop).
+    texture_.SetNoiseGate(bypassed_ ? 0.f : 1.f);
+
     led1.Set(frozen_ ? (flash ? 0.f : 1.f) : (flash ? 1.f : 0.f));
-    led2.Set(bypassed_ ? 0.f : 1.f);
+    // Fault indicator (DIAG builds only): after the non-finite guard fires,
+    // LED2 strobes hard for ~1 s, then returns to the state display. Lets a hang
+    // report say whether the guard caught something (strobe) or nothing
+    // non-finite ever occurred.
+    if (CT3_DIAG && fault_led_ms_ > 0) {
+      fault_led_ms_ -= 10;
+      led2.Set(((fault_led_ms_ / 40) & 1) ? 1.f : 0.f);   // 25 Hz strobe
+    } else {
+      led2.Set(bypassed_ ? 0.f : 1.f);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -188,6 +230,8 @@ class Sprawl : public Module {
   // -------------------------------------------------------------------------
   void Process(const float* in, float* wet, size_t size) override {
     const SprawlParams p = DeriveParams(controls_);
+    if (CT3_DIAG) last_p_ = p;   // diagnostics: what this block ran with
+    texture_.Block(p);          // control-rate part of the SW1-MID colour engine
 
     // Per-sample wet bus capture (used by the block-based reverb pipeline below).
     float wet_block[CT3_BLOCK_SIZE];
@@ -195,6 +239,7 @@ class Sprawl : public Module {
     for (size_t i = 0; i < size; i++) {
       send_gain_ += (send_target_ - send_gain_) * send_coef_;
       float dry = in[i] * send_gain_;
+      if (CT3_DIAG && fabsf(in[i]) > m_in_) m_in_ = fabsf(in[i]);  // meter (raw input)
 
       // Envelope follower (feeds pitch tracker gating)
       grain_env_ = env_.Process(dry);
@@ -243,6 +288,10 @@ class Sprawl : public Module {
 
       // Grain engine: scheduler tick + sum of all active voices.
       float w = grain_.Tick(p, harmony_);
+      if (CT3_DIAG) {
+        if (SprawlBad(w)) { w = 0.f; NoteFault(1, p); }
+        if (fabsf(w) > m_grn_) m_grn_ = fabsf(w);        // meter
+      }
 
       // Texture shaper — K4 meaning depends on SW1 mode
       w = texture_.Process(w, p, grain_env_, note_on);
@@ -258,6 +307,13 @@ class Sprawl : public Module {
       // (see the injection above), so there's no gated-filter click at the K2
       // noon boundary and the live/wet signal keeps its lows.
 
+      // Guard before the wet leaves the sample loop: prev_wet_ feeds the ring
+      // write, so a poisoned value here would reach every later grain.
+      if (CT3_DIAG) {
+        if (SprawlBad(w)) { w = 0.f; NoteFault(2, p); }
+        if (fabsf(w) > m_tex_) m_tex_ = fabsf(w);        // meter
+      }
+
       // Store wet for next sample's feedback injection (pre-reverb, so reverb
       // does not feed the ring buffer).
       prev_wet_ = w;
@@ -267,11 +323,51 @@ class Sprawl : public Module {
     }
 
     reverb_.ProcessBlock(wet_block, size, p.reverb_amt, wet);
+    if (CT3_DIAG) {
+      for (size_t i = 0; i < size; i++) {
+        if (SprawlBad(wet[i])) { wet[i] = 0.f; NoteFault(3, p); }
+        if (fabsf(wet[i]) > m_wet_) m_wet_ = fabsf(wet[i]);  // meter
+      }
+    }
     // Panic: mute the wet output (reverb included) — per-block gain is fine,
     // the envelope moves ~1 % per block at the 120 ms fade.
     if (panic_env_ < 0.9999f)
       for (size_t i = 0; i < size; i++) wet[i] *= panic_env_;
   }
+
+  // Full state snapshot. `live` = heartbeat from the main loop (also resets the
+  // peak meters and the sticky bad-voice mask); otherwise it is the ISR taking
+  // a picture at the exact sample the first non-finite value appeared.
+  void FillDebug(SprawlDebug& d, const SprawlParams& p, int stage, bool live) {
+    d.t_ms = daisy::System::GetNow(); d.stage = stage; d.fault_count = recover_count_;
+    d.k1 = controls_.k1; d.k2 = controls_.k2; d.k3 = controls_.k3; d.k4 = controls_.k4; d.k5 = controls_.k5;
+    d.tap = controls_.tap_samples; d.panic = panic_env_; d.send = send_gain_;
+    d.sw1 = controls_.sw1; d.sw2 = controls_.sw2; d.frozen = frozen_ ? 1 : 0; d.bypassed = bypassed_ ? 1 : 0;
+    d.fb_amt = p.feedback_amt; d.rev_amt = p.reverb_amt; d.k2_scale = p.k2_scale;
+    d.k3mag = p.k3mag; d.glitch = p.glitch_amount;
+    d.cloud = p.cloud_mode ? 1 : 0; d.live = p.live_grain ? 1 : 0; d.tex = p.texture_mode; d.harmony = p.harmony;
+    d.max_range = (uint32_t)p.max_range; d.base_delay = (uint32_t)p.base_delay;
+    d.grain_len = (uint32_t)p.grain_len; d.base_interval = (uint32_t)p.base_interval;
+    grain_.DebugFill(d, live);
+    feedback_.DebugFill(d.duck_env, d.onplay_env, d.hp0, d.hp1);
+    d.prev_wet = prev_wet_; d.grain_env = grain_env_; d.trans_slow = trans_slow_;
+    texture_.DebugFill(d);
+    d.in_pk = m_in_; d.grain_pk = m_grn_; d.tex_pk = m_tex_; d.wet_pk = m_wet_;
+    if (live) { m_in_ = m_grn_ = m_tex_ = m_wet_ = 0.f; }
+  }
+
+  // ISR: first fault of a burst gets the picture; later ones only count.
+  inline void NoteFault(int stage, const SprawlParams& p) {
+    recover_req_ = true;
+    if (!fault_pending_) { FillDebug(fault_snap_, p, stage, false); fault_pending_ = true; }
+  }
+
+  // Shell: drain the fault picture (true once per burst) / take a heartbeat.
+  bool DebugTakeFaultSnapshot(SprawlDebug& out) {
+    if (!fault_pending_) return false;
+    out = fault_snap_; fault_pending_ = false; return true;
+  }
+  void DebugFillLive(SprawlDebug& out) { FillDebug(out, last_p_, 0, true); }
 
   bool OwnsOutput() const override { return false; }   // shell applies K6
   bool Bypassed() const override { return bypassed_; }
@@ -582,6 +678,16 @@ class Sprawl : public Module {
 
   // --- per-sample state ----------------------------------------------------
   float sr_ = 48000.f;
+  // Non-finite guard (see SprawlBad). volatile: raised in the audio ISR,
+  // consumed in the main loop.
+  volatile bool recover_req_ = false;
+  uint32_t      recover_count_ = 0;
+  int           fault_led_ms_  = 0;      // LED2 strobe countdown after a fault
+  // Diagnostics: last block's params, peak meters, and the ISR fault picture.
+  SprawlParams  last_p_;
+  float         m_in_ = 0.f, m_grn_ = 0.f, m_tex_ = 0.f, m_wet_ = 0.f;
+  SprawlDebug   fault_snap_;
+  volatile bool fault_pending_ = false;
   float grain_env_ = 0.f;        // envelope value for grain amplitude
   float trans_slow_ = 0.f;       // slow envelope baseline for note-on detection
   int   trans_refractory_ = 0;   // samples until another attack can trigger

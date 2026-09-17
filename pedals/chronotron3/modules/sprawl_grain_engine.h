@@ -13,7 +13,9 @@
 #include "sprawl_harmony.h"
 #include "sprawl_params.h"
 #include "ring_buffer.h"
-#include <cstring>        // memset (Kill)   // core/blocks
+#include <cstring>        // memset (Kill)
+#include <cmath>          // std::isfinite (diagnostics)
+#include "sprawl_debug.h"   // core/blocks
 #include "grain_voice.h"   // core/blocks
 #include <math.h>
 
@@ -151,6 +153,10 @@ class SprawlGrainEngine {
       if (voice >= 0) {
         grain_voices_[voice].Trigger(
             ring_, delay, this_len, reverse, pitch_ratio, comp, loops, p.grain_alpha);
+        // diagnostics: remember what this voice was launched with
+        vdbg_[voice].delay = (uint32_t)delay; vdbg_[voice].len = (uint32_t)this_len;
+        vdbg_[voice].rev = reverse ? 1 : 0;    vdbg_[voice].loops = loops;
+        vdbg_[voice].rate = pitch_ratio;       vdbg_[voice].comp = comp;
       }
 
       if (burst) {
@@ -168,12 +174,38 @@ class SprawlGrainEngine {
     // Sum all active voices
     float wet = 0.f;
     for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
-      wet += grain_voices_[v].Process(ring_);
+      const float o = grain_voices_[v].Process(ring_);
+      last_out_[v] = o;                                    // diagnostics
+      if (!std::isfinite(o)) bad_voice_mask_ |= (1 << v);  // sticky until read
+      wet += o;
     }
     return wet;
   }
 
+  // Read-only diagnostics. clear_sticky = heartbeat (main loop) read.
+  void DebugFill(SprawlDebug& d, bool clear_sticky) {
+    d.active_voices = 0;
+    for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+      const bool a = grain_voices_[v].IsActive();
+      if (a) d.active_voices++;
+      d.v[v].active = a ? 1 : 0;
+      d.v[v].delay = vdbg_[v].delay; d.v[v].len = vdbg_[v].len;
+      d.v[v].rev = vdbg_[v].rev;     d.v[v].loops = vdbg_[v].loops;
+      d.v[v].rate = vdbg_[v].rate;   d.v[v].comp = vdbg_[v].comp;
+      d.v[v].last_out = last_out_[v];
+    }
+    d.grain_timer = grain_timer_; d.next_voice = grain_next_voice_;
+    d.hold_ctr = harmony_hold_counter_; d.cached_ratio = harmony_cached_ratio_;
+    d.wpos = (uint32_t)ring_.GetWritePos();
+    d.bad_voice_mask = bad_voice_mask_;
+    if (clear_sticky) bad_voice_mask_ = 0;
+  }
+
  private:
+  struct VoiceDbg { uint32_t delay = 0, len = 0; int rev = 0, loops = 0; float rate = 1.f, comp = 1.f; };
+  VoiceDbg vdbg_[NUM_GRAIN_VOICES];
+  float    last_out_[NUM_GRAIN_VOICES] = {};
+  int      bad_voice_mask_ = 0;
   RingBuffer ring_;
   float* slab_ = nullptr;   // ring storage (for Kill)
   size_t slab_n_ = 0;

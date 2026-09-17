@@ -20,14 +20,24 @@ PEDAL ?= nitrotron3
 # pitch tracker + frequency voicing constants for electric guitar (see the
 # "Instrument profile" block in pedals/<pedal>/constants.h). Make does not track
 # -D define changes or a switch of PEDAL source, so a stamp file records the
-# PEDAL+INSTRUMENT profile of the objects in build/; on mismatch the build dir
+# PEDAL+INSTRUMENT+DIAG profile of the objects in build/; on mismatch the build dir
 # is dropped at parse time (deterministic, safe under -j — a rule-based stamp
 # races on make 3.81) and everything recompiles. No manual `make clean` needed.
 INSTRUMENT ?= bass
 ifeq ($(INSTRUMENT),guitar)
 C_DEFS += -DNT3_INSTRUMENT_GUITAR
 endif
-BUILD_PROFILE := $(PEDAL)-$(INSTRUMENT)
+
+# Diagnostics build: `make PEDAL=chronotron3 DIAG=1` compiles the opt-in
+# instrumentation (USB-serial heartbeat / fault dump, the sprawl non-finite
+# guard and its LED2 fault strobe). Default 0 = zero runtime cost: the gates are
+# `if (CT3_DIAG)` on a constexpr false, so the code is dead-code eliminated.
+# DIAG is part of BUILD_PROFILE below so toggling it forces the full rebuild.
+DIAG ?= 0
+ifeq ($(DIAG),1)
+C_DEFS += -DCT3_DIAG_BUILD
+endif
+BUILD_PROFILE := $(PEDAL)-$(INSTRUMENT)-diag$(DIAG)
 PROFILE_STAMP := build/.buildprofile
 LAST_PROFILE := $(strip $(shell cat $(PROFILE_STAMP) 2>/dev/null))
 ifneq ($(LAST_PROFILE),$(BUILD_PROFILE))

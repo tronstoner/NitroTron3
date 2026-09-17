@@ -3,3 +3,6 @@ build/
 .DS_Store
 .claude/*
 !.claude/skills
+
+# serial-diag captures (tools/diag/capture.sh writes into the cwd)
+sprawl-*.log

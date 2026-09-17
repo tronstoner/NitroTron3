@@ -220,3 +220,33 @@ constexpr uint32_t SPRAWL_TAP_RELEASE_MS = 300; // FS1 released before this = TA
                                                 //  >= SPRAWL_LONGPRESS_MS = freeze toggle)
 constexpr float    SPRAWL_K2_MOVE_EPS = 0.02f;  // K2 travel that cancels a tapped length
 constexpr uint32_t SPRAWL_LED1_FLASH_MS = 40;   // LED1 buffer-clock flash width
+
+// ---------------------------------------------------------------------------
+// SW1 MIDDLE — tape/BBD colour (2026-09-17), replacing the event-driven glitch.
+// This is VESTIGE's adaptation of the shared degrade engine, not mnemonic's:
+// mnemonic modulates its single read tap (a delay-topology trick sprawl has no
+// equivalent of — grains have no one tap), whereas vestige carries the engine's
+// tape pitch on a short POST-stage warble delay line. That version is
+// host-agnostic, which is exactly why it ports here.
+// Starting values are vestige's, as the adaptation that already sounds right.
+//
+// Placement note: sprawl's texture shaper feeds prev_wet, so like the decimator
+// and ringmod beside it the colour sits INSIDE the feedback loop — repeats age
+// through it, as mnemonic's does.
+// ---------------------------------------------------------------------------
+static constexpr float  SPRAWL_BBD_FOLD_SCALE = 2.0f;   // brighter BBD fold (vestige value)
+// Per-instance voicing of the shared engine for THIS host (mnemonic and vestige
+// keep the defaults — these are setters, not edits to the MNEMD_* constants).
+static constexpr float  SPRAWL_BBD_LPF_SCALE   = 3.0f;  // CCW: open the BBD low-pass well up — the
+                                                        // default voicing is far too dark on the grain bus
+static constexpr float  SPRAWL_TAPE_DRIVE_SCALE = 2.5f; // CW: harder into the tape saturator (grit —
+                                                        // Shape() normalises by drive, so level is flat)
+static constexpr float  SPRAWL_TAPE_LEVEL      = 2.0f;  // CW: and louder with it
+static constexpr size_t SPRAWL_WARBLE_LEN     = 4800;   // 100 ms modulated-delay line (SDRAM)
+static constexpr float  SPRAWL_WARBLE_BASE_MS = 3.f;    // fixed base delay = tap centre (~3 ms)
+static constexpr float  SPRAWL_WARBLE_LEAK    = 0.99999f;    // leaky integrator (cents->displacement HP)
+static constexpr float  SPRAWL_WARBLE_CENTS_TO_RATE = 0.00057762f;  // ln2/1200
+static constexpr float  SPRAWL_WARBLE_EASE    = 0.003f; // ~7 ms ease of the wobble back to 0 when idle
+
+// Non-finite guard: how long LED2 strobes after a caught fault (diagnostic).
+constexpr int SPRAWL_FAULT_LED_MS = 1000;  // DIAG builds only (CT3_DIAG)
