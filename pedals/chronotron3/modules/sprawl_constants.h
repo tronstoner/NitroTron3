@@ -234,10 +234,10 @@ constexpr uint32_t SPRAWL_LED1_FLASH_MS = 40;   // LED1 buffer-clock flash width
 // and ringmod beside it the colour sits INSIDE the feedback loop — repeats age
 // through it, as mnemonic's does.
 // ---------------------------------------------------------------------------
-static constexpr float  SPRAWL_BBD_FOLD_SCALE = 2.0f;   // brighter BBD fold (vestige value)
+static constexpr float  SPRAWL_BBD_FOLD_SCALE = 0.8f;   // BBD fold amount (2.0 = the vestige value this started from)
 // Per-instance voicing of the shared engine for THIS host (mnemonic and vestige
 // keep the defaults — these are setters, not edits to the MNEMD_* constants).
-static constexpr float  SPRAWL_BBD_LPF_SCALE   = 3.0f;  // CCW: open the BBD low-pass well up — the
+static constexpr float  SPRAWL_BBD_LPF_SCALE   = 2.0f;  // CCW: open the BBD low-pass well up — the
                                                         // default voicing is far too dark on the grain bus
 static constexpr float  SPRAWL_TAPE_DRIVE_SCALE = 2.5f; // CW: harder into the tape saturator (grit —
                                                         // Shape() normalises by drive, so level is flat)
@@ -270,11 +270,14 @@ static constexpr float  SPRAWL_TAPE_DEPTH_SCALE = 1.5f;
 static constexpr float  SPRAWL_BBD_SLIP        = 1.0f;
 // How much the replay REPLACES the live signal during an event. 1 = you hear
 // the stutter alone for the event's duration, 0 = the replay is inaudible.
-static constexpr float  SPRAWL_BBD_REPLAY_MIX  = 1.00f;
+static constexpr float  SPRAWL_BBD_REPLAY_MIX  = 0.00f;  // TEMP: stutter off — was 0.50f
+// Bit-crush on the held BBD sample (scales MNEMD_CRUSH_STEP; 0 = off).
+// Coarse amplitude grit towards full CCW, as opposed to the smooth tanh fuzz.
+static constexpr float  SPRAWL_BBD_CRUSH       = 0.30f;  // scales MNEMD_CRUSH_STEP (0.008) -> effective step 0.0024
 // CCW: continuous clock drift on top of the slip events — a random walk on the
 // decimator clock so it never repeats. This is the 'between integers' region
 // the engine used to quantise away; wanted here, off for the other hosts.
-static constexpr float  SPRAWL_BBD_DRIFT       = 0.25f;
+static constexpr float  SPRAWL_BBD_DRIFT       = 0.00f;  // constant tape warble OFF — the sag below is the instability now
 // CCW: scale the slip-event LENGTH to the current echo time instead of fixed
 // milliseconds. 0 = fixed (MNEMD_BBD_SLIP_*_MS), 1 = fully scaled. The timing
 // stays random either way — this is scale, NOT sync: the wobble keeps the same

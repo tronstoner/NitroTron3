@@ -104,6 +104,17 @@ static constexpr float MNEMD_FOLD_HP_HZ      = 400.f; // HP corner (only used wh
 static constexpr bool  MNEMD_FOLD_SOLO       = false;
 static constexpr float MNEMD_FOLD_SOLO_GAIN  = 1.f;   // monitor gain for the soloed fold
 
+// --- Amplitude quantiser (bit-crush) on the held sample ---------------------
+// The rest of the BBD dirt is SMOOTH: tanh saturation plus alias harmonics, i.e.
+// fuzz. This is the opposite kind of dirt — a coarse amplitude STEP, applied once
+// per hold so it rides the staircase instead of adding a new rate. Quantisation
+// error is a FIXED size, so unlike the tanh it does not compress: quiet playing
+// gets proportionally grittier, loud playing stays intact. Off by default; hosts
+// opt in with SetBbdCrush().
+static constexpr float MNEMD_CRUSH_KNEE  = 0.15f; // BBD depth where the crush begins (~9:00, same as the fold)
+static constexpr float MNEMD_CRUSH_STEP  = 0.008f;// quantiser step at FULL CCW, absolute (not bits): the grit CHARACTER. Bigger = coarser.
+static constexpr float MNEMD_CRUSH_CURVE = 2.0f;  // depth->step ramp (>1 = stays fine longer, bites near CCW)
+
 // --- Tape (spec §4) ---
 static constexpr float MNEMD_TAPE_DEV_CENTS = 70.f;  // max ± speed deviation at d=1
 static constexpr float MNEMD_WOW_HZ = 0.7f,  MNEMD_WOW_SH  = 0.60f;
@@ -158,7 +169,18 @@ static constexpr float MNEMD_BBD_SLIP_MAX_MS = 500.f;
 static constexpr float MNEMD_BBD_SLIP_REF_MIN  = 0.15f;   // x the reference time
 static constexpr float MNEMD_BBD_SLIP_REF_MAX  = 0.80f;
 static constexpr float MNEMD_BBD_SLIP_REF_CAP_MS = 1500.f;
-static constexpr float MNEMD_BBD_SLIP_MULT   = 3.0f;  // max hold-length stretch (clock down to 1/3 speed)
+// --- Starving-capacitor clock -----------------------------------------------
+// NOT a warble and NOT a timed excursion: the clock is never held at nominal and
+// never released back to it. It SAGS continuously in one direction — usually
+// slower, like a supply rail drooping — until an occasional BUMP lurches it and
+// re-rolls the direction. Between bumps nothing oscillates; it just keeps
+// leaving. The travel limits are the only thing that stops it.
+static constexpr float MNEMD_BBD_SAG_RATE    = 0.04f; // hold-multiplier units per second: the DRIFT SPEED
+static constexpr float MNEMD_BBD_SAG_DOWN    = 0.75f; // share of bumps that send it slower (down) rather than faster
+static constexpr float MNEMD_BBD_BUMP_RATE   = 0.3f;  // bumps/s at full CCW (x host slip amount) — also sets SEGMENT LENGTH, since a bump re-rolls the direction
+static constexpr float MNEMD_BBD_BUMP_DEPTH  = 0.15f; // size of the discrete lurch at a bump
+static constexpr float MNEMD_BBD_SLIP_MULT   = 1.35f; // slowest the clock may sag to (hold-length stretch)
+static constexpr float MNEMD_BBD_SLIP_MULT_LO = 0.85f;// fastest it may drift the other way (<1 = quicker than nominal)
 // Event TYPE. There are two, chosen per event by SHARE.
 //
 //  - RATE SLIP: the ZOH clock jumps to another rate for the event. A ZOH's rate
@@ -195,6 +217,9 @@ static constexpr int   MNEMD_BBD_HIST_N        = 512;  // held-value history (po
 // at 0 ms, 0.047 at 1, 0.034 at 2, 0.021 at 4, 0.0156 at 8 — it saturates at 8,
 // and 12/16 were indistinguishable by ear while costing stutters (each event
 // has TWO fades and the shortest are 15 % of the echo time).
+// Polarity of the replayed run. -1 flips it against the live signal, so where
+// the two overlap they cancel instead of reinforce. TEMP experiment — 1.f is normal.
+static constexpr float MNEMD_BBD_REPLAY_POL = -1.f;
 static constexpr float MNEMD_BBD_REPLAY_XF_MS = 8.f;
 // The replayed run is used as a MODULATOR of the live path, not mixed with it.
 // Crossfading in the replay made this a second stutter voice, which competes
@@ -303,6 +328,10 @@ class MnemDegrade {
   // highs + grit) is mixed on top of the dark body. 1 = default (mnemonic);
   // vestige raises it for more clarity in the looper without losing distortion.
   void  SetFoldScale(float s) { fold_scale_ = s; }
+
+  // Per-instance bit-crush amount: scales MNEMD_CRUSH_STEP. 0 = off (default,
+  // so mnemonic and vestige are unchanged); 1 = the full step above.
+  void  SetBbdCrush(float s) { crush_scale_ = s; }
   // Per-instance BBD brightness: raises the reconstruction + stage-loss LPF
   // FLOOR. 1 = default (mnemonic, vestige).
   //
@@ -536,6 +565,11 @@ class MnemDegrade {
     fold_drive_ = MNEMD_FOLD_GAIN_MIN + (MNEMD_FOLD_GAIN - MNEMD_FOLD_GAIN_MIN) * dp;
     fold_out_   = MNEMD_FOLD_MAKEUP / fold_drive_;
 
+    // Crush step: 0 up to KNEE, ramping to STEP*scale at full CCW.
+    float cbp = (d_ - MNEMD_CRUSH_KNEE) / (1.f - MNEMD_CRUSH_KNEE);
+    if (cbp < 0.f) cbp = 0.f;
+    crush_step_ = MNEMD_CRUSH_STEP * crush_scale_ * powf(cbp, MNEMD_CRUSH_CURVE);
+
     // Tape coeffs
     tape_lp_.SetLP(MNEMD_TAPE_LP_D0 * powf(MNEMD_TAPE_LP_D1 / MNEMD_TAPE_LP_D0, d_), sr_);
     tape_hp_hz_ = MNEMD_TAPE_HP_D0 + (MNEMD_TAPE_HP_D1 - MNEMD_TAPE_HP_D0) * d_;
@@ -574,13 +608,32 @@ class MnemDegrade {
     // Poisson clock-slip events, BBD only, above the knee. Same shape as the
     // tape dropout/snag scheduler below.
     if (active_chain_ == -1) {
+      const float dd   = (d_ - MNEMD_BBD_SLIP_KNEE) / (1.f - MNEMD_BBD_SLIP_KNEE);
+      const float pblk = (float)MNEMD_CTRL / sr_;
+      const bool  armed = (bbd_slip_amt_ > 0.f && d_ > MNEMD_BBD_SLIP_KNEE);
+      // Replay (stutter) events: timed, unchanged.
       if (bbd_slip_left_ > 0) {
         bbd_slip_left_ -= MNEMD_CTRL;
-        if (bbd_slip_left_ <= 0) { bbd_slip_mult_ = 1.f; bbd_replay_on_ = false; }  // snap back
-      } else if (bbd_slip_amt_ > 0.f && d_ > MNEMD_BBD_SLIP_KNEE) {
-        const float dd = (d_ - MNEMD_BBD_SLIP_KNEE) / (1.f - MNEMD_BBD_SLIP_KNEE);
-        const float pblk = (float)MNEMD_CTRL / sr_;
-        if (Rand() < MNEMD_BBD_SLIP_RATE * bbd_slip_amt_ * dd * pblk) StartBbdSlip(dd);
+        if (bbd_slip_left_ <= 0) bbd_replay_on_ = false;
+      } else if (armed) {
+        if (Rand() < MNEMD_BBD_SLIP_RATE * MNEMD_BBD_REPLAY_SHARE
+                     * bbd_slip_amt_ * dd * pblk) StartBbdSlip(dd);
+      }
+      // Starving capacitor: sag continuously in the current direction, and bump
+      // (rarely) to a new one. No target, no release — it only ever drifts away.
+      if (armed) {
+        bbd_slip_mult_ += bbd_sag_dir_ * MNEMD_BBD_SAG_RATE * dd * dt;
+        if (Rand() < MNEMD_BBD_BUMP_RATE * bbd_slip_amt_ * dd * pblk) {
+          bbd_sag_dir_    = (Rand() < MNEMD_BBD_SAG_DOWN) ? +1.f : -1.f;
+          bbd_slip_mult_ += bbd_sag_dir_ * MNEMD_BBD_BUMP_DEPTH * dd;
+        }
+        // Travel limits. Hitting one turns it around, so it never parks.
+        const float hi = 1.f + (MNEMD_BBD_SLIP_MULT - 1.f) * dd;
+        const float lo = 1.f - (1.f - MNEMD_BBD_SLIP_MULT_LO) * dd;
+        if (bbd_slip_mult_ > hi) { bbd_slip_mult_ = hi; bbd_sag_dir_ = -1.f; }
+        else if (bbd_slip_mult_ < lo) { bbd_slip_mult_ = lo; bbd_sag_dir_ = +1.f; }
+      } else {
+        bbd_slip_mult_ = 1.f;
       }
     } else {
       bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f; bbd_replay_on_ = false;
@@ -599,7 +652,8 @@ class MnemDegrade {
   void ResetChain() {
     bbd_in_lp_.Reset(); bbd_rec_lp_.Reset(); bbd_loss_.Reset(); bbd_noise_lp_.Reset();
     bbd_samp_ctr_ = 0; bbd_phase_ = 0.f; bbd_hold_ = 0.f;
-    bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f;
+    bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f; bbd_sag_dir_ = 1.f;
+    crush_step_ = 0.f;
     tape_lp_.Reset(); tape_hp_.Reset(); head_bump_.Reset();
     tape_noise_lp1_.Reset(); tape_noise_lp2_.Reset(); sat_x1_ = 0.f;
     env_ = 0.f; drop_left_ = 0; drop_gain_ = drop_g_cur_ = 1.f; snag_cents_ = 0.f;
@@ -642,10 +696,15 @@ class MnemDegrade {
         if (++bbd_replay_pos_ >= bbd_replay_len_) bbd_replay_pos_ = 0;
         // A/B: the replay REPLACES the live signal for the event, faded in and
         // out by bbd_xf_. At mix 1.0 you hear the stutter alone.
-        bbd_hold_ = live + (rep - live) * (bbd_xf_ * bbd_replay_mix_);
+        bbd_hold_ = live + (rep * MNEMD_BBD_REPLAY_POL - live)
+                           * (bbd_xf_ * bbd_replay_mix_);
       } else {
         bbd_hold_ = live;
       }
+      // Quantise the held sample. Once per hold, so it coarsens the existing
+      // staircase rather than introducing a second rate.
+      if (crush_step_ > 0.f)
+        bbd_hold_ = crush_step_ * floorf(bbd_hold_ / crush_step_ + 0.5f);
     }
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
     // Ring modulation, at audio rate so the modulator can be smoothed out of its
@@ -720,7 +779,8 @@ class MnemDegrade {
     float dB = (MNEMD_DROP_DB_MIN + Rand() * (MNEMD_DROP_DB_MAX - MNEMD_DROP_DB_MIN)) * d_;
     drop_gain_ = powf(10.f, -dB / 20.f);                   // (envelope simplified to a hold dip)
   }
-  void StartBbdSlip(float dd) {                           // dd = 0..1 above the knee
+  // Event length in ms. Shared by the replay events and the rate excursions.
+  float BbdSlipDurMs() {
     float lo = MNEMD_BBD_SLIP_MIN_MS, hi = MNEMD_BBD_SLIP_MAX_MS;
     if (slip_ref_blend_ > 0.f && slip_ref_ms_ > 0.f) {
       float rlo = slip_ref_ms_ * MNEMD_BBD_SLIP_REF_MIN;
@@ -730,11 +790,13 @@ class MnemDegrade {
       lo += (rlo - lo) * slip_ref_blend_;
       hi += (rhi - hi) * slip_ref_blend_;
     }
-    const float dur = lo + Rand() * (hi - lo);
-    bbd_slip_left_ = (int)(dur * 0.001f * sr_);
-    if (Rand() < MNEMD_BBD_REPLAY_SHARE) {
+    return lo + Rand() * (hi - lo);
+  }
+  void StartBbdSlip(float dd) {                           // dd = 0..1 above the knee
+    (void)dd;
+    bbd_slip_left_ = (int)(BbdSlipDurMs() * 0.001f * sr_);
+    {
       bbd_replay_on_ = true;                 // replay: rate untouched
-      bbd_slip_mult_ = 1.f;
       // Loop length in ms -> whole held values at the CURRENT clock, bounded by
       // the history we actually have.
       const float lms = MNEMD_BBD_REPLAY_MIN_MS +
@@ -745,13 +807,8 @@ class MnemDegrade {
       bbd_replay_len_   = w;
       bbd_replay_start_ = bbd_hist_w_ - (unsigned)w;   // the run just captured
       bbd_replay_pos_   = 0;
-    } else {
-      bbd_replay_on_ = false;                // rate slip: the pitched one
-      bbd_slip_mult_ = 1.f + Rand() * (MNEMD_BBD_SLIP_MULT - 1.f) * dd;
     }
-    // (A bidirectional version — the clock lurching faster as well as slower —
-    //  was tried and pulled back out while isolating variables. It is a one-line
-    //  change here if the slip ever needs more variety.)
+    // The rate excursion lives in the control tick now, not here.
   }
   void StartSnag() {                                     // pitch bump, decays via snag_keep_
     snag_cents_ = (MNEMD_SNAG_CENTS_MIN +
@@ -791,6 +848,7 @@ class MnemDegrade {
   float fold_out_   = MNEMD_FOLD_MAKEUP / MNEMD_FOLD_GAIN; // relative level comp = MAKEUP/fold_drive_
   float fold_scale_ = 1.f;                         // per-instance fold brightness (SetFoldScale; 1 = default)
   float bbd_lpf_scale_    = 1.f;                   // per-instance BBD brightness (SetBbdLpfScale)
+  float crush_scale_ = 0.f, crush_step_ = 0.f;   // bit-crush (SetBbdCrush)
   float tape_drive_scale_ = 1.f;                   // per-instance tape drive (SetTapeDriveScale)
   float tape_level_       = 1.f;                   // per-instance tape output level (SetTapeLevel)
   float bbd_level_        = 1.f;                   // per-instance BBD output level (SetBbdLevel)
@@ -799,6 +857,7 @@ class MnemDegrade {
   float tape_depth_scale_ = 1.f;                   // per-instance CW travel extension (SetTapeDepthScale)
   float bbd_slip_amt_  = 0.f;                      // per-instance BBD clock-slip amount (SetBbdSlip)
   float bbd_slip_mult_ = 1.f;                      // active slip: hold-length stretch (1 = none)
+  float bbd_sag_dir_   = 1.f;                      // +1 = sagging slower, -1 = drifting faster
   int   bbd_slip_left_ = 0;                        // samples remaining in the current slip
   float bbd_drift_amt_ = 0.f;                      // per-instance continuous clock drift (SetBbdDrift)
   bool  bbd_replay_on_    = false;                    // current event corrupts CONTENT, not rate

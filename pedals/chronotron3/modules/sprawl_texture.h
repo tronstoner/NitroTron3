@@ -31,6 +31,7 @@ class SprawlTexture {
     degrade_.SetTapeDepthScale(SPRAWL_TAPE_DEPTH_SCALE);
     degrade_.SetBbdSlip(SPRAWL_BBD_SLIP);
     degrade_.SetBbdReplayMix(SPRAWL_BBD_REPLAY_MIX);
+    degrade_.SetBbdCrush(SPRAWL_BBD_CRUSH);
     degrade_.SetBbdDrift(SPRAWL_BBD_DRIFT);
     degrade_.SetBbdDepthComp(SPRAWL_BBD_DEPTH_COMP);
     degrade_.SetTapeDepthComp(SPRAWL_TAPE_DEPTH_COMP);
