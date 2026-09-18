@@ -176,6 +176,20 @@ static constexpr float MNEMD_BBD_GLITCH_SHARE = 0.5f;
 static constexpr float MNEMD_BBD_GLITCH_MIN_MS = 40.f;
 static constexpr float MNEMD_BBD_GLITCH_MAX_MS = 200.f;
 static constexpr int   MNEMD_BBD_HIST_N        = 512;  // held-value history (power of 2)
+// Boundary crossfade. Entering a stutter jumps from what is playing NOW to
+// something recorded tens of ms ago, at an unrelated point in the waveform;
+// stopping jumps back. MEASURED (deep CCW, 179 s): those two moments step ~10x
+// an ordinary hold — 0.171 entering and 0.116 leaving, against a 0.015 median —
+// while the loop point itself measured 0.014, i.e. perfectly normal. So it is
+// the boundaries that click, not the join. Fade live <-> replay across both.
+static constexpr float MNEMD_BBD_GLITCH_XF_MS = 8.f;
+// Measured boundary step vs a 0.0149 ordinary step: 0.171 at 0 ms, 0.047 at
+// 1, 0.034 at 2, 0.021 at 4, 0.0156 at 8 — i.e. it saturates at 8 and 12/16
+// were indistinguishable by ear. Larger only costs stutters: each event has
+// TWO fades and the shortest events are 15 % of the echo time, so at 16 ms a
+// 500 ms echo spends 43 % of its briefest stutters fading (all of them at a
+// 150 ms echo). 8 is the smallest fully clean value; 4 is nearly clean if a
+// snappier onset is ever wanted.
 // Continuous clock drift: a per-instance random walk on the hold length, so the
 // decimator never sits at the same clock twice and the slip events below ride a
 // moving target instead of repeating. Driven by the engine's OU random walk
@@ -284,6 +298,15 @@ class MnemDegrade {
   // Per-instance continuous BBD clock drift, 0..1 (0 = off = default, i.e. the
   // exact integer clock mnemonic and vestige have always had).
   void  SetBbdDrift(float a) { bbd_drift_amt_ = a; }
+  // Per-instance DEPTH compensation: the gain each chain should reach at FULL
+  // depth, interpolated from 1.0 at the centre deadzone. Both chains lose level
+  // as they get deeper (BBD to its LPFs, tape to the drive normalisation and HF
+  // loss), so without this the extremes sit well below the clean noon level. It
+  // is deliberately NOT an output level: at noon it is exactly 1, so it cannot
+  // change the already-correct centre or the feedback drive there.
+  // 1 = off = default (mnemonic, vestige).
+  void  SetBbdDepthComp(float g)  { bbd_depth_comp_ = g; }
+  void  SetTapeDepthComp(float g) { tape_depth_comp_ = g; }
   // Host time reference for slip-event LENGTH (control rate). `ref_ms` is the
   // host's musical time (sprawl: the echo time); `blend` crossfades from the
   // fixed MNEMD_BBD_SLIP_*_MS (0) to fully reference-scaled (1). Default 0,
@@ -295,6 +318,9 @@ class MnemDegrade {
   // Read-only state snapshot for diagnostics (host or serial). No behaviour.
   struct DebugState {
     int   chain, tgt_chain, hold_len;
+    bool  glitch;                 // a content-stutter event is running
+    float slip_mult, hold_f;      // rate-slip factor, live fractional hold
+    int   glitch_pos, glitch_len; // position within the replayed run
     float mix, d, d_tgt, noise_gate, noise_sgate, nz_det, env;
     float bbd_hold, in_z1, in_z2, rec_z1, rec_z2, loss_z, dc_x1, dc_y1;
     float sat_x1, tape_lp_z, hp_x1, hp_y1, hb_z1, hb_z2, drop_g, snag;
@@ -302,6 +328,9 @@ class MnemDegrade {
   };
   void DebugFill(DebugState& o) const {
     o.chain = active_chain_; o.tgt_chain = target_chain_; o.hold_len = bbd_hold_len_;
+    o.glitch = bbd_glitch_ && bbd_slip_left_ > 0;
+    o.slip_mult = bbd_slip_mult_; o.hold_f = bbd_hold_f_;
+    o.glitch_pos = bbd_glitch_pos_; o.glitch_len = bbd_glitch_len_;
     o.mix = mix_; o.d = d_; o.d_tgt = d_target_;
     o.noise_gate = noise_gate_; o.noise_sgate = noise_sgate_; o.nz_det = nz_det_; o.env = env_;
     o.bbd_hold = bbd_hold_;
@@ -443,6 +472,14 @@ class MnemDegrade {
     bbd_in_lp_.LP(in_fc,  0.707f, sr_);   // pre-decimation: >0.5 f_clk folds = grit
     bbd_rec_lp_.LP(rec_fc, 0.707f, sr_);  // post-line: floored so the dark end isn't muffled
     bbd_loss_.SetLP(loss_fc, sr_);
+    // d^2, not d: neither chain loses much until it is some way in, so a linear
+    // blend makes the shallow end HOTTER than the clean centre it is matching.
+    // Clamp at 1 first: the tape travel can be EXTENDED past full depth
+    // (SetTapeDepthScale), and this constant means 'gain at full depth', not
+    // 'gain per unit depth' — unclamped, a 1.5x travel squared to 2.25x comp.
+    { const float dq = d_ > 1.f ? 1.f : d_; const float dc = dq * dq;
+      bbd_comp_  = 1.f + (bbd_depth_comp_  - 1.f) * dc;   // exactly 1 at the deadzone
+      tape_comp_ = 1.f + (tape_depth_comp_ - 1.f) * dc; }
     bbd_noise_lin_ = powf(10.f, (MNEMD_BBD_NOISE_DB0 +
                           (MNEMD_BBD_NOISE_DB1 - MNEMD_BBD_NOISE_DB0) * d_) / 20.f);
     bbd_nl_drive_ = 1.f + MNEMD_BBD_NL_DRIVE * d_;
@@ -547,14 +584,25 @@ class MnemDegrade {
       float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_ * noise_gate_ * noise_sgate_;
       bbd_hist_[bbd_hist_w_ & (MNEMD_BBD_HIST_N - 1)] = x + n;   // history of held values
       bbd_hist_w_++;
-      if (bbd_glitch_ && bbd_slip_left_ > 0 && bbd_glitch_len_ > 1) {
+      const float live = x + n;                            // raw noise -> accumulates in feedback
+      const int   xf_n = (int)(MNEMD_BBD_GLITCH_XF_MS * 0.001f * sr_);
+      const bool  replaying = (bbd_glitch_ && bbd_slip_left_ > 0 && bbd_glitch_len_ > 1);
+      // Fade out once the event is within a crossfade of its end, so the return
+      // to live is as gradual as the entry. Stepped per hold, hence hold_f.
+      const float xf_tgt  = (replaying && bbd_slip_left_ > xf_n) ? 1.f : 0.f;
+      const float xf_step = bbd_hold_f_ / (float)(xf_n > 1 ? xf_n : 1);
+      if      (bbd_xf_ < xf_tgt) { bbd_xf_ += xf_step; if (bbd_xf_ > 1.f) bbd_xf_ = 1.f; }
+      else if (bbd_xf_ > xf_tgt) { bbd_xf_ -= xf_step; if (bbd_xf_ < 0.f) bbd_xf_ = 0.f; }
+
+      if (replaying || bbd_xf_ > 0.f) {
         // Replay a contiguous run of held values, in order, looping: the
         // waveform survives, so it reads as a repeat rather than noise.
-        bbd_hold_ = bbd_hist_[(bbd_glitch_start_ + bbd_glitch_pos_)
-                              & (MNEMD_BBD_HIST_N - 1)];
+        const float rep = bbd_hist_[(bbd_glitch_start_ + bbd_glitch_pos_)
+                                    & (MNEMD_BBD_HIST_N - 1)];
         if (++bbd_glitch_pos_ >= bbd_glitch_len_) bbd_glitch_pos_ = 0;
+        bbd_hold_ = live + (rep - live) * bbd_xf_;         // crossfade, not a switch
       } else {
-        bbd_hold_ = x + n;                                 // raw noise -> accumulates in feedback
+        bbd_hold_ = live;
       }
     }
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
@@ -577,7 +625,7 @@ class MnemDegrade {
     // fluctuation (same slow signal as the BBD clock drift) — approximates the
     // compander's level breathing for ~1 mult, no powf, and does NOT restore.
     x *= 1.f + MNEMD_BBD_BREATH * bbd_breath_ * d_;
-    return x * bbd_makeup_ * bbd_level_;
+    return x * bbd_makeup_ * bbd_level_ * bbd_comp_;
   }
 
   // ---- Tape chain (spec §4) ---------------------------------------------
@@ -606,7 +654,7 @@ class MnemDegrade {
     float dtgt = (drop_left_ > 0) ? drop_gain_ : 1.f;
     drop_g_cur_ += (dtgt - drop_g_cur_) * drop_coef_;
     x *= drop_g_cur_;
-    return x * tape_makeup_ * tape_level_;
+    return x * tape_makeup_ * tape_level_ * tape_comp_;
   }
   inline float Shape(float x) {                            // asym waveshaper + bias deadzone
     // Normalise to unity small-signal gain (d/dx at 0 = sat_k) so the shaper
@@ -698,6 +746,8 @@ class MnemDegrade {
   float tape_drive_scale_ = 1.f;                   // per-instance tape drive (SetTapeDriveScale)
   float tape_level_       = 1.f;                   // per-instance tape output level (SetTapeLevel)
   float bbd_level_        = 1.f;                   // per-instance BBD output level (SetBbdLevel)
+  float bbd_depth_comp_  = 1.f, tape_depth_comp_ = 1.f;  // gain at FULL depth (1 = off)
+  float bbd_comp_ = 1.f, tape_comp_ = 1.f;               // ... interpolated by depth
   float tape_depth_scale_ = 1.f;                   // per-instance CW travel extension (SetTapeDepthScale)
   float bbd_slip_amt_  = 0.f;                      // per-instance BBD clock-slip amount (SetBbdSlip)
   float bbd_slip_mult_ = 1.f;                      // active slip: hold-length stretch (1 = none)
@@ -708,6 +758,7 @@ class MnemDegrade {
   unsigned bbd_hist_w_ = 0;
   unsigned bbd_glitch_start_ = 0;                  // first held value of the replayed run
   int      bbd_glitch_len_ = 0, bbd_glitch_pos_ = 0;
+  float    bbd_xf_ = 0.f;                          // live <-> replay crossfade (0..1)
   float slip_ref_ms_    = 0.f;                     // host time reference for slip length
   float slip_ref_blend_ = 0.f;                     // 0 = fixed ms, 1 = fully reference-scaled
   float bbd_hold_f_    = 1.f;                      // fractional hold length (the live clock)

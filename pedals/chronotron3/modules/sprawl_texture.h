@@ -31,6 +31,8 @@ class SprawlTexture {
     degrade_.SetTapeDepthScale(SPRAWL_TAPE_DEPTH_SCALE);
     degrade_.SetBbdSlip(SPRAWL_BBD_SLIP);
     degrade_.SetBbdDrift(SPRAWL_BBD_DRIFT);
+    degrade_.SetBbdDepthComp(SPRAWL_BBD_DEPTH_COMP);
+    degrade_.SetTapeDepthComp(SPRAWL_TAPE_DEPTH_COMP);
     warble_ring_.Init(warble_slab, SPRAWL_WARBLE_LEN);
     warble_base_ = SPRAWL_WARBLE_BASE_MS * 0.001f * sr;
   }

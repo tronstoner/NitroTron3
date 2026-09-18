@@ -241,10 +241,23 @@ static constexpr float  SPRAWL_BBD_LPF_SCALE   = 3.0f;  // CCW: open the BBD low
                                                         // default voicing is far too dark on the grain bus
 static constexpr float  SPRAWL_TAPE_DRIVE_SCALE = 2.5f; // CW: harder into the tape saturator (grit —
                                                         // Shape() normalises by drive, so level is flat)
-static constexpr float  SPRAWL_TAPE_LEVEL      = 1.6f;  // CW: and louder with it (2.0 was hot once
-                                                        // SPRAWL_TAPE_DEPTH_SCALE extended the travel)
-static constexpr float  SPRAWL_BBD_LEVEL       = 1.5f;  // CCW: BBD output level (the CW side's
-                                                        // SPRAWL_TAPE_LEVEL counterpart)
+static constexpr float  SPRAWL_TAPE_LEVEL      = 1.30f; // CW output level
+// Both sides are normalised so their LOUDEST point equals the noon/clean level
+// (= SW1 UP at noon = unity), measured with events and noise off:
+//   BBD  at level 1.0 runs 0.80..1.15 (peaks near the deadzone edge) -> 0.87
+//   tape at level 1.0 runs 0.51..0.77 (peaks just past noon)         -> 1.30
+// The two chains are NOT symmetric: BBD is already near unity on its own,
+// tape loses level to the drive normalisation and HF loss, so they need very
+// different numbers to end up equally loud. Peak-matched rather than
+// average-matched because the peak is what tips the feedback loop early.
+static constexpr float  SPRAWL_BBD_LEVEL       = 0.87f; // CCW output level
+// Depth compensation: the gain each chain reaches at FULL depth, blended in
+// from 1.0 at noon. Both chains lose level as they deepen, so the extremes —
+// where this mode is actually used — sat ~3.5 dB below the clean noon level.
+// Fixing that with OUTPUT level instead would lift the correct centre too and
+// tip the feedback loop early, which is exactly what happened.
+static constexpr float  SPRAWL_BBD_DEPTH_COMP  = 1.45f;
+static constexpr float  SPRAWL_TAPE_DEPTH_COMP = 1.52f;
 // CW: extend the tape travel past its stock endpoint. One knob on the shared
 // engine's depth, so every tape parameter reaches further in the same
 // proportion — the character at a given position is unchanged, the far end
