@@ -159,30 +159,69 @@ static constexpr float MNEMD_BBD_SLIP_REF_MIN  = 0.15f;   // x the reference tim
 static constexpr float MNEMD_BBD_SLIP_REF_MAX  = 0.80f;
 static constexpr float MNEMD_BBD_SLIP_REF_CAP_MS = 1500.f;
 static constexpr float MNEMD_BBD_SLIP_MULT   = 3.0f;  // max hold-length stretch (clock down to 1/3 speed)
-// Event TYPE. A rate slip changes how fast the ZOH runs, and a ZOH's rate IS a
-// pitch — so slipping it can only ever move the staircase's note around, which
-// reads as melodic sample-and-hold however it is tuned. The other half of the
-// events therefore leave the rate ALONE and corrupt the held CONTENT instead:
-// each hold re-issues a RANDOM one of the last GLITCH_DEPTH held values. That
-// is aperiodic by construction — a stutter/bit-rot, not a tone — and it is the
-// axis that actually removes the melody. SHARE 0 = all rate slips (the old
-// behaviour), 1 = all content glitches.
-static constexpr float MNEMD_BBD_GLITCH_SHARE = 0.5f;
-// The replay must be a CONTIGUOUS run, looped — that is what a stutter is. An
-// earlier version picked a random held value each tick: an uncorrelated
-// sequence, i.e. white noise ("chhhrrr"), not a repeat. Loop LENGTH is set in
-// ms and kept well above the audio range, because a short loop is just a low
-// note again (40 ms = 25 Hz); this is the rhythmic-repeat range.
-static constexpr float MNEMD_BBD_GLITCH_MIN_MS = 40.f;
-static constexpr float MNEMD_BBD_GLITCH_MAX_MS = 200.f;
+// Event TYPE. There are two, chosen per event by SHARE.
+//
+//  - RATE SLIP: the ZOH clock jumps to another rate for the event. A ZOH's rate
+//    IS a pitch, so this moves the staircase's note around; tuned any way, it
+//    reads as melodic sample-and-hold. That is its character, not a fault.
+//
+//  - REPLAY: the rate is left alone and a contiguous run of recent held values
+//    is replayed, looping, and SUMMED INTO the live path (see the mix below).
+//    It is not heard as a repeat: summing a signal with a looping copy of
+//    itself cancels at regular frequency intervals, so what you hear is a
+//    hollow, metallic, drifting colour. NOTE that is an inherent consequence of
+//    the sum — there is no comb-filter stage anywhere in this chain.
+//
+// SHARE 0 = all rate slips, 1 = all replays.
+static constexpr float MNEMD_BBD_REPLAY_SHARE = 0.5f;
+
+// The run must be CONTIGUOUS and looped. An earlier version picked a random
+// held value per tick: an uncorrelated sequence, i.e. white noise ("chhhrrr").
+// Its LENGTH sets how far back the summed copy is delayed, and therefore the
+// spacing of the cancellation notches — 40-200 ms puts those 5-25 Hz apart,
+// which is dense enough to read as colour rather than as an echo. This is the
+// parameter that decides what the effect SOUNDS like.
+static constexpr float MNEMD_BBD_REPLAY_MIN_MS = 40.f;
+static constexpr float MNEMD_BBD_REPLAY_MAX_MS = 200.f;
 static constexpr int   MNEMD_BBD_HIST_N        = 512;  // held-value history (power of 2)
-// Boundary crossfade. Entering a stutter jumps from what is playing NOW to
-// something recorded tens of ms ago, at an unrelated point in the waveform;
-// stopping jumps back. MEASURED (deep CCW, 179 s): those two moments step ~10x
-// an ordinary hold — 0.171 entering and 0.116 leaving, against a 0.015 median —
-// while the loop point itself measured 0.014, i.e. perfectly normal. So it is
-// the boundaries that click, not the join. Fade live <-> replay across both.
-static constexpr float MNEMD_BBD_GLITCH_XF_MS = 8.f;
+
+// Boundary fade. Starting a replay jumps from what is playing NOW to something
+// recorded tens of ms ago at an unrelated point in the waveform; stopping jumps
+// back. MEASURED (deep CCW, 179 s): those two moments stepped ~10x an ordinary
+// hold — 0.171 entering, 0.116 leaving, against a 0.015 median — while the loop
+// point itself measured 0.014, i.e. perfectly normal. So it is the BOUNDARIES
+// that click, not the join; an earlier loop-point search fixed the one join
+// that was never broken. Measured boundary step vs that 0.0149 baseline: 0.171
+// at 0 ms, 0.047 at 1, 0.034 at 2, 0.021 at 4, 0.0156 at 8 — it saturates at 8,
+// and 12/16 were indistinguishable by ear while costing stutters (each event
+// has TWO fades and the shortest are 15 % of the echo time).
+static constexpr float MNEMD_BBD_REPLAY_XF_MS = 8.f;
+// The replayed run is used as a MODULATOR of the live path, not mixed with it.
+// Crossfading in the replay made this a second stutter voice, which competes
+// with the grain engine's own stutter on K3-CW; multiplying instead keeps the
+// live signal as the carrier and lets the replay colour it. Because the
+// modulator is a delayed copy of the same source, the two share a pitch with a
+// drifting phase relationship, so the product is an octave-ish component whose
+// amplitude walks in the stutter's rhythm — modulation, not repeats.
+// The modulator is the raw replayed signal, NOT normalised — it keeps the level
+// it was recorded at, so the modulation tracks playing dynamics. The entry/exit
+// crossfade ramps the DEPTH, which is click-free by construction.
+// How much of the replayed run is summed into the live path.
+//
+// SUMMED — not crossfaded against it, and not used to modulate it. Both were
+// tried: crossfading made it a second stutter voice that competed with the
+// grain engine's own stutter on K3-CW, and multiplying (ring modulation) nulls
+// the output whenever the modulator crosses zero, which reads as dropouts.
+// Summing cancels at regular frequency intervals instead, and because the loop
+// keeps replaying the same run while the live path moves on, the phase
+// relationship drifts continuously so the colour never settles. Metallic,
+// hollow, shifted.
+//
+// It is summed INSIDE the reconstruction path, so it is filtered exactly like
+// the live signal and sits in the same tonal world rather than on top of it.
+//
+// Kept deliberately BELOW the live path (see the depth constant): it should
+// colour, not answer back. At full depth it is still the quieter of the two.
 // Measured boundary step vs a 0.0149 ordinary step: 0.171 at 0 ms, 0.047 at
 // 1, 0.034 at 2, 0.021 at 4, 0.0156 at 8 — i.e. it saturates at 8 and 12/16
 // were indistinguishable by ear. Larger only costs stutters: each event has
@@ -307,6 +346,9 @@ class MnemDegrade {
   // 1 = off = default (mnemonic, vestige).
   void  SetBbdDepthComp(float g)  { bbd_depth_comp_ = g; }
   void  SetTapeDepthComp(float g) { tape_depth_comp_ = g; }
+  // Per-instance ring depth for the BBD stutter: 0 = off (the replay is simply
+  // not heard), 1 = the live path fully multiplied by the replayed run.
+  void  SetBbdReplayMix(float d) { bbd_replay_mix_ = d; }
   // Host time reference for slip-event LENGTH (control rate). `ref_ms` is the
   // host's musical time (sprawl: the echo time); `blend` crossfades from the
   // fixed MNEMD_BBD_SLIP_*_MS (0) to fully reference-scaled (1). Default 0,
@@ -318,9 +360,9 @@ class MnemDegrade {
   // Read-only state snapshot for diagnostics (host or serial). No behaviour.
   struct DebugState {
     int   chain, tgt_chain, hold_len;
-    bool  glitch;                 // a content-stutter event is running
+    bool  replay_on;                 // a replay event is running
     float slip_mult, hold_f;      // rate-slip factor, live fractional hold
-    int   glitch_pos, glitch_len; // position within the replayed run
+    int   replay_pos, replay_len; // position within the replayed run
     float mix, d, d_tgt, noise_gate, noise_sgate, nz_det, env;
     float bbd_hold, in_z1, in_z2, rec_z1, rec_z2, loss_z, dc_x1, dc_y1;
     float sat_x1, tape_lp_z, hp_x1, hp_y1, hb_z1, hb_z2, drop_g, snag;
@@ -328,9 +370,9 @@ class MnemDegrade {
   };
   void DebugFill(DebugState& o) const {
     o.chain = active_chain_; o.tgt_chain = target_chain_; o.hold_len = bbd_hold_len_;
-    o.glitch = bbd_glitch_ && bbd_slip_left_ > 0;
+    o.replay_on = bbd_replay_on_ && bbd_slip_left_ > 0;
     o.slip_mult = bbd_slip_mult_; o.hold_f = bbd_hold_f_;
-    o.glitch_pos = bbd_glitch_pos_; o.glitch_len = bbd_glitch_len_;
+    o.replay_pos = bbd_replay_pos_; o.replay_len = bbd_replay_len_;
     o.mix = mix_; o.d = d_; o.d_tgt = d_target_;
     o.noise_gate = noise_gate_; o.noise_sgate = noise_sgate_; o.nz_det = nz_det_; o.env = env_;
     o.bbd_hold = bbd_hold_;
@@ -534,14 +576,14 @@ class MnemDegrade {
     if (active_chain_ == -1) {
       if (bbd_slip_left_ > 0) {
         bbd_slip_left_ -= MNEMD_CTRL;
-        if (bbd_slip_left_ <= 0) { bbd_slip_mult_ = 1.f; bbd_glitch_ = false; }  // snap back
+        if (bbd_slip_left_ <= 0) { bbd_slip_mult_ = 1.f; bbd_replay_on_ = false; }  // snap back
       } else if (bbd_slip_amt_ > 0.f && d_ > MNEMD_BBD_SLIP_KNEE) {
         const float dd = (d_ - MNEMD_BBD_SLIP_KNEE) / (1.f - MNEMD_BBD_SLIP_KNEE);
         const float pblk = (float)MNEMD_CTRL / sr_;
         if (Rand() < MNEMD_BBD_SLIP_RATE * bbd_slip_amt_ * dd * pblk) StartBbdSlip(dd);
       }
     } else {
-      bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f; bbd_glitch_ = false;
+      bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f; bbd_replay_on_ = false;
     }
 
     // Poisson events (dropout + snag), tape only
@@ -585,8 +627,8 @@ class MnemDegrade {
       bbd_hist_[bbd_hist_w_ & (MNEMD_BBD_HIST_N - 1)] = x + n;   // history of held values
       bbd_hist_w_++;
       const float live = x + n;                            // raw noise -> accumulates in feedback
-      const int   xf_n = (int)(MNEMD_BBD_GLITCH_XF_MS * 0.001f * sr_);
-      const bool  replaying = (bbd_glitch_ && bbd_slip_left_ > 0 && bbd_glitch_len_ > 1);
+      const int   xf_n = (int)(MNEMD_BBD_REPLAY_XF_MS * 0.001f * sr_);
+      const bool  replaying = (bbd_replay_on_ && bbd_slip_left_ > 0 && bbd_replay_len_ > 1);
       // Fade out once the event is within a crossfade of its end, so the return
       // to live is as gradual as the entry. Stepped per hold, hence hold_f.
       const float xf_tgt  = (replaying && bbd_slip_left_ > xf_n) ? 1.f : 0.f;
@@ -595,19 +637,33 @@ class MnemDegrade {
       else if (bbd_xf_ > xf_tgt) { bbd_xf_ -= xf_step; if (bbd_xf_ < 0.f) bbd_xf_ = 0.f; }
 
       if (replaying || bbd_xf_ > 0.f) {
-        // Replay a contiguous run of held values, in order, looping: the
-        // waveform survives, so it reads as a repeat rather than noise.
-        const float rep = bbd_hist_[(bbd_glitch_start_ + bbd_glitch_pos_)
+        const float rep = bbd_hist_[(bbd_replay_start_ + bbd_replay_pos_)
                                     & (MNEMD_BBD_HIST_N - 1)];
-        if (++bbd_glitch_pos_ >= bbd_glitch_len_) bbd_glitch_pos_ = 0;
-        bbd_hold_ = live + (rep - live) * bbd_xf_;         // crossfade, not a switch
+        if (++bbd_replay_pos_ >= bbd_replay_len_) bbd_replay_pos_ = 0;
+        bbd_rep_ = rep;          // summed into the reconstruction path above
+        bbd_hold_ = live;
       } else {
+        bbd_rep_ = 0.f;
         bbd_hold_ = live;
       }
     }
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
+    // Replay summed in HERE, inside the reconstruction path, so it is loss- and
+    // reconstruction-filtered exactly like the live signal rather than sitting
+    // raw on top of it. bbd_xf_ ramps it in and out, keeping the boundaries
+    // click-free. (It was briefly summed after those filters: brighter and more
+    // separate, but it read as too bright overall, and the dedicated tone
+    // control that needed is redundant once the reconstruction filter sees it.)
+    if (bbd_replay_mix_ > 0.f && bbd_xf_ > 0.f)
+      x += bbd_rep_ * bbd_replay_mix_ * bbd_xf_;
+    // Ring modulation, at audio rate so the modulator can be smoothed out of its
+    // own staircase. Always runs the filter so it never restarts from stale
+    // state; bbd_xf_ ramps the depth, keeping the boundaries click-free.
     x = bbd_loss_.LP(x);                                   // stage loss (darkening; compounds)
     x = bbd_rec_lp_.Process(x);                            // reconstruction LP (dark, tames imaging)
+    // Sum the replayed run in here, AFTER reconstruction (see the note above).
+    // bbd_xf_ ramps it in and out, so the boundaries stay click-free.
+
     // Parallel sine-fold (aging stages overflow): regenerate mids/highs the dark
     // LPF removed and blend on top by depth. Dynamics-reactive by construction —
     // the raw signal level drives the fold depth (louder in = more overtones).
@@ -684,21 +740,21 @@ class MnemDegrade {
     }
     const float dur = lo + Rand() * (hi - lo);
     bbd_slip_left_ = (int)(dur * 0.001f * sr_);
-    if (Rand() < MNEMD_BBD_GLITCH_SHARE) {
-      bbd_glitch_ = true;                 // content glitch: rate untouched
+    if (Rand() < MNEMD_BBD_REPLAY_SHARE) {
+      bbd_replay_on_ = true;                 // replay: rate untouched
       bbd_slip_mult_ = 1.f;
       // Loop length in ms -> whole held values at the CURRENT clock, bounded by
       // the history we actually have.
-      const float lms = MNEMD_BBD_GLITCH_MIN_MS +
-                        Rand() * (MNEMD_BBD_GLITCH_MAX_MS - MNEMD_BBD_GLITCH_MIN_MS);
+      const float lms = MNEMD_BBD_REPLAY_MIN_MS +
+                        Rand() * (MNEMD_BBD_REPLAY_MAX_MS - MNEMD_BBD_REPLAY_MIN_MS);
       int w = (int)(lms * 0.001f * sr_ / (bbd_hold_f_ > 1.f ? bbd_hold_f_ : 1.f));
       if (w < 2) w = 2;
       if (w > MNEMD_BBD_HIST_N - 1) w = MNEMD_BBD_HIST_N - 1;
-      bbd_glitch_len_   = w;
-      bbd_glitch_start_ = bbd_hist_w_ - (unsigned)w;   // the run just captured
-      bbd_glitch_pos_   = 0;
+      bbd_replay_len_   = w;
+      bbd_replay_start_ = bbd_hist_w_ - (unsigned)w;   // the run just captured
+      bbd_replay_pos_   = 0;
     } else {
-      bbd_glitch_ = false;                // rate slip (the pitched one)
+      bbd_replay_on_ = false;                // rate slip: the pitched one
       bbd_slip_mult_ = 1.f + Rand() * (MNEMD_BBD_SLIP_MULT - 1.f) * dd;
     }
     // (A bidirectional version — the clock lurching faster as well as slower —
@@ -753,12 +809,14 @@ class MnemDegrade {
   float bbd_slip_mult_ = 1.f;                      // active slip: hold-length stretch (1 = none)
   int   bbd_slip_left_ = 0;                        // samples remaining in the current slip
   float bbd_drift_amt_ = 0.f;                      // per-instance continuous clock drift (SetBbdDrift)
-  bool  bbd_glitch_    = false;                    // current event corrupts CONTENT, not rate
-  float bbd_hist_[MNEMD_BBD_HIST_N] = {};          // recent held values (glitch source)
+  bool  bbd_replay_on_    = false;                    // current event corrupts CONTENT, not rate
+  float bbd_hist_[MNEMD_BBD_HIST_N] = {};          // recent held values (the replay source)
   unsigned bbd_hist_w_ = 0;
-  unsigned bbd_glitch_start_ = 0;                  // first held value of the replayed run
-  int      bbd_glitch_len_ = 0, bbd_glitch_pos_ = 0;
+  unsigned bbd_replay_start_ = 0;                  // first held value of the replayed run
+  int      bbd_replay_len_ = 0, bbd_replay_pos_ = 0;
   float    bbd_xf_ = 0.f;                          // live <-> replay crossfade (0..1)
+  float    bbd_replay_mix_ = 0.f;                  // per-instance ring depth (SetBbdReplayMix)
+  float    bbd_rep_ = 0.f;                         // replayed value, summed pre-reconstruction
   float slip_ref_ms_    = 0.f;                     // host time reference for slip length
   float slip_ref_blend_ = 0.f;                     // 0 = fixed ms, 1 = fully reference-scaled
   float bbd_hold_f_    = 1.f;                      // fractional hold length (the live clock)

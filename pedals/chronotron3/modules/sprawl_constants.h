@@ -268,6 +268,10 @@ static constexpr float  SPRAWL_TAPE_DEPTH_SCALE = 1.5f;
 // decimator lurches like the tape side's dropouts. Starts only past ~9
 // o'clock (MNEMD_BBD_SLIP_KNEE) and scales in from there. 0 = off.
 static constexpr float  SPRAWL_BBD_SLIP        = 1.0f;
+// How much of the replayed run is summed into the live path. It is a COLOUR,
+// not a second voice: kept at/below the live level so it cancels and skews
+// rather than answering back rhythmically. 0 = the replay is inaudible.
+static constexpr float  SPRAWL_BBD_REPLAY_MIX  = 0.50f;
 // CCW: continuous clock drift on top of the slip events — a random walk on the
 // decimator clock so it never repeats. This is the 'between integers' region
 // the engine used to quantise away; wanted here, off for the other hosts.
