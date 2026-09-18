@@ -206,16 +206,16 @@ static constexpr float MNEMD_BBD_REPLAY_XF_MS = 8.f;
 // The modulator is the raw replayed signal, NOT normalised — it keeps the level
 // it was recorded at, so the modulation tracks playing dynamics. The entry/exit
 // crossfade ramps the DEPTH, which is click-free by construction.
-// How much of the replayed run is summed into the live path.
+// How much the replay REPLACES the live signal during an event (A/B).
+// 1 = the stutter alone, 0 = the replay is inaudible.
 //
-// SUMMED — not crossfaded against it, and not used to modulate it. Both were
-// tried: crossfading made it a second stutter voice that competed with the
-// grain engine's own stutter on K3-CW, and multiplying (ring modulation) nulls
-// the output whenever the modulator crosses zero, which reads as dropouts.
-// Summing cancels at regular frequency intervals instead, and because the loop
-// keeps replaying the same run while the live path moves on, the phase
-// relationship drifts continuously so the colour never settles. Metallic,
-// hollow, shifted.
+// Summing it in parallel was tried instead and does NOT colour the sound: a
+// copy delayed by 40-200 ms does cancel frequencies, but they land 5-25 Hz
+// apart, far too fine for the ear to hear as timbre, so it just reads as a
+// second copy. Metallic/hollow colouring needs the two paths a FEW ms apart,
+// the way overlapping grains are — a different mechanism, not a mix level.
+// Ring modulation was also tried: multiplying nulls the output whenever the
+// modulator crosses zero, so it reads as dropouts.
 //
 // It is summed INSIDE the reconstruction path, so it is filtered exactly like
 // the live signal and sits in the same tonal world rather than on top of it.
@@ -640,22 +640,14 @@ class MnemDegrade {
         const float rep = bbd_hist_[(bbd_replay_start_ + bbd_replay_pos_)
                                     & (MNEMD_BBD_HIST_N - 1)];
         if (++bbd_replay_pos_ >= bbd_replay_len_) bbd_replay_pos_ = 0;
-        bbd_rep_ = rep;          // summed into the reconstruction path above
-        bbd_hold_ = live;
+        // A/B: the replay REPLACES the live signal for the event, faded in and
+        // out by bbd_xf_. At mix 1.0 you hear the stutter alone.
+        bbd_hold_ = live + (rep - live) * (bbd_xf_ * bbd_replay_mix_);
       } else {
-        bbd_rep_ = 0.f;
         bbd_hold_ = live;
       }
     }
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
-    // Replay summed in HERE, inside the reconstruction path, so it is loss- and
-    // reconstruction-filtered exactly like the live signal rather than sitting
-    // raw on top of it. bbd_xf_ ramps it in and out, keeping the boundaries
-    // click-free. (It was briefly summed after those filters: brighter and more
-    // separate, but it read as too bright overall, and the dedicated tone
-    // control that needed is redundant once the reconstruction filter sees it.)
-    if (bbd_replay_mix_ > 0.f && bbd_xf_ > 0.f)
-      x += bbd_rep_ * bbd_replay_mix_ * bbd_xf_;
     // Ring modulation, at audio rate so the modulator can be smoothed out of its
     // own staircase. Always runs the filter so it never restarts from stale
     // state; bbd_xf_ ramps the depth, keeping the boundaries click-free.
@@ -816,7 +808,6 @@ class MnemDegrade {
   int      bbd_replay_len_ = 0, bbd_replay_pos_ = 0;
   float    bbd_xf_ = 0.f;                          // live <-> replay crossfade (0..1)
   float    bbd_replay_mix_ = 0.f;                  // per-instance ring depth (SetBbdReplayMix)
-  float    bbd_rep_ = 0.f;                         // replayed value, summed pre-reconstruction
   float slip_ref_ms_    = 0.f;                     // host time reference for slip length
   float slip_ref_blend_ = 0.f;                     // 0 = fixed ms, 1 = fully reference-scaled
   float bbd_hold_f_    = 1.f;                      // fractional hold length (the live clock)
