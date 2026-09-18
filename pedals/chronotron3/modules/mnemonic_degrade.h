@@ -159,6 +159,23 @@ static constexpr float MNEMD_BBD_SLIP_REF_MIN  = 0.15f;   // x the reference tim
 static constexpr float MNEMD_BBD_SLIP_REF_MAX  = 0.80f;
 static constexpr float MNEMD_BBD_SLIP_REF_CAP_MS = 1500.f;
 static constexpr float MNEMD_BBD_SLIP_MULT   = 3.0f;  // max hold-length stretch (clock down to 1/3 speed)
+// Event TYPE. A rate slip changes how fast the ZOH runs, and a ZOH's rate IS a
+// pitch — so slipping it can only ever move the staircase's note around, which
+// reads as melodic sample-and-hold however it is tuned. The other half of the
+// events therefore leave the rate ALONE and corrupt the held CONTENT instead:
+// each hold re-issues a RANDOM one of the last GLITCH_DEPTH held values. That
+// is aperiodic by construction — a stutter/bit-rot, not a tone — and it is the
+// axis that actually removes the melody. SHARE 0 = all rate slips (the old
+// behaviour), 1 = all content glitches.
+static constexpr float MNEMD_BBD_GLITCH_SHARE = 0.5f;
+// The replay must be a CONTIGUOUS run, looped — that is what a stutter is. An
+// earlier version picked a random held value each tick: an uncorrelated
+// sequence, i.e. white noise ("chhhrrr"), not a repeat. Loop LENGTH is set in
+// ms and kept well above the audio range, because a short loop is just a low
+// note again (40 ms = 25 Hz); this is the rhythmic-repeat range.
+static constexpr float MNEMD_BBD_GLITCH_MIN_MS = 40.f;
+static constexpr float MNEMD_BBD_GLITCH_MAX_MS = 200.f;
+static constexpr int   MNEMD_BBD_HIST_N        = 512;  // held-value history (power of 2)
 // Continuous clock drift: a per-instance random walk on the hold length, so the
 // decimator never sits at the same clock twice and the slip events below ride a
 // moving target instead of repeating. Driven by the engine's OU random walk
@@ -480,14 +497,14 @@ class MnemDegrade {
     if (active_chain_ == -1) {
       if (bbd_slip_left_ > 0) {
         bbd_slip_left_ -= MNEMD_CTRL;
-        if (bbd_slip_left_ <= 0) bbd_slip_mult_ = 1.f;      // snap back
+        if (bbd_slip_left_ <= 0) { bbd_slip_mult_ = 1.f; bbd_glitch_ = false; }  // snap back
       } else if (bbd_slip_amt_ > 0.f && d_ > MNEMD_BBD_SLIP_KNEE) {
         const float dd = (d_ - MNEMD_BBD_SLIP_KNEE) / (1.f - MNEMD_BBD_SLIP_KNEE);
         const float pblk = (float)MNEMD_CTRL / sr_;
         if (Rand() < MNEMD_BBD_SLIP_RATE * bbd_slip_amt_ * dd * pblk) StartBbdSlip(dd);
       }
     } else {
-      bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f;
+      bbd_slip_left_ = 0; bbd_slip_mult_ = 1.f; bbd_glitch_ = false;
     }
 
     // Poisson events (dropout + snag), tape only
@@ -528,7 +545,17 @@ class MnemDegrade {
       bbd_phase_ -= bbd_hold_f_;
       if (bbd_phase_ >= bbd_hold_f_) bbd_phase_ = 0.f;   // hold shrank under us
       float n = bbd_noise_lp_.LP((Rand() * 2.f - 1.f)) * bbd_noise_lin_ * noise_gate_ * noise_sgate_;
-      bbd_hold_ = x + n;                                   // raw noise -> accumulates in feedback
+      bbd_hist_[bbd_hist_w_ & (MNEMD_BBD_HIST_N - 1)] = x + n;   // history of held values
+      bbd_hist_w_++;
+      if (bbd_glitch_ && bbd_slip_left_ > 0 && bbd_glitch_len_ > 1) {
+        // Replay a contiguous run of held values, in order, looping: the
+        // waveform survives, so it reads as a repeat rather than noise.
+        bbd_hold_ = bbd_hist_[(bbd_glitch_start_ + bbd_glitch_pos_)
+                              & (MNEMD_BBD_HIST_N - 1)];
+        if (++bbd_glitch_pos_ >= bbd_glitch_len_) bbd_glitch_pos_ = 0;
+      } else {
+        bbd_hold_ = x + n;                                 // raw noise -> accumulates in feedback
+      }
     }
     x = bbd_hold_;                                         // zero-order hold (imaging kept)
     x = bbd_loss_.LP(x);                                   // stage loss (darkening; compounds)
@@ -609,7 +636,23 @@ class MnemDegrade {
     }
     const float dur = lo + Rand() * (hi - lo);
     bbd_slip_left_ = (int)(dur * 0.001f * sr_);
-    bbd_slip_mult_ = 1.f + Rand() * (MNEMD_BBD_SLIP_MULT - 1.f) * dd;
+    if (Rand() < MNEMD_BBD_GLITCH_SHARE) {
+      bbd_glitch_ = true;                 // content glitch: rate untouched
+      bbd_slip_mult_ = 1.f;
+      // Loop length in ms -> whole held values at the CURRENT clock, bounded by
+      // the history we actually have.
+      const float lms = MNEMD_BBD_GLITCH_MIN_MS +
+                        Rand() * (MNEMD_BBD_GLITCH_MAX_MS - MNEMD_BBD_GLITCH_MIN_MS);
+      int w = (int)(lms * 0.001f * sr_ / (bbd_hold_f_ > 1.f ? bbd_hold_f_ : 1.f));
+      if (w < 2) w = 2;
+      if (w > MNEMD_BBD_HIST_N - 1) w = MNEMD_BBD_HIST_N - 1;
+      bbd_glitch_len_   = w;
+      bbd_glitch_start_ = bbd_hist_w_ - (unsigned)w;   // the run just captured
+      bbd_glitch_pos_   = 0;
+    } else {
+      bbd_glitch_ = false;                // rate slip (the pitched one)
+      bbd_slip_mult_ = 1.f + Rand() * (MNEMD_BBD_SLIP_MULT - 1.f) * dd;
+    }
     // (A bidirectional version — the clock lurching faster as well as slower —
     //  was tried and pulled back out while isolating variables. It is a one-line
     //  change here if the slip ever needs more variety.)
@@ -660,6 +703,11 @@ class MnemDegrade {
   float bbd_slip_mult_ = 1.f;                      // active slip: hold-length stretch (1 = none)
   int   bbd_slip_left_ = 0;                        // samples remaining in the current slip
   float bbd_drift_amt_ = 0.f;                      // per-instance continuous clock drift (SetBbdDrift)
+  bool  bbd_glitch_    = false;                    // current event corrupts CONTENT, not rate
+  float bbd_hist_[MNEMD_BBD_HIST_N] = {};          // recent held values (glitch source)
+  unsigned bbd_hist_w_ = 0;
+  unsigned bbd_glitch_start_ = 0;                  // first held value of the replayed run
+  int      bbd_glitch_len_ = 0, bbd_glitch_pos_ = 0;
   float slip_ref_ms_    = 0.f;                     // host time reference for slip length
   float slip_ref_blend_ = 0.f;                     // 0 = fixed ms, 1 = fully reference-scaled
   float bbd_hold_f_    = 1.f;                      // fractional hold length (the live clock)
