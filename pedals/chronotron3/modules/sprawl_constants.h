@@ -256,6 +256,14 @@ constexpr bool   GRAIN_PITCH_SHORT_GRAINS = true;
 // Shorter than this is NOT better: at a 50 ms grain the hop is 25 ms and the
 // copies comb at 40 Hz, which reads as metallic.
 constexpr size_t GRAIN_PITCH_MAX_LEN      = 7200;  // 150 ms = the tuned live length
+// SW2 UP only. There every grain carries the SAME fixed interval, so the 2r
+// copies line up and spreading them out is what makes the slapback. In the
+// resonance-table modes each grain draws its own pitch, so the copies never
+// line up into a slap -- and there the grain rate IS the cloud's rate, which is
+// meant to fall as the delay lengthens. Capping it pinned the harmonic cloud at
+// a single high rate at every K2 setting. Leaving those modes uncapped restores
+// their original coupling exactly (GRAIN_NEUTRAL_LEN x k2_scale, 150-600 ms).
+constexpr bool   GRAIN_PITCH_CAP_HARMONY  = false;
 
 // SW2 MID pitch re-roll: how many grains share a random pitch before a new one
 // is rolled from the ±1 resonance window. Baseline is change-EVERY-grain

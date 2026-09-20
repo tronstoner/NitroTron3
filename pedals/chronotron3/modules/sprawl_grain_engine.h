@@ -118,7 +118,8 @@ class SprawlGrainEngine {
       // stutter is off anyway), and before the safety floor below, which scales
       // with the grain length and so shrinks with it.
       size_t emit_interval = p.base_interval;
-      if (GRAIN_PITCH_SHORT_GRAINS && p.glitch_amount < 0.01f
+      const bool cap_this = GRAIN_PITCH_CAP_HARMONY || p.harmony == 0;
+      if (GRAIN_PITCH_SHORT_GRAINS && cap_this && p.glitch_amount < 0.01f
           && pitch_ratio != 1.f && this_len > GRAIN_PITCH_MAX_LEN) {
         this_len = GRAIN_PITCH_MAX_LEN;
         // The hop MUST follow the capped length: p.base_interval is derived from
