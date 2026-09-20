@@ -55,6 +55,12 @@ struct SprawlParams {
   float  overlap          = 0.f;
   size_t base_interval    = 0;
   float  grain_alpha      = 0.f;
+  // K3 CCW multiband smear (see GRAIN_MB_* in sprawl_constants.h). Inactive
+  // everywhere except the cloud side; at mb_smear 0 it reduces to the old stream.
+  bool   mb_active        = false;
+  int    mb_bands         = 1;
+  float  mb_smear         = 0.f;    // 0 = placement tracks the head, 1 = scan loops
+  float  diffusion        = 0.f;    // K3 CCW: allpass diffuser dry/wet
 
   // K4 / SW1 — texture shaper
   float  k4               = 0.f;

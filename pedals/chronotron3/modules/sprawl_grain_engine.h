@@ -22,7 +22,10 @@
 class SprawlGrainEngine {
  public:
   // `slab` = externally allocated SDRAM storage (GRAIN_BUF_SAMPLES floats).
-  void Init(float* slab, size_t n) { slab_ = slab; slab_n_ = n; ring_.Init(slab, n); }
+  void Init(float* slab, size_t n, float sr = 48000.f) {
+    slab_ = slab; slab_n_ = n; sr_ = sr; ring_.Init(slab, n);
+    MBBuildBanks();
+  }
 
   // Ring write (dry + feedback return), done before the scheduler tick.
   void Write(float s) { ring_.Write(s); }
@@ -77,21 +80,7 @@ class SprawlGrainEngine {
       // GRAIN_PITCH_HOLD_MAX) so the slow smear settles onto stable pitches.
       // K1-range for change detection uses the mode's effective span so UP
       // doesn't spuriously re-roll when K1 clamps above +12.
-      int k1_semi_now = (p.harmony == 0) ? K1ToSemi(p.k1, 12) : K1ToSemi(p.k1, 36);
-      bool k1_changed = (k1_semi_now != harmony_cached_k1_semi_);
-      // Baseline change-every-grain; CCW ramps the hold interval 1 →
-      // GRAIN_PITCH_HOLD_MAX with k3mag (longer holds the further out you go).
-      int reroll_interval = p.cloud_mode
-          ? 1 + static_cast<int>(p.k3mag * static_cast<float>(GRAIN_PITCH_HOLD_MAX - 1))
-          : 1;
-      if (k1_changed || (p.harmony != 0 && harmony_hold_counter_ <= 0)) {
-        harmony_cached_ratio_ = h.GrainPitchRatio(p.harmony, p.k1);
-        harmony_cached_k1_semi_ = k1_semi_now;
-        harmony_hold_counter_ = (p.harmony == 0) ? 1 : reroll_interval;
-      }
-      if (p.harmony != 0 && harmony_hold_counter_ > 0) harmony_hold_counter_--;
-      float pitch_ratio = harmony_cached_ratio_;
-      if (p.freq_shift_active) pitch_ratio = 1.f;  // SW2 DOWN: buffer pitch held at unison
+      float pitch_ratio = PickPitch(p, h);
       float comp = 1.f / sqrtf(pitch_ratio);
 
       // Per-grain length variation → randomized stutter frequency. Scatter
@@ -121,6 +110,24 @@ class SprawlGrainEngine {
       int loops = static_cast<int>(base_f / static_cast<float>(this_len) + 0.5f);
       if (loops < 1) loops = 1;
       if (loops > GRAIN_STUTTER_MAX_LOOPS) loops = GRAIN_STUTTER_MAX_LOOPS;
+
+      // Transposed grains keep a short window whatever the delay time is, so the
+      // 2*r copies stay packed tightly enough to fuse into a pitch shift instead
+      // of spreading into slapback. See GRAIN_PITCH_MAX_LEN. Placed after the
+      // loops calculation so a capped grain keeps loops = 1 (in this zone the
+      // stutter is off anyway), and before the safety floor below, which scales
+      // with the grain length and so shrinks with it.
+      size_t emit_interval = p.base_interval;
+      if (GRAIN_PITCH_SHORT_GRAINS && p.glitch_amount < 0.01f
+          && pitch_ratio != 1.f && this_len > GRAIN_PITCH_MAX_LEN) {
+        this_len = GRAIN_PITCH_MAX_LEN;
+        // The hop MUST follow the capped length: p.base_interval is derived from
+        // the uncapped block base, so leaving it alone would emit a 50 ms grain
+        // once per 300 ms = a hard gate at the hop rate. Re-deriving it keeps the
+        // overlap at p.overlap, i.e. a continuous dense short-grain shifter.
+        emit_interval = (size_t)((float)this_len / (p.overlap < 1.f ? 1.f : p.overlap));
+        if (emit_interval < 32) emit_interval = 32;
+      }
 
       // Read-overrun safety (ALL grains). A forward grain consumes
       // rate·grain_len source samples; a reverse grain starts a full
@@ -166,7 +173,7 @@ class SprawlGrainEngine {
       } else {
         float jitter = (h.rng.Next() * 2.f - 1.f) * p.glitch_amount * 0.8f;
         grain_timer_ = static_cast<int>(
-            static_cast<float>(p.base_interval) * (1.f + jitter));
+            static_cast<float>(emit_interval) * (1.f + jitter));
         if (grain_timer_ < 32) grain_timer_ = 32;
       }
     }
@@ -177,6 +184,92 @@ class SprawlGrainEngine {
       const float o = grain_voices_[v].Process(ring_);
       last_out_[v] = o;                                    // diagnostics
       if (!std::isfinite(o)) bad_voice_mask_ |= (1 << v);  // sticky until read
+      wet += o;
+    }
+    return wet;
+  }
+
+  // -------------------------------------------------------------------------
+  // K3 CCW multiband smear: one grain cloud per band, each band-limited by a
+  // per-grain biquad and scanning its own prime-length window. At p.mb_smear 0
+  // with 1 band this is the plain cloud stream (no filter, no spray, placement
+  // tracking the write head), so the two are the same engine, not a switch.
+  // -------------------------------------------------------------------------
+  float TickMB(const SprawlParams& p, SprawlHarmony& h) {
+    const int N = (p.mb_bands < 1) ? 1
+                : (p.mb_bands > GRAIN_MB_MAX_BANDS ? GRAIN_MB_MAX_BANDS : p.mb_bands);
+    const int row = N - 1;
+    // Spray fades in first (thickens the single stream), the scan fades in over
+    // the whole travel (placement stops tracking the head and starts looping).
+    float spray_fade = p.mb_smear / GRAIN_MB_SPRAY_RAMP;
+    if (spray_fade > 1.f) spray_fade = 1.f;
+    // Band 0 keeps the stream's own density anchor while it IS the stream, so the
+    // SW2-MID echo bloom survives; split bands use the fixed overlap so the grain
+    // count stays inside the voice pool (3 x 2 = 6 of 8).
+    const float ov = (N == 1) ? p.overlap : GRAIN_MB_OVERLAP;
+
+    for (int b = 0; b < N; b++) {
+      size_t glen = static_cast<size_t>((float)p.grain_len * GRAIN_MB_LEN_RATIO[row][b]);
+      if (glen < GRAIN_MIN_LEN) glen = GRAIN_MIN_LEN;
+      // Keep the scan window inside the buffer span: base delay + scan + grain
+      // must not reach past max_range, or a grain reads stale ring content.
+      size_t room = (p.max_range > p.base_delay + glen + 64)
+                      ? (p.max_range - p.base_delay - glen - 64) : 1;
+      size_t scanlen = GRAIN_MB_SCAN[row][b];
+      if (scanlen > room) scanlen = room;
+      if (scanlen < 1) scanlen = 1;
+      mb_scan_[b] += 1.f;
+      if (mb_scan_[b] >= (float)scanlen) mb_scan_[b] -= (float)scanlen;
+
+      if (--mb_timer_[b] > 0) continue;
+      float pitch_ratio = PickPitch(p, h);
+      float comp = 1.f / sqrtf(pitch_ratio);
+      // Placement: the scan offset pushes the read point further back exactly as
+      // fast as the write head advances, so at full smear the grain start stands
+      // still in the buffer and the band loops its window.
+      float spray_w = (float)GRAIN_MB_SPRAY[row][b] * spray_fade;
+      float d = (float)p.base_delay + mb_scan_[b] * p.mb_smear
+              + (h.rng.Next() * 2.f - 1.f) * spray_w;
+      if (d < 0.f) d = 0.f;
+      size_t delay = static_cast<size_t>(d);
+      if (delay > p.max_range) delay = p.max_range;
+      // Same read-overrun safety as the main scheduler.
+      {
+        size_t safety = p.buf_reverse
+            ? (glen + 64)
+            : (pitch_ratio > 1.f
+                  ? static_cast<size_t>(glen * (pitch_ratio - 1.f)) + 64
+                  : 64);
+        if (delay < safety) delay = safety;
+      }
+      int voice = -1;
+      for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+        int idx = (grain_next_voice_ + v) % NUM_GRAIN_VOICES;
+        if (!grain_voices_[idx].IsActive()) {
+          voice = idx; grain_next_voice_ = (idx + 1) % NUM_GRAIN_VOICES; break;
+        }
+      }
+      if (voice >= 0) {
+        grain_voices_[voice].Trigger(ring_, delay, glen, p.buf_reverse,
+                                     pitch_ratio, comp, 1, p.grain_alpha);
+        if (N > 1) {
+          const float* c = mb_coef_[row][b];
+          grain_voices_[voice].SetBandFilter(c[0], c[1], c[2], c[3], c[4]);
+        }
+        vdbg_[voice].delay = (uint32_t)delay; vdbg_[voice].len = (uint32_t)glen;
+        vdbg_[voice].rev = p.buf_reverse ? 1 : 0; vdbg_[voice].loops = 1;
+        vdbg_[voice].rate = pitch_ratio;       vdbg_[voice].comp = comp;
+      }
+      int itv = static_cast<int>((float)glen / (ov < 1.f ? 1.f : ov));
+      if (itv < 32) itv = 32;
+      mb_timer_[b] = itv;
+    }
+
+    float wet = 0.f;
+    for (int v = 0; v < NUM_GRAIN_VOICES; v++) {
+      const float o = grain_voices_[v].Process(ring_);
+      last_out_[v] = o;
+      if (!std::isfinite(o)) bad_voice_mask_ |= (1 << v);
       wet += o;
     }
     return wet;
@@ -202,6 +295,54 @@ class SprawlGrainEngine {
   }
 
  private:
+  // Pitch pick shared by both schedulers: UP holds a fixed interval, MID/DOWN
+  // re-roll from the RESONANCES window every `reroll` grains (held longer the
+  // further down the CCW cloud you go).
+  float PickPitch(const SprawlParams& p, SprawlHarmony& h) {
+    int k1_semi_now = (p.harmony == 0) ? K1ToSemi(p.k1, 12) : K1ToSemi(p.k1, 36);
+    bool k1_changed = (k1_semi_now != harmony_cached_k1_semi_);
+    int reroll_interval = p.cloud_mode
+        ? 1 + static_cast<int>(p.k3mag * static_cast<float>(GRAIN_PITCH_HOLD_MAX - 1))
+        : 1;
+    if (k1_changed || (p.harmony != 0 && harmony_hold_counter_ <= 0)) {
+      harmony_cached_ratio_ = h.GrainPitchRatio(p.harmony, p.k1);
+      harmony_cached_k1_semi_ = k1_semi_now;
+      harmony_hold_counter_ = (p.harmony == 0) ? 1 : reroll_interval;
+    }
+    if (p.harmony != 0 && harmony_hold_counter_ > 0) harmony_hold_counter_--;
+    if (p.freq_shift_active) return 1.f;   // SW2 DOWN: buffer pitch held at unison
+    return harmony_cached_ratio_;
+  }
+
+  // Band filters, built once per band count: low = LP, mid = BP (centre =
+  // geometric mean of the two crossovers), high = HP. Same shapes as vestige.
+  void MBSetLP(float* c, float fc) {
+    float w = 6.2831853f * fc / sr_, cs = cosf(w), sn = sinf(w), al = sn / 1.41421356f, a0 = 1 + al;
+    c[0] = (1 - cs) * 0.5f / a0; c[1] = (1 - cs) / a0; c[2] = c[0]; c[3] = -2 * cs / a0; c[4] = (1 - al) / a0;
+  }
+  void MBSetHP(float* c, float fc) {
+    float w = 6.2831853f * fc / sr_, cs = cosf(w), sn = sinf(w), al = sn / 1.41421356f, a0 = 1 + al;
+    c[0] = (1 + cs) * 0.5f / a0; c[1] = -(1 + cs) / a0; c[2] = c[0]; c[3] = -2 * cs / a0; c[4] = (1 - al) / a0;
+  }
+  void MBSetBP(float* c, float fc, float Q) {
+    float w = 6.2831853f * fc / sr_, cs = cosf(w), sn = sinf(w), al = sn / (2.f * Q), a0 = 1 + al;
+    c[0] = al / a0; c[1] = 0.f; c[2] = -al / a0; c[3] = -2 * cs / a0; c[4] = (1 - al) / a0;
+  }
+  void MBBuildBanks() {
+    // 2 bands: split at the geometric mean. 3 bands: the two crossovers.
+    MBSetLP(mb_coef_[1][0], sqrtf(GRAIN_MB_XLO * GRAIN_MB_XHI));
+    MBSetHP(mb_coef_[1][1], sqrtf(GRAIN_MB_XLO * GRAIN_MB_XHI));
+    MBSetLP(mb_coef_[2][0], GRAIN_MB_XLO);
+    float c = sqrtf(GRAIN_MB_XLO * GRAIN_MB_XHI);
+    MBSetBP(mb_coef_[2][1], c, c / (GRAIN_MB_XHI - GRAIN_MB_XLO));
+    MBSetHP(mb_coef_[2][2], GRAIN_MB_XHI);
+  }
+
+  float  sr_ = 48000.f;
+  float  mb_coef_[GRAIN_MB_MAX_BANDS][GRAIN_MB_MAX_BANDS][5] = {};
+  float  mb_scan_[GRAIN_MB_MAX_BANDS]  = {};
+  int    mb_timer_[GRAIN_MB_MAX_BANDS] = {};
+
   struct VoiceDbg { uint32_t delay = 0, len = 0; int rev = 0, loops = 0; float rate = 1.f, comp = 1.f; };
   VoiceDbg vdbg_[NUM_GRAIN_VOICES];
   float    last_out_[NUM_GRAIN_VOICES] = {};

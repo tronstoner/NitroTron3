@@ -27,5 +27,17 @@ else
 fi
 
 echo
+echo "== test_pitch_grains (transposed grain length / hop across the K2 travel)"
+if g++ -O2 -std=c++17 -DCT3_DIAG_BUILD \
+     -I tools/host/stub -I pedals/chronotron3 -I pedals/chronotron3/modules \
+     -I src/core/blocks -I src/core/util \
+     -o /tmp/ct3_pitch tools/host/test_pitch_grains.cpp \
+   && /tmp/ct3_pitch 6; then
+  echo "PASS  test_pitch_grains"
+else
+  echo "FAIL  test_pitch_grains"; fail=1
+fi
+
+echo
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "FAILURES"
 exit "$fail"

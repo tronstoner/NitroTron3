@@ -49,6 +49,7 @@
 #include "env_follower.h"        // core/blocks
 #include "pitch_tracker.h"       // core/blocks — TRACK_* from chronotron3/constants.h
 #include "freq_shifter.h"        // core/blocks — Bode SSB shifter (SW2 DOWN)
+#include "diffuser.h"            // core/blocks — Clouds 4-allpass diffuser (K3 CCW)
 #include <math.h>
 #include <cmath>       // std::isfinite (the non-finite guard; no -ffast-math in this build)
 
@@ -80,11 +81,12 @@ class Sprawl : public Module {
     env_.Init(sr);
     env_.SetCutoff(SPRAWL_ENV_LP_CUTOFF_HZ);
     tracker_.Init(sr);
-    grain_.Init(sprawl_ring_slab, GRAIN_BUF_SAMPLES);
+    grain_.Init(sprawl_ring_slab, GRAIN_BUF_SAMPLES, sr);
     b_shifter_.Init(sr);
     feedback_.Init(sr);
     reverb_.Init(sprawl_reverb_slab);
     texture_.Init(sr, sprawl_warble_slab);
+    diffuser_.Init();
     send_coef_ = 1.f - expf(-1.f / (0.003f * sr_));   // 3 ms send gate ramp
     panic_rise_coef_ = 1.f - expf(-1.f / (SPRAWL_PANIC_RISE_MS * 0.001f * sr_));
     panic_fall_coef_ = 1.f - expf(-1.f / (SPRAWL_PANIC_FADE_MS * 0.001f * sr_));
@@ -293,7 +295,9 @@ class Sprawl : public Module {
       if (!frozen_) grain_.Write(dry + fb);
 
       // Grain engine: scheduler tick + sum of all active voices.
-      float w = grain_.Tick(p, harmony_);
+      // K3 CCW runs the multiband smear scheduler; everything else (neutral,
+      // the CW glitch half, live passthrough) stays on the original one.
+      float w = p.mb_active ? grain_.TickMB(p, harmony_) : grain_.Tick(p, harmony_);
       if (CT3_DIAG) {
         if (SprawlBad(w)) { w = 0.f; NoteFault(1, p); }
         if (fabsf(w) > m_grn_) m_grn_ = fabsf(w);        // meter
@@ -312,6 +316,11 @@ class Sprawl : public Module {
       // Wet output is full-range now — the HPF sits on the feedback return only
       // (see the injection above), so there's no gated-filter click at the K2
       // noon boundary and the live/wet signal keeps its lows.
+
+      // K3 CCW diffusion. Last in the loop, immediately before the feedback tap
+      // -- the same place Parasites puts it (its fb_ buffer is a copy of the
+      // already-diffused output), so each repeat is diffused again.
+      if (GRAIN_DIFFUSE) w = diffuser_.Process(w, p.diffusion);
 
       // Guard before the wet leaves the sample loop: prev_wet_ feeds the ring
       // write, so a poisoned value here would reach every later grain.
@@ -470,6 +479,13 @@ class Sprawl : public Module {
           GrainBaseLen(cloud_mode, k3mag) * k2_scale);
       overlap = ovl_anchor - glitch_amount * (ovl_anchor - 1.f);
     }
+    // Cloud grain cap: keep a grain plus its read-back inside the buffer span, so
+    // the scatter range cannot underflow at the short-buffer end. This replaces
+    // what the echo-time floor used to do there.
+    if (GRAIN_K3_DECOUPLE_TIME && cloud_mode) {
+      size_t cap_len = (size_t)((float)max_range * GRAIN_CLOUD_LEN_MAX_FRAC);
+      if (grain_len > cap_len) grain_len = cap_len;
+    }
     if (grain_len < GRAIN_MIN_LEN) grain_len = GRAIN_MIN_LEN;
     size_t base_interval = static_cast<size_t>(
         static_cast<float>(grain_len) / overlap);
@@ -482,6 +498,20 @@ class Sprawl : public Module {
     // Hann window so the constant-overlap sum is flat (no tremolo at unison).
     // CW character grains keep the length-based Tukey (flatter = more present).
     p.grain_alpha = (glitch_amount < 0.01f) ? 1.0f : -1.0f;
+
+    // K3 CCW multiband smear. Band count steps in with k3mag; the scan fades in
+    // over the whole travel. At k3mag 0 this is 1 unfiltered band with no spray
+    // and no scan = the old neutral stream, so crossing noon stays seamless.
+    // K3 CCW = diffusion amount, the role DENSITY has in Parasites' looping
+    // delay. Linear, as there: 0 at the noon pad, full at CCW.
+    if (GRAIN_DIFFUSE && cloud_mode) p.diffusion = k3mag * GRAIN_DIFFUSE_MAX;
+
+    if (GRAIN_MB_SMEAR && cloud_mode) {
+      p.mb_active = true;
+      p.mb_smear  = k3mag;
+      p.mb_bands  = (k3mag < GRAIN_MB_SPLIT_2) ? 1
+                  : (k3mag < GRAIN_MB_SPLIT_3) ? 2 : GRAIN_MB_MAX_BANDS;
+    }
 
     // K4: texture amount (0 = clean, CW = full effect)
     float k4 = RemapKnob(c.k4);
@@ -599,7 +629,12 @@ class Sprawl : public Module {
       if (base_delay > cap) base_delay = cap;
     } else {
       base_delay = max_range / 8;
-      if (base_delay < grain_len) base_delay = grain_len;
+      // The grain-length floor is a trails aesthetic, not a physical limit (the
+      // real read-overrun guard is the per-grain safety at trigger time). It is
+      // what let a K3-CCW grain length take over the echo time; with the
+      // decoupling on, the knob path behaves like the tap path and the echo time
+      // is K2's alone.
+      if (!GRAIN_K3_DECOUPLE_TIME && base_delay < grain_len) base_delay = grain_len;
     }
     p.live_grain = live_grain;
     p.base_delay = base_delay;
@@ -641,8 +676,12 @@ class Sprawl : public Module {
   // both grain_len and the tap-tempo inversion.
   // -------------------------------------------------------------------------
   static float GrainBaseLen(bool cloud_mode, float k3mag) {
-    if (cloud_mode)  // CCW: lengthen neutral -> CLOUD_LEN_MAX
+    if (cloud_mode) {
+      // Decoupled: the cloud grain length is the neutral base, and K2 alone
+      // scales it (via k2_scale at the call site). K3 CCW is texture only.
+      if (GRAIN_K3_DECOUPLE_TIME) return GRAIN_NEUTRAL_LEN;
       return GRAIN_NEUTRAL_LEN + k3mag * (CLOUD_LEN_MAX - GRAIN_NEUTRAL_LEN);
+    }
     const float gc_sq = k3mag * k3mag;  // CW: shorten neutral -> CW_LEN_FLOOR
     return GRAIN_NEUTRAL_LEN - gc_sq * (GRAIN_NEUTRAL_LEN - GRAIN_CW_LEN_FLOOR);
   }
@@ -675,6 +714,7 @@ class Sprawl : public Module {
   SprawlControls    controls_;
   SprawlHarmony     harmony_;
   SprawlGrainEngine grain_;
+  Diffuser          diffuser_;
   SprawlTexture     texture_;
   SprawlFeedback    feedback_;
   SprawlReverb      reverb_;

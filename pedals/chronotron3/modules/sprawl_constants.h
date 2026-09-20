@@ -144,6 +144,119 @@ constexpr float GRAIN_NEUTRAL_OVERLAP = 2.0f;    // default overlap anchor — s
 constexpr float GRAIN_OVERLAP_MID_ECHO = 6.0f;   // richer anchor for echo (K2 engaged) + SW2 MID — lets that mode bloom
 constexpr float CLOUD_LEN_MAX         = 96000.f; // full-CCW base length (2 s, ×k2_scale) — long slow smear
 
+// K3/delay decoupling (set false to restore the old coupled behaviour).
+// On the CCW cloud side K3 used to stretch the grain length to 2 s, and the echo
+// time was floored at the grain length -- so past roughly k3mag 0.3 the echo time
+// WAS the grain length and K2 no longer set it. That is two timing controls
+// fighting over one parameter, and it reads as "the character knob changes the
+// delay time". With this true:
+//   * cloud grain length no longer follows K3; it stays on the k2_scale coupling
+//     that already existed (GRAIN_NEUTRAL_LEN x 0.5..2.0 = 150..600 ms),
+//   * the echo time loses the grain-length floor, so it is max_range/8 (or the
+//     tapped value) and nothing else,
+//   * cloud grain length is capped to a fraction of the buffer span, which is the
+//     job the floor used to do at the short-buffer end.
+// CW is untouched: its grains shorten, and glitch moves timing on purpose.
+constexpr bool  GRAIN_K3_DECOUPLE_TIME   = true;
+constexpr float GRAIN_CLOUD_LEN_MAX_FRAC = 0.5f;  // cloud grain <= this x buffer span
+
+// ---------------------------------------------------------------------------
+// K3 CCW = multiband smear (set GRAIN_MB_SMEAR false to restore the plain cloud).
+//
+// The CCW half stops being "longer grains" and becomes a blend from clean
+// playback to smeared playback, the same engine throughout:
+//   k3mag 0        1 band, no filter, no spray, grain placement tracks the write
+//                  head  ->  bit-for-bit the old neutral stream.
+//   0 -> RAMP      spray fades in: the single stream thickens.
+//   SPLIT_2/_3     the band count grows to 2 then 3. Each band is its own grain
+//                  cloud, band-limited by a per-grain biquad (no band buffers),
+//                  with its own grain length and its own scan length.
+//   -> 1           the scan fades in fully: each band's grain placement stops
+//                  tracking the head and loops a window instead. The scan lengths
+//                  are distinct primes, so the bands never re-sync and the texture
+//                  keeps evolving without repeating.
+// This is the same mechanism as vestige's freeze, reduced to 3 bands to fit the
+// 8-voice pool (3 bands x overlap 2 = 6 grains).
+//
+// NOTE: "smear" (this, a playback character on K3) and "buffer hold" (FS1, which
+// stops the ring being written) are separate things and combine freely.
+// ---------------------------------------------------------------------------
+constexpr bool  GRAIN_MB_SMEAR      = false;  // OFF: K3 CCW is the allpass diffuser instead
+constexpr int   GRAIN_MB_MAX_BANDS  = 3;
+constexpr float GRAIN_MB_XLO        = 250.f;   // Hz, low/mid crossover
+constexpr float GRAIN_MB_XHI        = 2000.f;  // Hz, mid/high crossover
+constexpr float GRAIN_MB_OVERLAP    = 2.0f;    // grains per band (Hann @2x = flat sum)
+constexpr float GRAIN_MB_SPRAY_RAMP = 0.35f;   // k3mag at which spray is fully in
+constexpr float GRAIN_MB_SPLIT_2    = 0.35f;   // k3mag: 1 -> 2 bands
+constexpr float GRAIN_MB_SPLIT_3    = 0.65f;   // k3mag: 2 -> 3 bands
+// Per-band grain length, as a fraction of the cloud grain length (which K2 sets).
+// Rows = band count - 1, cols = band low->high. Ratios follow vestige's
+// 150/80/40 ms split, so the whole texture scales with K2 as one unit.
+constexpr float GRAIN_MB_LEN_RATIO[GRAIN_MB_MAX_BANDS][GRAIN_MB_MAX_BANDS] = {
+    {1.00f, 0.00f, 0.00f},
+    {1.00f, 0.27f, 0.00f},
+    {1.00f, 0.53f, 0.27f},
+};
+// Scan lengths (samples). Distinct primes = the bands never re-sync; the low band
+// scans the longest window. These ARE the phasing character.
+constexpr size_t GRAIN_MB_SCAN[GRAIN_MB_MAX_BANDS][GRAIN_MB_MAX_BANDS] = {
+    {11987,     0,     0},
+    {11987,  4099,     0},
+    {11987,  8419,  4099},
+};
+// Per-band position spray (samples), widest on the low band.
+constexpr size_t GRAIN_MB_SPRAY[GRAIN_MB_MAX_BANDS][GRAIN_MB_MAX_BANDS] = {
+    {480,   0,   0},
+    {480, 120,   0},
+    {480, 240, 120},
+};
+
+// ---------------------------------------------------------------------------
+// K3 CCW = allpass DIFFUSION (Clouds / Parasites looping-delay model).
+//
+// A grain cloud can only copy a transient around; an allpass chain dissolves it.
+// Parasites drives its 4-stage diffuser straight from the DENSITY knob in
+// looping-delay mode, 0..1, as a plain dry/wet on the playback output. K3 CCW
+// takes that role here: 0 at noon (bit-identical to today) -> 1 at full CCW.
+// The chain sits just before the feedback tap, where Clouds has it, so repeats
+// are diffused again on every pass. Wet path only.
+// ---------------------------------------------------------------------------
+constexpr bool  GRAIN_DIFFUSE      = true;
+constexpr float GRAIN_DIFFUSE_MAX  = 1.0f;   // diffuser amount at full K3 CCW
+
+// ---------------------------------------------------------------------------
+// Transposed grains keep a SHORT window, whatever the delay time is.
+//
+// A grain at ratio r reads its source r times as fast as it plays, but the read
+// point is anchored to the write head, which advances in real time. So every
+// source sample ends up played glen*r/hop = 2*r times (4 at one octave up,
+// with overlap 2) -- always, at every setting. Grain length does not change how
+// MANY copies there are, only how far apart they land, which is one hop:
+//   K2 noon   glen 150 ms -> hop  75 ms (13 Hz) -- fuses, the old-school shifter
+//                                                  (this is the tuned reference)
+//   K2 mid    glen 293 ms -> hop 146 ms         -- audible repeats
+//   K2 CW     glen 600 ms -> hop 300 ms         -- four distinct slaps
+// Same artifact throughout; the K2 grain-length coupling is what drags it out of
+// timbre and into slapback. The window that makes a good pitch shifter belongs
+// to the SHIFTER, not to the delay time, so transposed grains get capped here
+// and base_delay is left alone.
+//
+// At unison this cannot matter: forward rate-1 grains with full Hann windows at
+// overlap 2 reconstruct the delayed input exactly, so grain length is inaudible.
+// Only transposition, reverse, scatter or stutter break that reconstruction.
+//
+// Applied on the cloud/neutral side only (glitch_amount < 0.01). The CW glitch
+// half moves timing on purpose and is left alone.
+// ---------------------------------------------------------------------------
+constexpr bool   GRAIN_PITCH_SHORT_GRAINS = true;
+// The cap IS the tuned K2-noon length, so that position is untouched (the cap
+// cannot bind there) and every deeper K2 setting is pulled down to match it:
+//   GRAIN_NEUTRAL_LEN 14400 x k2_scale 0.5 at the K2 deadzone = 7200 = 150 ms,
+//   hop 75 ms, so the 4 copies land 75 ms apart exactly as they do live.
+// Shorter than this is NOT better: at a 50 ms grain the hop is 25 ms and the
+// copies comb at 40 Hz, which reads as metallic.
+constexpr size_t GRAIN_PITCH_MAX_LEN      = 7200;  // 150 ms = the tuned live length
+
 // SW2 MID pitch re-roll: how many grains share a random pitch before a new one
 // is rolled from the ±1 resonance window. Baseline is change-EVERY-grain
 // (interval 1), which holds across all of neutral + the CW glitch half — the
