@@ -57,6 +57,19 @@ static constexpr float  VESTIGE_CCW_OVERLAP   = 2.0f;   // Hann overlap-add sums
 static constexpr float  VESTIGE_CW_OVERLAP    = 3.0f;   // denser cloud so short grains fuse
 static constexpr size_t VESTIGE_MIN_INTERVAL  = 32;     // scheduler floor (samples)
 static constexpr size_t VESTIGE_MIN_LOOP_SAMPLES = 240; // 5 ms shortest capture (short FS2 tap)
+
+// ---------------------------------------------------------------------------
+// K4 = MAX LOOP LENGTH (temporary test build; set false to give K4 back to the
+// BBD/Tape degradation engine). When true K4 sets a ceiling on capture length:
+// recording auto-stops and playback begins the moment the ceiling is reached,
+// in every capture mode (manual FS2-held, continuous-auto, frippertronics first
+// pass). Log taper so the short end has usable resolution.
+//   CCW = VESTIGE_MAXLEN_MIN_SAMPLES (one grain, ~5.3 ms — below this the grain
+//         engine mutes the slot, so this is the shortest *audible* loop)
+//   CW  = VESTIGE_LOOP_MAX_SAMPLES (8 s = current behaviour)
+// ---------------------------------------------------------------------------
+static constexpr bool   VESTIGE_K4_MAXLEN = true;
+static constexpr size_t VESTIGE_MAXLEN_MIN_SAMPLES = VESTIGE_GRAIN_MIN_LEN;  // 256 = ~5.3 ms
 // BBD (K4 CCW) fold brightness in the looper: scales the regenerated fold mixed
 // on top of the dark body. >1 = more mids/highs + grit (clarity). 1 = mnemonic default.
 static constexpr float  VESTIGE_BBD_FOLD_SCALE = 2.0f;

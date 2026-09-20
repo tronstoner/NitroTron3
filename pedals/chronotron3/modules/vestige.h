@@ -104,6 +104,7 @@ class Vestige : public Module {
     // Recording cannot straddle a mode switch — drop any in-flight capture.
     recording_ = false;
     rec_full_  = false;
+    auto_rearm_block_ = false;
     commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
     frip_od_gain_ = 0.f; frip_od_target_ = 0.f; frip_stop_pending_ = false;
     frip_head_ = 0.f; frip_rec_ = 0.f;
@@ -220,7 +221,22 @@ class Vestige : public Module {
     // saturation/wow/dropouts. Colours ONLY the looper output in Process; the
     // routed dry stays clean (hard rule G1). The old tape varispeed pitch-
     // shifter that lived here is retired — pitch stays at unity.
-    degrade_.SetDepth(k4 * 2.f - 1.f);   // k4 [0..1] → bipolar [-1..+1]
+    // TEST BUILD (VESTIGE_K4_MAXLEN): K4 is temporarily the MAX LOOP LENGTH
+    // instead of the colour. Log taper 5.3 ms (CCW) → 8 s (CW = old behaviour);
+    // recording stops and playback begins the moment the ceiling is hit, in any
+    // capture mode. Degrade is held clean so the test is unclouded.
+    if (VESTIGE_K4_MAXLEN) {
+      const float lo = (float)VESTIGE_MAXLEN_MIN_SAMPLES;
+      const float hi = (float)VESTIGE_LOOP_MAX_SAMPLES;
+      size_t ml = (size_t)(lo * powf(hi / lo, k4));
+      if (ml < VESTIGE_MAXLEN_MIN_SAMPLES) ml = VESTIGE_MAXLEN_MIN_SAMPLES;
+      if (ml > VESTIGE_LOOP_MAX_SAMPLES)   ml = VESTIGE_LOOP_MAX_SAMPLES;
+      max_loop_len_ = ml;
+      degrade_.SetDepth(0.f);
+    } else {
+      max_loop_len_ = VESTIGE_LOOP_MAX_SAMPLES;
+      degrade_.SetDepth(k4 * 2.f - 1.f);   // k4 [0..1] → bipolar [-1..+1]
+    }
     // Idle-hiss guard: with no loop captured the engine's injected noise would
     // add a hiss bed to the output, so duck it to 0 until there is content.
     bool degrade_has_content = false;
@@ -256,6 +272,7 @@ class Vestige : public Module {
     if (f2.rising) {
       if (auto_mode) {
         auto_armed_ = !auto_armed_;   // continuous-auto: record-arm toggle
+        auto_rearm_block_ = false;    // a fresh arm always listens immediately
       } else {
         StartRecording();    // manual (SW1 UP) and DOWN (TBD → manual)
       }
@@ -274,9 +291,14 @@ class Vestige : public Module {
       EndRecording();
     }
 
-    // ---- Recording auto-stop (buffer full) --------------------------------
+    // ---- Recording auto-stop (length ceiling reached) ----------------------
+    // In auto mode the note is usually still ringing when the K4 ceiling cuts the
+    // capture, so block re-arming until the envelope has fallen back below the
+    // close threshold: the next loop starts on a fresh silence→sound transition,
+    // never back-to-back.
     if (rec_full_) {
       rec_full_ = false;
+      if (auto_mode) auto_rearm_block_ = true;
       EndRecording();
     }
 
@@ -441,7 +463,7 @@ class Vestige : public Module {
           }
           frip_in_prev_ = x;
           rec_idx_ = cur;                             // growing loop length
-          if (rec_idx_ >= VESTIGE_LOOP_MAX_SAMPLES) rec_full_ = true;
+          if (rec_idx_ >= max_loop_len_) rec_full_ = true;
         } else {
           // Linear capture (voiced only). After the record end (pending_len_ set)
           // we keep writing a short overhang for the seam crossfade, then commit.
@@ -449,7 +471,7 @@ class Vestige : public Module {
           rec_idx_++;
           if (overhang_left_ > 0) {
             if (--overhang_left_ == 0) commit_pending_ = true;
-          } else if (pending_len_ == 0 && rec_idx_ >= VESTIGE_LOOP_MAX_SAMPLES) {
+          } else if (pending_len_ == 0 && rec_idx_ >= max_loop_len_) {
             rec_full_ = true;
           }
         }
@@ -928,7 +950,7 @@ class Vestige : public Module {
     }
     size_t L = rec_idx_;
     if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
-    if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
+    if (L > max_loop_len_) L = max_loop_len_;
     pending_len_ = L;
     size_t target = L + SeamXfadeLen(L);              // record up to here
     if (target > VESTIGE_VOICE_CAP) target = VESTIGE_VOICE_CAP;
@@ -951,7 +973,7 @@ class Vestige : public Module {
       }
       size_t L = rec_idx_;
       if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
-      if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
+      if (L > max_loop_len_) L = max_loop_len_;
       RefreshFrippGuard(L);
       loop_len_[s] = L;
       play_pos_[s] = 0;
@@ -968,7 +990,7 @@ class Vestige : public Module {
     // ---- Voiced path: choose target NOW, copy scratch → target -------------
     size_t L = (pending_len_ > 0) ? pending_len_ : rec_idx_;
     if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
-    if (L > VESTIGE_LOOP_MAX_SAMPLES) L = VESTIGE_LOOP_MAX_SAMPLES;
+    if (L > max_loop_len_) L = max_loop_len_;
     // Copy the loop PLUS the recorded overhang so WriteGuard can crossfade it.
     size_t copy = L + SeamXfadeLen(L);
     if (copy > VESTIGE_VOICE_CAP) copy = VESTIGE_VOICE_CAP;
@@ -1209,7 +1231,12 @@ class Vestige : public Module {
     const float close = auto_thresh_ * VESTIGE_AUTO_HYST;
     const uint32_t now = daisy::System::GetNow();
     if (!recording_) {
-      if (env_ > open) StartRecording();   // silence → sound: begin a phrase
+      // After a ceiling auto-stop, wait for the envelope to drop before re-arming.
+      if (auto_rearm_block_) {
+        if (env_ < close) auto_rearm_block_ = false;
+      } else if (env_ > open) {
+        StartRecording();                  // silence → sound: begin a phrase
+      }
     } else {
       if (env_ < close) {
         if (silence_since_ == 0) silence_since_ = now;
@@ -1384,6 +1411,8 @@ class Vestige : public Module {
   volatile bool rec_full_  = false;
   int    rec_slot_ = 0;
   size_t rec_idx_  = 0;
+  size_t max_loop_len_ = VESTIGE_LOOP_MAX_SAMPLES;  // K4 capture-length ceiling (samples)
+  bool   auto_rearm_block_ = false;  // ceiling stop: hold off until env falls
   // Seam-crossfade overhang: loop end is set at EndRecording, then we record
   // `overhang_left_` more samples before committing (commit_pending_).
   volatile bool commit_pending_ = false;
