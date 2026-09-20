@@ -86,7 +86,7 @@ class Sprawl : public Module {
     feedback_.Init(sr);
     reverb_.Init(sprawl_reverb_slab);
     texture_.Init(sr, sprawl_warble_slab);
-    diffuser_.Init();
+    diffuser_.Init(sr);
     send_coef_ = 1.f - expf(-1.f / (0.003f * sr_));   // 3 ms send gate ramp
     panic_rise_coef_ = 1.f - expf(-1.f / (SPRAWL_PANIC_RISE_MS * 0.001f * sr_));
     panic_fall_coef_ = 1.f - expf(-1.f / (SPRAWL_PANIC_FADE_MS * 0.001f * sr_));
