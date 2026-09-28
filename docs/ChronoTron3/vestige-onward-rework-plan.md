@@ -187,7 +187,7 @@ buffers**. Freeze stops being a position on a morph and becomes an operation.
 | **K1** | **playback speed blend** | a crossfade, not an added voice: CCW only half-speed · noon only clean · CW only double-speed. Sits *before* the error stage |
 | **K2** | **max buffer length + direction**, bipolar | CCW reverse · noon shortest · CW forward. Matches sprawl's K2 idiom |
 | **K3** | **error intensity of the type SW2 selects** | not WYSIWYG — it edits the selected type's stored value (§6) |
-| **K4** | **capture sensitivity** | was K2; the gate threshold |
+| **K4** | **capture sensitivity** | was K2; the gate threshold. Possibly temporary — see §9, the degrade engine may want K4 back |
 | **K5** | fade in / out | unchanged; also the replace-crossfade (Onward's FADE) |
 | **K6** | **dry/wet mix** | now shell-owned equal-power, like the other modules. vestige stops owning its output |
 | **SW1** | mode | UP 1-voice · MIDDLE 6-voice · DOWN freeze |
@@ -446,7 +446,10 @@ takes over when moved.
 
 ### Stage 2 — quantised capture
 
-- Captures extend to the next division boundary; division set from §4.3.
+- Captures quantise to the NEAREST division boundary (§4.3 rule 2) of a grid
+  anchored at their own start — rounding up or down, truncation included.
+  Division set from §4.5. The arithmetic lives in
+  `src/core/blocks/grid_quantize.h`, built ahead of this stage.
 - Loops therefore always sit on the grid.
 
 *Acceptance:* short stabs and long phrases both produce loops that lock together
@@ -578,3 +581,36 @@ The K3 blend also goes, along with the unified-engine work in
 `vestige-rework-plan.md` §2.0 that made the CCW half a relaxed version of the
 freeze. The *engine* stays; only the addressing changes. That doc remains the
 as-built reference for how the multiband freeze works internally.
+
+### The degrade engine is parked, not retired
+
+This one happened quietly and was not written down at the time, so recording it
+here.
+
+The BBD/tape degrade engine (`MnemDegrade`, folded in from mnemonic — see
+`vestige-rework-plan.md` §1) used to live on K4. It was switched off when K4 was
+borrowed for the max-loop-length test (`c25a06e`), and Stage 0 then gave K4 to
+capture sensitivity, so it has had **no knob since**. Its depth is pinned at 0
+in `Controls()`, and the whole engine is otherwise intact and compiled in. Its
+revive site is marked in `vestige.h`.
+
+Two consequences of it being idle rather than removed:
+
+- **Its warble line was a pure 3 ms delay on the entire wet path**, freeze
+  included. The post-grain modulated delay (`warble_ring_`,
+  `VESTIGE_WARBLE_BASE_MS`) only exists to give the degrade's wow/flutter room
+  to swing; with the engine idle it modulated nothing and just delayed the wet
+  by 143 samples. Found while measuring Stage 2's sample accuracy, and bypassed
+  while the engine is idle — reviving degrade brings the delay back exactly as
+  it was.
+- **Its idle-hiss gate is irrelevant while depth is 0** but becomes relevant
+  again the moment it is revived.
+
+**Likely future:** capture sensitivity becomes a compile-time constant once a
+good default is found by ear — it is a set-and-forget control rather than a
+performance one — which frees K4 to take degrade back. Not decided; the order is
+to find the sensitivity default first, then decide whether K4 is worth more as
+colour than as a threshold. If it happens, K4 should keep degrade's original
+bipolar mapping (CCW BBD · noon clean · CW tape), matching mnemonic's K3 for
+cross-module muscle memory.
+
