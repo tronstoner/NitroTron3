@@ -4,7 +4,8 @@ Hard rules for all AI agents working on this project. These override default beh
 
 ## Git
 
-- **Never `git commit` without the user explicitly confirming** (e.g., "commit", "yes commit"). Preparing the message is fine; executing `git commit` is not until confirmed.
+- **Commit savepoints continuously — no confirmation needed.** Commit at every meaningful step, **including unverified, untested or unheard work**, so any state can be returned to or bisected by ear later. A stack of small uncommitted steps is the failure mode, not a premature commit. State the verification level honestly in the message (e.g. "savepoint, untested", "host-verified, not heard", "verified on hardware"). Commits go on the current feature branch only.
+- **Only the main agent commits.** Subagents leave their work uncommitted and report; the main agent reviews and commits it, step by step, before starting the next step.
 - **Never `git push`.** Only the user pushes.
 - **Never add `Co-Authored-By` lines** to commit messages.
 
