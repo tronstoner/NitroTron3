@@ -21,7 +21,15 @@ static constexpr size_t VESTIGE_VOICE_CAP        = VESTIGE_LOOP_MAX_SAMPLES + VE
 // ---------------------------------------------------------------------------
 // Topology (SW1: UP = 1 voice · MIDDLE = 6 voices · DOWN = freeze)
 // ---------------------------------------------------------------------------
-static constexpr int    VESTIGE_MAX_VOICES   = 6;   // voiced pool ceiling (SW1 MIDDLE)
+static constexpr int    VESTIGE_MAX_VOICES   = 4;   // voiced pool ceiling (SW1 MIDDLE). TEST: was 6.
+// Grain budget: one playback stream = 2 overlapping grains, and while K1 sits
+// between noon and an end each voice plays TWO streams (clean + shifted) to
+// crossfade them, i.e. 4 grains per voice. At 6 voices that is 24 against
+// VESTIGE_MB_GRAIN_CAP = 16, so grains were refused and the crossfade thinned.
+// At 4 voices it is exactly 16 in steady state; during a replacement (old voice
+// fading out while the new one fades in) it is 20, so some grains are still
+// refused for the length of the K5 fade. 3 voices would stay within 16 in every
+// state. 4 is being tried on hardware to see whether that transient is audible.
 static constexpr int    VESTIGE_VOICE_SPARES = 3;   // spare slabs for in-flight fade-outs / crossfades
 static constexpr int    VESTIGE_VOICE_SLABS  = VESTIGE_MAX_VOICES + VESTIGE_VOICE_SPARES; // voiced slabs
 static constexpr int    VESTIGE_FRIP_SLOT    = VESTIGE_VOICE_SLABS;      // frippertronics buffer (ARCHIVED — see below)

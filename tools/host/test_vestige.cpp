@@ -251,9 +251,9 @@ static void TestStage0() {
   Tap(); play_input = true; RunFor(3.0f); play_input = false; RunFor(1.0f);
   Check(v.rev_play_ && v.HasContent() && peak > 0.01f, "reverse: loop plays (audible)");
 
-  // MIDDLE = 6 voices.
+  // MIDDLE = VESTIGE_MAX_VOICES voices.
   cs.sw[0] = 1; cs.knob[1] = 0.62f; play_input = true; RunFor(8.0f);
-  Check(v.target_voices_ == 6 && Live() > 1, "MIDDLE: poly (>1 live voice)");
+  Check(v.target_voices_ == VESTIGE_MAX_VOICES && Live() > 1, "MIDDLE: poly (>1 live voice)");
   printf("      live voices in MIDDLE: %d\n", Live());
   cs.sw[0] = 0; RunFor(2.0f);
   Check(Live() == 1, "back to UP: 1 live voice");
@@ -748,12 +748,14 @@ static void TestQuantisedCapture() {
           "K2 mid-capture: the capture keeps the T latched at its start");
     cs.knob[1] = 0.85f; RunFor(1.0f); Taps({1000}); RunFor(2.0f); }
 
-  // Six voices, six anchors.
+  // A full poly pool: every voice keeps its own anchor.
   cs.sw[0] = 1; RunFor(0.5f);
+  static_assert(VESTIGE_MAX_VOICES <= 6, "test burst tables hold at most 6 voices");
+  const int NV = VESTIGE_MAX_VOICES;
   const long bursts[6] = {3000, 9000, 14000, 21000, 27000, 30500};
   const float gaps[6]  = {0.37f, 0.61f, 0.23f, 0.89f, 0.41f, 0.5f};
   int slots[6]; long As[6]; size_t Qs[6]; int got = 0;
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < NV; i++) {
     CapRec r{};
     noise_from = n; noise_to = n + bursts[i];
     if (WaitActivation(3.f, &r)) { slots[got] = r.s; As[got] = r.A; Qs[got] = r.Q; got++; }
@@ -779,8 +781,8 @@ static void TestQuantisedCapture() {
     if (!dup) qset[nq++] = Qs[i];
     printf("      voice slot %d: anchor %ld, Q %zu (%.4f of T)\n", slots[i], As[i], Qs[i], GridQuantize::DivisionOf(Qs[i], 48000));
   }
-  Check(got == 6 && live == 6, "MIDDLE: six captures, six live voices");
-  Check(anchors_distinct && nq >= 3 && divs, "six voices: distinct anchors, >= 3 different divisions of one T");
+  Check(got == NV && live == NV, "MIDDLE: a full pool of captures, all live");
+  Check(anchors_distinct && nq >= 3 && divs, "full pool: distinct anchors, >= 3 different divisions of one T");
   Check(heads_ok, "every voice's head sits on (now - its own anchor) mod its own Q, at every probe");
   // Freeze: nothing else sounding, one fragment. Its output must begin at its
   // activation sample (the first grain's Hann window is 0 at phase 0, so the
@@ -1084,11 +1086,11 @@ static void TestSpeedXfade() {
   Check(audit_max_over <= 1, "coverage clamp: no read past L + min(L, guard) (+1 interpolation partner)");
   noise_from = noise_to = -1;
 
-  // Six voices + K1 in the crossfade: the grain count doubles there; the cap holds.
+  // Full poly pool + K1 in the crossfade: the grain count doubles there; the cap holds.
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.sw[0] = 1; Taps({1000}); RunFor(0.5f);
   seen_acts = v.act_count_;
   const long bursts[6] = {3000, 9000, 14000, 21000, 27000, 30500};
-  for (int i = 0; i < 6; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
+  for (int i = 0; i < VESTIGE_MAX_VOICES; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
   noise_from = noise_to = -1;
   RunFor(1.0f);
   int live6 = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) if (v.active_[q] && !v.dying_[q]) live6++;
@@ -1102,7 +1104,11 @@ static void TestSpeedXfade() {
   const int g_end = max_grains; const uint32_t drop_end = v.grain_cap_drops_ - d0;
   printf("      %d voices: max active grains noon %d (cap drops %u) | CW midpoint %d (drops %u) | full CW %d (drops %u); cap %d\n",
          live6, g_noon, drop_noon, g_mid, drop_mid, g_end, drop_end, VESTIGE_MB_GRAIN_CAP);
-  Check(live6 == 6, "setup: six live voices");
+  Check(live6 == VESTIGE_MAX_VOICES, "setup: a full poly pool is live");
+  // The reason for the voice count: in steady state (no voice fading out) the
+  // crossfade must fit the cap without refusing a single grain.
+  Check(2 * 2 * VESTIGE_MAX_VOICES > VESTIGE_MB_GRAIN_CAP || drop_mid == 0,
+        "steady state: K1 crossfade with a full pool refuses no grains");
   Check(g_noon <= VESTIGE_MB_GRAIN_CAP && g_mid <= VESTIGE_MB_GRAIN_CAP && g_end <= VESTIGE_MB_GRAIN_CAP,
         "grain count never exceeds VESTIGE_MB_GRAIN_CAP");
   Check(g_end <= g_noon + 1, "at the K1 end only one version runs (no doubling outside the crossfade)");

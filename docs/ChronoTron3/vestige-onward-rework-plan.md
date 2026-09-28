@@ -171,11 +171,29 @@ design decisions, and §5 makes them explicit so they can be tuned by ear.**
 | SW1 | mode | voices | buffer |
 |-|-|-|-|
 | **UP** | dynamic auto capture | 1 | loop buffer |
-| **MIDDLE** | dynamic auto capture, polyphonic | 6 | loop buffer |
+| **MIDDLE** | dynamic auto capture, polyphonic | 4 (was 6 — grain budget, see below) | loop buffer |
 | **DOWN** | **freeze** | 1 | its own fixed freeze buffer |
 
 Retired: manual capture mode (auto is always on), frippertronics, the K1 voice
 count, and the K3 loop↔freeze blend.
+
+**Poly voice count: 4, reduced from 6 by the grain budget.** One playback stream
+is 2 overlapping grains. While K1 sits between noon and an end, each voice plays
+two streams at once (clean + shifted) to crossfade them — 4 grains per voice.
+Freeze and poly never run together, so this is the only thing that loads the
+grain pool on the loop side:
+
+| voices | K1 noon or an end | K1 crossfade | crossfade + one voice fading out |
+|-|-|-|-|
+| 6 | 12 | 24 | 28 |
+| 4 | 8 | 16 | 20 |
+| 3 | 6 | 12 | 16 |
+
+The grain cap is 16. At 6 voices the crossfade refused grains and thinned. 4
+fits exactly in steady state (host-measured: 16 grains, 0 refused), but during a
+replacement the outgoing voice still plays for the K5 fade, so some grains are
+refused then. 3 would fit in every state. 4 is on trial to find out whether that
+transient is audible; it is one constant, `VESTIGE_MAX_VOICES`.
 
 The loop side and the freeze side become **conceptually and physically separate
 buffers**. Freeze stops being a position on a morph and becomes an operation.
@@ -190,7 +208,7 @@ buffers**. Freeze stops being a position on a morph and becomes an operation.
 | **K4** | **capture sensitivity** | was K2; the gate threshold. Possibly temporary — see §9, the degrade engine may want K4 back |
 | **K5** | fade in / out | unchanged; also the replace-crossfade (Onward's FADE) |
 | **K6** | **dry/wet mix** | now shell-owned equal-power, like the other modules. vestige stops owning its output |
-| **SW1** | mode | UP 1-voice · MIDDLE 6-voice · DOWN freeze |
+| **SW1** | mode | UP 1-voice · MIDDLE 4-voice · DOWN freeze |
 | **SW2** | **error type select** | picks which of TIMING / CONDITION / PLAYBACK K3 edits. All three stay active at their stored values |
 | **FS1** | **tap tempo**, dedicated | with LED1 as the clock indicator |
 | **FS2** | capture + playback on/off · **hold = buffer hold** | hold always toggles hold, held or not; while held, tap still toggles playback |
@@ -253,7 +271,7 @@ Rules:
 Two consequences worth stating, because they are the point rather than side
 effects:
 
-- **In 6-voice mode each voice has its own anchor.** Six loops, each quantised
+- **In poly mode each voice has its own anchor.** Several loops, each quantised
   to a division of the same T but each with its own beat one, is exactly the
   polymetric/polyrhythmic behaviour being aimed for: they share a pulse but not
   a downbeat, so they phase against each other and realign only when their
