@@ -1,0 +1,1135 @@
+// test_vestige.cpp — the REAL vestige module on the host, stubbed hardware.
+//
+// Drives Controls() every 10 ms and Process() every 48 samples like the shell,
+// over a synthetic bass pluck, and checks the onward-rework behaviour:
+//
+//   stage 0  FS2 transport (playing / stopped / held-playing / held-stopped),
+//            K2 length + direction, SW1 1-voice / 6-voice / freeze, K6 not owned.
+//   buffers  the loop side and the freeze side are DISTINCT memory: address
+//            ranges disjoint, each slot's RingBuffer as long as its own row,
+//            neither side ever writes the other's slab, every capture write
+//            stays inside its scratch row, and an SW1 switch between the sides
+//            carries no content across (unheld: the side left is cleared;
+//            held: it is kept, untouched, and comes back).
+//
+// Private state is inspected directly (#define private public) — this is a
+// white-box test of the module, not of its interface.
+//
+// Build/run via tools/host/run.sh.
+//
+#include <cstdio>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <new>
+#include <vector>
+#include "daisy.h"
+#include "hothouse.h"
+#include "control_surface.h"
+#include "knob_map.h"
+#include "constants.h"
+#define private public
+#include "vestige.h"
+#undef private
+uint32_t daisy::System::now_ms = 0;
+
+static Vestige v;
+static ControlSurface cs;
+static daisy::Led led1, led2;
+static const float sr = 48000.f;
+static long n = 0;
+static bool play_input = true;
+static bool sustain_input = false;   // steady tone instead of plucks
+// Deterministic noise bursts [noise_from, noise_to) (sample numbers): a sharp
+// autocorrelation, so the output can be lined up against the input exactly.
+static long noise_from = -1, noise_to = -1;
+static float Noise(long k) {
+  uint32_t h = (uint32_t)k * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+  return ((float)(h & 0xFFFF) / 32768.f - 1.f);
+}
+// Input / wet history (only while hist_on), indexed n - hist_n0.
+static bool hist_on = false; static long hist_n0 = 0;
+static std::vector<float> in_hist, wet_hist;
+static float sustain_hz = 110.f;
+static float peak = 0.f, maxabs = 0.f, maxd = 0.f, prevw = 0.f;
+static int bad = 0;
+static long rec_overrun = 0;     // blocks where rec_idx_ exceeded its scratch row
+static size_t frz_rec_max = 0;   // furthest index the freeze scratch reached
+
+static float Input(long k) {
+  if (k >= noise_from && k < noise_to) return 0.25f * Noise(k);
+  if (!play_input) return 0.f;
+  if (sustain_input) return 0.25f * sinf(2.f * 3.14159265f * sustain_hz * (float)k / sr);
+  const float period = 0.7f;
+  float t = fmodf((float)k / sr, period);
+  float env = (t < 0.35f) ? expf(-t * 3.f) * (t < 0.005f ? t / 0.005f : 1.f) : 0.f;
+  float ph = 2.f * 3.14159265f * 73.4f * (float)k / sr;
+  return 0.25f * env * (sinf(ph) + 0.5f * sinf(2 * ph));
+}
+
+// Footswitch state injected per tick, with the real ControlSurface's semantics
+// (held_ms = 0 whenever the switch is up — so also on the falling edge).
+static int fs_down_ticks[2] = {0, 0};   // >0: pressed for this many more ticks
+static uint32_t fs_since[2] = {0, 0};
+static bool fs_last[2] = {false, false};
+// LED1 rising edges, as the sample number at the tick that lit it.
+static std::vector<long> led1_rises;
+static bool led1_prev = false;
+static long led1_on_while_off = 0;      // ticks LED1 was lit while the effect was off
+
+static void Tick() {
+  daisy::System::now_ms += 10;
+  for (int f = 0; f < 2; f++) {
+    bool down = fs_down_ticks[f] > 0;
+    if (fs_down_ticks[f] > 0) fs_down_ticks[f]--;
+    FootswitchEvent& e = cs.fs[f];
+    e.rising = down && !fs_last[f]; e.falling = !down && fs_last[f];
+    if (e.rising) fs_since[f] = daisy::System::now_ms;
+    e.down = down; e.held_ms = down ? daisy::System::now_ms - fs_since[f] : 0;
+    fs_last[f] = down;
+  }
+  v.Controls(cs, led1, led2);
+  const bool on = led1.v > 0.5f;
+  if (on && !led1_prev) led1_rises.push_back(n);
+  if (on && !v.engaged_) led1_on_while_off++;
+  led1_prev = on;
+}
+static int& fs2_down_ticks = fs_down_ticks[1];
+
+static int  blk = 48;                  // Process() block size (1 = per-sample audit mode)
+static bool audit_on = false;
+static long audit_bad = 0, audit_reads = 0;
+static long audit_max_over = 0;        // deepest guard read past L, minus min(L, guard) (<= 1 expected)
+static int  max_grains = 0;
+static void Audit();
+static void RunFor(float secs) {
+  float in[48], wet[48];
+  long end = n + (long)(secs * sr);
+  peak = 0.f;
+  while (n < end) {
+    if (n % 480 == 0) Tick();
+    for (int i = 0; i < blk; i++) in[i] = Input(n + i);
+    v.Process(in, wet, blk);
+    if (audit_on) Audit();
+    { int a = 0; for (int g = 0; g < VESTIGE_GRAINS; g++) if (v.grains_[g].IsActive()) a++; if (a > max_grains) max_grains = a; }
+    if (hist_on) for (int i = 0; i < blk; i++) { in_hist.push_back(in[i]); wet_hist.push_back(wet[i]); }
+    if (v.recording_ && v.rec_idx_ > v.cap_[v.rec_slot_]) rec_overrun++;
+    if (v.recording_ && Vestige::PoolOf(v.rec_slot_) == Vestige::kPoolFreeze && v.rec_idx_ > frz_rec_max)
+      frz_rec_max = v.rec_idx_;
+    for (int i = 0; i < blk; i++) {
+      float a = fabsf(wet[i]);
+      if (!std::isfinite(wet[i]) || a > 10.f) bad++;
+      if (a > peak) peak = a;
+      float d = fabsf(wet[i] - prevw); prevw = wet[i]; if (d > maxd) maxd = d;
+      if (a > maxabs) maxabs = a;
+    }
+    n += blk;
+  }
+}
+// Back to shell-rate blocks after a per-sample section: step single samples
+// until n is on a 480-sample tick boundary again (Tick fires on n % 480 == 0).
+static void Realign() { blk = 1; while (n % 480 != 0) RunFor(1.f / sr); blk = 48; }
+static void Tap()  { fs2_down_ticks = 10; RunFor(0.2f); }   // 100 ms press
+static void Hold() { fs2_down_ticks = 90; RunFor(1.0f); }   // 900 ms press
+
+static int fails = 0;
+static void Check(bool ok, const char* what) { printf("%s  %s\n", ok ? "ok  " : "FAIL", what); if (!ok) fails++; }
+
+// Pool helpers over the module's own ranges.
+static int LiveIn(int p) {
+  int c = 0;
+  for (int s = Vestige::PoolLo(p); s < Vestige::PoolHi(p); s++) if (v.active_[s] && !v.dying_[s]) c++;
+  return c;
+}
+static int Live() { return LiveIn(Vestige::kPoolLoop); }
+static bool HasIn(int p) { return v.PoolHasContent(p); }
+static int GrainsIn(int p) {
+  int c = 0;
+  for (int g = 0; g < VESTIGE_GRAINS; g++)
+    if (v.grains_[g].IsActive() && Vestige::PoolOf(v.grain_slot_[g]) == p) c++;
+  return c;
+}
+// FNV-1a over a float range's bytes.
+static uint64_t Hash(const float* p, size_t count) {
+  const unsigned char* b = reinterpret_cast<const unsigned char*>(p);
+  uint64_t h = 1469598103934665603ULL;
+  for (size_t i = 0; i < count * sizeof(float); i++) { h ^= b[i]; h *= 1099511628211ULL; }
+  return h;
+}
+static uint64_t HashLoopSide()   { return Hash(&vestige_slab[0][0], sizeof(vestige_slab) / sizeof(float)); }
+static uint64_t HashFreezeSide() { return Hash(&vestige_freeze_slab[0][0], sizeof(vestige_freeze_slab) / sizeof(float)); }
+static bool AllZero(const float* p, size_t count) { for (size_t i = 0; i < count; i++) if (p[i] != 0.f) return false; return true; }
+// Zero crossings per second over a slot's captured loop — identifies which
+// steady tone a slot was recorded from.
+static float SlotHz(int s) {
+  const float* m = v.slab_[s]; const size_t L = v.loop_len_[s];
+  int zc = 0;
+  for (size_t i = 1; i < L; i++) if ((m[i - 1] < 0.f) != (m[i] < 0.f)) zc++;
+  return (L > 1) ? 0.5f * (float)zc * sr / (float)L : 0.f;
+}
+static void Engage()   { if (!v.engaged_) Tap(); }
+static void Unhold()   { if (v.held_) Hold(); }
+
+// ---------------------------------------------------------------------------
+static void TestMemoryLayout() {
+  printf("-- buffers: distinct memory\n");
+  const uintptr_t loop_lo = (uintptr_t)&vestige_slab[0][0];
+  const uintptr_t loop_hi = loop_lo + sizeof(vestige_slab);
+  const uintptr_t frz_lo  = (uintptr_t)&vestige_freeze_slab[0][0];
+  const uintptr_t frz_hi  = frz_lo + sizeof(vestige_freeze_slab);
+  Check(loop_hi <= frz_lo || frz_hi <= loop_lo, "loop slab and freeze slab do not overlap");
+  bool rows_ok = true, len_ok = true, disjoint = true, side_ok = true;
+  for (int s = 0; s < VESTIGE_SLOTS; s++) {
+    const uintptr_t a = (uintptr_t)v.slab_[s], b = a + v.cap_[s] * sizeof(float);
+    const bool frz = (s >= VESTIGE_FREEZE_SLOT0);
+    if (frz ? (a < frz_lo || b > frz_hi) : (a < loop_lo || b > loop_hi)) side_ok = false;
+    if (v.cap_[s] != (frz ? VESTIGE_FREEZE_CAP : VESTIGE_VOICE_CAP)) rows_ok = false;
+    if (v.ring_[s].GetLength() != v.cap_[s]) len_ok = false;
+    for (int t = 0; t < VESTIGE_SLOTS; t++) {
+      if (t == s) continue;
+      const uintptr_t c = (uintptr_t)v.slab_[t], d = c + v.cap_[t] * sizeof(float);
+      if (a < d && c < b) disjoint = false;
+    }
+  }
+  Check(side_ok, "every slot's row lies inside its own side's slab");
+  Check(rows_ok, "row capacity: loop = 8 s + guard, freeze = 400 ms + overhang");
+  Check(len_ok,  "every RingBuffer is exactly its row's length (grain reads wrap inside the row)");
+  Check(disjoint, "no two slots share memory");
+  Check(VESTIGE_FREEZE_CAP >= VESTIGE_FREEZE_SAMPLES + VESTIGE_SEAM_XFADE_MAX,
+        "freeze row holds the 400 ms window + the seam overhang");
+}
+
+// ---------------------------------------------------------------------------
+static void TestStage0() {
+  printf("-- stage 0: transport, K2, SW1\n");
+  RunFor(1.0f);
+  Check(!v.engaged_ && v.Bypassed() && !v.HasContent(), "power-up: off, bypassed, empty");
+  Check(peak == 0.f, "power-up: wet silent");
+  Check(!v.OwnsOutput(), "OwnsOutput() == false");
+
+  Tap(); RunFor(2.0f);
+  Check(v.engaged_ && !v.held_ && !v.Bypassed(), "tap: playing");
+  Check(v.HasContent() && peak > 0.01f, "playing: auto-captured a loop, wet audible");
+  Check(!led1_rises.empty() && led1_rises.back() > n - (long)(2.0f * sr), "playing: LED1 flashing (clock)");
+
+  Hold();
+  Check(v.engaged_ && v.held_, "hold: held-playing");
+  play_input = false; RunFor(1.0f);
+  Check(!v.recording_ && peak > 0.01f, "held-playing: loop sustains, no capture");
+
+  Tap(); RunFor(1.5f);
+  Check(!v.engaged_ && v.held_ && v.Bypassed(), "tap while held: held-stopped");
+  Check(v.HasContent(), "held-stopped: buffer preserved after fade-out");
+  RunFor(0.5f);
+  Check(peak < 1e-4f, "held-stopped: wet silent after fade");
+  Check(led1.v == 0.f, "held-stopped: LED1 off");
+
+  Tap(); RunFor(1.5f);
+  Check(v.engaged_ && v.held_ && peak > 0.01f, "tap again: held-playing, old loop returns with no input");
+
+  Hold();
+  Check(v.engaged_ && !v.held_, "hold again: playing (unheld)");
+  Tap(); RunFor(1.5f);
+  Check(!v.engaged_ && !v.held_ && !v.HasContent(), "tap while unheld: stopped + buffers cleared");
+
+  // Un-hold while stopped clears too.
+  Tap(); play_input = true; RunFor(2.0f); Hold(); play_input = false; Tap(); RunFor(1.0f);
+  Check(!v.engaged_ && v.held_ && v.HasContent(), "setup: held-stopped with content");
+  Hold(); RunFor(0.3f);
+  Check(!v.engaged_ && !v.held_ && !v.HasContent(), "release hold while stopped: cleared");
+
+  // K2 noon = shortest ceiling; CCW = reverse.
+  cs.knob[1] = 0.5f; RunFor(0.05f);
+  Check(v.period_ == VESTIGE_T_MIN_SAMPLES && v.max_loop_len_ == VESTIGE_T_MIN_SAMPLES && !v.rev_play_,
+        "K2 noon: T = T_MIN (100 ms), forward");
+  cs.knob[1] = 0.0f; RunFor(0.05f);
+  Check(v.max_loop_len_ == VESTIGE_LOOP_MAX_SAMPLES && v.rev_play_, "K2 CCW: longest, reverse");
+  cs.knob[1] = 1.0f; RunFor(0.05f);
+  Check(v.max_loop_len_ == VESTIGE_LOOP_MAX_SAMPLES && !v.rev_play_, "K2 CW: longest, forward");
+  cs.knob[1] = 0.15f;  // reverse, shorter
+  Tap(); play_input = true; RunFor(3.0f); play_input = false; RunFor(1.0f);
+  Check(v.rev_play_ && v.HasContent() && peak > 0.01f, "reverse: loop plays (audible)");
+
+  // MIDDLE = 6 voices.
+  cs.sw[0] = 1; cs.knob[1] = 0.62f; play_input = true; RunFor(8.0f);
+  Check(v.target_voices_ == 6 && Live() > 1, "MIDDLE: poly (>1 live voice)");
+  printf("      live voices in MIDDLE: %d\n", Live());
+  cs.sw[0] = 0; RunFor(2.0f);
+  Check(Live() == 1, "back to UP: 1 live voice");
+
+  // Freeze.
+  cs.sw[0] = 2; cs.knob[1] = 0.0f; cs.knob[2] = 0.0f; RunFor(3.0f);
+  size_t maxL = 0;
+  for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++)
+    if (v.active_[s] && !v.dying_[s] && v.loop_len_[s] > maxL) maxL = v.loop_len_[s];
+  Check(maxL <= VESTIGE_FREEZE_SAMPLES && maxL > 0, "freeze: captures <= 400 ms, in the freeze pool");
+  Check(v.mb_nbands_ == 3 && v.k3_frozen_ && !v.rev_play_ && v.k3_focus_ == 1.f, "freeze: 3 bands, frozen, forward, K2 inert");
+  float kf = v.k3_focus_; cs.knob[2] = 1.0f; cs.knob[1] = 1.0f; RunFor(0.05f);
+  Check(v.k3_focus_ == kf && v.max_loop_len_ == VESTIGE_FREEZE_SAMPLES, "freeze: K2/K3 inert");
+  play_input = false; RunFor(1.0f);
+  Check(peak > 0.005f, "freeze: sustains after input stops");
+  printf("      freeze loop len %zu, peak %.4f\n", maxL, peak);
+
+  // Forward vs reverse on the SAME held loop: max sample-to-sample jump.
+  cs.sw[0] = 0; cs.knob[1] = 0.8f; RunFor(0.1f);
+  Unhold(); Engage();
+  play_input = true; RunFor(3.0f); Hold(); play_input = false; RunFor(2.0f);
+  maxd = 0.f; RunFor(4.0f); float dfwd = maxd, pfwd = peak;
+  cs.knob[1] = 0.2f; RunFor(1.0f); maxd = 0.f; RunFor(4.0f); float drev = maxd, prev = peak;
+  printf("      fwd: peak %.4f maxstep %.5f | rev: peak %.4f maxstep %.5f\n", pfwd, dfwd, prev, drev);
+  Check(v.rev_play_ && prev > 0.01f, "reverse on a held loop: audible");
+  Check(drev < dfwd * 2.f + 1e-3f, "reverse: no step much larger than forward's (seam)");
+}
+
+// ---------------------------------------------------------------------------
+// Start each buffer scenario from a known state: effect on, not held, both
+// sides empty, UP, sensible knobs.
+static void Reset() {
+  play_input = false;
+  cs.knob[1] = 0.85f; cs.knob[3] = 0.1f; cs.knob[4] = 0.05f;
+  cs.sw[0] = 0; RunFor(0.1f);
+  Unhold();
+  if (v.engaged_) Tap();
+  RunFor(1.0f);                          // fades finish -> off + unheld clears everything
+  Engage();
+}
+
+static void TestBufferSeparation() {
+  printf("-- buffers: no content crosses an SW1 side switch\n");
+
+  // 1. Loop side never touches the freeze slab (hashed: stage 0 above already
+  //    used freeze, so it is no longer all-zero).
+  Reset();
+  uint64_t hf = HashFreezeSide();
+  play_input = true; RunFor(3.0f); play_input = false; RunFor(1.0f);
+  Check(HasIn(Vestige::kPoolLoop) && !HasIn(Vestige::kPoolFreeze), "UP: capture lands in the loop pool only");
+  Check(HashFreezeSide() == hf, "UP capture + playback: freeze slab byte-identical");
+
+  // 2. Unheld switch UP -> DOWN with no input: the loop fades out and is
+  //    cleared; nothing appears in freeze; the wet goes silent.
+  cs.sw[0] = 2; RunFor(0.05f);
+  Check(v.pool_ == Vestige::kPoolFreeze, "SW1 DOWN: freeze side active");
+  Check(v.eng_[Vestige::kPoolLoop].frozen == false && v.eng_[Vestige::kPoolFreeze].frozen == true,
+        "loop tail keeps loop addressing while the freeze side is active");
+  RunFor(1.0f);
+  Check(!HasIn(Vestige::kPoolLoop), "unheld: loop side cleared after its fade-out");
+  Check(!HasIn(Vestige::kPoolFreeze), "freeze side did not inherit the loop");
+  RunFor(0.5f);
+  Check(peak < 1e-5f, "freeze side with no capture: wet silent");
+
+  // 3. Freeze side never touches the loop slab.
+  uint64_t hl = HashLoopSide();
+  hf = HashFreezeSide();
+  play_input = true; RunFor(3.0f); play_input = false; RunFor(0.5f);
+  Check(HasIn(Vestige::kPoolFreeze) && !HasIn(Vestige::kPoolLoop), "DOWN: capture lands in the freeze pool only");
+  Check(HashLoopSide() == hl, "DOWN capture + playback: loop slab byte-identical");
+  Check(HashFreezeSide() != hf, "DOWN capture: the freeze slab was written (sanity)");
+  Check(peak > 0.005f, "DOWN: freeze audible");
+
+  // 4. Unheld switch DOWN -> UP: freeze cleared, loop side starts empty, silent.
+  cs.sw[0] = 0; RunFor(1.0f);
+  Check(!HasIn(Vestige::kPoolFreeze), "unheld: freeze side cleared after its fade-out");
+  Check(!HasIn(Vestige::kPoolLoop), "loop side did not inherit the freeze");
+  RunFor(0.5f);
+  Check(peak < 1e-5f, "loop side with no capture: wet silent");
+
+  // 5. Held switch UP -> DOWN -> UP: the loop is kept untouched, silent and
+  //    unscheduled while away, and comes back.
+  play_input = true; RunFor(3.0f); play_input = false; RunFor(1.0f);
+  Hold();
+  Check(v.held_ && HasIn(Vestige::kPoolLoop), "setup: held loop");
+  int ls = -1;
+  for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) if (v.active_[s] && !v.dying_[s]) ls = s;
+  const size_t L0 = (ls >= 0) ? v.loop_len_[ls] : 0;
+  const uint64_t hrow = (ls >= 0) ? Hash(v.slab_[ls], v.cap_[ls]) : 0;
+  hf = HashFreezeSide();
+  cs.sw[0] = 2; play_input = true; RunFor(2.0f);   // input playing: held = no capture
+  Check(!v.recording_ && !HasIn(Vestige::kPoolFreeze), "held on the freeze side: no capture, freeze empty");
+  Check(HashFreezeSide() == hf, "held on the freeze side: freeze slab untouched");
+  Check(HasIn(Vestige::kPoolLoop) && ls >= 0 && v.active_[ls] && v.loop_len_[ls] == L0,
+        "held: loop kept while on the freeze side");
+  Check(GrainsIn(Vestige::kPoolLoop) == 0, "held loop is parked: no grains scheduled while away");
+  play_input = false; RunFor(0.5f);
+  Check(peak < 1e-5f, "held, freeze side empty: wet silent (the loop does not play here)");
+  cs.sw[0] = 0; RunFor(1.0f);
+  Check(ls >= 0 && v.active_[ls] && v.loop_len_[ls] == L0 && Hash(v.slab_[ls], v.cap_[ls]) == hrow,
+        "back on UP: the same loop, byte-identical");
+  RunFor(0.5f);
+  Check(peak > 0.01f, "back on UP: held loop fades back in");
+
+  // 6. Held freeze is kept too, and the loop side does not hear it.
+  Unhold(); cs.sw[0] = 2; RunFor(1.0f);           // unheld: loop cleared on leaving
+  play_input = true; RunFor(2.0f); play_input = false; RunFor(0.3f);
+  Hold();
+  Check(v.held_ && HasIn(Vestige::kPoolFreeze) && !HasIn(Vestige::kPoolLoop), "setup: held freeze, empty loop side");
+  cs.sw[0] = 0; RunFor(1.0f);                     // freeze fades out (K5 ~0.3 s)
+  Check(HasIn(Vestige::kPoolFreeze) && !HasIn(Vestige::kPoolLoop), "held: freeze kept on the loop side, loop side still empty");
+  RunFor(0.5f);
+  Check(peak < 1e-5f, "loop side (held, empty): wet silent");
+  cs.sw[0] = 2; RunFor(1.0f);
+  Check(peak > 0.005f, "back on DOWN: held freeze fades back in");
+
+  // 7. A capture in flight when SW1 changes side is dropped, not committed
+  //    into the other side.
+  Unhold(); cs.sw[0] = 0; RunFor(1.0f);
+  Reset();
+  cs.knob[1] = 1.0f;                               // 8 s ceiling: the capture runs long
+  // Tone A (110 Hz) is played into the loop side; the instant SW1 moves the
+  // tone changes to B (330 Hz). Everything the freeze side holds afterwards
+  // must be B: an A slot there means the loop capture crossed over.
+  sustain_hz = 110.f; sustain_input = true; play_input = true; RunFor(0.3f);
+  Check(v.recording_ && Vestige::PoolOf(v.rec_slot_) == Vestige::kPoolLoop, "setup: loop capture in flight (into a loop-side slot)");
+  cs.sw[0] = 2; sustain_hz = 330.f; RunFor(0.02f);
+  Check(!HasIn(Vestige::kPoolLoop), "in-flight loop capture dropped (never committed)");
+  Check(!v.recording_ || Vestige::PoolOf(v.rec_slot_) == Vestige::kPoolFreeze, "any new capture records into a freeze-side slot");
+  RunFor(0.45f);                                   // B capture hits the 400 ms ceiling
+  int nb = 0, na = 0;
+  for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++) {
+    if (!v.active_[s]) continue;                  // incl. dying: a crossed-over slot would be fading here
+    const float hz = SlotHz(s);
+    printf("      freeze slot %d: %zu samples, %.1f Hz%s\n", s, v.loop_len_[s], hz, v.dying_[s] ? " (dying)" : "");
+    if (fabsf(hz - 330.f) < 15.f) nb++; else na++;
+  }
+  Check(nb >= 1 && na == 0, "freeze side holds only audio played AFTER the switch (330 Hz, no 110 Hz)");
+  RunFor(0.6f);
+  sustain_input = false; play_input = false; sustain_hz = 110.f; RunFor(0.3f);
+  bool frz_only = true;
+  for (int s = 0; s < VESTIGE_FREEZE_SLOT0; s++) if (v.active_[s]) frz_only = false;
+  Check(frz_only && HasIn(Vestige::kPoolFreeze), "after the switch only the freeze side holds content");
+
+  // 8. A freeze capture hitting the 400 ms ceiling never writes past the
+  //    scratch row. The ceiling stop and the commit are acted on by Controls()
+  //    up to a tick (480 samples) late and the row only has 240 spare, so the
+  //    write bound is what holds it. Sustained input so the capture runs to the
+  //    ceiling instead of ending on silence.
+  Unhold(); cs.sw[0] = 2; play_input = false; RunFor(1.0f);
+  frz_rec_max = 0;
+  sustain_input = true; play_input = true; RunFor(1.5f);
+  play_input = false; sustain_input = false; RunFor(0.5f);
+  printf("      freeze capture: furthest index %zu, row capacity %zu, ceiling %zu\n",
+         frz_rec_max, (size_t)VESTIGE_FREEZE_CAP, (size_t)VESTIGE_FREEZE_SAMPLES);
+  size_t fl = 0;
+  for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++)
+    if (v.active_[s] && !v.dying_[s]) fl = v.loop_len_[s];
+  Check(frz_rec_max >= VESTIGE_FREEZE_SAMPLES, "sustained freeze capture reached the 400 ms ceiling");
+  Check(fl == VESTIGE_FREEZE_SAMPLES, "ceiling capture committed at exactly 400 ms");
+  Check(frz_rec_max <= VESTIGE_FREEZE_CAP, "freeze capture never indexed past its row");
+  Check(rec_overrun == 0, "no capture ever indexed past its scratch row (whole run)");
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1: T, the master period.
+static void PressFS1(int ticks) { fs_down_ticks[0] = ticks; }
+// A chain of FS1 taps: each press lasts 50 ms, successive DOWN-presses `ivs`
+// ms apart (multiples of the 10 ms tick, so the intervals are exact).
+static void Taps(const std::vector<int>& ivs) {
+  for (int iv : ivs) { PressFS1(5); RunFor((float)iv * 0.001f); }
+  PressFS1(5); RunFor(0.1f);                        // the closing tap
+}
+static size_t TapT(int ms) { return (size_t)((float)ms * 0.001f * sr + 0.5f); }
+
+// Every LED1 rise in [from, to) must sit on anchor + k*T, lit at the first tick
+// at or after the true flash start (0..480 samples late). Returns the worst
+// lateness in samples, or -1 if any rise is off the anchor's beat.
+static long LedWorstLate(long anchor, size_t T, long from, long to, int* count) {
+  long worst = 0; *count = 0;
+  for (long r : led1_rises) {
+    if (r < from || r >= to) continue;
+    const long ph = (r - anchor) % (long)T;
+    (*count)++;
+    if (ph > 480) return -1;
+    if (ph > worst) worst = ph;
+  }
+  return worst;
+}
+
+static void TestTimeBase() {
+  printf("-- stage 1: the time base (T)\n");
+  Reset();
+  Check(v.engaged_ && !v.held_ && !v.HasContent(), "setup: on, unheld, empty, UP");
+  cs.knob[1] = 0.85f; RunFor(0.05f);
+  const size_t knobT = Vestige::KnobPeriod(RemapKnob(0.85f));
+
+  // Range.
+  Check(VESTIGE_T_MIN_SAMPLES / 8 >= VESTIGE_GRAIN_MIN_LEN, "T_MIN/8 >= VESTIGE_GRAIN_MIN_LEN (quantiser floor stays playable)");
+  printf("      T range %zu..%zu samples (%.1f ms..%.1f s), T_MIN/8 = %zu\n",
+         (size_t)VESTIGE_T_MIN_SAMPLES, (size_t)VESTIGE_T_MAX_SAMPLES,
+         VESTIGE_T_MIN_SAMPLES * 1000.f / sr, VESTIGE_T_MAX_SAMPLES / sr, (size_t)VESTIGE_T_MIN_SAMPLES / 8);
+  bool mono = true; size_t prevT = 0, tmin = (size_t)-1, tmax = 0;
+  for (int i = 0; i <= 200; i++) {
+    const size_t t = Vestige::KnobPeriod((float)i / 200.f);
+    if (t < tmin) tmin = t; if (t > tmax) tmax = t;
+    if (i > 100 && t < prevT) mono = false;
+    prevT = t;
+  }
+  Check(tmin == VESTIGE_T_MIN_SAMPLES && tmax == VESTIGE_T_MAX_SAMPLES && mono,
+        "K2 sweep: T spans exactly T_MIN..T_MAX, monotonic away from noon");
+  Check(v.period_ == knobT && v.max_loop_len_ == knobT, "no tap: K2 sets T, and T is the loop ceiling");
+
+  // Tap intervals produce T.
+  struct TapCase { int ms; bool accept; };
+  const TapCase cases[] = { {500, true}, {250, true}, {1230, true}, {100, true}, {7990, true},
+                            {90, false}, {8010, false} };
+  size_t expect = v.period_;
+  for (const TapCase& c : cases) {
+    // Break the chain first: an interval longer than T_MAX is ignored and the
+    // press that ends it starts a new chain.
+    RunFor(8.2f);
+    Taps({c.ms});
+    if (c.accept) expect = TapT(c.ms);
+    char msg[128];
+    snprintf(msg, sizeof msg, "tap %d ms -> T %s (%zu samples)", c.ms, c.accept ? "set" : "ignored, unchanged", expect);
+    Check(v.period_ == expect, msg);
+  }
+  RunFor(8.2f);
+  // Multi-tap chain: the LAST interval is T (no averaging, like sprawl).
+  Taps({600, 610, 450});
+  Check(v.period_ == TapT(450), "tap chain 600/610/450 ms -> T = last interval (450 ms)");
+  // A long press is not a tap: T unchanged, chain untouched.
+  const size_t before = v.period_;
+  PressFS1(40); RunFor(0.8f);                         // 400 ms press
+  Check(v.period_ == before, "400 ms FS1 press: not a tap, T unchanged");
+  // T drives the loop ceiling: a sustained note captures exactly T.
+  Taps({500});
+  Check(v.period_ == TapT(500) && v.max_loop_len_ == TapT(500), "tapped T is the loop ceiling");
+  sustain_hz = 110.f; sustain_input = true; play_input = true; RunFor(1.0f);
+  sustain_input = false; play_input = false; RunFor(0.5f);
+  size_t ll = 0;
+  for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) if (v.active_[s] && !v.dying_[s]) ll = v.loop_len_[s];
+  Check(ll == TapT(500), "sustained note under a 500 ms tap: loop = exactly T (24000)");
+
+  // K2 arbitration.
+  cs.knob[1] = 0.85f + 0.012f; RunFor(0.05f);         // ADC-scale jitter
+  Check(v.period_ == TapT(500), "K2 jitter below epsilon: tap kept");
+  cs.knob[1] = 0.85f + 0.05f; RunFor(0.05f);
+  Check(v.tap_period_ == 0 && v.period_ == Vestige::KnobPeriod(RemapKnob(0.90f)), "K2 moved past epsilon: tap cancelled, knob sets T");
+  cs.knob[1] = 0.20f; RunFor(0.05f);                  // CCW: reverse
+  Taps({400});
+  Check(v.period_ == TapT(400) && v.rev_play_, "tap overrides T only: K2 CCW still sets reverse");
+  cs.knob[1] = 0.85f; RunFor(0.05f);
+  Check(v.tap_period_ == 0 && !v.rev_play_, "K2 back CW: tap cancelled, forward");
+
+  // Tap on the freeze side: T is global, the freeze window is not.
+  cs.sw[0] = 2; RunFor(0.8f);
+  Taps({700});
+  Check(v.period_ == TapT(700) && v.max_loop_len_ == VESTIGE_FREEZE_SAMPLES, "freeze side: tap sets T, capture window stays 400 ms");
+  cs.sw[0] = 0; RunFor(0.8f);
+  Check(v.max_loop_len_ == TapT(700), "back on the loop side: the tapped T is the ceiling");
+
+  // LED1 = the clock, anchored to the most recent capture start.
+  Reset();
+  Taps({1000});                                      // T = 1 s, buffers empty
+  const size_t T = v.period_;
+  Check(T == TapT(1000), "setup: T = 1000 ms");
+  // (a) no capture yet: the flash runs from the tap's down-press.
+  long a0 = (long)v.led_anchor_[Vestige::kPoolLoop];
+  long from = n;
+  RunFor(3.2f);
+  int cnt = 0; long late = LedWorstLate(a0, T, from, n, &cnt);
+  Check(cnt >= 3 && late >= 0, "no capture: LED1 flashes once per T from the last tap");
+  // (b) a capture start re-anchors: burst of tone at an arbitrary offset.
+  RunFor(0.37f);                                     // 0.37 T off the tap beat
+  sustain_input = true; play_input = true; RunFor(0.02f);
+  Check(v.recording_, "setup: capture started");
+  const long a1 = (long)v.led_anchor_[Vestige::kPoolLoop];
+  Check(labs(a1 - a0) % (long)T > 4800 && labs(a1 - a0) % (long)T < (long)T - 4800,
+        "setup: the capture start is well off the old beat");
+  RunFor(0.28f); sustain_input = false; play_input = false;
+  from = a1;
+  RunFor(4.0f);
+  late = LedWorstLate(a1, T, from, n, &cnt);
+  printf("      capture-anchored flashes: %d, worst lateness %ld samples (tick = 480)\n", cnt, late);
+  Check(cnt >= 4 && late >= 0, "LED1 re-anchored to the capture start: every flash on start + k*T");
+  int stale = 0;
+  long off_old = LedWorstLate(a0, T, from, n, &stale);
+  Check(off_old < 0, "no flash left on the old (tap) beat — not free-running");
+  // (c) a second capture re-anchors again, per capture.
+  RunFor(0.61f);
+  sustain_input = true; play_input = true; RunFor(0.02f);
+  const long a2 = (long)v.led_anchor_[Vestige::kPoolLoop];
+  RunFor(0.2f); sustain_input = false; play_input = false; RunFor(3.0f);
+  late = LedWorstLate(a2, T, a2, n, &cnt);
+  Check(a2 != a1 && cnt >= 2 && late >= 0, "next capture start re-anchors LED1 again");
+  // (d) a tap while a loop exists changes the period but not the anchor.
+  Taps({700});
+  Check(v.period_ == TapT(700) && (long)v.led_anchor_[Vestige::kPoolLoop] == a2,
+        "tap with a loop playing: new T, anchor stays on the capture start");
+  from = n; RunFor(3.0f);
+  late = LedWorstLate(a2, v.period_, from, n, &cnt);
+  Check(cnt >= 3 && late >= 0, "LED1 flashes the new T from the capture's own start");
+  // (e) off = LED1 dark.
+  Tap(); RunFor(1.5f);
+  Check(!v.engaged_, "setup: effect off");
+  Check(led1_on_while_off == 0, "LED1 never lit while the effect is off (whole run)");
+  Tap(); RunFor(0.2f);
+
+  // A held loop parked on the other side keeps running (stays on its beat).
+  sustain_input = true; play_input = true; RunFor(0.3f); sustain_input = false; play_input = false; RunFor(1.0f);
+  Hold();
+  int ls = -1;
+  for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) if (v.active_[s] && !v.dying_[s]) ls = s;
+  Check(ls >= 0, "setup: held loop");
+  if (ls >= 0) {
+    const float L = (float)v.loop_len_[ls];
+    const float f0 = v.fwd_[ls]; const long c0 = n;
+    cs.sw[0] = 2; RunFor(2.13f); cs.sw[0] = 0; RunFor(0.01f);
+    const float expect_f = fmodf(f0 + (float)(n - c0), L);
+    float d = fabsf(v.fwd_[ls] - expect_f); if (d > L * 0.5f) d = L - d;
+    printf("      parked head: drift %.1f samples over %.2f s away\n", d, (n - c0) / sr);
+    Check(d < 2.f, "held loop's head kept running while parked on the freeze side");
+  }
+  Unhold();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2: quantised capture, sample-accurate.
+static float InH(long k)  { long i = k - hist_n0; return (i >= 0 && i < (long)in_hist.size())  ? in_hist[i]  : 0.f; }
+static float WetH(long k) { long i = k - hist_n0; return (i >= 0 && i < (long)wet_hist.size()) ? wet_hist[i] : 0.f; }
+// Lag (-maxlag..maxlag) at which wet[at + lag + t] best matches ref(t), t < N.
+// ref(t) = input sample the loop should be playing at `at + t` (before the
+// wet path's latency). Returns the lag and the normalised correlation.
+template <class F> static int BestLag(long at, int N, int maxlag, F ref, float* corr_out) {
+  int best = -1; double bc = -2.0;
+  for (int d = -maxlag; d <= maxlag; d++) {        // both signs: early would show too
+    double xy = 0, xx = 0, yy = 0;
+    for (int t = 0; t < N; t++) { const double a = WetH(at + d + t), b = ref(t); xy += a * b; xx += a * a; yy += b * b; }
+    const double c = (xx > 0 && yy > 0) ? xy / sqrt(xx * yy) : 0.0;
+    if (c > bc) { bc = c; best = d; }
+  }
+  *corr_out = (float)bc; return best;
+}
+
+struct CapRec { int s; long A; size_t Q, raw, T; long act; uint32_t phase; };
+static uint32_t seen_acts = 0;
+// Wait (up to `secs`) for the next activation; fills a record from the module.
+static bool WaitActivation(float secs, CapRec* r) {
+  const long end = n + (long)(secs * sr);
+  while (n < end) {
+    RunFor(0.01f);
+    if (v.act_count_ != seen_acts) {
+      seen_acts = v.act_count_;
+      const int s = v.last_act_slot_;
+      *r = CapRec{s, (long)v.cap_start_[s], v.cap_len_[s], v.cap_raw_[s], v.cap_T_[s],
+                  (long)v.last_act_at_, v.act_phase_[s]};
+      return true;
+    }
+  }
+  return false;
+}
+// Where the replicated gate opens: the module's own envelope follower run
+// over the recorded input, from the module's envelope state at hist start.
+static float env_at_hist0 = 0.f;
+static long GateOpen(long from) {
+  float env = env_at_hist0;
+  for (long k = hist_n0; k < hist_n0 + (long)in_hist.size(); k++) {
+    env += VESTIGE_ENV_COEF * (fabsf(InH(k)) - env);
+    if (k >= from && env > v.auto_thresh_) return k;
+  }
+  return -1;
+}
+
+static long worst_start_err = 0, worst_play_err = 0, worst_period_err = 0, content_bad = 0;
+static int  wet_latency = -1;
+
+// One capture: a noise burst of `burst` samples starting now. Returns its record.
+static bool OneCapture(long burst, CapRec* r, const char* name, bool expect_rev = false) {
+  const long b0 = n; noise_from = b0; noise_to = b0 + burst;
+  if (!WaitActivation(4.0f + burst / sr, r)) { Check(false, name); return false; }
+  const long A_rep = GateOpen(b0);
+  const long start_err = labs(r->A - A_rep);
+  if (start_err > worst_start_err) worst_start_err = start_err;
+  // Recorded content: the loop body is exactly input[A .. A+Q), bit for bit.
+  long bad = 0;
+  for (size_t j = 0; j < r->Q; j++) if (v.slab_[r->s][j] != InH(r->A + (long)j)) bad++;
+  content_bad += bad;
+  // Playback on its own grid, measured at the output. The loop sample that
+  // should sound at act + t: forward in[A + (p+t) mod Q], reverse the mirror.
+  const long at = r->act;
+  const size_t Q = r->Q; const uint32_t p = r->phase;
+  auto fwd_ref = [&](int t) { return InH(r->A + (long)((p + (size_t)t) % Q)); };
+  auto rev_ref = [&](int t) { return InH(r->A + (long)(Q - 1 - ((p + (size_t)t) % Q))); };
+  RunFor(0.3f + (float)(2 * Q) / sr);             // let it play two passes
+  float c1 = 0.f, c2 = 0.f;
+  const int N = 2400;
+  const int d1 = expect_rev ? BestLag(at, N, 600, rev_ref, &c1) : BestLag(at, N, 600, fwd_ref, &c1);
+  // Next full pass, from its "one": loop sample 0 at A + k*Q.
+  long one = r->A + (long)((( (size_t)(at - r->A) + Q - 1) / Q) * Q);
+  if (one <= at) one += (long)Q;
+  auto one_ref_f = [&](int t) { return InH(r->A + (long)((size_t)t % Q)); };
+  auto one_ref_r = [&](int t) { return InH(r->A + (long)(Q - 1 - ((size_t)t % Q))); };
+  const int d2 = expect_rev ? BestLag(one, N, 600, one_ref_r, &c2) : BestLag(one, N, 600, one_ref_f, &c2);
+  const long perr = labs((long)d1 - wet_latency), qerr = labs((long)d2 - (long)d1);
+  if (perr > worst_play_err) worst_play_err = perr;
+  if (qerr > worst_period_err) worst_period_err = qerr;
+  const char* dir = (Q > r->raw) ? "up" : (Q < r->raw) ? "DOWN (truncated)" : "exact";
+  printf("      %-19s gate%+ld  raw %6zu -> Q %6zu (%.4f T) %-16s play @A+%-6ld phase %-5u lag %d (c=%.3f)  next-one lag %d (c=%.3f)  body mismatches %ld\n",
+         name, r->A - A_rep, r->raw, Q, GridQuantize::DivisionOf(Q, r->T), dir, at - r->A, p, d1, c1, d2, c2, bad);
+  return c1 > 0.9f && c2 > 0.9f;
+}
+
+static void TestQuantisedCapture() {
+  printf("-- stage 2: quantised capture (sample-accurate)\n");
+  Reset();
+  cs.sw[0] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f;   // UP, sensitive gate, K5 CCW (3 ms fades)
+  Taps({1000}); RunFor(1.0f);
+  const size_t T = v.period_;
+  Check(T == 48000, "setup: T = 1000 ms (48000)");
+  // The wet path has no latency (the idle warble tap is bypassed): the loop
+  // sample due at t must sound AT t — lag 0 against the dry.
+  wet_latency = 0;
+  seen_acts = v.act_count_;
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear(); env_at_hist0 = v.env_;
+
+  struct Case { const char* name; long burst; int want; };   // want: +1 up, -1 down, 0 = Q==T ceiling
+  // Raw length ~ burst + ~330 (envelope decay to the close threshold).
+  const Case cases[] = {
+    {"floor (tiny stab)",   1500, +1},   // raw ~1.8k -> 1/8 = 6000
+    {"1/8 down",            6200, -1},   // raw ~6.5k -> 6000 (truncates ~500)
+    {"1/2 up (late)",      21800, +1},   // raw ~22.1k -> 24000, decided after the boundary
+    {"1/2 down",           25400, -1},   // raw ~25.7k -> 24000 (truncates)
+    {"1 up (on time)",     42500, +1},   // raw ~42.8k -> 48000, decided before it
+    {"ceiling (T)",        62000,  0},   // runs into T
+  };
+  bool dirs_ok = true, div_ok = true, all_corr = true, on_time_ok = true, phase_ok = true;
+  bool saw_up = false, saw_down = false;
+  for (const Case& c : cases) {
+    CapRec r{};
+    const bool ok = OneCapture(c.burst, &r, c.name);
+    all_corr = all_corr && ok;
+    const size_t q = GridQuantize::Quantize(r.raw, r.T);
+    if (r.T != T || q != r.Q || GridQuantize::IndexOf(r.Q, r.T) < 0) div_ok = false;
+    if (c.want > 0 && !(r.Q > r.raw)) dirs_ok = false;
+    if (c.want < 0 && !(r.Q < r.raw)) dirs_ok = false;
+    if (c.want == 0 && r.Q != T) dirs_ok = false;
+    if (r.Q > r.raw) saw_up = true;
+    if (r.Q < r.raw) saw_down = true;
+    // On its grid: entered at phase (act - A) mod Q; on time = exactly A+Q, phase 0.
+    if ((uint32_t)((size_t)(r.act - r.A) % r.Q) != r.phase || r.act < r.A + (long)r.Q) phase_ok = false;
+    const bool decided_early = (c.want == 0) || (r.Q > r.raw + VESTIGE_AUTO_RELEASE_MS * 48);
+    if (decided_early && !(r.act == r.A + (long)r.Q && r.phase == 0)) on_time_ok = false;
+    if (c.want < 0) {
+      // Truncated for real: nothing past Q is readable as loop — the cells a
+      // grain can reach behind Q are the crossfaded seam and the head copy.
+      const float* m = v.slab_[r.s];
+      const size_t xf = Vestige::SeamXfadeLen(r.Q);
+      long gbad = 0;
+      for (size_t k = xf; k < r.Q + 2 && k < VESTIGE_GUARD_SAMPLES; k++) if (m[r.Q + k] != m[k % r.Q]) gbad++;
+      Check(gbad == 0 && v.loop_len_[r.s] == r.Q, "truncated capture: loop = Q, guard behind it = the head, not the cut material");
+    }
+    RunFor(0.8f);
+  }
+  Check(div_ok, "every captured loop length is an exact division of the T latched at its start");
+  Check(dirs_ok && saw_up && saw_down, "rounding goes both ways (up, down/truncated, floor, ceiling)");
+  Check(phase_ok, "every loop enters ON its own grid: phase == (start - A) mod Q");
+  Check(on_time_ok, "end known before the boundary: playback starts at exactly A + Q, on its \"one\"");
+  Check(all_corr, "output correlates with the expected loop samples (c > 0.9), both passes");
+  Check(worst_start_err == 0, "capture start = the sample the gate opens (replicated envelope), 0 samples error");
+  Check(content_bad == 0, "loop body bit-identical to input[A .. A+Q): recorded length and start exact");
+  printf("      worst: start %ld, heard playback start vs grid (vs dry) %ld, period %ld samples\n",
+         worst_start_err, worst_play_err, worst_period_err);
+  Check(worst_play_err == 0 && worst_period_err == 0, "measured at the OUTPUT: playback start and period on the grid, 0 samples vs dry");
+
+  // Reverse on time (ceiling), short T: the guard must be ready at A+Q.
+  cs.knob[1] = 0.2f; RunFor(0.1f); Taps({150}); RunFor(0.5f);
+  Check(v.rev_play_ && v.period_ == 7200, "setup: reverse, T = 150 ms");
+  { CapRec r{}; const bool ok = OneCapture(12000, &r, "reverse ceiling", true);
+    Check(ok && r.Q == 7200 && r.act == r.A + 7200 && r.phase == 0,
+          "reverse: ceiling loop starts at exactly A+Q from its tail (guard ready in time)"); }
+  cs.knob[1] = 0.85f; RunFor(0.1f); Taps({1000}); RunFor(1.0f);
+
+  // T latched at the capture start: K2 moved mid-capture (cancels the tap).
+  { const long b0 = n; noise_from = b0; noise_to = b0 + 30000;
+    RunFor(0.2f);
+    cs.knob[1] = 0.62f;                                  // T -> knob value (much shorter)
+    CapRec r{}; WaitActivation(3.f, &r);
+    printf("      K2 moved mid-capture: live T now %zu, capture T %zu, Q %zu\n", v.period_, r.T, r.Q);
+    Check(v.period_ != 48000 && r.T == 48000 && GridQuantize::IndexOf(r.Q, 48000) >= 0,
+          "K2 mid-capture: the capture keeps the T latched at its start");
+    cs.knob[1] = 0.85f; RunFor(1.0f); Taps({1000}); RunFor(2.0f); }
+
+  // Six voices, six anchors.
+  cs.sw[0] = 1; RunFor(0.5f);
+  const long bursts[6] = {3000, 9000, 14000, 21000, 27000, 30500};
+  const float gaps[6]  = {0.37f, 0.61f, 0.23f, 0.89f, 0.41f, 0.5f};
+  int slots[6]; long As[6]; size_t Qs[6]; int got = 0;
+  for (int i = 0; i < 6; i++) {
+    CapRec r{};
+    noise_from = n; noise_to = n + bursts[i];
+    if (WaitActivation(3.f, &r)) { slots[got] = r.s; As[got] = r.A; Qs[got] = r.Q; got++; }
+    RunFor(gaps[i]);
+  }
+  RunFor(1.0f);
+  int live = 0; bool heads_ok = true, anchors_distinct = true, divs = true; size_t qset[6]; int nq = 0;
+  for (int k = 0; k < 4; k++) {                          // sample the heads at a few moments
+    RunFor(0.137f);
+    for (int i = 0; i < got; i++) {
+      const int s = slots[i];
+      if (!v.active_[s] || v.dying_[s]) continue;
+      const long last = n - 1;                            // the head is on the sample just played
+      const float want = (float)((size_t)(last - As[i]) % Qs[i]);
+      if (v.fwd_[s] != want) heads_ok = false;
+    }
+  }
+  for (int i = 0; i < got; i++) {
+    if (v.active_[slots[i]] && !v.dying_[slots[i]]) live++;
+    if (GridQuantize::IndexOf(Qs[i], 48000) < 0) divs = false;
+    for (int j = 0; j < i; j++) if (As[j] == As[i]) anchors_distinct = false;
+    bool dup = false; for (int j = 0; j < nq; j++) if (qset[j] == Qs[i]) dup = true;
+    if (!dup) qset[nq++] = Qs[i];
+    printf("      voice slot %d: anchor %ld, Q %zu (%.4f of T)\n", slots[i], As[i], Qs[i], GridQuantize::DivisionOf(Qs[i], 48000));
+  }
+  Check(got == 6 && live == 6, "MIDDLE: six captures, six live voices");
+  Check(anchors_distinct && nq >= 3 && divs, "six voices: distinct anchors, >= 3 different divisions of one T");
+  Check(heads_ok, "every voice's head sits on (now - its own anchor) mod its own Q, at every probe");
+  // Freeze: nothing else sounding, one fragment. Its output must begin at its
+  // activation sample (the first grain's Hann window is 0 at phase 0, so the
+  // first NON-ZERO sample is activation + 1 — a window value, not a delay).
+  cs.sw[0] = 2; RunFor(2.0f);                            // loop side fades out and clears
+  { CapRec r{}; const long b0 = n; noise_from = b0; noise_to = b0 + 4800;
+    WaitActivation(2.f, &r);
+    long first = -1;
+    for (long k = r.act - 2000; k < r.act + 2000; k++) if (WetH(k) != 0.f) { first = k; break; }
+    printf("      freeze: activation at %ld, first non-zero output at %+ld\n", r.act, first - r.act);
+    Check(Vestige::PoolOf(r.s) == Vestige::kPoolFreeze && first == r.act + 1,
+          "freeze: output starts at its activation sample (0 latency vs dry)"); }
+  cs.sw[0] = 0; RunFor(1.0f);
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+  noise_from = noise_to = -1;
+  Unhold();
+}
+
+// ---------------------------------------------------------------------------
+// Guard-read audit: for every active loop-side grain, the cell(s) it reads next
+// (and its interpolation partner when that has weight) must be real loop data:
+// inside the body, or a FINISHED guard cell — the seam crossfade once recorded,
+// or a head copy the background job has already written.
+static void Audit() {
+  for (int g = 0; g < VESTIGE_GRAINS; g++) {
+    const GrainVoice& gv = v.grains_[g];
+    if (!gv.IsActive()) continue;
+    const int s = v.grain_slot_[g];
+    if (s >= VESTIGE_FREEZE_SLOT0 || s == VESTIGE_FRIP_SLOT) continue;
+    const size_t L = v.loop_len_[s];
+    if (L == 0) continue;
+    const float pos = gv.read_pos_f_;
+    const size_t idx = (size_t)pos;
+    const bool partner = (pos - (float)idx) > 0.f;
+    for (int q = 0; q < (partner ? 2 : 1); q++) {
+      const size_t c = idx + (size_t)q;
+      audit_reads++;
+      if (c < L) continue;
+      const size_t k = c - L;
+      const size_t span = (L < VESTIGE_GUARD_SAMPLES) ? L : VESTIGE_GUARD_SAMPLES;
+      if ((long)k - (long)span > audit_max_over) audit_max_over = (long)k - (long)span;
+      const size_t xf = Vestige::SeamXfadeLen(L);
+      bool ok;
+      if (c >= v.cap_[s]) ok = false;
+      else if (k < xf) ok = !(v.recording_ && v.rec_slot_ == s) || v.rec_idx_ > c;
+      else ok = (v.gfill_base_[s] == L && v.gfill_k_[s] > k);
+      if (!ok) audit_bad++;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6 (step 4): K1 playback speed crossfade.
+// Expected output for the loop in slot s over the next N samples, from the
+// module's own clean head / pass at the last processed sample: version rate r
+// (1 = clean) in direction dir (+1 / -1).
+static std::vector<float> ExpectVersion(int s, float r, int dir, int N) {
+  const float L = (float)v.loop_len_[s];
+  float c = v.fwd_[s]; int32_t pass = v.pass_[s];
+  std::vector<float> out(N);
+  const float* m = v.slab_[s];
+  for (int j = 0; j < N; j++) {
+    c += (float)dir;
+    if (c >= L) { c -= L; pass++; }
+    if (c < 0.f) { c += L; pass--; }
+    float h;
+    if (r == 1.f) h = c;
+    else if (r < 1.f) h = (c + ((pass & 1) ? L : 0.f)) * 0.5f;
+    else { h = c * 2.f; if (h >= L) h -= L; }
+    // Just past the loop seam every grain in flight started BEFORE the wrap
+    // (hop >> seam), so it reads on into the guard — whose first cells are the
+    // designed seam crossfade, not the plain head. Model exactly that; the row
+    // holds the guard, so i0 + 1 needs no wrap.
+    size_t i0 = (size_t)h; const float f = h - (float)i0;
+    if (i0 < Vestige::SeamXfadeLen((size_t)L)) i0 += (size_t)L;
+    const size_t i1 = i0 + 1;
+    out[j] = m[i0] * (1.f - f) + m[i1] * f;
+  }
+  return out;
+}
+// The same, from the GRID alone (no module state): a loop that started playing
+// at `act` on its "one" plays, at time t, clean sample (t-act) mod L, half speed
+// ((t-act) mod 2L)/2, double speed 2(t-act) mod L — all versions anchored at
+// the playback start and realigning every two loop periods.
+static std::vector<float> ExpectGrid(int s, long act, float r, long from, int N) {
+  const size_t L = v.loop_len_[s];
+  const float* m = v.slab_[s];
+  std::vector<float> out(N);
+  for (int j = 0; j < N; j++) {
+    const long e = from + j - act;
+    float h;
+    if (r == 1.f)      h = (float)(e % (long)L);
+    else if (r < 1.f)  h = (float)(e % (long)(2 * L)) * 0.5f;
+    else               h = (float)((2 * e) % (long)L);
+    size_t i0 = (size_t)h; const float f = h - (float)i0;
+    if (i0 < Vestige::SeamXfadeLen(L)) i0 += L;
+    out[j] = m[i0] * (1.f - f) + m[i0 + 1] * f;
+  }
+  return out;
+}
+static float CorrAt(long at, const std::vector<float>& ref, int lag) {
+  double xy = 0, xx = 0, yy = 0;
+  for (size_t t = 0; t < ref.size(); t++) { const double a = WetH(at + lag + (long)t), b = ref[t]; xy += a * b; xx += a * a; yy += b * b; }
+  return (xx > 0 && yy > 0) ? (float)(xy / sqrt(xx * yy)) : 0.f;
+}
+static int BestLagRef(long at, const std::vector<float>& ref, int maxlag, float* c) {
+  int best = 0; float bc = -2.f;
+  for (int d = -maxlag; d <= maxlag; d++) { const float cc = CorrAt(at, ref, d); if (cc > bc) { bc = cc; best = d; } }
+  *c = bc; return best;
+}
+// Loop period of the wet from its autocorrelation: the SMALLEST lag in
+// [lo, hi] whose correlation is within 5% of the best one there.
+static long PeriodOf(long at, int N, long lo, long hi) {
+  std::vector<double> cs_(hi - lo + 1);
+  double best = -2;
+  for (long P = lo; P <= hi; P += 1) {
+    double xy = 0, xx = 0, yy = 0;
+    for (int t = 0; t < N; t += 4) { const double a = WetH(at + t), b = WetH(at + t + P); xy += a * b; xx += a * a; yy += b * b; }
+    const double c = (xx > 0 && yy > 0) ? xy / sqrt(xx * yy) : 0; cs_[P - lo] = c; if (c > best) best = c;
+  }
+  for (long P = lo; P <= hi; P++) if (cs_[P - lo] >= best * 0.95) {
+    long b = P; while (b + 1 <= hi && cs_[b + 1 - lo] > cs_[b - lo]) b++;   // refine to the local max
+    return b;
+  }
+  return -1;
+}
+// Least-squares split of the wet onto two expected versions.
+static void Split(long at, const std::vector<float>& a, const std::vector<float>& b, float* ga, float* gb, float* resid) {
+  double aa = 0, bb = 0, ab = 0, ya = 0, yb = 0, yy = 0;
+  for (size_t t = 0; t < a.size(); t++) {
+    const double y = WetH(at + (long)t);
+    aa += a[t] * a[t]; bb += b[t] * b[t]; ab += a[t] * b[t]; ya += y * a[t]; yb += y * b[t]; yy += y * y;
+  }
+  const double det = aa * bb - ab * ab;
+  const double x1 = (ya * bb - yb * ab) / det, x2 = (yb * aa - ya * ab) / det;
+  double e = 0;
+  for (size_t t = 0; t < a.size(); t++) { const double r = WetH(at + (long)t) - x1 * a[t] - x2 * b[t]; e += r * r; }
+  *ga = (float)x1; *gb = (float)x2; *resid = (float)sqrt(e / (yy > 0 ? yy : 1));
+}
+
+static void TestSpeedXfade() {
+  printf("-- stage 6: K1 playback speed crossfade\n");
+  Reset();
+  cs.sw[0] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  Taps({500}); RunFor(0.6f);
+  const size_t Q = 24000;
+  Check(v.period_ == Q, "setup: T = 500 ms");
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  CapRec r{};
+  noise_from = n; noise_to = n + 36000;            // runs into T: ceiling loop, on time
+  WaitActivation(3.f, &r);
+  Check(r.Q == Q && r.phase == 0, "setup: 500 ms noise loop, started on its one");
+  RunFor(0.8f);
+  const int s = r.s;
+  const int N = 4800;
+
+  struct Pos { const char* name; float k1; float rate; long period; };
+  const Pos ps[] = { {"noon (clean)", 0.5f, 1.f, (long)Q}, {"full CCW (half)", 0.0f, 0.5f, (long)(2 * Q)},
+                     {"full CW (double)", 1.0f, 2.f, (long)(Q / 2)} };
+  for (const Pos& p : ps) {
+    cs.knob[0] = p.k1; RunFor(1.2f);                 // crossfade + noon swap settle
+    const long at = n;
+    const std::vector<float> ref = ExpectVersion(s, p.rate, +1, N);
+    RunFor(0.1f + (float)(3 * Q) / sr);
+    float c = 0.f; const int lag = BestLagRef(at, ref, 400, &c);
+    const long P = PeriodOf(at, 12000, (long)(Q / 4), (long)(5 * Q / 2));
+    const std::vector<float> gref = ExpectGrid(s, r.act, p.rate, at, N);
+    float cg = 0.f; const int glag = BestLagRef(at, gref, 400, &cg);
+    printf("      %-18s period %ld (expect %ld)  lag vs module head %d (c=%.3f), vs grid from playback start %d (c=%.3f)\n",
+           p.name, P, p.period, lag, c, glag, cg);
+    char msg[160];
+    snprintf(msg, sizeof msg, "%s: loop period %ld = %.2fx; on the grid anchored at its playback start (lag 0)", p.name, P, (double)P / Q);
+    Check(P == p.period && lag == 0 && c > 0.95f && glag == 0 && cg > 0.95f, msg);
+  }
+
+  struct Mid { const char* name; float k1; float rate; };
+  const float half_travel = VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f;
+  const Mid ms[] = { {"CCW midpoint", 0.5f - half_travel, 0.5f}, {"CW midpoint", 0.5f + half_travel, 2.f} };
+  for (const Mid& m : ms) {
+    cs.knob[0] = m.k1; RunFor(1.2f);
+    const long at = n;
+    const std::vector<float> rc = ExpectVersion(s, 1.f, +1, N), rs = ExpectVersion(s, m.rate, +1, N);
+    RunFor(0.2f);
+    float gc = 0, gs = 0, res = 0; Split(at, rc, rs, &gc, &gs, &res);
+    // The equal-power law for the amount this knob position actually gives.
+    const float c1 = RemapKnob(m.k1) - 0.5f;
+    const float x = (fabsf(c1) - VESTIGE_K1_DEADZONE) / (0.5f - VESTIGE_K1_DEADZONE);
+    const float ec = cosf(x * 1.5707963f), es = sinf(x * 1.5707963f);
+    printf("      %-18s clean %.3f + speed %.3f (expected %.3f + %.3f; sum of squares %.3f), residual %.4f\n",
+           m.name, gc, gs, ec, es, gc * gc + gs * gs, res);
+    Check(fabsf(gc - ec) < 0.02f && fabsf(gs - es) < 0.02f && res < 0.02f,
+          m.rate < 1.f ? "CCW midpoint: clean + half speed, both ~0.707 (equal power)"
+                       : "CW midpoint: clean + double speed, both ~0.707 (equal power)");
+  }
+
+  // Half-speed restarts at arbitrary sample offsets: every half-speed grain must
+  // read exactly at the half-speed head (never half a sample off).
+  {
+    long misaligned = 0, checked = 0;
+    for (int trial = 0; trial < 8; trial++) {
+      cs.knob[0] = 0.5f; RunFor(0.6f);                   // noon: speed version idle
+      blk = 1; RunFor((float)(7 * trial + 3) / sr);       // shift the restart by odd sample counts
+      cs.knob[0] = 0.0f;
+      for (int j = 0; j < 9600; j++) {
+        RunFor(1.f / sr);
+        const float L = (float)v.loop_len_[s];
+        // Half head at the NEXT sample (grain read_pos_f_ is the next read).
+        float c = v.fwd_[s] + 1.f; int32_t pass = v.pass_[s];
+        if (c >= L) { c -= L; pass++; }
+        const float hn = (c + ((pass & 1) ? L : 0.f)) * 0.5f;
+        for (int g = 0; g < VESTIGE_GRAINS; g++) {
+          if (!v.grains_[g].IsActive() || v.grain_ver_[g] != 1 || v.grain_slot_[g] != s) continue;
+          float d = fmodf(v.grains_[g].read_pos_f_ - hn, L); if (d < 0.f) d += L;
+          checked++;
+          if (d != 0.f && d != L) misaligned++;
+        }
+      }
+      Realign();
+    }
+    printf("      half-speed restarts: %ld grain reads checked, %ld off the half-speed head\n", checked, misaligned);
+    Check(checked > 0 && misaligned == 0, "half speed: every grain reads exactly on the half-speed head, whatever the restart sample");
+    cs.knob[0] = 0.5f; RunFor(0.6f);
+  }
+  cs.knob[1] = 0.2f; RunFor(0.3f);
+  const Pos rv[] = { {"reverse half", 0.0f, 0.5f, (long)(2 * Q)}, {"reverse double", 1.0f, 2.f, (long)(Q / 2)} };
+  for (const Pos& p : rv) {
+    cs.knob[0] = p.k1; RunFor(1.2f);
+    const long at = n;
+    const std::vector<float> ref = ExpectVersion(s, p.rate, -1, N);
+    RunFor(0.1f + (float)(3 * Q) / sr);
+    float c = 0.f; const int lag = BestLagRef(at, ref, 400, &c);
+    const long P = PeriodOf(at, 12000, (long)(Q / 4), (long)(5 * Q / 2));
+    printf("      %-18s period %ld (expect %ld)  content lag %d, c=%.3f\n", p.name, P, p.period, lag, c);
+    Check(v.rev_play_ && P == p.period && lag == 0 && c > 0.95f,
+          p.rate < 1.f ? "reverse at half speed: period 2x, reversed content on the grid"
+                       : "reverse at double speed: period 0.5x, reversed content on the grid");
+  }
+  cs.knob[1] = 0.85f; cs.knob[0] = 0.5f; RunFor(1.0f);
+  hist_on = false; in_hist.clear(); wet_hist.clear(); noise_from = noise_to = -1;
+
+  // Noon crossing declick, on a sine loop (noise has no meaningful step bound).
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  sustain_hz = 220.f; sustain_input = true; play_input = true;
+  WaitActivation(2.f, &r);
+  sustain_input = false; play_input = false; RunFor(1.0f);
+  cs.knob[0] = 1.0f; RunFor(1.5f);
+  maxd = 0.f; RunFor(1.0f); const float step_cw = maxd;
+  cs.knob[0] = 0.0f; RunFor(1.5f);
+  maxd = 0.f; RunFor(1.0f); const float step_ccw = maxd;
+  blk = 1;
+  int side_prev = v.sp_side_; int swaps = 0; bool swap_silent = true;
+  maxd = 0.f;
+  for (int k = 0; k <= 120; k++) {
+    cs.knob[0] = (float)k / 120.f;
+    const long e = n + 480;
+    while (n < e) {
+      RunFor(1.f / sr);
+      if (v.sp_side_ != side_prev) { swaps++; if (v.sp_x_ != 0.f) swap_silent = false; side_prev = v.sp_side_; }
+    }
+  }
+  RunFor(0.5f);
+  Realign();
+  const float step_sweep = maxd;
+  const float bound = 1.5f * (step_cw > step_ccw ? step_cw : step_ccw);
+  printf("      max sample step: steady half %.5f, steady double %.5f, sweep CCW->noon->CW %.5f (bound %.5f), swaps %d\n",
+         step_ccw, step_cw, step_sweep, bound, swaps);
+  Check(swaps == 1 && swap_silent, "noon crossing: half->double swap happened once, with the speed version at exactly 0");
+  Check(step_sweep <= bound, "noon crossing + crossfade: no step above 1.5x the steady double-speed maximum");
+  cs.knob[0] = 0.5f; RunFor(1.0f);
+
+  printf("      guard-read audit (per sample):\n");
+  struct Aud { const char* name; float k1; float k2; int tap; long burst; };
+  const Aud au[] = {
+    {"2x fwd, T=100 ms ceiling",   1.0f, 0.85f, 100, 9000},
+    {"2x rev, T=100 ms ceiling",   1.0f, 0.20f, 100, 9000},
+    {"0.5x rev, T=100 ms ceiling", 0.0f, 0.20f, 100, 9000},
+    {"2x fwd, 1/8 late join",      1.0f, 0.85f, 100, 300},
+    {"2x rev, 1/8 late join",      1.0f, 0.20f, 100, 300},
+    {"2x fwd, T=1 s ceiling",      1.0f, 0.85f, 1000, 60000},
+    {"2x rev, T=1 s ceiling",      1.0f, 0.20f, 1000, 60000},
+  };
+  for (const Aud& a : au) {
+    Reset(); cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
+    Taps({a.tap}); RunFor(0.3f);
+    const long bad0 = audit_bad, reads0 = audit_reads;
+    blk = 1; audit_on = true;
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + a.burst;
+    CapRec q{}; const bool got = WaitActivation(3.f, &q);
+    RunFor(1.5f);
+    audit_on = false; Realign();
+    printf("        %-28s Q %6zu phase %5u  reads audited %ld, bad %ld\n", a.name, q.Q, q.phase,
+           audit_reads - reads0, audit_bad - bad0);
+    char msg[160]; snprintf(msg, sizeof msg, "%s: captured length is still a division of T", a.name);
+    Check(got && GridQuantize::IndexOf(q.Q, (size_t)a.tap * 48) >= 0, msg);
+  }
+  Check(audit_bad == 0, "guard audit: no grain ever read an unwritten guard cell (all speeds, both directions)");
+  printf("      deepest guard read: %ld cells past min(L, guard) (<= 1 = within the coverage clamp)\n", audit_max_over);
+  Check(audit_max_over <= 1, "coverage clamp: no read past L + min(L, guard) (+1 interpolation partner)");
+  noise_from = noise_to = -1;
+
+  // Six voices + K1 in the crossfade: the grain count doubles there; the cap holds.
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.sw[0] = 1; Taps({1000}); RunFor(0.5f);
+  seen_acts = v.act_count_;
+  const long bursts[6] = {3000, 9000, 14000, 21000, 27000, 30500};
+  for (int i = 0; i < 6; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
+  noise_from = noise_to = -1;
+  RunFor(1.0f);
+  int live6 = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) if (v.active_[q] && !v.dying_[q]) live6++;
+  max_grains = 0; uint32_t d0 = v.grain_cap_drops_; RunFor(3.0f);
+  const int g_noon = max_grains; const uint32_t drop_noon = v.grain_cap_drops_ - d0;
+  cs.knob[0] = ms[1].k1; RunFor(1.0f);
+  max_grains = 0; d0 = v.grain_cap_drops_; RunFor(3.0f);
+  const int g_mid = max_grains; const uint32_t drop_mid = v.grain_cap_drops_ - d0;
+  cs.knob[0] = 1.0f; RunFor(1.5f);
+  max_grains = 0; d0 = v.grain_cap_drops_; RunFor(3.0f);
+  const int g_end = max_grains; const uint32_t drop_end = v.grain_cap_drops_ - d0;
+  printf("      %d voices: max active grains noon %d (cap drops %u) | CW midpoint %d (drops %u) | full CW %d (drops %u); cap %d\n",
+         live6, g_noon, drop_noon, g_mid, drop_mid, g_end, drop_end, VESTIGE_MB_GRAIN_CAP);
+  Check(live6 == 6, "setup: six live voices");
+  Check(g_noon <= VESTIGE_MB_GRAIN_CAP && g_mid <= VESTIGE_MB_GRAIN_CAP && g_end <= VESTIGE_MB_GRAIN_CAP,
+        "grain count never exceeds VESTIGE_MB_GRAIN_CAP");
+  Check(g_end <= g_noon + 1, "at the K1 end only one version runs (no doubling outside the crossfade)");
+  cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f);
+  Unhold();
+}
+
+int main() {
+  v.Init(sr);
+  cs.sw[0] = 0; cs.sw[1] = 0; cs.sw[2] = 0;
+  cs.knob[1] = 0.85f;   // K2 CW: forward, long-ish
+  cs.knob[3] = 0.1f;    // K4 sensitive
+  cs.knob[4] = 0.05f;   // K5 short fades (0.3 s)
+  v.Activate();
+
+  TestMemoryLayout();
+  // Before anything has run the freeze side is untouched memory.
+  Check(AllZero(&vestige_freeze_slab[0][0], sizeof(vestige_freeze_slab) / sizeof(float)),
+        "freeze slab zeroed at init");
+  TestStage0();
+  TestBufferSeparation();
+  TestTimeBase();
+  TestQuantisedCapture();
+  TestSpeedXfade();
+
+  printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
+  Check(bad == 0, "no non-finite / >10 samples");
+  printf(fails ? "FAILURES: %d\n" : "ALL OK\n", fails);
+  return fails ? 1 : 0;
+}

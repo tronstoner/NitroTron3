@@ -15,6 +15,15 @@ else
 fi
 
 echo
+echo "== test_grid_quantize (loop-length grid quantiser)"
+if g++ -O2 -std=c++17 -I src/core/blocks -o /tmp/ct3_gridq tools/host/test_grid_quantize.cpp \
+   && /tmp/ct3_gridq; then
+  echo "PASS  test_grid_quantize"
+else
+  echo "FAIL  test_grid_quantize"; fail=1
+fi
+
+echo
 echo "== sprawl_harness (real Sprawl module, stubbed hardware, ${SECS}s per scenario)"
 if g++ -O2 -std=c++17 -DCT3_DIAG_BUILD \
      -I tools/host/stub -I pedals/chronotron3 -I pedals/chronotron3/modules \
@@ -36,6 +45,18 @@ if g++ -O2 -std=c++17 -DCT3_DIAG_BUILD \
   echo "PASS  test_pitch_grains"
 else
   echo "FAIL  test_pitch_grains"; fail=1
+fi
+
+echo
+echo "== test_vestige (real vestige module: transport, K2, SW1, loop/freeze buffer separation)"
+if g++ -O2 -std=c++17 -DCT3_DIAG_BUILD \
+     -I tools/host/stub -I pedals/chronotron3 -I pedals/chronotron3/modules \
+     -I src/core/blocks -I src/core/util \
+     -o /tmp/ct3_vestige tools/host/test_vestige.cpp \
+   && /tmp/ct3_vestige; then
+  echo "PASS  test_vestige"
+else
+  echo "FAIL  test_vestige"; fail=1
 fi
 
 echo

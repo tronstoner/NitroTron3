@@ -19,21 +19,40 @@ static constexpr size_t VESTIGE_LOOP_MAX_SAMPLES = (size_t)(VESTIGE_LOOP_SECONDS
 static constexpr size_t VESTIGE_VOICE_CAP        = VESTIGE_LOOP_MAX_SAMPLES + VESTIGE_GUARD_SAMPLES;
 
 // ---------------------------------------------------------------------------
-// Topology (K1)
+// Topology (SW1: UP = 1 voice · MIDDLE = 6 voices · DOWN = freeze)
 // ---------------------------------------------------------------------------
-static constexpr int    VESTIGE_MAX_VOICES   = 6;   // max LIVE voiced (K1 range 1..6)
+static constexpr int    VESTIGE_MAX_VOICES   = 6;   // voiced pool ceiling (SW1 MIDDLE)
 static constexpr int    VESTIGE_VOICE_SPARES = 3;   // spare slabs for in-flight fade-outs / crossfades
 static constexpr int    VESTIGE_VOICE_SLABS  = VESTIGE_MAX_VOICES + VESTIGE_VOICE_SPARES; // voiced slabs
-static constexpr int    VESTIGE_FRIP_SLOT    = VESTIGE_VOICE_SLABS;      // frippertronics buffer
+static constexpr int    VESTIGE_FRIP_SLOT    = VESTIGE_VOICE_SLABS;      // frippertronics buffer (ARCHIVED — see below)
 static constexpr int    VESTIGE_REC_SLOT     = VESTIGE_VOICE_SLABS + 1;  // dedicated record scratch
-static constexpr int    VESTIGE_SLOTS        = VESTIGE_VOICE_SLABS + 2;  // total slabs
-// K1 mapping: padded noon = 1 voice; CCW adds voices to 6; CW = frippertronics.
-static constexpr float  VESTIGE_K1_NOON_LO  = 0.44f;  // below → voiced, more voices toward CCW
-static constexpr float  VESTIGE_K1_NOON_HI  = 0.56f;  // above → frippertronics region
+static constexpr int    VESTIGE_LOOP_SIDE_SLOTS = VESTIGE_VOICE_SLABS + 2; // slots backed by vestige_slab (loop side)
+// FREEZE side (SW1 DOWN): its own pool of slots, backed by its own SDRAM slab
+// (vestige_freeze_slab, sized VESTIGE_FREEZE_CAP per slot — see the FREEZE
+// block below). The loop side and the freeze side never share memory: SW1
+// UP/MIDDLE read and write only slots [0, VESTIGE_LOOP_SIDE_SLOTS), SW1 DOWN
+// only [VESTIGE_FREEZE_SLOT0, VESTIGE_SLOTS). The freeze pool has as many
+// playback slots as the voiced pool so its replace-crossfade / voice-steal
+// headroom is exactly what freeze had when it borrowed the voiced slabs.
+static constexpr int    VESTIGE_FREEZE_SLABS    = VESTIGE_VOICE_SLABS;             // freeze playback slots
+static constexpr int    VESTIGE_FREEZE_SLOT0    = VESTIGE_LOOP_SIDE_SLOTS;         // first freeze playback slot
+static constexpr int    VESTIGE_FREEZE_REC_SLOT = VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; // freeze record scratch
+static constexpr int    VESTIGE_SLOTS           = VESTIGE_FREEZE_REC_SLOT + 1;     // total slots (both sides)
+// ARCHIVED (stage 0 of docs/ChronoTron3/vestige-onward-rework-plan.md): the K1
+// voice-count / frippertronics mapping is retired. The two thresholds below are
+// kept only so the unwired frippertronics code (vestige.h: fripp_mode_,
+// EnterFrippertronics/LeaveFrippertronics, the frip branches in Process) can be
+// revived by restoring the K1 block in Controls(). Pattern:
+// docs/ChronoTron3/impulse resonator - armitage/ARMITAGE_ARCHIVED.md.
+static constexpr float  VESTIGE_K1_NOON_LO  = 0.44f;  // [retired] below → voiced, more voices toward CCW
+static constexpr float  VESTIGE_K1_NOON_HI  = 0.56f;  // [retired] above → frippertronics region
 static constexpr int    VESTIGE_GRAINS      = 48;    // shared grain pool (multiband freeze = 3 bands/voice → more grains)
 
 // ---------------------------------------------------------------------------
-// Grain smoothness macro (K3): looper (CCW / 0) → freeze (CW / 1)
+// Grain smoothness macro — formerly K3: looper (CCW / 0) → freeze (CW / 1).
+// The K3 blend is RETIRED (rework stage 0). The two ends survive as fixed modes:
+// the loop modes (SW1 UP/MIDDLE) run the CCW end, freeze (SW1 DOWN) runs the CW
+// end. Nothing in between is reachable any more; the values are unchanged.
 // ---------------------------------------------------------------------------
 static constexpr size_t VESTIGE_CCW_GRAIN_LEN = 19200;  // 400 ms — long grain, looper end
 static constexpr size_t VESTIGE_CW_GRAIN_LEN  = 4800;   // 100 ms — tonal freeze grain (30 ms was buzzy)
@@ -59,20 +78,85 @@ static constexpr size_t VESTIGE_MIN_INTERVAL  = 32;     // scheduler floor (samp
 static constexpr size_t VESTIGE_MIN_LOOP_SAMPLES = 240; // 5 ms shortest capture (short FS2 tap)
 
 // ---------------------------------------------------------------------------
-// K4 = MAX LOOP LENGTH (temporary test build; set false to give K4 back to the
-// BBD/Tape degradation engine). When true K4 sets a ceiling on capture length:
-// recording auto-stops and playback begins the moment the ceiling is reached,
-// in every capture mode (manual FS2-held, continuous-auto, frippertronics first
-// pass). Log taper so the short end has usable resolution.
-//   CCW = VESTIGE_MAXLEN_MIN_SAMPLES (one grain, ~5.3 ms — below this the grain
-//         engine mutes the slot, so this is the shortest *audible* loop)
-//   CW  = VESTIGE_LOOP_MAX_SAMPLES (8 s = current behaviour)
+// K2 = T (the master period, below) + DIRECTION (bipolar). Magnitude away from
+// noon sets T, which on the loop side is the ceiling on capture length:
+// recording auto-stops and playback begins the moment T is reached. Log taper
+// so the short end has usable resolution.
+//   noon = VESTIGE_T_MIN_SAMPLES (100 ms — see the T block for why)
+//   full CCW / full CW = VESTIGE_T_MAX_SAMPLES (8 s)
+// An FS1 tap overrides the magnitude until K2 moves (see T block).
+// Sign selects playback direction: past the CCW dead zone the loop plays in
+// REVERSE (head walks backward, grains read backward); noon + CW = forward.
+// Inert in freeze mode (SW1 DOWN) — see the freeze block below.
+// (Was the VESTIGE_K4_MAXLEN test build; the mechanism is unchanged, only the
+// knob and the added direction half.)
 // ---------------------------------------------------------------------------
-static constexpr bool   VESTIGE_K4_MAXLEN = true;
-static constexpr size_t VESTIGE_MAXLEN_MIN_SAMPLES = VESTIGE_GRAIN_MIN_LEN;  // 256 = ~5.3 ms
-// BBD (K4 CCW) fold brightness in the looper: scales the regenerated fold mixed
-// on top of the dark body. >1 = more mids/highs + grit (clarity). 1 = mnemonic default.
+static constexpr float  VESTIGE_K2_DEADZONE = 0.06f;   // ±6% around noon: shortest length, forward
+
+// ---------------------------------------------------------------------------
+// T — THE MASTER PERIOD (rework stage 1, plan §4.3). K2's magnitude (above) or
+// an FS1 tap sets it; on the loop side it is the maximum capture length. T is a
+// PERIOD only: there is no running grid and no global downbeat — every capture
+// anchors its own grid at its own start (stage 2), and LED1 flashes T from the
+// most recent capture start.
+//
+// Range. Hard floor: stage 2 can quantise a capture down to T/8, and a loop
+// shorter than VESTIGE_GRAIN_MIN_LEN (256) is muted by the grain engine, so
+// T >= 8*256 = 2048 samples (42.7 ms). Chosen floor: 100 ms (4800 samples):
+//   - T/8 = 600 samples keeps the FULL 240-sample seam crossfade on the shortest
+//     loop (SeamXfadeLen shrinks it to L/2 below 480 samples, i.e. T < 80 ms);
+//   - 100 ms is sprawl's tap floor (SPRAWL_TAP_MIN_MS) — the same FS1 gesture on
+//     the same pedal accepts the same range;
+//   - it is a period (600 BPM quarter / 150 BPM bar-of-16ths), not a click.
+// Ceiling: the 8 s loop buffer. K2 noon = T_MIN (was one grain, 5.3 ms, as a
+// length test); full CCW / CW = T_MAX, log taper between.
+// ---------------------------------------------------------------------------
+static constexpr uint32_t VESTIGE_T_MIN_MS      = 100;
+static constexpr size_t   VESTIGE_T_MIN_SAMPLES = (size_t)(VESTIGE_T_MIN_MS * 48);   // 4800 @48k
+static constexpr size_t   VESTIGE_T_MAX_SAMPLES = VESTIGE_LOOP_MAX_SAMPLES;          // 384000 = 8 s
+static constexpr uint32_t VESTIGE_T_MAX_MS      = (uint32_t)(VESTIGE_LOOP_SECONDS * 1000.f); // 8000
+static_assert(VESTIGE_T_MIN_SAMPLES / 8 >= VESTIGE_GRAIN_MIN_LEN,
+              "T/8 must stay a playable loop (>= VESTIGE_GRAIN_MIN_LEN)");
+static_assert(VESTIGE_T_MIN_SAMPLES / 8 >= 2 * VESTIGE_SEAM_XFADE_MAX,
+              "T/8 must keep the full seam crossfade");
+// FS1 tap tempo — sprawl's arbitration, exactly: the interval between two
+// DOWN-presses IS T; a press released before TAP_RELEASE is a tap (longer = no-op,
+// chain untouched); intervals outside [T_MIN, T_MAX] are ignored (and start a
+// new chain). Moving K2 past K2_MOVE_EPS cancels the tapped T; K2 keeps its
+// direction job either way.
+static constexpr uint32_t VESTIGE_TAP_RELEASE_MS = 300;    // = SPRAWL_TAP_RELEASE_MS
+static constexpr float    VESTIGE_K2_MOVE_EPS    = 0.02f;  // = SPRAWL_K2_MOVE_EPS (raw knob travel)
+// LED1 clock: one flash per T, anchored to the most recent capture start.
+static constexpr uint32_t VESTIGE_LED1_FLASH_MS  = 40;     // = SPRAWL_LED1_FLASH_MS
+// BBD fold brightness in the looper: scales the regenerated fold mixed on top of
+// the dark body. >1 = more mids/highs + grit (clarity). 1 = mnemonic default.
+// ARCHIVED with the degradation colour: MnemDegrade is held clean (depth 0) —
+// the rework gives K4 to capture sensitivity, so the colour engine has no knob.
+// Revive by mapping a knob to degrade_.SetDepth() in Controls().
 static constexpr float  VESTIGE_BBD_FOLD_SCALE = 2.0f;
+
+// ---------------------------------------------------------------------------
+// FREEZE (SW1 DOWN) — fixed, not blended. Values pinned from mnemonic's freeze
+// (the one the builder signed off on): 400 ms capture window, 3 bands, 250 Hz /
+// 2 kHz crossovers, per-band grain 150/80/40 ms, coprime scans 11987/8419/4099,
+// spray 480/240/120. The crossovers come from VESTIGE_MB_XLO/XHI and the three
+// per-band rows from the N=3 row of VESTIGE_MB_{GLEN,SCAN,SPRAY} below — they
+// already hold exactly those numbers, so freeze only has to pin the band count
+// and stop reading K3. See docs/ChronoTron3/vestige-onward-rework-plan.md §4.4.
+// ---------------------------------------------------------------------------
+static constexpr float  VESTIGE_FREEZE_WIN_MS   = 400.f;   // captured fragment length (= MNEM_FREEZE_WIN_MS)
+static constexpr size_t VESTIGE_FREEZE_SAMPLES  = (size_t)(VESTIGE_FREEZE_WIN_MS * 0.001f * VESTIGE_SR); // 19200
+static constexpr int    VESTIGE_FREEZE_BANDS    = 3;       // pinned band count (was the K3 chaos ramp)
+static constexpr float  VESTIGE_FREEZE_POS_FRAC = 0.f;     // read anchor in the window (0 = start)
+// Freeze slab sizing. A freeze grain is FROZEN: EmitBandGrain clamps its window
+// inside [0, L-glen], so the deepest read (GrainVoice's interpolation partner)
+// is index L — the freeze never reads across the loop seam and needs no
+// head-continuation guard. What it does need past L is room for the recorded
+// seam-crossfade overhang (EndRecording keeps writing SeamXfadeLen(L) <=
+// VESTIGE_SEAM_XFADE_MAX samples past the loop end before the commit), which
+// also covers the index-L read. So the guard is exactly the overhang.
+static constexpr size_t VESTIGE_FREEZE_GUARD = VESTIGE_SEAM_XFADE_MAX;                   // 240
+static constexpr size_t VESTIGE_FREEZE_CAP   = VESTIGE_FREEZE_SAMPLES + VESTIGE_FREEZE_GUARD; // 19440 per slot
 
 // ---------------------------------------------------------------------------
 // Multiband granular freeze (K3 CW freeze region) — the EHX-style evolving freeze
@@ -140,6 +224,11 @@ static constexpr int    VESTIGE_MB_2BAND_MAX_VOICES = 4;
 
 // ---------------------------------------------------------------------------
 // K3 unified engine: order -> chaos -> focus -> sweep (one granular engine).
+// RETIRED as a control (rework stage 0): K3 no longer drives this. The loop
+// modes pin the s=0 end (chaos 0, focus 0, gscale = GSCALE_CCW, 1 band); freeze
+// pins the s>=0.5 end (chaos 1, focus 1, gscale 1, VESTIGE_FREEZE_BANDS). The
+// development curve and chaos thresholds below are therefore unused, kept only
+// for reviving the blend.
 // ---------------------------------------------------------------------------
 // The multiband granular engine now spans the WHOLE K3 travel (not just the CW
 // freeze). K3 morphs ONE cloud continuously — no engine switch at noon:
@@ -171,19 +260,47 @@ static constexpr float  VESTIGE_K3_CHAOS_4BAND     = 0.80f; // above this = 4 ba
 static constexpr float  VESTIGE_K3_CHAOS_5BAND     = 0.92f; // above this = 5 bands
 
 // ---------------------------------------------------------------------------
-// Footswitch timing (FS1 stop)
+// Footswitch timing. FS2 is the only live footswitch: tap = capture + playback
+// on/off, hold = buffer hold. Same values the retired FS1 stop/clear pair used.
+// FS1 is free (reserved for tap tempo, stage 1).
 // ---------------------------------------------------------------------------
-static constexpr uint32_t VESTIGE_FS1_TAP_MAX_MS    = 350;  // <= this on release = tap (mute/pause)
-static constexpr uint32_t VESTIGE_FS1_CLEAR_HOLD_MS = 700;  // >= this while held = clear all
+static constexpr uint32_t VESTIGE_FS_TAP_MAX_MS = 350;  // nominal tap ceiling (see note in vestige.h)
+static constexpr uint32_t VESTIGE_FS_HOLD_MS    = 700;  // >= this while held = toggle buffer hold
 
 // ---------------------------------------------------------------------------
-// Continuous-auto capture (SW1 MIDDLE)
+// Auto capture (always on for SW1 UP / MIDDLE / DOWN while engaged and not held)
 // ---------------------------------------------------------------------------
 static constexpr float    VESTIGE_ENV_COEF        = 0.008f; // input |env| one-pole (~60 Hz; 0.002 was too lazy for onsets/short samples)
-static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K2 CCW: sensitive
-static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K2 CW:  insensitive
+static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K4 CCW: sensitive
+static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K4 CW:  insensitive
 static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold = open * hyst
 static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 80;     // silence held this long ends a phrase
+// Stage 2: background wrap-guard writer (vestige.h IsrFillGuards). Cells per
+// sample; anything >= 1 keeps ahead of forward grains (they first read the
+// guard one loop after playback starts). 8 = a full 21504-cell guard in ~56 ms,
+// which decides how soon a fresh short loop may start in REVERSE. Cost: 8
+// SDRAM copies per sample, only while a guard is being written.
+static constexpr uint32_t VESTIGE_GUARD_FILL_PER_SAMPLE = 8;
+// Stage 2: a loop whose end is decided AFTER its first grid boundary (every
+// round-down, and any round-up within the 80 ms release of its boundary) can
+// no longer start on its "one". true = it joins immediately, IN PHASE with its
+// own grid (every loop sample still lands on start + k*len + j; the first pass
+// just enters part-way in). false = it stays silent until its next "one" —
+// entry on the downbeat, at the cost of up to a loop length of silence.
+static constexpr bool     VESTIGE_LATE_JOIN_IN_PHASE = true;
+
+// ---------------------------------------------------------------------------
+// K1 = PLAYBACK SPEED CROSSFADE (rework stage 6, plan §4.2). A crossfade between
+// three versions of the loop's playback, not an added voice: full CCW = only
+// half speed, noon = only clean, full CW = only double speed; between noon and
+// an end, the two adjacent versions crossfade equal-power. Tape-style: the head
+// and the grain read rate move together (0.5 / 2), so a half-speed pass lasts
+// exactly 2 loop lengths and a double-speed one exactly 1/2 — still on the grid.
+// Loop side only (freeze ignores K1). Never touches capture or loop length.
+// ---------------------------------------------------------------------------
+static constexpr float  VESTIGE_K1_DEADZONE = 0.06f;   // ±6% around noon = only clean (same as K2's)
+static constexpr float  VESTIGE_K1_SMOOTH   = 0.003f;  // one-pole per sample on the amount (~7 ms)
+static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than this emits no grains
 
 // ---------------------------------------------------------------------------
 // K4 = tape varispeed (pitch + speed COUPLED — the whole loop plays faster &
@@ -224,6 +341,9 @@ static constexpr size_t VESTIGE_FRIP_HEAD_GAP  = 240;    // ~5 ms head gap
 // wobbled read tap). A small fixed base delay gives the tap room to swing both
 // ways; the displacement is clamped so it never reads the future. Base is a few
 // ms — inaudible, but note it is a fixed latency on the wet looper path.
+// Since the degrade engine is retired (held idle) the tap is BYPASSED on the
+// idle path, so the wet has no latency and stays on the stage-2 grid; the
+// latency only returns if degrade is revived (vestige.h, ARCHIVED note).
 // ---------------------------------------------------------------------------
 static constexpr size_t VESTIGE_WARBLE_LEN     = 4800;      // 100 ms modulated-delay line (SDRAM)
 static constexpr float  VESTIGE_WARBLE_BASE_MS = 3.f;       // fixed base delay = tap centre (~3 ms)
@@ -252,16 +372,19 @@ static constexpr float  VESTIGE_AGE_FADE_DEPTH     = 0.4f;
 static constexpr float  VESTIGE_FADE_ATTACK_MAX_S  = 6.0f;  // K5 CW: swell-in finishes in this
 static constexpr float  VESTIGE_FADE_RELEASE_MAX_S = 6.0f;  // K5 CW: fade-out finishes in this (symmetric)
 static constexpr float  VESTIGE_FADE_MIN_S         = 0.003f; // K5 CCW floor: declick, not a 1-sample step (voice-steal click)
-// Output routing (vestige owns its mix): K6 = looper volume (0 → unity at noon
-// → boost at CW), SW2 = dry (clean) routing. Both gains one-pole smoothed.
-static constexpr float  VESTIGE_LOOP_BOOST_MAX = 2.0f;   // K6 full CW = +6 dB on the looper
-static constexpr float  VESTIGE_ROUTING_SMOOTH = 0.003f; // ~7 ms smoothing for K6 / dry-gate
+// Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
+// mnemonic and sprawl) and vestige no longer owns its output — the looper
+// volume knob and the SW2 dry gate are gone. VESTIGE_LOOP_BOOST_MAX is kept for
+// the revival path only; VESTIGE_ROUTING_SMOOTH still smooths the warble ease.
+static constexpr float  VESTIGE_LOOP_BOOST_MAX = 2.0f;   // [retired] was K6 full CW = +6 dB on the looper
+static constexpr float  VESTIGE_ROUTING_SMOOTH = 0.003f; // ~7 ms one-pole smoothing
 // Concurrent-voice cap: total granulating voiced voices (live + fading) is
 // bounded to VESTIGE_MAX_VOICES — the pre-regression ceiling the CPU/grain pool
 // handled fine. Beyond it, the oldest is "stolen": fast-released over
 // VESTIGE_STEAL_RELEASE_S (declicked) so its slab frees quickly. Classic
 // synth-style voice-stealing — a new note reclaims the oldest, cutting its tail.
 static constexpr float  VESTIGE_STEAL_RELEASE_S = 0.006f; // fast release on voice-steal (~6 ms)
+// Frippertronics — ARCHIVED (unwired, source kept; see the Topology note above).
 static constexpr float  VESTIGE_FRIP_OD_RAMP_S = 0.005f; // overdub input fade in/out (declick record in/out)
 static constexpr float  VESTIGE_FRIP_DECAY_MIN = 0.20f;  // fast tape decay (frippertronics, just past noon, ~1 repeat)
 static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (frippertronics, full CW)

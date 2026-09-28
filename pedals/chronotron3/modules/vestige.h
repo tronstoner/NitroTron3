@@ -3,27 +3,50 @@
 // vestige — dynamic looper / freeze (grain-based).  SW3 UP.
 // Spec: docs/ChronoTron3/dynamic-looper-concept.md
 //
-// STAGE-1 discovery implementation. Grain-based poly-looper + freeze macro:
-//   FS2  = main engage (manual: record while held; auto: record-arm toggle).
-//   FS1  = stop (tap = mute/pause · hold = clear all).
-//   SW1  = capture mode (UP manual · MID continuous-auto · DOWN → manual, TBD).
-//   K1   = voice count / topology (CCW 6 voices … noon 1 voice … CW frippertronics).
-//   K2   = auto-capture threshold (spare in manual).
-//   K3   = smoothness macro (looper CCW → freeze CW).
-//   K4   = degradation colour (bipolar: BBD lo-fi CCW ↔ tape saturation CW).
-//   K5   = loop fade in/out time (CCW instant → CW 3 s).
-//   K6   = mix (shell-owned).
+// Onward-rework STAGE 0 (docs/ChronoTron3/vestige-onward-rework-plan.md §7):
+// retirement + re-map, no new DSP. Auto capture is always on; manual capture,
+// frippertronics, the K1 voice count and the K3 loop↔freeze blend are retired.
+//   SW1  = mode: UP 1-voice loop · MIDDLE 6-voice loop · DOWN freeze (fixed).
+//   K1   = playback speed crossfade (stage 6): CCW only half speed · noon only
+//          clean · CW only double speed; tape-style (pitch + time). Loop side only.
+//   K2   = T (the master period) + direction, bipolar: CCW reverse · noon
+//          shortest T (100 ms) · CW forward; either end T = 8 s. On the loop side
+//          T is the max capture length. Direction is inert in freeze.
+//   K3   = reserved (read, unused) — error intensity.
+//   K4   = capture sensitivity (auto-capture gate threshold; CCW = sensitive).
+//   K5   = loop fade in/out time (unchanged).
+//   K6   = dry/wet mix (shell-owned, equal-power). vestige no longer owns output.
+//   SW2  = reserved (read, unused) — error type select.
+//   FS1  = tap tempo, dedicated: the interval between taps IS T; overrides K2's
+//          magnitude until K2 moves (stage 1).
+//   FS2  = tap: capture + playback on/off · hold: toggle buffer hold (in either
+//          state). Switching OFF while not held clears the buffers.
+//
+// ARCHIVED, unwired but kept on disk (same pattern as
+// docs/ChronoTron3/impulse resonator - armitage/ARMITAGE_ARCHIVED.md):
+//   - frippertronics (fripp_mode_ is never set; its branches below are dead),
+//   - the K3 loop↔freeze blend (the loop modes pin its CCW end, freeze its CW end),
+//   - the K4 degradation colour (MnemDegrade held at depth 0),
+//   - the K6 looper volume + SW2 dry routing.
+// Each unwired site carries an "ARCHIVED" comment saying how to revive it.
 //
 // Reuses the core grain engine (grain_voice.h / ring_buffer.h). Playback is a
 // shared pool of GrainVoice objects; each grain is tagged with the RingBuffer it
 // reads from, so any number of loop-voices share the pool with bounded CPU.
 //
-// Storage: one SDRAM slab per slot (6 voiced + 1 frippertronics + 1 record
-// scratch). Recording writes directly into the record scratch slab (voiced) so
-// it never evicts a playing loop; commit copies the scratch into a target slot.
-// Each slot's RingBuffer views the same memory
-// for grain reads. A wrap-guard copy of the loop head sits after the loop end so
-// grains that read across the loop boundary stay seamless.
+// Storage: two physically separate SDRAM slabs, one per side.
+//   LOOP side  (SW1 UP / MIDDLE) — vestige_slab: 9 voiced + 1 frippertronics
+//              [archived, still allocated] + 1 record scratch, 8 s + guard each.
+//   FREEZE side (SW1 DOWN)       — vestige_freeze_slab: 9 playback + 1 record
+//              scratch, 400 ms + seam overhang each.
+// Each side is a POOL: it records into its own scratch and commits into its own
+// playback slots; nothing ever copies across. Recording writes directly into
+// the pool's record scratch so it never evicts a playing loop; commit copies the
+// scratch into a target slot of the same pool. Each slot's RingBuffer views its
+// slab row (with that row's real length) for grain reads. On the loop side a
+// wrap-guard copy of the loop head sits after the loop end so grains that read
+// across the loop boundary stay seamless; freeze grains never cross the seam.
+// Switching SW1 between the sides: see SwitchPool().
 //
 // Requires daisy.h + hothouse.h + control_surface.h + knob_map.h included first.
 //
@@ -31,15 +54,24 @@
 #include "vestige_constants.h"
 #include "grain_voice.h"   // core/blocks — pulls in ring_buffer.h
 #include "mnemonic_degrade.h" // BBD/Tape degradation engine (folded in on K4)
+#include "grid_quantize.h"   // core/blocks — loop length -> nearest division of T
 #include <cmath>
 #include <cstring>         // memcpy (commit copies record scratch → target slot)
 
 // ---------------------------------------------------------------------------
-// SDRAM storage — one slab per slot. File scope (single TU) is safe here.
-// Layout per slab: [0 .. loop_len)  = captured loop
-//                  [loop_len .. +GUARD) = copy of the loop head (wrap-guard)
+// SDRAM storage — one row per slot. File scope (single TU) is safe here.
+// Loop-side row:   [0 .. loop_len)       = captured loop
+//                  [loop_len .. +GUARD)  = copy of the loop head (wrap-guard)
+// Freeze-side row: [0 .. loop_len)       = captured fragment (<= 400 ms)
+//                  [loop_len .. +240)    = recorded seam overhang (see
+//                                          VESTIGE_FREEZE_GUARD)
+// The two arrays are distinct allocations; a row's neighbour in SDRAM is
+// arbitrary data (the next row, or whatever the linker placed next), so every
+// write is bounded by the row's own capacity (cap_[s]) and every grain reads
+// through a RingBuffer whose length is that capacity.
 // ---------------------------------------------------------------------------
-static float DSY_SDRAM_BSS vestige_slab[VESTIGE_SLOTS][VESTIGE_VOICE_CAP];
+static float DSY_SDRAM_BSS vestige_slab[VESTIGE_LOOP_SIDE_SLOTS][VESTIGE_VOICE_CAP];
+static float DSY_SDRAM_BSS vestige_freeze_slab[VESTIGE_SLOTS - VESTIGE_FREEZE_SLOT0][VESTIGE_FREEZE_CAP];
 // Post-grain warble modulated-delay line (K4 tape/BBD pitch modulation).
 static float DSY_SDRAM_BSS vestige_warble_slab[VESTIGE_WARBLE_LEN];
 
@@ -69,8 +101,13 @@ class Vestige : public Module {
     warble_int_  = 0.f;
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
+    release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
-      ring_[s].Init(vestige_slab[s], VESTIGE_VOICE_CAP);  // memsets the slab
+      // Each slot views its OWN side's slab row, at that row's real length —
+      // the grain reader wraps at this length, so it can never leave the row.
+      if (s < VESTIGE_FREEZE_SLOT0) { slab_[s] = vestige_slab[s];                             cap_[s] = VESTIGE_VOICE_CAP;  }
+      else                          { slab_[s] = vestige_freeze_slab[s - VESTIGE_FREEZE_SLOT0]; cap_[s] = VESTIGE_FREEZE_CAP; }
+      ring_[s].Init(slab_[s], cap_[s]);  // memsets the row
       loop_len_[s] = 0;
       play_pos_[s] = 0;
       timer_[s]    = 0;
@@ -81,8 +118,13 @@ class Vestige : public Module {
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
       fwd_[s]      = 0.f;
-      if (s < VESTIGE_VOICE_SLABS) { dying_[s] = false; stolen_[s] = false; }
+      dying_[s] = false; stolen_[s] = false;
     }
+    // Per-pool engine addressing. Controls() refreshes the ACTIVE pool's entry
+    // every tick; these defaults only matter before the first tick.
+    eng_[kPoolLoop]   = PoolEngine{0.f, VESTIGE_K3_GSCALE_CCW, 0.f, 0.f, false, false, 1};
+    eng_[kPoolFreeze] = PoolEngine{1.f, 1.f, 1.f, VESTIGE_FREEZE_POS_FRAC, true, false, VESTIGE_FREEZE_BANDS};
+    pool_ = kPoolLoop;
     for (int g = 0; g < VESTIGE_GRAINS; g++) { grain_src_[g] = &ring_[0]; grain_slot_[g] = 0; }
     // Sensible defaults so Process is silent before the first Controls pass.
     grain_len_    = VESTIGE_CCW_GRAIN_LEN;
@@ -101,10 +143,13 @@ class Vestige : public Module {
     // Material persists across mode switches; nothing to reset.
   }
   void Deactivate() override {
-    // Recording cannot straddle a mode switch — drop any in-flight capture.
-    recording_ = false;
+    // Recording cannot straddle a mode switch — drop any in-flight capture and
+    // any capture waiting for its grid point. The capture machine lives in the
+    // audio thread, so this is a request; Process() is not called while another
+    // module is active, and its first sample after re-activation honours it.
+    cap_allow_ = false;
+    drop_req_  = true;
     rec_full_  = false;
-    auto_rearm_block_ = false;
     commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
     frip_od_gain_ = 0.f; frip_od_target_ = 0.f; frip_stop_pending_ = false;
     frip_head_ = 0.f; frip_rec_ = 0.f;
@@ -115,47 +160,68 @@ class Vestige : public Module {
   // -------------------------------------------------------------------------
   void Controls(const ControlSurface& cs,
                 daisy::Led& led1, daisy::Led& led2) override {
-    const float k1 = RemapKnob(cs.Knob(0));
-    const float k2 = RemapKnob(cs.Knob(1));
-    const float k3 = RemapKnob(cs.Knob(2));
-    const float k4 = RemapKnob(cs.Knob(3));
-    const float k5 = RemapKnob(cs.Knob(4));
-    const int   sw1 = cs.Switch(0);        // 0=UP manual, 1=MID auto, 2=DOWN TBD
-    const int   sw2 = cs.Switch(1);        // dry routing: 0=UP clean · 1=MID auto-cut · 2=DOWN off
-    const float k6  = RemapKnob(cs.Knob(5)); // looper output volume (vestige owns the mix)
-    const FootswitchEvent f1 = cs.Foot(0); // FS1 = stop
-    const FootswitchEvent f2 = cs.Foot(1); // FS2 = engage
+    // Reserved controls are READ so the surface contract stays explicit, but
+    // they have no effect in stage 0 (docs/ChronoTron3/vestige-onward-rework-plan.md).
+    const float k1  = RemapKnob(cs.Knob(0)); // playback speed crossfade (half · clean · double)
+    const float k2  = RemapKnob(cs.Knob(1)); // T (master period) + direction (bipolar)
+    const float k3  = RemapKnob(cs.Knob(2)); // RESERVED — error intensity
+    const float k4  = RemapKnob(cs.Knob(3)); // capture sensitivity (gate threshold)
+    const float k5  = RemapKnob(cs.Knob(4)); // loop fade in/out
+    const int   sw1 = cs.Switch(0);          // 0=UP 1-voice · 1=MID 6-voice · 2=DOWN freeze
+    const int   sw2 = cs.Switch(1);          // RESERVED — error type select
+    const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
+    const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
+    (void)k3; (void)sw2;
+
+    // ---- K1 = playback speed crossfade (rework stage 6, plan §4.2) -------------
+    // A CROSSFADE between versions of the same loop, not an added voice: CCW end
+    // = only half speed, noon (dead zone) = only clean, CW end = only double.
+    // Published as a side (-1 half / 0 / +1 double) and an amount 0..1; the audio
+    // thread smooths it and swaps the speed version only while it is silent
+    // (UpdateSpeedXfade). Loop side only: freeze ignores it.
+    {
+      const float c1 = k1 - 0.5f;
+      const int side = (c1 < -VESTIGE_K1_DEADZONE) ? -1 : (c1 > VESTIGE_K1_DEADZONE) ? 1 : 0;
+      float x = (fabsf(c1) - VESTIGE_K1_DEADZONE) / (0.5f - VESTIGE_K1_DEADZONE);
+      if (x < 0.f) x = 0.f;
+      if (x > 1.f) x = 1.f;
+      k1_x_    = (side == 0) ? 0.f : x;
+      k1_side_ = side;
+    }
+    // K6 is not read here: it is the shell's equal-power dry/wet mix.
 
     blink_++;
 
-    // ---- Topology (K1): voice count / frippertronics -----------------------
-    //   CCW..NOON_LO : voiced, 6 voices (full CCW) → 1 voice (noon)
-    //   NOON_LO..HI  : voiced, 1 voice (padded noon)
-    //   NOON_HI..CW  : frippertronics, decay 0.40 (just past noon, ~1 repeat) → 1.0 infinite (full CW)
-    bool want_frip = (k1 > VESTIGE_K1_NOON_HI);
-    if (want_frip && !fripp_mode_) EnterFrippertronics();
-    if (!want_frip && fripp_mode_) LeaveFrippertronics();
-    fripp_mode_ = want_frip;
+    // ---- T: the master period (K2 magnitude or FS1 tap) --------------------
+    // sprawl's arbitration, exactly: the last gesture wins. A tap overrides the
+    // knob; moving K2 (raw position) past a small epsilon cancels the tap. K2
+    // keeps its direction job either way. T is only a PERIOD — nothing here
+    // runs a clock or a downbeat (plan §4.3); see UpdateLeds for LED1.
+    UpdatePeriod(cs.Knob(1), k2, f1);
 
-    if (!fripp_mode_) {
-      if (k1 < VESTIGE_K1_NOON_LO) {
-        float pos = k1 / VESTIGE_K1_NOON_LO;   // 0 (full CCW) → 1 (at noon band)
-        int tv = 1 + (int)lroundf((1.f - pos) * (float)(VESTIGE_MAX_VOICES - 1));
-        if (tv < 1) tv = 1;
-        if (tv > VESTIGE_MAX_VOICES) tv = VESTIGE_MAX_VOICES;
-        target_voices_ = tv;
-      } else {
-        target_voices_ = 1;                    // padded noon = 1 voice
+    // ---- SW1 = mode --------------------------------------------------------
+    const bool freeze_mode = (sw1 == 2);
+    const int  want_pool   = freeze_mode ? kPoolFreeze : kPoolLoop;
+    if (sw1 != sw1_prev_) {
+      if (want_pool != pool_) {
+        // Loop side <-> freeze side: a different buffer. See SwitchPool().
+        SwitchPool(want_pool);
+      } else if (recording_) {
+        // UP <-> MIDDLE: same buffer, but the capture must not straddle the
+        // voice-count change — close it out at what it has (stage-0 behaviour;
+        // since stage 2 "what it has" is quantised to its own grid).
+        if (fripp_mode_) EndRecording(); else end_req_ = true;
       }
-      EvictToTarget();       // reducing K1 evicts oldest-first, live
-      UpdateVoicedGains();    // fixed age-ramp fade (K5 no longer affects it)
-    } else {
-      gain_[VESTIGE_FRIP_SLOT] = 1.f;
-      float cw = (k1 - VESTIGE_K1_NOON_HI) / (1.f - VESTIGE_K1_NOON_HI);
-      // Reversed travel: just past noon = shortest decay (barely repeats),
-      // full CW = infinite sustain.
-      frip_decay_ = Mapf(cw, VESTIGE_FRIP_DECAY_MIN, VESTIGE_FRIP_DECAY_MAX);
+      sw1_prev_ = sw1;
     }
+    // ARCHIVED — K1 voice count / frippertronics. fripp_mode_ is never set any
+    // more, so every frip branch below is dead. Revive: restore the pre-stage-0
+    // K1 block here (k1 > VESTIGE_K1_NOON_HI → EnterFrippertronics(), K1 →
+    // target_voices_ / frip_decay_) in place of the SW1 voice count below.
+    // Voice management (retire beyond target, age-ramp gains) runs in the
+    // audio thread since stage 2 — Process() block start and each activation —
+    // so it has ONE owner and can never race a sample-accurate activation.
+    target_voices_ = (sw1 == 1) ? VESTIGE_MAX_VOICES : 1;
 
     // ---- K5 fade in/out: two bounded durations on one scale ----------------
     // Both are phase ramps that FINISH in their time (no one-pole tail): attack
@@ -169,136 +235,111 @@ class Vestige : public Module {
     atk_inc_ = 1.f / (atk_s * sr_);
     rel_inc_ = 1.f / (rel_s * sr_);
 
-    // ---- K3 smoothness macro ----------------------------------------------
-    const float s = k3;                    // 0 = clean loop (CCW), 1 = freeze sweep (CW)
-    float glen_f = Mapf(s, (float)VESTIGE_CCW_GRAIN_LEN, (float)VESTIGE_CW_GRAIN_LEN);
-    grain_len_ = (size_t)glen_f;
-    if (grain_len_ < VESTIGE_GRAIN_MIN_LEN) grain_len_ = VESTIGE_GRAIN_MIN_LEN;
-    overlap_ = Mapf(s, VESTIGE_CCW_OVERLAP, VESTIGE_CW_OVERLAP);
-    spray_  = s * (float)VESTIGE_FREEZE_SPRAY;
-    jitter_ = s * VESTIGE_FREEZE_JITTER;
-    k3_amt_ = s;                  // first-grain attack softening toward freeze
-
-    // ---- K3 unified engine params (order → chaos → focus → sweep) ----------
-    // One granular engine across the whole travel (see vestige_constants.h). At
-    // s>=0.5 these reduce to the prior multiband freeze exactly.
-    //   dev:    the break-up development, 0 (CCW clean loop) → 1 (noon), front-
-    //           loaded by DEVELOP_CURVE so it gets interesting early; 1 across the
-    //           freeze half. Drives BOTH grain-shorten/band-split (chaos) and the
-    //           motion handover forward-head → evolving scan (focus). Motion stays
-    //           rate-1.0 throughout = no slapback.
-    //   gscale: grain-length ×, long at CCW (clean COLA loop) → 1 at noon+.
-    //   frozen: s>=0.5 → grains clamp to the safe range + head pinned (freeze);
-    //           below noon they wrap the loop seam (forward loop / smear).
-    float prog = (s < 0.5f) ? (s * 2.f) : 1.f;      // linear break-up progress
-    float dev  = powf(prog, VESTIGE_K3_DEVELOP_CURVE);
-    k3_chaos_        = dev;
-    k3_focus_        = dev;
-    k3_gscale_       = Mapf(k3_chaos_, VESTIGE_K3_GSCALE_CCW, 1.f);
-    k3_frozen_       = (s >= 0.5f);
-    freeze_pos_frac_ = (s > 0.5f) ? (s - 0.5f) * 2.f : 0.f;  // 0 = start (noon) → 1 = end (CW)
-    // Bands split in as chaos builds (capped later by the voice budget).
-    k3_bands_chaos_  = (k3_chaos_ < VESTIGE_K3_CHAOS_2BAND) ? 1
-                     : (k3_chaos_ < VESTIGE_K3_CHAOS_3BAND) ? 2
-                     : (k3_chaos_ < VESTIGE_K3_CHAOS_4BAND) ? 3
-                     : (k3_chaos_ < VESTIGE_K3_CHAOS_5BAND) ? 4 : 5;
-
-    // Legacy single-stream fallback (VESTIGE_MB_FREEZE=false) still uses k3_mode_.
-    if (s < VESTIGE_K3_LOOP_ZONE) {
-      k3_mode_ = kLooper;
-    } else if (s < 0.5f) {
-      k3_mode_ = kScrub;
-      float t2 = (s - VESTIGE_K3_LOOP_ZONE) / (0.5f - VESTIGE_K3_LOOP_ZONE);
-      scrub_back_frac_ = 1.f - t2;          // ~1× just off CCW → 0 at noon
-    } else {
-      k3_mode_ = kFreeze;
+    // ---- Engine addressing: fixed per mode --------------------------------
+    // ARCHIVED — the K3 loop↔freeze blend (order → chaos → focus → sweep). The
+    // engine is unchanged; only its addressing is: the loop modes pin the old
+    // K3-CCW end (s = 0: the clean loop) and freeze pins the old K3 freeze half
+    // with the band count and window from mnemonic (vestige_constants.h
+    // "FREEZE"). Revive: restore the pre-stage-0 "K3 smoothness macro" + "K3
+    // unified engine params" blocks, driven by k3.
+    if (freeze_mode) {
+      // Freeze = the old s >= 0.5 end, pinned. K2 and K3 are inert here.
+      grain_len_ = VESTIGE_CW_GRAIN_LEN;
+      if (grain_len_ < VESTIGE_GRAIN_MIN_LEN) grain_len_ = VESTIGE_GRAIN_MIN_LEN;
+      overlap_         = VESTIGE_CW_OVERLAP;
+      spray_           = (float)VESTIGE_FREEZE_SPRAY;
+      jitter_          = VESTIGE_FREEZE_JITTER;
+      k3_amt_          = 1.f;
+      k3_chaos_        = 1.f;
+      k3_focus_        = 1.f;
+      k3_gscale_       = 1.f;
+      k3_frozen_       = true;
+      freeze_pos_frac_ = VESTIGE_FREEZE_POS_FRAC;
+      k3_bands_chaos_  = VESTIGE_FREEZE_BANDS;
+      k3_mode_         = kFreeze;          // legacy single-stream fallback only
       scrub_back_frac_ = 0.f;
+      max_loop_len_    = VESTIGE_FREEZE_SAMPLES;   // 400 ms capture window
+      rev_play_        = false;
+    } else {
+      // Loop modes = the old s = 0 end, pinned (clean forward COLA loop).
+      grain_len_ = VESTIGE_CCW_GRAIN_LEN;
+      if (grain_len_ < VESTIGE_GRAIN_MIN_LEN) grain_len_ = VESTIGE_GRAIN_MIN_LEN;
+      overlap_         = VESTIGE_CCW_OVERLAP;
+      spray_           = 0.f;
+      jitter_          = 0.f;
+      k3_amt_          = 0.f;
+      k3_chaos_        = 0.f;
+      k3_focus_        = 0.f;
+      k3_gscale_       = VESTIGE_K3_GSCALE_CCW;
+      k3_frozen_       = false;
+      freeze_pos_frac_ = 0.f;
+      k3_bands_chaos_  = 1;
+      k3_mode_         = kLooper;          // legacy single-stream fallback only
+      scrub_back_frac_ = 0.f;
+
+      // ---- K2 sign = direction; T = the capture ceiling (rule 1) -----------
+      // Past the CCW dead zone the loop plays in reverse; the dead zone and the
+      // CW half play forward. T (UpdatePeriod) is the maximum capture length.
+      rev_play_     = ((k2 - 0.5f) < -VESTIGE_K2_DEADZONE);
+      max_loop_len_ = period_;
     }
 
-    // ---- K4 = degradation colour: BBD (CCW) / Tape (CW) -------------------
-    // Folded in from mnemonic (MnemDegrade). Bipolar around noon with the
-    // engine's own dead-zone clean centre: CCW = BBD lo-fi grit, CW = tape
-    // saturation/wow/dropouts. Colours ONLY the looper output in Process; the
-    // routed dry stays clean (hard rule G1). The old tape varispeed pitch-
-    // shifter that lived here is retired — pitch stays at unity.
-    // TEST BUILD (VESTIGE_K4_MAXLEN): K4 is temporarily the MAX LOOP LENGTH
-    // instead of the colour. Log taper 5.3 ms (CCW) → 8 s (CW = old behaviour);
-    // recording stops and playback begins the moment the ceiling is hit, in any
-    // capture mode. Degrade is held clean so the test is unclouded.
-    if (VESTIGE_K4_MAXLEN) {
-      const float lo = (float)VESTIGE_MAXLEN_MIN_SAMPLES;
-      const float hi = (float)VESTIGE_LOOP_MAX_SAMPLES;
-      size_t ml = (size_t)(lo * powf(hi / lo, k4));
-      if (ml < VESTIGE_MAXLEN_MIN_SAMPLES) ml = VESTIGE_MAXLEN_MIN_SAMPLES;
-      if (ml > VESTIGE_LOOP_MAX_SAMPLES)   ml = VESTIGE_LOOP_MAX_SAMPLES;
-      max_loop_len_ = ml;
-      degrade_.SetDepth(0.f);
-    } else {
-      max_loop_len_ = VESTIGE_LOOP_MAX_SAMPLES;
-      degrade_.SetDepth(k4 * 2.f - 1.f);   // k4 [0..1] → bipolar [-1..+1]
-    }
+    // ---- Degradation colour — ARCHIVED -------------------------------------
+    // K4 was the BBD/Tape colour (MnemDegrade), then the max-length test; it is
+    // now capture sensitivity, so the colour engine is held clean (depth 0),
+    // exactly as the max-length test build already held it. The engine and its
+    // Process path stay intact. Revive: map a knob k to degrade_.SetDepth(k*2-1).
+    degrade_.SetDepth(0.f);
     // Idle-hiss guard: with no loop captured the engine's injected noise would
     // add a hiss bed to the output, so duck it to 0 until there is content.
     bool degrade_has_content = false;
     for (int s = 0; s < VESTIGE_SLOTS; s++) if (active_[s]) { degrade_has_content = true; break; }
     degrade_.SetNoiseGate(degrade_has_content ? 1.f : 0.f);
-    pitch_rate_ = 1.f;                    // K4 no longer transposes
+    pitch_rate_ = 1.f;                    // no transposition (tape varispeed retired earlier)
 
-    // ---- K2: auto-capture threshold ---------------------------------------
-    auto_thresh_ = Mapf(k2, VESTIGE_AUTO_THRESH_MIN, VESTIGE_AUTO_THRESH_MAX);
+    // ---- K4 = capture sensitivity (was K2; same mapping) -------------------
+    auto_thresh_ = Mapf(k4, VESTIGE_AUTO_THRESH_MIN, VESTIGE_AUTO_THRESH_MAX);
 
-    // ---- FS1 = stop (tap = mute/pause · hold = clear) ----------------------
-    if (f1.down && !clear_latched_ && f1.held_ms >= VESTIGE_FS1_CLEAR_HOLD_MS) {
-      ClearAll();
-      clear_latched_ = true;
-      flash_ = VESTIGE_FLASH_TICKS;
-    }
-    if (f1.falling) {
-      if (!clear_latched_ && f1.held_ms <= VESTIGE_FS1_TAP_MAX_MS) {
-        muted_ = !muted_;   // tap: toggle mute (fades out/in over K5 time)
-        for (int s = 0; s < VESTIGE_SLOTS; s++)
-          // Don't touch dying voices — resurrecting their fade would strand them
-          // active forever (they'd never hit the free condition).
-          if (active_[s] && !(s < VESTIGE_VOICE_SLABS && dying_[s]))
-            SetFade(s, muted_ ? 0.f : 1.f);
-      }
-      clear_latched_ = false;
-    }
-
-    // ---- FS2 = main engage -------------------------------------------------
-    // FS2 always means "record"; starting a record resumes a paused loop
-    // (StartRecording → ResumeFromMute). To resume WITHOUT recording, tap FS1.
-    const bool auto_mode = (sw1 == 1);
-    if (f2.rising) {
-      if (auto_mode) {
-        auto_armed_ = !auto_armed_;   // continuous-auto: record-arm toggle
-        auto_rearm_block_ = false;    // a fresh arm always listens immediately
-      } else {
-        StartRecording();    // manual (SW1 UP) and DOWN (TBD → manual)
-      }
+    // ---- FS2: tap = capture + playback on/off · hold = buffer hold ---------
+    // Hold fires once, while the switch is still down, and toggles hold in
+    // either on/off state. Any release that did not fire the hold is a tap.
+    // (ControlSurface zeroes held_ms on the falling edge, so the hold latch —
+    // not a tap-length compare — is what separates the two gestures; this is
+    // the same idiom the retired FS1 stop/clear used.)
+    if (f2.down && !hold_latched_ && f2.held_ms >= VESTIGE_FS_HOLD_MS) {
+      held_ = !held_;
+      hold_latched_ = true;
     }
     if (f2.falling) {
-      if (!auto_mode && recording_) {
-        EndRecording();   // set loop end, record the seam overhang, then commit
-      }
+      if (!hold_latched_) SetEngaged(!engaged_);
+      hold_latched_ = false;
     }
 
-    // ---- Continuous-auto capture state machine -----------------------------
-    if (auto_mode && auto_armed_) {
-      RunAutoCapture();
-    } else if (recording_ && auto_mode) {
-      // Disarmed mid-phrase → close it out.
-      EndRecording();
+    // ---- Auto capture (always on while engaged and not held) ---------------
+    // ARCHIVED — manual capture (SW1 UP: FS2 held = record) is retired; auto
+    // capture runs in every SW1 mode. Holding locks the buffer: no resampling.
+    // Since stage 2 the gate, the capture start/end and the playback start are
+    // all decided per SAMPLE in the audio thread (IsrCapture). This thread only
+    // sets policy: whether a capture may start, which free slot it records
+    // into, and requests (end / drop) that the audio thread executes.
+    if (fripp_mode_) {
+      if (engaged_ && !held_) RunAutoCapture();
+      else if (recording_)    EndRecording();
+    } else {
+      const bool allow = engaged_ && !held_;
+      if (!allow && recording_) end_req_ = true;   // hold engaged mid-phrase → keep it (quantised)
+      if (allow) ReserveArmSlot();                 // BEFORE allowing: the ISR needs a slot to start
+      cap_allow_ = allow;
     }
 
     // ---- Recording auto-stop (length ceiling reached) ----------------------
-    // In auto mode the note is usually still ringing when the K4 ceiling cuts the
-    // capture, so block re-arming until the envelope has fallen back below the
-    // close threshold: the next loop starts on a fresh silence→sound transition,
+    // The note is usually still ringing when the K2 ceiling cuts the capture,
+    // so block re-arming until the envelope has fallen back below the close
+    // threshold: the next loop starts on a fresh silence→sound transition,
     // never back-to-back.
     if (rec_full_) {
       rec_full_ = false;
-      if (auto_mode) auto_rearm_block_ = true;
+      auto_rearm_block_ = true;
       EndRecording();
     }
 
@@ -308,40 +349,64 @@ class Vestige : public Module {
       CommitRecording();
     }
 
+    // ---- Off + not held = empty --------------------------------------------
+    // Switching off fades the loops out over K5; once every fade-out has
+    // finished, the buffers are cleared unless hold is on. Being state-derived
+    // (not a one-shot), it also clears when hold is released while stopped.
+    if (!engaged_ && !held_ && HasContent() && FadesOutDone()) {
+      ClearAll();
+      muted_ = true;
+    }
+    // Same rule for the side SW1 is NOT on: leaving it faded it out; once that
+    // fade has finished it is cleared unless hold is on. Also state-derived, so
+    // releasing hold while on the other side clears it too.
+    const int other_pool = 1 - pool_;
+    if (!held_ && PoolHasContent(other_pool) && PoolFadesOutDone(other_pool))
+      ClearPool(other_pool);
 
-    // ---- K6 looper volume + SW2 dry routing (vestige owns its output) ------
-    // K6: 0 (CCW) → unity (noon) → boost (CW). Sets the looper's level only.
-    k6_vol_ = (k6 < 0.5f)
-                ? (k6 * 2.f)
-                : (1.f + (k6 - 0.5f) * 2.f * (VESTIGE_LOOP_BOOST_MAX - 1.f));
-    // SW2 dry (clean) routing:  UP = always on ·  MID = off while recording or
-    // auto-armed ·  DOWN = off (loop only). Gain is smoothed in Process.
-    dry_gain_ = 1.f;
-    if (sw2 == 2) dry_gain_ = 0.f;
-    else if (sw2 == 1 && (recording_ || auto_armed_)) dry_gain_ = 0.f;
-
-    // ---- Adaptive multiband bands (poly CPU) ∩ chaos-driven split ----------
-    // Voice budget (CPU-safe): 5 bands only at 1 voice, then 3 / 2 / 1 as poly rises
-    // — so every voice gets grains without blowing CPU at high poly. The K3 chaos
-    // ramp splits bands IN as the loop breaks up (1 band at the clean-loop end),
-    // so the effective count is the lesser of the two: min(voice-budget, chaos).
-    int nv = 0;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (active_[v] && !dying_[v]) nv++;
+    // ---- Adaptive multiband bands (poly CPU) ∩ mode band count -------------
+    // Voice budget (CPU-safe): 5 bands only at 1 voice, then 3 / 2 / 1 as poly
+    // rises. The effective count is min(voice budget, the mode's band count):
+    // 1 for the loop modes, VESTIGE_FREEZE_BANDS for freeze. Counted over the
+    // active pool (the only one that can hold more than a fading tail).
+    int nv = CountLive();
     int bands_voice = (nv <= VESTIGE_MB_5BAND_MAX_VOICES) ? 5
                     : (nv <= VESTIGE_MB_3BAND_MAX_VOICES) ? 3
                     : (nv <= VESTIGE_MB_2BAND_MAX_VOICES) ? 2 : 1;
     mb_nbands_ = (bands_voice < k3_bands_chaos_) ? bands_voice : k3_bands_chaos_;
 
+    // ---- Publish the active pool's engine addressing -----------------------
+    // The pool SW1 is NOT on keeps the addressing it had when it was left, so
+    // its fade-out tail is rendered by its own engine (a loop tail stays a loop,
+    // never reinterpreted as a freeze of its first 400 ms, and vice versa).
+    eng_[pool_] = PoolEngine{k3_focus_, k3_gscale_, k3_amt_, freeze_pos_frac_,
+                             k3_frozen_, rev_play_, mb_nbands_};
+
     // ---- LEDs --------------------------------------------------------------
-    UpdateLeds(led1, led2, auto_mode);
+    UpdateLeds(led1, led2);
   }
 
-  bool OwnsOutput() const override { return true; }
+  // Output is shell-mixed on K6 like mnemonic/sprawl. ARCHIVED: vestige used to
+  // own its output (K6 looper volume + SW2 dry routing); revive by returning
+  // true here and restoring the k6_vol_/dry_gain_ mix at the end of Process.
+  bool OwnsOutput() const override { return false; }
+  // Off (FS2) = bypassed: the shell lifts the dry to unity (hard rule G1) while
+  // the loops' fade-out tail still plays on the wet.
+  bool Bypassed() const override { return !engaged_; }
 
   // -------------------------------------------------------------------------
   // Audio-rate. Recording writes, grain scheduler, grain sum, texture.
   // -------------------------------------------------------------------------
   void Process(const float* in, float* wet, size_t size) override {
+    // Running sample count — a TIMESTAMP source only (LED1 phase against the
+    // capture anchor). It is never a grid: nothing is ever aligned to it.
+    // Sample i of this block is sample number clk0 + i; the control thread
+    // (which never runs mid-block) always sees the index of the NEXT sample.
+    const uint32_t clk0 = sample_clock_;
+    // Voice management, once per block, audio thread only (see Controls):
+    // leaving MIDDLE retires the older loops oldest-first over K5, and the
+    // age-ramp gains follow the live set.
+    if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); }
     for (size_t i = 0; i < size; i++) {
       const float x = in[i];
 
@@ -349,6 +414,8 @@ class Vestige : public Module {
       pitch_rate_s_ += (pitch_rate_ - pitch_rate_s_) * VESTIGE_PITCH_SMOOTH;
 
       // ---- Frippertronics loop head (single per-sample head) --------------
+      // ARCHIVED (rework stage 0): fripp_mode_ is never set, so this and the frip
+      // record/playback branches below are dead. Revive via Controls()' K1 block.
       // Advance it before record/playback so both reference the same position.
       if (fripp_mode_ && frip_len_ > 0) AdvanceFripHead();
 
@@ -357,8 +424,8 @@ class Vestige : public Module {
       env_ += VESTIGE_ENV_COEF * (a - env_);
 
       // ---- Recording ------------------------------------------------------
-      if (recording_) {
-        float* m = vestige_slab[rec_slot_];
+      if (recording_ && fripp_mode_) {   // ARCHIVED frippertronics recorder only
+        float* m = slab_[rec_slot_];
         if (fripp_mode_ && frip_len_ > 0) {
           // Overdub (sound-on-sound), tape-style. The record head frip_rec_
           // moves at the varispeed rate, so we RESAMPLE the live input onto
@@ -464,50 +531,59 @@ class Vestige : public Module {
           frip_in_prev_ = x;
           rec_idx_ = cur;                             // growing loop length
           if (rec_idx_ >= max_loop_len_) rec_full_ = true;
-        } else {
-          // Linear capture (voiced only). After the record end (pending_len_ set)
-          // we keep writing a short overhang for the seam crossfade, then commit.
-          m[rec_idx_] = x;
-          rec_idx_++;
-          if (overhang_left_ > 0) {
-            if (--overhang_left_ == 0) commit_pending_ = true;
-          } else if (pending_len_ == 0 && rec_idx_ >= max_loop_len_) {
-            rec_full_ = true;
-          }
         }
       }
+      // ---- Voiced / freeze capture: the sample-accurate machine -----------
+      if (!fripp_mode_) IsrCapture(x, clk0 + (uint32_t)i);
+      // ---- K1 speed crossfade amount (smoothed; version swap at silence) --
+      UpdateSpeedXfade();
 
       // ---- Grain scheduler + per-slot sum + fade envelope -----------------
       // Mute/unmute rides the per-slot fade (K5), so the scheduler runs even
       // while muted so the fade-out tail can play; fully-faded slots sum to 0.
-      // Unified engine: ServiceMBFreeze is now the ONE granular engine across the
-      // whole K3 travel (order→chaos→focus→sweep) — its params morph, so the clean
-      // loop, the break-up and the freeze are one continuous cloud (no noon seam).
+      // Unified engine: ServiceMBFreeze is the ONE granular engine. Since rework
+      // stage 0 its params no longer morph on K3 — Controls() pins them to the
+      // clean-loop end (SW1 UP/MIDDLE) or the multiband-freeze end (SW1 DOWN).
       // Legacy single-stream looper/scrub/freeze stays behind VESTIGE_MB_FREEZE=0.
       if (fripp_mode_) {
         if (VESTIGE_MB_FREEZE) ServiceMBFreeze(VESTIGE_FRIP_SLOT);
         else                   ServiceSlot(VESTIGE_FRIP_SLOT);
       } else {
-        for (int v = 0; v < VESTIGE_VOICE_SLABS; v++)
-          if (VESTIGE_MB_FREEZE) ServiceMBFreeze(v);
-          else                   ServiceSlot(v);
+        // Both pools' playback slots. The pool SW1 is not on only plays its
+        // fade-out tail; once a slot there is silent it is PARKED — not
+        // scheduled at all, so it spends no CPU and takes no grains from the
+        // shared pool / grain cap the active side needs.
+        for (int p = 0; p < 2; p++) {
+          const int lo = PoolLo(p), hi = PoolHi(p);
+          for (int v = lo; v < hi; v++) {
+            if (!active_[v]) continue;             // (both services no-op on it anyway)
+            if (p != pool_ && Parked(v)) { AdvanceParkedHeads(v); continue; }
+            if (VESTIGE_MB_FREEZE) ServiceMBFreeze(v);
+            else                   ServiceSlot(v);
+          }
+        }
       }
+      // Per slot, per version: [0] = clean (rate 1), [1] = K1 speed version.
       float slot_sum[VESTIGE_SLOTS] = {0.f};
+      float slot_sp[VESTIGE_SLOTS]  = {0.f};
       for (int g = 0; g < VESTIGE_GRAINS; g++) {
-        if (grains_[g].IsActive())
-          slot_sum[grain_slot_[g]] += grains_[g].Process(*grain_src_[g]);
+        if (grains_[g].IsActive()) {
+          const float gv = grains_[g].Process(*grain_src_[g]);
+          if (grain_ver_[g]) slot_sp[grain_slot_[g]]  += gv;
+          else               slot_sum[grain_slot_[g]] += gv;
+        }
       }
       float y = 0.f;
       for (int s = 0; s < VESTIGE_SLOTS; s++) {
         // Skip fully dormant slots — no grains, silent, not fading in — so they
         // cost nothing (and no cosf/sinf). Most slots at low voice counts.
-        if (slot_sum[s] == 0.f && fade_gain_[s] == 0.f && fade_target_[s] < 0.5f) continue;
+        if (slot_sum[s] == 0.f && slot_sp[s] == 0.f && fade_gain_[s] == 0.f && fade_target_[s] < 0.5f) continue;
         // One duration-based fade for both directions. fade_phase_ ramps 0→1
         // over the (attack|release) time; fade_from_ is the gain the fade
         // started at, so an interrupted fade resumes smoothly with no jump.
         const bool rising = (fade_target_[s] > 0.5f);
         // Stolen (fast-released) voices fade out at steal_inc_, not the K5 rate.
-        const bool fast = (s < VESTIGE_VOICE_SLABS && stolen_[s]);
+        const bool fast = stolen_[s];
         if (fade_phase_[s] < 1.f) {
           fade_phase_[s] += rising ? atk_inc_ : (fast ? steal_inc_ : rel_inc_);
           if (fade_phase_[s] > 1.f) fade_phase_[s] = 1.f;
@@ -530,9 +606,23 @@ class Vestige : public Module {
             fade_gain_[s] = fade_from_[s] * sh;
           }
         }
-        y += slot_sum[s] * fade_gain_[s];
+        // Playback path per slot: speed crossfade -> [error stage] -> K5 fade.
+        //  1. K1 speed crossfade (loop side): clean and speed versions of the
+        //     same loop, equal-power. At noon it is exactly the clean sum.
+        float pv = slot_sum[s];
+        if (PoolOf(s) == kPoolLoop && !(g_c_ == 1.f && g_sp_ == 0.f))
+          pv = slot_sum[s] * g_c_ + slot_sp[s] * g_sp_;
+        //  2. Error stage (plan §5, stages 3-5) goes HERE, on whatever speed K1
+        //     selected. Signal-domain errors (CONDITION: mutes, rate reduction)
+        //     replace this pass-through; head-domain ones (PLAYBACK speed /
+        //     direction, TIMING re-length) compose with SpeedRatio() and the
+        //     head advance in ServiceMBFreeze — the speed crossfade needs no
+        //     restructuring for either.
+        pv = PlaybackErrors(s, pv);
+        //  3. K5 loop fade.
+        y += pv * fade_gain_[s];
         // Free a retired (dying) voiced slot once its fade-out has completed.
-        if (s < VESTIGE_VOICE_SLABS && dying_[s] &&
+        if (dying_[s] &&
             fade_target_[s] < 0.5f && fade_phase_[s] >= 1.f) {
           active_[s] = false; dying_[s] = false; stolen_[s] = false;
           loop_len_[s] = 0; gain_[s] = 0.f;
@@ -544,13 +634,24 @@ class Vestige : public Module {
       // TapePitchCents) and the colour chain (control-rate powf + filters in
       // ColourProcess) do audible NOTHING but still burn CPU — so skip them.
       // This is why K4-at-noon didn't relieve the overload before: the always-on
-      // cost wasn't gated. The cheap fixed-base-delay tap stays on both paths so
-      // engaging/disengaging K4 doesn't step the wet delay.
+      // cost wasn't gated. (The fixed-base-delay tap used to stay on both paths
+      // so engaging/disengaging K4 didn't step the wet delay; since degrade is
+      // retired the idle path bypasses it — see ARCHIVED note below.)
       warble_ring_.Write(y);
       if (degrade_.Idle()) {
+        // Idle = the only state since the degrade engine was retired (depth
+        // pinned at 0, no knob): the tap would be a pure warble_base_ delay
+        // (143 samples) on the whole wet path, putting every loop and the
+        // freeze ~3 ms behind the dry and off their grid. So the wet goes
+        // straight through. The ring is still written, so the non-idle path
+        // below has its history.
+        // ARCHIVED — reviving degrade: restore the idle-path tap read
+        //   y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
+        //                             - warble_base_ - warble_int_);
+        // here, so engaging/disengaging K4 does not step the wet delay (the
+        // reason the fixed-base tap used to stay on both paths) — and budget
+        // the 3 ms against the stage-2 grid (compensate, or accept it).
         warble_int_ += (0.f - warble_int_) * VESTIGE_ROUTING_SMOOTH;   // ease wobble to 0
-        y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
-                                  - warble_base_ - warble_int_);
       } else {
         float w_cents = degrade_.TapePitchCents();            // wow/flutter/snag/drift
         warble_int_ = warble_int_ * VESTIGE_WARBLE_LEAK
@@ -563,12 +664,15 @@ class Vestige : public Module {
         y = degrade_.ColourProcess(y);   // tape speed first, then head/electronics
       }
 
-      // Vestige owns its output: looper (y) at K6 volume + routed dry (x).
-      // Both gains one-pole smoothed so K6 moves and the dry gate don't zip.
-      k6_vol_s_   += (k6_vol_   - k6_vol_s_)   * VESTIGE_ROUTING_SMOOTH;
-      dry_gain_s_ += (dry_gain_ - dry_gain_s_) * VESTIGE_ROUTING_SMOOTH;
-      wet[i] = dry_gain_s_ * x + k6_vol_s_ * y;
+      // WET only: the shell mixes it against the dry on K6 (equal-power).
+      // ARCHIVED — vestige-owned output: was
+      //   wet[i] = dry_gain_s_ * x + k6_vol_s_ * y;
+      // with k6_vol_ (K6 looper volume 0 → unity at noon → VESTIGE_LOOP_BOOST_MAX)
+      // and dry_gain_ (SW2: UP clean · MID cut while recording/armed · DOWN off),
+      // both one-pole smoothed at VESTIGE_ROUTING_SMOOTH. Revive with OwnsOutput().
+      wet[i] = y;
     }
+    sample_clock_ = clk0 + (uint32_t)size;
   }
 
  private:
@@ -717,7 +821,7 @@ class Vestige : public Module {
 
     // Delay = distance from the (frozen) write head back to this absolute index.
     const size_t wp  = ring_[s].GetWritePos();
-    const size_t cap = VESTIGE_VOICE_CAP;
+    const size_t cap = ring_[s].GetLength();   // this row's real length (loop 8 s+guard, freeze 400 ms+240)
     size_t delay = (wp + cap - posi) % cap;
 
     grain_src_[g]  = &ring_[s];
@@ -757,47 +861,192 @@ class Vestige : public Module {
 
     // Forward read head (clean-loop / break-up anchor). Frip advances its own head
     // per-sample in AdvanceFripHead; voiced slots advance here (once per sample).
+    // K2 CCW half = reverse: the head walks backward (and EmitBandGrain reads
+    // each grain backward) so the loop plays in reverse. rev_play_ is always
+    // false in freeze mode, where the head is irrelevant (focus = 1).
+    // Addressing comes from the slot's OWN pool (eng_), not the live controls:
+    // a pool SW1 has left keeps rendering its fade-out tail as it sounded.
+    const PoolEngine& e = eng_[PoolOf(s)];
     const bool is_frip = (s == VESTIGE_FRIP_SLOT);
+    // A fresh loop whose guard is still being written plays forward until it is
+    // ready (forward never outruns the guard job; reverse could read it at once).
+    const bool rev = e.rev && GuardReady(s);
     if (!is_frip) {
-      fwd_[s] += pitch_rate_s_;
-      while (fwd_[s] >= (float)L) fwd_[s] -= (float)L;
-      while (fwd_[s] < 0.f)       fwd_[s] += (float)L;
+      fwd_[s] += rev ? -pitch_rate_s_ : pitch_rate_s_;
+      // pass_ counts the clean head's wraps: the half-speed version needs its
+      // parity (it covers the loop once per TWO clean passes).
+      while (fwd_[s] >= (float)L) { fwd_[s] -= (float)L; pass_[s]++; }
+      while (fwd_[s] < 0.f)       { fwd_[s] += (float)L; pass_[s]--; }
     }
     const float head = is_frip ? frip_head_ : fwd_[s];
+    // Seam-crossing (non-frozen) grains need the head-continuation guard behind
+    // L; clamp to what this row actually has. Loop rows always have the full
+    // VESTIGE_GUARD_SAMPLES (unchanged). Frozen grains never cross the seam, so
+    // they keep the old cap — the freeze row's short guard does not bind them.
+    const size_t gcap = e.frozen ? VESTIGE_GUARD_SAMPLES : SlotGuard(s, L);
 
-    // Per-band-count tables are indexed [mb_nbands_-1][band]: the log-spaced
+    // Per-band-count tables are indexed [nbands-1][band]: the log-spaced
     // filterbank (built in MBInit) plus the tunable glen/scan/spray rows. The band
     // index bi maps straight through — no remap — so every band count 1..MAX gets
     // its own full-spectrum split. 1-band = no filter (coef nullptr).
-    const int row = mb_nbands_ - 1;
-    for (int bi = 0; bi < mb_nbands_; bi++) {
-      size_t glen = (size_t)((float)VESTIGE_MB_GLEN[row][bi] * k3_gscale_);
+    const int nb  = e.nbands;
+    const int row = nb - 1;
+    for (int bi = 0; bi < nb; bi++) {
+      size_t glen = (size_t)((float)VESTIGE_MB_GLEN[row][bi] * e.gscale);
       if (glen > L) glen = L;
-      if (glen > VESTIGE_GUARD_SAMPLES) glen = VESTIGE_GUARD_SAMPLES;
+      if (glen > gcap) glen = gcap;
       if (glen < VESTIGE_GRAIN_MIN_LEN) glen = (L < VESTIGE_GRAIN_MIN_LEN) ? L : VESTIGE_GRAIN_MIN_LEN;
       size_t maxscan = (L > glen + 1) ? (L - glen - 1) : 1;
       size_t scanlen = VESTIGE_MB_SCAN[row][bi]; if (scanlen > maxscan) scanlen = maxscan; if (scanlen < 1) scanlen = 1;
       mb_scan_[s][bi] += 1.f;
       if (mb_scan_[s][bi] >= (float)scanlen) mb_scan_[s][bi] -= (float)scanlen;
+      // A version returning from silence emits its restart grain (instant
+      // attack) the very sample its gain crosses the gate — i.e. while it is
+      // still ~VESTIGE_K1_GATE_EPS — not a hop later at an audible gain.
+      if (ver_idle_[s][0] && !e.frozen && g_c_ > VESTIGE_K1_GATE_EPS) mb_timer_[s][bi] = 1;
       if (--mb_timer_[s][bi] <= 0) {
         // Base = forward head → swept freeze point as focus→1; scan fades in with
         // focus so the clean loop has no scan and the freeze has full scan.
         float span = (float)L - (float)glen - (float)scanlen; if (span < 0.f) span = 0.f;
-        float freeze_base = span * freeze_pos_frac_;
-        float base = head + (freeze_base - head) * k3_focus_;
-        float posf = base + mb_scan_[s][bi] * k3_focus_;
+        float freeze_base = span * e.pos_frac;
+        float base = head + (freeze_base - head) * e.focus;
+        float posf = base + mb_scan_[s][bi] * e.focus;
         // Position spray = the small freeze phasing spray ONLY, faded in with focus.
         // NO random break-up scatter: displaced grains on the moving head read as
         // slapback echoes. The break-up decorrelates via grain-shortening + band-
         // split + the motion-conserving scan (base rate stays 1.0), never a jump.
-        float spray_width = (float)VESTIGE_MB_SPRAY[row][bi] * k3_focus_;
-        const float* coef = (mb_nbands_ == 1) ? nullptr : mb_bank_coef_[row][bi];
-        EmitBandGrain(s, glen, posf, coef, spray_width, k3_frozen_);
+        float spray_width = (float)VESTIGE_MB_SPRAY[row][bi] * e.focus;
+        const float* coef = (nb == 1) ? nullptr : mb_bank_coef_[row][bi];
+        // K1 at the speed end: the clean version is silent, so it emits
+        // nothing (the grain count only doubles INSIDE the crossfade). Its
+        // scheduling keeps running, and it restarts with an instant-attack
+        // grain under the smoothed crossfade gain.
+        if (e.frozen || g_c_ > VESTIGE_K1_GATE_EPS) {
+          EmitBandGrain(s, glen, posf, coef, spray_width, e.frozen);
+          ver_idle_[s][0] = false;
+        } else {
+          ver_idle_[s][0] = true;
+        }
         int hop = (int)((float)glen / VESTIGE_MB_OVERLAP);
         if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
         mb_timer_[s][bi] = hop;
       }
+      // ---- K1 speed version (loop side): tape-style, pitch AND time --------
+      // Its own grains on its own head, read at the same rate the head moves,
+      // so it is a true resample of the static loop (no multi-copy artefact).
+      if (!e.frozen && !is_frip) {
+        const float r = SpeedRatio();
+        // Coverage clamp (the retired varispeed guard, generalised): a grain
+        // reads glen*r source samples; keep that within the loop AND the
+        // guard, so a read never passes L + min(L, guard) — the extent the
+        // stage-2 guard gate already guarantees.
+        size_t gsp = glen;
+        const size_t span = (L < gcap) ? L : gcap;
+        if (r > 1.f && (float)gsp * r > (float)span) gsp = (size_t)((float)span / r);
+        if (gsp < VESTIGE_GRAIN_MIN_LEN) gsp = VESTIGE_GRAIN_MIN_LEN;
+        if (ver_idle_[s][1] && g_sp_ > VESTIGE_K1_GATE_EPS) mb_timer_sp_[s][bi] = 1;   // see clean version
+        const float hsp = SpeedHead(s, r);
+        // Half speed: the head sits on .5 every other sample and a grain starts
+        // on an integer, so fire only on integer heads (the even hop then keeps
+        // every later grain there too): the version is exactly on its timeline,
+        // not half a sample off.
+        const bool on_int = !(r < 1.f) || hsp == (float)(size_t)hsp;
+        if (--mb_timer_sp_[s][bi] <= 0 && !on_int) mb_timer_sp_[s][bi] = 1;   // retry next sample
+        else if (mb_timer_sp_[s][bi] <= 0) {
+          if (g_sp_ > VESTIGE_K1_GATE_EPS) {
+            EmitSpeedGrain(s, gsp, hsp, r, rev,
+                           (nb == 1) ? nullptr : mb_bank_coef_[row][bi],
+                           ver_idle_[s][1] ? 0.f : 1.f);
+            ver_idle_[s][1] = false;
+          } else {
+            ver_idle_[s][1] = true;
+          }
+          int hop = (int)((float)gsp / VESTIGE_MB_OVERLAP);
+          if (r < 1.f) hop &= ~1;                  // even hop: every half-speed grain
+                                                   // starts on the same .5 phase
+          if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
+          mb_timer_sp_[s][bi] = hop;
+        }
+      }
     }
+  }
+
+  // ---- K1 speed crossfade helpers -------------------------------------------
+  float SpeedRatio() const { return sp_rate_; }
+  // Speed-version head, DERIVED from the clean head (never integrated), so every
+  // version stays on the capture's grid by construction: position = r x (clean
+  // timeline) mod L. Half speed = (clean + L*(pass parity)) / 2, double = 2*clean
+  // mod L. They coincide with the clean head whenever it is at 0 on an even pass:
+  // every two loop periods, exactly as the plan's power-of-two argument says.
+  float SpeedHead(int s, float r) const {
+    const float L = (float)loop_len_[s];
+    const float c = fwd_[s];
+    if (r < 1.f) return (c + ((pass_[s] & 1) ? L : 0.f)) * 0.5f;
+    float h = c * 2.f;
+    if (h >= L) h -= L;
+    return h;
+  }
+  // Audio thread, per sample. Smooths the K1 amount (declick) and swaps the
+  // speed version (half <-> double) only while it is exactly silent, so the
+  // noon crossing never jumps a sounding head.
+  void UpdateSpeedXfade() {
+    const int want = k1_side_;
+    float tgt = k1_x_;
+    if (want != 0 && want != sp_side_) {
+      tgt = 0.f;                                   // fade the current version out first
+      if (sp_x_ == 0.f) {
+        sp_side_ = want; sp_rate_ = (want < 0) ? 0.5f : 2.f;
+        // The old version's grains are still mid-window, silent only because
+        // its gain is 0 right now; clear them so they cannot come back up as a
+        // ghost under the new version's fade-in. Silent by construction.
+        for (int g = 0; g < VESTIGE_GRAINS; g++)
+          if (grain_ver_[g] && grains_[g].IsActive()) grains_[g] = GrainVoice{};
+      }
+    }
+    if (sp_x_ != tgt) {
+      sp_x_ += (tgt - sp_x_) * VESTIGE_K1_SMOOTH;
+      if (fabsf(tgt - sp_x_) < 1e-4f) sp_x_ = tgt;
+      const float h = GrainHannRise(sp_x_);        // sin^2(pi/2 x): equal-power pair
+      g_sp_ = sqrtf(h);
+      g_c_  = sqrtf(1.f - h);
+    }
+  }
+  // Error-stage hook (plan §5): identity until stages 3-5 exist.
+  static inline float PlaybackErrors(int /*s*/, float x) { return x; }
+
+  // One speed-version grain at rate r, starting AT the speed head. Forward reads
+  // [head, head + r*glen); reverse reads backward from head down to head - r*glen
+  // — through the guard (start at head + L) when that would cross 0, so a read
+  // never wraps below the row start.
+  void EmitSpeedGrain(int s, size_t glen, float head, float r, bool rev,
+                      const float* coef, float atk_scale) {
+    int nactive = 0;
+    for (int k = 0; k < VESTIGE_GRAINS; k++) if (grains_[k].IsActive()) nactive++;
+    if (nactive >= VESTIGE_MB_GRAIN_CAP) { grain_cap_drops_++; return; }
+    int g = -1;
+    for (int k = 0; k < VESTIGE_GRAINS; k++) {
+      int idx = (next_grain_ + k) % VESTIGE_GRAINS;
+      if (!grains_[idx].IsActive()) { g = idx; next_grain_ = (idx + 1) % VESTIGE_GRAINS; break; }
+    }
+    if (g < 0) return;
+    const float  L  = (float)loop_len_[s];
+    const size_t wp = ring_[s].GetWritePos();
+    const size_t bl = ring_[s].GetLength();
+    size_t start, delay;
+    if (!rev) {
+      start = (size_t)head;
+      delay = (wp + bl - start) % bl;                       // Trigger: start = wp - delay
+    } else {
+      const float sf = (head - r * (float)glen < 0.f) ? head + L : head;
+      start = (size_t)sf;
+      delay = (wp + bl + glen - start) % bl;                // Trigger(rev): start = wp - delay + glen
+    }
+    grain_src_[g]  = &ring_[s];
+    grain_slot_[g] = s;
+    grain_ver_[g]  = 1;
+    const float ov_comp = 2.f / VESTIGE_MB_OVERLAP;
+    grains_[g].Trigger(ring_[s], delay, glen, rev, r, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
+    if (coef) grains_[g].SetBandFilter(coef[0], coef[1], coef[2], coef[3], coef[4]);
   }
 
   // Emit one band grain. frozen=true (freeze half): clamp the read inside the safe
@@ -809,7 +1058,7 @@ class Vestige : public Module {
     // hard cap on concurrent grains (CPU guard for multi-voice freeze)
     int nactive = 0;
     for (int k = 0; k < VESTIGE_GRAINS; k++) if (grains_[k].IsActive()) nactive++;
-    if (nactive >= VESTIGE_MB_GRAIN_CAP) return;
+    if (nactive >= VESTIGE_MB_GRAIN_CAP) { grain_cap_drops_++; return; }
     int g = -1;
     for (int k = 0; k < VESTIGE_GRAINS; k++) {
       int idx = (next_grain_ + k) % VESTIGE_GRAINS;
@@ -820,6 +1069,13 @@ class Vestige : public Module {
     float sprayf = spray_width;
     if (L < VESTIGE_SHORT_LEN) { float cap = (float)L * 0.125f; if (sprayf > cap) sprayf = cap; }
     float pos = posf + (VestigeRand() * 2.f - 1.f) * sprayf;
+    // Reverse (K2 CCW, loop modes only): the grain reads [pos, pos+glen] backward,
+    // so shift its window down by glen to make it START at the head. A fresh loop
+    // then plays from its tail backward, and a live direction flip through K2 noon
+    // is positionally continuous (forward grains also start at the head).
+    const PoolEngine& e = eng_[PoolOf(s)];   // this slot's own pool addressing
+    const bool rev = e.rev && !frozen && GuardReady(s);   // see ServiceMBFreeze
+    if (rev) pos -= (float)glen;
     size_t posi;
     if (frozen) {
       float hi = (float)L - (float)glen; if (hi < 0.f) hi = 0.f;
@@ -830,16 +1086,21 @@ class Vestige : public Module {
       posi = (size_t)pos;
     }
     const size_t wp  = ring_[s].GetWritePos();
-    const size_t cap = VESTIGE_VOICE_CAP;
+    const size_t cap = ring_[s].GetLength();   // this row's real length (loop 8 s+guard, freeze 400 ms+240)
     size_t delay = (wp + cap - posi) % cap;
     grain_src_[g]  = &ring_[s];
     grain_slot_[g] = s;
     float ov_comp = 2.f / VESTIGE_MB_OVERLAP;
     // First grain of a fresh loop starts (near-)instantly, softened toward freeze
-    // by k3_amt_ (0 at K3 CCW = instant). Without this the long CCW grains fade in
-    // over their full Hann rise = an audible slow attack on loop start.
-    float atk_scale = first_grain_[s] ? k3_amt_ : 1.f;
-    grains_[g].Trigger(ring_[s], delay, glen, false, 1.f, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
+    // by the pool's amt (0 on the loop side = instant, 1 on the freeze side).
+    // Without this the long loop grains fade in over their full Hann rise = an
+    // audible slow attack on loop start.
+    float atk_scale = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
+    grain_ver_[g] = 0;
+    // Reverse: same [posi, posi+glen] window as forward, read backward — so the
+    // wrap-guard coverage is identical. Every grain in a band shares glen, so the
+    // overlap-add stays coherent on the backward-walking head.
+    grains_[g].Trigger(ring_[s], delay, glen, rev, 1.f, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
     first_grain_[s] = false;
     if (coef) grains_[g].SetBandFilter(coef[0], coef[1], coef[2], coef[3], coef[4]);
     // coef == nullptr → 1-band full-range grain (no filter): the old-style freeze.
@@ -887,12 +1148,498 @@ class Vestige : public Module {
   // Recording lifecycle
   // -------------------------------------------------------------------------
   // Resume paused loops (fade back in from the current gain). No-op if playing.
+  // Active pool only: the pool SW1 is not on stays parked.
   void ResumeFromMute() {
     if (!muted_) return;
     muted_ = false;
-    for (int s = 0; s < VESTIGE_SLOTS; s++)
-      if (active_[s] && !(s < VESTIGE_VOICE_SLABS && dying_[s]))
+    for (int s = OwnLo(pool_); s < OwnHi(pool_); s++)
+      if (active_[s] && !dying_[s])
         SetFade(s, 1.f);   // don't resurrect dying voices
+  }
+
+  // FS2 tap: capture + playback on/off. Hold state is untouched.
+  //   ON : loops fade back in over K5 (if any were kept); auto capture resumes
+  //        unless held.
+  //   OFF: any in-flight capture is DROPPED (a commit would un-mute and swell a
+  //        new loop in while off), and every loop fades out over K5. If not
+  //        held, Controls() clears the buffers once those fade-outs finish.
+  void SetEngaged(bool on) {
+    if (on == engaged_) return;
+    engaged_ = on;
+    if (engaged_) {
+      auto_rearm_block_ = false;   // a fresh engage listens immediately
+      // Nothing kept on this side = no capture beat yet: LED1 flashes T from
+      // the engage itself until the first capture re-anchors it.
+      if (!PoolHasContent(pool_) && !recording_ && npend_ == 0) led_anchor_[pool_] = sample_clock_;
+      ResumeFromMute();
+      return;
+    }
+    // Off: no new capture, and the audio thread drops the one in flight and
+    // any capture still waiting for its grid point (IsrDrop) at its next sample.
+    cap_allow_ = false;
+    drop_req_  = true;
+    DropRecording();   // frip-side bookkeeping (archived); the voiced state is ISR-owned
+    muted_ = true;
+    // Active pool only: the other pool is already faded out / parked, and
+    // restarting its fade would only reset its phase.
+    for (int s = OwnLo(pool_); s < OwnHi(pool_); s++)
+      // Don't touch dying voices — resurrecting their fade would strand them
+      // active forever (they'd never hit the free condition).
+      if (active_[s] && !dying_[s])
+        SetFade(s, 0.f);
+  }
+
+  // Frippertronics (archived) capture bookkeeping; the voiced / freeze capture
+  // is dropped by the audio thread on drop_req_ (IsrDrop).
+  void DropRecording() {
+    if (fripp_mode_) recording_ = false;
+    rec_full_  = false;
+    commit_pending_ = false; pending_len_ = 0; overhang_left_ = 0;
+    silence_since_ = 0;
+  }
+
+  // -------------------------------------------------------------------------
+  // SW1 side switch: loop side (UP/MIDDLE) <-> freeze side (DOWN).
+  // The two sides are separate buffers and nothing crosses between them:
+  //   - an in-flight capture belongs to the side being left, so it is DROPPED
+  //     (committing it later would land a loop-side capture in the freeze pool
+  //     or vice versa). A note still sounding is picked up by the new side's
+  //     own auto capture on the next tick;
+  //   - the side being left fades out over K5 — the same fade FS2 off uses, so
+  //     the switch never clicks — and, once silent, is PARKED (not scheduled);
+  //   - once that fade has finished it is CLEARED unless hold is on (Controls,
+  //     state-derived). This is plan §4.2's rule for FS2 off applied to the
+  //     side you leave: only hold preserves a buffer. Held, it is kept and
+  //     fades back in when SW1 returns to it (if the effect is on);
+  //   - the side being entered plays only its OWN content: if it kept some
+  //     (held), that fades in over K5; otherwise it starts empty and fills from
+  //     its own auto capture.
+  // -------------------------------------------------------------------------
+  void SwitchPool(int to) {
+    if (to == pool_) return;
+    // Order matters (the audio thread can run between any two lines): stop new
+    // captures, request the drop (honoured before anything else at the ISR's
+    // next sample), fade the side being left — which also catches a capture the
+    // ISR activated just before the drop — then switch and retract the slot
+    // reserved on the old side (the ISR ignores it once pool_ has moved).
+    cap_allow_ = false;
+    drop_req_  = true;
+    DropRecording();
+    const int from = pool_;
+    for (int s = OwnLo(from); s < OwnHi(from); s++)
+      if (active_[s] && !dying_[s]) SetFade(s, 0.f);
+    pool_ = to;
+    arm_slot_ = -1;
+    if (!PoolHasContent(to)) led_anchor_[to] = sample_clock_;   // empty side: flash from the switch
+    if (engaged_) {
+      for (int s = OwnLo(to); s < OwnHi(to); s++) {
+        if (!active_[s] || dying_[s]) continue;
+        // Parked slots were not scheduled: fire their next grain promptly
+        // rather than after a stale countdown. The read heads kept running
+        // while parked (AdvanceParkedHeads), so the loop is still on its beat.
+        for (int b = 0; b < VESTIGE_MAX_BANDS; b++) mb_timer_[s][b] = 0;
+        timer_[s] = 0;
+        SetFade(s, 1.f);
+      }
+    }
+  }
+
+  // A parked slot (other side, faded out) emits no grains, but its read heads
+  // keep running exactly as ServiceMBFreeze would move them, so a held loop
+  // stays on its own beat while away — the same way a held loop keeps running
+  // silently while FS2 is off — and LED1's anchor for that side stays true.
+  void AdvanceParkedHeads(int s) {
+    const size_t L = loop_len_[s];
+    if (L < VESTIGE_GRAIN_MIN_LEN) return;
+    const PoolEngine& e = eng_[PoolOf(s)];
+    fwd_[s] += (e.rev && GuardReady(s)) ? -pitch_rate_s_ : pitch_rate_s_;
+    while (fwd_[s] >= (float)L) { fwd_[s] -= (float)L; pass_[s]++; }
+    while (fwd_[s] < 0.f)       { fwd_[s] += (float)L; pass_[s]--; }
+    const size_t gcap = e.frozen ? VESTIGE_GUARD_SAMPLES : SlotGuard(s, L);
+    const int row = e.nbands - 1;
+    for (int bi = 0; bi < e.nbands; bi++) {
+      size_t glen = (size_t)((float)VESTIGE_MB_GLEN[row][bi] * e.gscale);
+      if (glen > L) glen = L;
+      if (glen > gcap) glen = gcap;
+      if (glen < VESTIGE_GRAIN_MIN_LEN) glen = (L < VESTIGE_GRAIN_MIN_LEN) ? L : VESTIGE_GRAIN_MIN_LEN;
+      size_t maxscan = (L > glen + 1) ? (L - glen - 1) : 1;
+      size_t scanlen = VESTIGE_MB_SCAN[row][bi]; if (scanlen > maxscan) scanlen = maxscan; if (scanlen < 1) scanlen = 1;
+      mb_scan_[s][bi] += 1.f;
+      if (mb_scan_[s][bi] >= (float)scanlen) mb_scan_[s][bi] -= (float)scanlen;
+    }
+  }
+
+  // =========================================================================
+  // STAGE 2 — sample-accurate quantised capture (plan §4.3, §7 Stage 2).
+  //
+  // Division of labour. The CONTROL thread only sets policy: cap_allow_
+  // (engaged and not held), the slot the next capture records into
+  // (arm_slot_), and requests (end_req_, drop_req_). The AUDIO thread runs the
+  // whole capture lifecycle per sample, so every boundary is an exact sample:
+  //   start  — the sample the gate opens (env_ crosses the open threshold);
+  //            T is latched here (cap_T_), the LED anchor is set here.
+  //   end    — decided at an exact sample: the T ceiling, or 80 ms of silence
+  //            (raw length = where the silence began), or an end request.
+  //            Loop side: length = GridQuantize::Quantize(raw, cap_T_), the
+  //            NEAREST division of the capture's own T — up (recording goes on
+  //            to the boundary) or down (the material past it is cut).
+  //            Freeze side: unquantised (fixed 400 ms window, no grid).
+  //   play   — at the exact sample start + k*len (its own grid, k >= 1): the
+  //            head is placed so that sample outputs loop sample 0.
+  // A capture records STRAIGHT INTO the free voice slot reserved for it (no
+  // scratch, no copy), so the loop exists in place the moment its last sample
+  // is written and can start on the very next one. Behind the loop end the
+  // recorder writes the seam overhang already crossfaded into the head (same
+  // curve WriteGuard used), and a background job (IsrFillGuards) writes the
+  // head-continuation guard at up to VESTIGE_GUARD_FILL_PER_SAMPLE cells per
+  // sample. Forward grains first read the guard one full loop after playback
+  // starts, so the job (>= 1 cell/sample, started no later than the loop end)
+  // is always ahead of them. Reverse grains can read it at once, so a reverse
+  // loop only starts once its guard is ready — otherwise on its next grid point.
+  // =========================================================================
+
+  // Control thread: keep one free slot of the active side reserved for the
+  // next capture. Single producer / single consumer: this thread writes
+  // arm_slot_ only while it is -1; the audio thread only consumes it (sets -1).
+  void ReserveArmSlot() {
+    if (arm_slot_ >= 0 && PoolOf(arm_slot_) == pool_) return;
+    const int s = FindFreeSlot();
+    if (s >= 0) arm_slot_ = s;
+    // None free: every slot is sounding or fading. The voice cap bounds the
+    // unstolen voices, so one frees within a fade; the capture waits for it.
+  }
+
+  // Audio thread, once per sample (Process). x = this sample's input, now = its
+  // sample number.
+  void IsrCapture(float x, uint32_t now) {
+    if (drop_req_) { drop_req_ = false; IsrDrop(); }
+    const float close = auto_thresh_ * VESTIGE_AUTO_HYST;
+    if (!recording_) {
+      if (rearm_block_) {                         // after a ceiling stop: wait for the note to die
+        if (env_ < close) rearm_block_ = false;
+      } else {
+        const int a = arm_slot_;
+        if (cap_allow_ && a >= 0 && PoolOf(a) == pool_ && env_ > auto_thresh_)
+          IsrStart(a, now);
+      }
+    }
+    if (recording_) {
+      const int s = rec_slot_;
+      float* m = slab_[s];
+      const size_t r = rec_idx_;
+      const size_t E = cap_len_[s];
+      if (r < cap_[s]) {                          // bounded by the row, always
+        if (E > 0 && r >= E) {
+          // Seam overhang, crossfaded into the head as it is recorded:
+          // guard[E+k] = overhang*cos + head*sin (WriteGuard's curve).
+          const size_t k  = r - E;
+          const size_t xf = SeamXfadeLen(E);
+          if (k < xf) {
+            const float t = (float)(k + 1) / (float)(xf + 1);
+            m[r] = x * cosf(t * 1.5707963f) + m[k] * sinf(t * 1.5707963f);
+          }
+        } else {
+          m[r] = x;
+        }
+        rec_idx_ = r + 1;
+      }
+      if (E == 0) {
+        // End not decided yet: request, ceiling, or sustained silence.
+        if (end_req_) {
+          end_req_ = false;
+          IsrDecide(s, rec_idx_, now);
+        } else if (rec_idx_ >= cap_ceil_) {
+          // The note is usually still ringing when the ceiling cuts the
+          // capture: block re-arming until the envelope has fallen below the
+          // close threshold, so the next loop starts on a fresh onset.
+          rearm_block_ = true;
+          IsrDecide(s, rec_idx_, now);
+        } else if (env_ < close) {
+          if (sil_run_ == 0) sil_onset_ = r;      // this sample is the first silent one
+          if (++sil_run_ >= release_samples_)
+            IsrDecide(s, (PoolOf(s) == kPoolLoop) ? sil_onset_ : rec_idx_, now);
+        } else {
+          sil_run_ = 0;
+        }
+      }
+      if (cap_len_[s] > 0 && rec_idx_ >= rec_stop_) recording_ = false;   // body + overhang done
+    }
+    if (npend_ > 0) IsrActivations(now);
+    IsrFillGuards();
+  }
+
+  void IsrStart(int s, uint32_t now) {
+    KillSlotGrains(s);                  // zombie grains from the slot's last life (audio thread owns grains)
+    rec_slot_  = s;
+    rec_idx_   = 0;
+    cap_len_[s] = 0;
+    rec_stop_  = 0;
+    sil_run_   = 0; sil_onset_ = 0;
+    end_req_   = false;                 // a stale request must not end this capture
+    cap_start_[s] = now;
+    const bool loop = (PoolOf(s) == kPoolLoop);
+    cap_T_[s]  = loop ? period_ : 0;    // T latched at the START: K2 / a tap cannot move this grid
+    cap_ceil_  = loop ? period_ : max_loop_len_;
+    age_[s]    = ++age_counter_;        // capture order = voice age
+    led_anchor_[pool_] = now;           // the capture start is the "one" (LED1)
+    // Speculative guard for the ceiling: a capture that runs to T then starts
+    // on time even in reverse. Re-based if the end turns out shorter.
+    GuardJob(s, cap_ceil_);
+    recording_ = true;
+    arm_slot_  = -1;                    // consumed; the control thread reserves the next
+  }
+
+  // The end is known at sample `now`: raw = captured length before quantising.
+  void IsrDecide(int s, size_t raw, uint32_t now) {
+    const bool loop = (PoolOf(s) == kPoolLoop);
+    size_t Q;
+    if (loop) {
+      Q = GridQuantize::Quantize(raw, cap_T_[s]);           // nearest division, up or down
+    } else {
+      Q = raw;
+      if (Q < VESTIGE_MIN_LOOP_SAMPLES) Q = VESTIGE_MIN_LOOP_SAMPLES;
+      if (Q > cap_ceil_)                Q = cap_ceil_;
+    }
+    cap_raw_[s] = raw;
+    cap_len_[s] = Q;
+    float* m = slab_[s];
+    const size_t xf = SeamXfadeLen(Q);
+    // Rounded DOWN (or exactly on): part of the overhang is already recorded
+    // as plain audio — crossfade it into the head now. Anything recorded past
+    // Q + xf is truncated: never read as loop, overwritten by the guard.
+    const size_t have = (rec_idx_ > Q) ? (rec_idx_ - Q) : 0;
+    for (size_t k = 0; k < xf && k < have; k++) {
+      const float t = (float)(k + 1) / (float)(xf + 1);
+      m[Q + k] = m[Q + k] * cosf(t * 1.5707963f) + m[k] * sinf(t * 1.5707963f);
+    }
+    rec_stop_ = Q + xf;                 // rounded UP: recording continues to Q, then the overhang
+    if (gfill_base_[s] != Q) GuardJob(s, Q);
+    // First playback sample. The loop always plays ON its own grid (loop
+    // sample j sounds at start + k*Q + j); what varies is where it can enter:
+    //   - end known before start+Q (ceiling, early round-up): at start+Q, on
+    //     its "one";
+    //   - end decided after start+Q (every round-down, and a round-up closer
+    //     than the 80 ms release to its boundary): either join NOW, in phase
+    //     (VESTIGE_LATE_JOIN_IN_PHASE), or wait for the next "one".
+    // Freeze has no grid: it plays as soon as its fragment exists.
+    const uint32_t el = now - cap_start_[s];                // this sample is `el` after the start
+    uint32_t at;
+    if (!loop) {
+      at = (el >= Q) ? now : cap_start_[s] + (uint32_t)Q;
+    } else if (el <= Q) {
+      at = cap_start_[s] + (uint32_t)Q;                      // on time: the loop's "one"
+    } else if (VESTIGE_LATE_JOIN_IN_PHASE) {
+      at = now;                                              // late: join in phase, now
+    } else {
+      at = cap_start_[s] + (uint32_t)(((el + Q - 1) / Q) * Q);   // late: next "one"
+    }
+    act_at_[s] = at;
+    pend_[s]   = true;
+    npend_++;
+  }
+
+  void IsrActivations(uint32_t now) {
+    for (int s = PoolLo(pool_); s < PoolHi(pool_); s++) {
+      if (!pend_[s] || (int32_t)(now - act_at_[s]) < 0) continue;
+      const bool need_rev = eng_[PoolOf(s)].rev && !eng_[PoolOf(s)].frozen;
+      if (need_rev && !GuardReady(s)) {
+        // Reverse can read the guard at once; not written yet. In-phase joining
+        // retries every sample (the phase is taken at the moment it enters);
+        // the wait-for-the-one variant moves to the next grid point.
+        act_at_[s] += (PoolOf(s) == kPoolLoop && !VESTIGE_LATE_JOIN_IN_PHASE)
+                      ? (uint32_t)cap_len_[s] : 1u;
+        continue;
+      }
+      IsrActivate(s, now);
+    }
+  }
+
+  // Loop s starts playing at THIS sample. Everything the old control-thread
+  // commit did for its target, plus the retire / cap / gains that went with it,
+  // happens here in one place, at the same sample.
+  void IsrActivate(int s, uint32_t now) {
+    pend_[s] = false; npend_--;
+    const size_t L = cap_len_[s];
+    loop_len_[s] = L;
+    play_pos_[s] = 0;
+    timer_[s]    = 0;
+    for (int b = 0; b < VESTIGE_MAX_BANDS; b++) { mb_timer_[s][b] = 0; mb_scan_[s][b] = 0.f; }
+    // Phase on the capture's own grid: samples since its latest grid point
+    // (0 when it enters on its "one"). ServiceMBFreeze advances the head BEFORE
+    // emitting, later in this same sample, so place it one step back: forward
+    // then reads loop sample p NOW, reverse reads L-1-p (the tail at p = 0).
+    const bool     loop = (PoolOf(s) == kPoolLoop);
+    const uint32_t p    = loop ? (uint32_t)((now - cap_start_[s]) % (uint32_t)L) : 0u;
+    const bool     rev  = eng_[PoolOf(s)].rev && GuardReady(s);
+    fwd_[s] = rev ? (float)(L - p) : (float)p - pitch_rate_s_;
+    act_phase_[s] = p;
+    // K1 speed versions start with the loop: the half-speed timeline begins at
+    // this pass (forward: passes since the playback grid began at A+Q; reverse:
+    // odd, so half speed also enters from the tail). Double speed needs none.
+    pass_[s] = rev ? 1 : (int32_t)((now - cap_start_[s]) / (uint32_t)L) - 1;
+    for (int b = 0; b < VESTIGE_MAX_BANDS; b++) mb_timer_sp_[s][b] = 0;
+    ver_idle_[s][0] = ver_idle_[s][1] = true;   // whichever version emits first: instant attack
+    active_[s] = true; dying_[s] = false; stolen_[s] = false;
+    StartFadeIn(s);                     // swells in over K5; first grain instant
+    ResumeFromMute();                   // record END unpauses the retained loops (stage-0 behaviour)
+    while (CountLive() > target_voices_) {
+      const int o = OldestLive();
+      if (o < 0 || o == s) break;
+      StartDying(o);                    // single voice: the old loop fades out as this fades in
+    }
+    EnforceVoiceCap();
+    UpdateVoicedGains();
+    last_act_slot_ = s; last_act_at_ = now; act_count_++;   // diagnostics / host test
+  }
+
+  void IsrDrop() {
+    recording_   = false;
+    sil_run_     = 0;
+    rearm_block_ = false;               // a fresh engage / side listens immediately
+    for (int s = 0; s < VESTIGE_SLOTS; s++) {
+      if (pend_[s]) { pend_[s] = false; cap_len_[s] = 0; }
+    }
+    npend_ = 0;
+  }
+
+  // Head-continuation guard behind a loop of length L, written in the
+  // background: cells L+k = head[k % L] for k in [xf, SlotGuard) — exactly
+  // what WriteGuard wrote. Cells [L, L+xf) are the crossfaded overhang.
+  void GuardJob(int s, size_t L) {
+    const size_t xf = SeamXfadeLen(L);
+    gfill_base_[s] = L;
+    gfill_k_[s]    = xf;
+    gfill_src_[s]  = xf % L;
+    gfill_end_[s]  = SlotGuard(s, L);
+    // Reads reach at most L + glen + 1 with glen <= L: guard cells < L + 2
+    // are what a grain can touch (the rest keeps parity with WriteGuard).
+    gready_[s]     = (L + 2 < gfill_end_[s]) ? L + 2 : gfill_end_[s];
+    gfill_idle_    = false;
+  }
+  bool GuardReady(int s) const { return gfill_k_[s] >= gready_[s]; }
+  void IsrFillGuards() {
+    if (gfill_idle_) return;                        // no job anywhere: cost = one branch
+    int budget = (int)VESTIGE_GUARD_FILL_PER_SAMPLE;
+    bool any = false;
+    for (int s = 0; s < VESTIGE_SLOTS && budget > 0; s++) {
+      if (gfill_k_[s] >= gfill_end_[s]) continue;
+      any = true;
+      const bool rec_here = recording_ && s == rec_slot_;
+      if (!(active_[s] || pend_[s] || rec_here)) { gfill_k_[s] = gfill_end_[s]; continue; }  // slot left its life: stop
+      const size_t L = gfill_base_[s];
+      // Source must be recorded (and final: the body below L never changes).
+      const size_t avail = rec_here ? ((rec_idx_ < L) ? rec_idx_ : L) : L;
+      float* m = slab_[s];
+      while (budget > 0 && gfill_k_[s] < gfill_end_[s] && gfill_src_[s] < avail) {
+        m[L + gfill_k_[s]] = m[gfill_src_[s]];
+        gfill_k_[s]++;
+        if (++gfill_src_[s] >= L) gfill_src_[s] = 0;
+        budget--;
+      }
+    }
+    if (!any) gfill_idle_ = true;
+  }
+
+  // ---- T: master period ----------------------------------------------------
+  // K2 magnitude -> T: log taper, noon dead zone = T_MIN, either end = T_MAX.
+  static size_t KnobPeriod(float k2) {
+    const float c = k2 - 0.5f;                        // [-0.5, +0.5]
+    float mag = (fabsf(c) - VESTIGE_K2_DEADZONE) / (0.5f - VESTIGE_K2_DEADZONE);
+    if (mag < 0.f) mag = 0.f;
+    if (mag > 1.f) mag = 1.f;
+    const float lo = (float)VESTIGE_T_MIN_SAMPLES;
+    const float hi = (float)VESTIGE_T_MAX_SAMPLES;
+    size_t t = (size_t)(lo * powf(hi / lo, mag));
+    if (t < VESTIGE_T_MIN_SAMPLES) t = VESTIGE_T_MIN_SAMPLES;
+    if (t > VESTIGE_T_MAX_SAMPLES) t = VESTIGE_T_MAX_SAMPLES;
+    return t;
+  }
+
+  // K2 / FS1 arbitration (sprawl's, exactly — see sprawl.h Controls): the last
+  // gesture wins. FS1 is a DEDICATED tap (no hold function), but the press is
+  // still measured the sprawl way: the DOWN-press is the timing reference (so
+  // tempo accuracy does not depend on the release), timed here from our own
+  // rising-edge timestamp — NOT FootswitchEvent::held_ms, which is 0 whenever
+  // the switch is up and therefore always 0 on the falling edge.
+  void UpdatePeriod(float k2_raw, float k2, const FootswitchEvent& f1) {
+    if (!k2_seeded_) { k2_last_ = k2_raw; k2_seeded_ = true; }
+    if (fabsf(k2_raw - k2_last_) > VESTIGE_K2_MOVE_EPS) {
+      k2_last_ = k2_raw;
+      tap_period_ = 0;                                // knob wins: drop the tapped T
+    }
+    const uint32_t now = daisy::System::GetNow();
+    if (f1.rising) f1_down_ms_ = now;
+    if (f1.falling) {
+      const uint32_t press = now - f1_down_ms_;
+      if (press < VESTIGE_TAP_RELEASE_MS) {
+        if (tap_prev_ms_ != 0) {
+          const uint32_t iv = f1_down_ms_ - tap_prev_ms_;
+          if (iv >= VESTIGE_T_MIN_MS && iv <= VESTIGE_T_MAX_MS) {
+            size_t t = (size_t)((float)iv * 0.001f * sr_ + 0.5f);
+            if (t < VESTIGE_T_MIN_SAMPLES) t = VESTIGE_T_MIN_SAMPLES;
+            if (t > VESTIGE_T_MAX_SAMPLES) t = VESTIGE_T_MAX_SAMPLES;
+            tap_period_ = t;
+            // Nothing captured on this side yet = no capture beat to show, so
+            // LED1 flashes from the tap itself (the down-press that closed the
+            // interval). Once a capture exists, a tap changes only the period:
+            // the beat stays on the capture's own start.
+            if (!PoolHasContent(pool_) && !recording_ && npend_ == 0)
+              led_anchor_[pool_] = sample_clock_ - (uint32_t)((float)press * 0.001f * sr_);
+          }
+        }
+        tap_prev_ms_ = f1_down_ms_;
+      }
+    }
+    period_ = (tap_period_ > 0) ? tap_period_ : KnobPeriod(k2);
+  }
+
+  // Slot ranges. OWN = every slot backed by that side's slab (incl. the
+  // archived frip slot and the record scratch, which are never audible voices).
+  // PLAY = the pool's voice slots (what voice management and the scheduler use).
+  static int PoolOf(int s) { return (s >= VESTIGE_FREEZE_SLOT0) ? kPoolFreeze : kPoolLoop; }
+  static int OwnLo(int p)  { return (p == kPoolFreeze) ? VESTIGE_FREEZE_SLOT0 : 0; }
+  static int OwnHi(int p)  { return (p == kPoolFreeze) ? VESTIGE_SLOTS : VESTIGE_LOOP_SIDE_SLOTS; }
+  static int PoolLo(int p) { return (p == kPoolFreeze) ? VESTIGE_FREEZE_SLOT0 : 0; }
+  static int PoolHi(int p) { return (p == kPoolFreeze) ? VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS
+                                                       : VESTIGE_VOICE_SLABS; }
+  static int PoolRec(int p) { return (p == kPoolFreeze) ? VESTIGE_FREEZE_REC_SLOT : VESTIGE_REC_SLOT; }
+  // Head-continuation guard actually available behind a loop of length L in
+  // slot s (loop rows: always VESTIGE_GUARD_SAMPLES; freeze rows: what is left).
+  size_t SlotGuard(int s, size_t L) const {
+    const size_t room = (cap_[s] > L) ? (cap_[s] - L) : 0;
+    return (room < VESTIGE_GUARD_SAMPLES) ? room : VESTIGE_GUARD_SAMPLES;
+  }
+  // A slot faded to silence (its fade-out has finished). In the pool SW1 is
+  // not on, such a slot is parked: kept, but not scheduled.
+  bool Parked(int s) const {
+    return fade_target_[s] < 0.5f && (fade_phase_[s] >= 1.f || fade_gain_[s] == 0.f);
+  }
+  bool PoolHasContent(int p) const {
+    for (int s = OwnLo(p); s < OwnHi(p); s++) if (active_[s]) return true;
+    return false;
+  }
+  bool PoolFadesOutDone(int p) const {
+    for (int s = OwnLo(p); s < OwnHi(p); s++) {
+      if (!active_[s]) continue;
+      if (fade_target_[s] > 0.5f) return false;
+      if (fade_phase_[s] < 1.f && fade_gain_[s] != 0.f) return false;
+    }
+    return true;
+  }
+
+  bool HasContent() const {
+    for (int s = 0; s < VESTIGE_SLOTS; s++) if (active_[s]) return true;
+    return false;
+  }
+  // Every active slot is fading out and has finished (or is already silent).
+  // fade_* are written in the audio ISR; a stale read only delays this a tick.
+  bool FadesOutDone() const {
+    for (int s = 0; s < VESTIGE_SLOTS; s++) {
+      if (!active_[s]) continue;
+      if (fade_target_[s] > 0.5f) return false;
+      if (fade_phase_[s] < 1.f && fade_gain_[s] != 0.f) return false;
+    }
+    return true;
   }
 
   void StartRecording() {
@@ -909,12 +1656,7 @@ class Vestige : public Module {
         frip_in_acc_ = 0.f; frip_in_cnt_ = 0; frip_in_prev_ = 0.f;
       }
     } else {
-      // Record into a dedicated scratch slot so recording never evicts/mutes a
-      // playing voice. Target slot is chosen at commit time.
-      rec_slot_ = VESTIGE_REC_SLOT;
-      rec_idx_  = 0;
-      active_[rec_slot_]   = false;  // scratch slot is never itself audible
-      loop_len_[rec_slot_] = 0;
+      return;   // voiced / freeze captures start in the audio thread (IsrStart)
     }
     recording_ = true;
   }
@@ -948,14 +1690,7 @@ class Vestige : public Module {
       CommitRecording();                                // first pass: nothing to fade
       return;
     }
-    size_t L = rec_idx_;
-    if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
-    if (L > max_loop_len_) L = max_loop_len_;
-    pending_len_ = L;
-    size_t target = L + SeamXfadeLen(L);              // record up to here
-    if (target > VESTIGE_VOICE_CAP) target = VESTIGE_VOICE_CAP;
-    if (rec_idx_ >= target) commit_pending_ = true;   // already have enough
-    else overhang_left_ = (int)(target - rec_idx_);
+    // Voiced / freeze captures end in the audio thread (end_req_ -> IsrDecide).
   }
 
   void CommitRecording() {
@@ -987,50 +1722,8 @@ class Vestige : public Module {
       return;
     }
 
-    // ---- Voiced path: choose target NOW, copy scratch → target -------------
-    size_t L = (pending_len_ > 0) ? pending_len_ : rec_idx_;
-    if (L < VESTIGE_MIN_LOOP_SAMPLES) L = VESTIGE_MIN_LOOP_SAMPLES;
-    if (L > max_loop_len_) L = max_loop_len_;
-    // Copy the loop PLUS the recorded overhang so WriteGuard can crossfade it.
-    size_t copy = L + SeamXfadeLen(L);
-    if (copy > VESTIGE_VOICE_CAP) copy = VESTIGE_VOICE_CAP;
-
-    // Prefer a FREE voiced slot so the outgoing voice can fade out in its OWN
-    // buffer (no slab reuse under in-flight grains). Single-voice mode always
-    // has spares, so this is where the crossfade lives. Only a full pool (6
-    // active) forces reuse of the oldest slab (declick handled in Commit B).
-    int target = FindFreeSlot();
-    if (target < 0) { target = EvictOldest(); KillSlotGrains(target); }  // last resort
-
-    memcpy(vestige_slab[target], vestige_slab[VESTIGE_REC_SLOT], copy * sizeof(float));
-    WriteGuard(target, L);      // crossfades the overhang into the loop head
-    loop_len_[target] = L;
-    play_pos_[target] = 0;
-    fwd_[target]      = 0.f;     // unified engine: forward head starts at the loop head
-    timer_[target]    = 0;      // fire the first grain immediately
-    // Reset the unified engine's per-band scan/timers for this (possibly reused)
-    // slot. A stale mb_timer_ delays the first band grain by up to a full hop while
-    // fwd_ keeps advancing — so playback would start mid-buffer, not at the head.
-    for (int b = 0; b < VESTIGE_MAX_BANDS; b++) { mb_timer_[target][b] = 0; mb_scan_[target][b] = 0.f; }
-    active_[target]   = true;
-    dying_[target]    = false;
-    age_[target]      = ++age_counter_;
-    StartFadeIn(target);        // new loop swells in over K5
-
-    // Retire the oldest live voice(s) beyond the target — graceful fade-out over
-    // K5 (frees when silent). For single-voice this IS the crossfade: the old
-    // loop fades out while the new swells in. With K5 CCW both are instant.
-    while (CountLive() > target_voices_) {
-      int o = OldestLive();
-      if (o < 0 || o == target) break;
-      StartDying(o);
-    }
-    // Bound total granulating voices to the CPU/grain ceiling: steal (fast-
-    // release) the oldest tails beyond it. This is what keeps a long fade + fast
-    // captures from piling up ~9 voices and overrunning the audio block.
-    EnforceVoiceCap();
-    pending_len_ = 0; overhang_left_ = 0;
-    UpdateVoicedGains();
+    // Voiced / freeze captures are activated in the audio thread (IsrActivate):
+    // recorded straight into their slot, no scratch copy.
   }
 
   // Begin a fade-in for a slot: silent now, swelling to unity over K5 time.
@@ -1073,54 +1766,36 @@ class Vestige : public Module {
   }
   void RefreshFrippGuard(size_t L) {
     if (L == 0) return;
-    float* m = vestige_slab[VESTIGE_FRIP_SLOT];
+    float* m = slab_[VESTIGE_FRIP_SLOT];
     size_t xf = SeamXfadeLen(L);
     FrippSeamXfade(m, L, xf);
     for (size_t k = xf; k < VESTIGE_GUARD_SAMPLES; k++) m[L + k] = m[k % L];
   }
 
-  void WriteGuard(int s, size_t L) {
-    float* m = vestige_slab[s];
-    size_t xf = SeamXfadeLen(L);
-    for (size_t k = 0; k < xf; k++) {
-      float ov = m[L + k];
-      float hd = m[k];
-      float t  = (float)(k + 1) / (float)(xf + 1);
-      m[L + k] = ov * cosf(t * 1.5707963f) + hd * sinf(t * 1.5707963f);
-    }
-    for (size_t k = xf; k < VESTIGE_GUARD_SAMPLES; k++) m[L + k] = m[k % L];
-  }
-
-  // Pick a voiced slot for a new capture: a free slot if under target, else
-  // evict the oldest (FIFO) and reuse it.
-  int EvictOldest() {
-    int oldest = -1;
-    uint32_t best = 0xFFFFFFFFu;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) {
-      if (active_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
-    }
-    if (oldest < 0) oldest = 0;
-    active_[oldest]   = false;
-    loop_len_[oldest] = 0;
-    return oldest;
-  }
-
+  // Voice management works on the ACTIVE pool's voice slots only
+  // [PoolLo(pool_), PoolHi(pool_)): a capture is committed into the side it was
+  // recorded on, and the side SW1 is not on is never re-targeted.
+  //
   // Reduce active voiced count to target, oldest-first (live K1 control).
   // Live = active and not fading out. Dying voices still sound (fading) but no
   // longer count toward the target or the gain normalization.
   int CountLive() const {
     int n = 0;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (active_[v] && !dying_[v]) n++;
+    for (int v = PoolLo(pool_); v < PoolHi(pool_); v++) if (active_[v] && !dying_[v]) n++;
     return n;
   }
   int OldestLive() const {
     int oldest = -1; uint32_t best = 0xFFFFFFFFu;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++)
+    for (int v = PoolLo(pool_); v < PoolHi(pool_); v++)
       if (active_[v] && !dying_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
     return oldest;
   }
+  // Free = not sounding, not fading, not waiting for its grid point, not being
+  // recorded into and not already reserved for the next capture.
   int FindFreeSlot() const {
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (!active_[v] && !dying_[v]) return v;
+    const int rs = recording_ ? rec_slot_ : -1;
+    for (int v = PoolLo(pool_); v < PoolHi(pool_); v++)
+      if (!active_[v] && !dying_[v] && !pend_[v] && v != rs && v != arm_slot_) return v;
     return -1;
   }
   // Retire a voice gracefully: keep it sounding but fade it out over K5, then
@@ -1134,15 +1809,28 @@ class Vestige : public Module {
   // Concurrency cap: count/find the oldest voice that is NOT already being
   // fast-released. Total granulating voices are bounded to VESTIGE_MAX_VOICES
   // (the pre-regression CPU/grain ceiling); the excess oldest gets stolen.
+  // Counted across BOTH pools, because the side SW1 just left is still
+  // granulating its fade-out tail — exactly as it did when both sides shared
+  // one pool. Two exemptions: a parked (silent, unscheduled) slot costs nothing,
+  // and a held slot on the other side must not be stolen — stealing frees it,
+  // and hold is the promise that it survives. Held tails are therefore exempt
+  // (bounded by the grain cap and by their K5 fade).
+  bool CapCounted(int s) const {
+    if (!active_[s] || stolen_[s]) return false;
+    if (PoolOf(s) == pool_) return true;
+    return !held_ && !Parked(s);
+  }
   int CountUnstolen() const {
     int n = 0;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (active_[v] && !stolen_[v]) n++;
+    for (int p = 0; p < 2; p++)
+      for (int v = PoolLo(p); v < PoolHi(p); v++) if (CapCounted(v)) n++;
     return n;
   }
   int OldestUnstolen() const {
     int oldest = -1; uint32_t best = 0xFFFFFFFFu;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++)
-      if (active_[v] && !stolen_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
+    for (int p = 0; p < 2; p++)
+      for (int v = PoolLo(p); v < PoolHi(p); v++)
+        if (CapCounted(v) && age_[v] < best) { best = age_[v]; oldest = v; }
     return oldest;
   }
   // Steal a voice: fast-release it (declicked) so its slab frees quickly.
@@ -1175,21 +1863,24 @@ class Vestige : public Module {
 
   // Age-ramped fade over the FIFO stack. rank r (0 = newest); linear gain
   // (N-r)/N, normalised 1/sqrt(N) for the stacking law. Fixed slope (K5 now
-  // drives the loop fade envelope, not this age-fade).
+  // drives the loop fade envelope, not this age-fade). Active pool only: the
+  // other pool's gains are frozen with it (gain_ is baked into each grain at
+  // trigger, and a parked pool triggers none).
   void UpdateVoicedGains() {
     // Level tracks the ACTUAL active-voice count. Age-ramp weights (newest = 1,
     // oldest = 1-d) are power-normalized as a SET so the total power equals a
     // single voice → the loop stays equally loud at any voice count (single is
     // no longer the loudest), while newer voices still sit above older ones.
+    const int lo = PoolLo(pool_), hi = PoolHi(pool_);
     int n = 0;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) if (active_[v] && !dying_[v]) n++;
+    for (int v = lo; v < hi; v++) if (active_[v] && !dying_[v]) n++;
     const float d = VESTIGE_AGE_FADE_DEPTH;
     float sumsq = 0.f;
-    for (int v = 0; v < VESTIGE_VOICE_SLABS; v++) {
+    for (int v = lo; v < hi; v++) {
       if (!active_[v]) { gain_[v] = 0.f; continue; }
       if (dying_[v]) continue;       // fading out: keep its frozen gain_
       int r = 0;   // rank among live voices: 0 = newest
-      for (int w = 0; w < VESTIGE_VOICE_SLABS; w++)
+      for (int w = lo; w < hi; w++)
         if (active_[w] && !dying_[w] && age_[w] > age_[v]) r++;
       float wr = (n > 1) ? (1.f - d * ((float)r / (float)(n - 1))) : 1.f;
       if (wr < 0.f) wr = 0.f;
@@ -1198,7 +1889,7 @@ class Vestige : public Module {
     }
     if (sumsq > 1e-9f) {
       const float norm = 1.f / sqrtf(sumsq);
-      for (int v = 0; v < VESTIGE_VOICE_SLABS; v++)
+      for (int v = lo; v < hi; v++)
         if (active_[v] && !dying_[v]) gain_[v] *= norm;
     }
   }
@@ -1263,46 +1954,75 @@ class Vestige : public Module {
       fade_gain_[s]   = 0.f;   // silence immediately (no fade)
       fade_target_[s] = 0.f;
       fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
-      if (s < VESTIGE_VOICE_SLABS) { dying_[s] = false; stolen_[s] = false; }
-      for (int b = 0; b < VESTIGE_MAX_BANDS; b++) mb_timer_[s][b] = 0;   // re-freeze fires promptly
+      dying_[s] = false; stolen_[s] = false;
+      for (int b = 0; b < VESTIGE_MAX_BANDS; b++) { mb_timer_[s][b] = 0; mb_timer_sp_[s][b] = 0; }   // re-freeze fires promptly
     }
     for (int g = 0; g < VESTIGE_GRAINS; g++) grains_[g] = GrainVoice{};
     frip_len_ = 0;
     frip_head_ = 0.f; frip_rec_ = 0.f;
     muted_    = false;
-    // NB: auto_armed_ is intentionally preserved — clearing the loop should not
-    // disarm continuous-auto if it was armed.
+    // NB: engaged_ / held_ are intentionally preserved — clearing is a buffer
+    // operation, not a transport one (the caller re-asserts muted_).
+  }
+
+  // Clear ONE side (the one SW1 is not on, once its fade-out has finished).
+  // Leaves the active side, the transport and any in-flight capture alone.
+  void ClearPool(int p) {
+    const int lo = OwnLo(p), hi = OwnHi(p);
+    for (int s = lo; s < hi; s++) {
+      if (s == rec_slot_ && recording_) continue;   // never the active scratch (defensive)
+      active_[s]   = false;
+      loop_len_[s] = 0;
+      play_pos_[s] = 0;
+      timer_[s]    = 0;
+      gain_[s]     = 0.f;
+      fade_gain_[s]   = 0.f;
+      fade_target_[s] = 0.f;
+      fade_phase_[s] = 0.f; fade_from_[s] = 0.f;
+      dying_[s] = false; stolen_[s] = false;
+      for (int b = 0; b < VESTIGE_MAX_BANDS; b++) { mb_timer_[s][b] = 0; mb_timer_sp_[s][b] = 0; }
+    }
+    for (int g = 0; g < VESTIGE_GRAINS; g++)
+      if (grain_slot_[g] >= lo && grain_slot_[g] < hi) grains_[g] = GrainVoice{};
+    if (p == kPoolLoop) { frip_len_ = 0; frip_head_ = 0.f; frip_rec_ = 0.f; }
   }
 
   // -------------------------------------------------------------------------
-  // LED mapping (single-colour, blink states). Liberties taken — see report.
-  //   led1 (PLAY/STOP): solid while playing · slow-blink while muted/paused · off
-  //   led2 (RECORD):    solid while recording · fast-blink while auto-armed · off
-  //   clear: both fast-blink together for a moment.
+  // LED mapping (single-colour). Stage 1:
+  //   led1 (CLOCK):  while engaged, one 40 ms flash per T, anchored to this
+  //                   side's most recent capture start · off when off
+  //   led2 (CAPTURE/HOLD): solid while a capture is recording · slow-blink while
+  //                   the buffer is held · off otherwise
+  //   playing = 1 flashing / 2 off (on while capturing) · held-playing = 1
+  //   flashing / 2 blink · held-stopped = 1 off / 2 blink · stopped = both off
+  // (flash_ is kept but no longer set: the FS1 clear-confirm flash went with FS1.)
   // -------------------------------------------------------------------------
-  void UpdateLeds(daisy::Led& led1, daisy::Led& led2, bool auto_mode) {
+  void UpdateLeds(daisy::Led& led1, daisy::Led& led2) {
     const bool slow = ((blink_ / VESTIGE_BLINK_SLOW) & 1) != 0;
     const bool fast = ((blink_ / VESTIGE_BLINK_FAST) & 1) != 0;
 
-    if (flash_ > 0) {   // clear-confirm flash overrides
+    if (flash_ > 0) {   // confirm flash overrides (currently unused)
       flash_--;
       float f = fast ? 1.f : 0.f;
       led1.Set(f); led2.Set(f);
       return;
     }
 
-    bool has_content = false;
-    for (int s = 0; s < VESTIGE_SLOTS; s++) if (active_[s]) has_content = true;
+    // LED1 = the clock: one flash per T, anchored to this side's most recent
+    // capture start (the current "one"), never free-running. Only while the
+    // effect is on, so off still reads as off.
+    if (engaged_ && period_ > 0) {
+      const uint32_t el    = sample_clock_ - led_anchor_[pool_];
+      const uint32_t ph    = el % (uint32_t)period_;
+      const uint32_t width = (uint32_t)((float)VESTIGE_LED1_FLASH_MS * 0.001f * sr_);
+      led1.Set(ph < width ? 1.f : 0.f);
+    } else {
+      led1.Set(0.f);
+    }
 
-    // led1 — playback/stop status (correlates with FS1 = stop)
-    if (muted_ && has_content) led1.Set(slow ? 1.f : 0.f);
-    else if (has_content)      led1.Set(1.f);
-    else                       led1.Set(0.f);
-
-    // led2 — record status (correlates with FS2 = engage/record)
-    if (recording_)            led2.Set(1.f);
-    else if (auto_mode && auto_armed_) led2.Set(fast ? 1.f : 0.f);
-    else                       led2.Set(0.f);
+    if (recording_)  led2.Set(1.f);
+    else if (held_)  led2.Set(slow ? 1.f : 0.f);
+    else             led2.Set(0.f);
   }
 
   // -------------------------------------------------------------------------
@@ -1315,6 +2035,8 @@ class Vestige : public Module {
   const RingBuffer* grain_src_[VESTIGE_GRAINS];
   int              grain_slot_[VESTIGE_GRAINS] = {0};  // which slot emitted grain g
   int              next_grain_ = 0;
+  uint8_t          grain_ver_[VESTIGE_GRAINS] = {0};  // 0 = clean, 1 = K1 speed version
+  uint32_t         grain_cap_drops_ = 0;              // grains refused by VESTIGE_MB_GRAIN_CAP (diag)
 
   // Multiband granular freeze: per-slot per-band scan pointer + scheduler timer, and
   // the crossover filterbank indexed [band count-1][band]. Per-band grain length /
@@ -1322,6 +2044,18 @@ class Vestige : public Module {
   // (VESTIGE_MB_FREEZE.)
   float  mb_scan_[VESTIGE_SLOTS][VESTIGE_MAX_BANDS]  = {};
   int    mb_timer_[VESTIGE_SLOTS][VESTIGE_MAX_BANDS] = {};
+  int    mb_timer_sp_[VESTIGE_SLOTS][VESTIGE_MAX_BANDS] = {};  // K1 speed version's band timers
+  int32_t pass_[VESTIGE_SLOTS] = {0};                 // clean-head wraps (half-speed parity)
+  bool   ver_idle_[VESTIGE_SLOTS][2] = {};           // version emitted nothing last time (restart = instant attack)
+  // K1 speed crossfade. Control -> ISR: side (-1 half / 0 / +1 double), amount.
+  volatile int   k1_side_ = 0;
+  volatile float k1_x_    = 0.f;
+  // ISR-owned: smoothed amount, the speed version's side / rate, the gain pair.
+  float  sp_x_    = 0.f;
+  int    sp_side_ = 0;
+  float  sp_rate_ = 2.f;
+  float  g_c_     = 1.f;   // clean version gain   (cos)
+  float  g_sp_    = 0.f;   // speed version gain   (sin)
   float  mb_bank_coef_[VESTIGE_MAX_BANDS][VESTIGE_MAX_BANDS][5] = {};  // [N-1][band] RBJ coeffs
   int    mb_nbands_ = 3;                        // adaptive: min(voice budget, K3 chaos ramp)
 
@@ -1333,14 +2067,35 @@ class Vestige : public Module {
   int    k3_bands_chaos_ = 1;     // band count the chaos ramp wants (∩ voice budget)
   float  fwd_[VESTIGE_SLOTS] = {0.f};   // per-slot forward read head (voiced; frip uses frip_head_)
 
-  // Per-slot loop state (slots 0..5 voiced, slot 6 frippertronics)
+  // Two pools (sides), selected by SW1. See SwitchPool().
+  enum Pool { kPoolLoop = 0, kPoolFreeze = 1 };
+  int pool_ = kPoolLoop;             // the side SW1 is on (Controls writes; ISR reads)
+  // Engine addressing per pool, published by Controls for the active pool and
+  // frozen for the other, so a tail keeps sounding like the side it came from.
+  struct PoolEngine {
+    float focus;     // k3_focus_
+    float gscale;    // k3_gscale_
+    float amt;       // k3_amt_ (first-grain attack softening)
+    float pos_frac;  // freeze_pos_frac_
+    bool  frozen;    // k3_frozen_
+    bool  rev;       // rev_play_ (K2 CCW half; loop side only)
+    int   nbands;    // mb_nbands_ (1..VESTIGE_MAX_BANDS)
+  };
+  PoolEngine eng_[2];
+
+  // Per-slot loop state. Slots [0, VESTIGE_VOICE_SLABS) voiced, then the
+  // archived frippertronics slot and the loop record scratch (all loop side,
+  // vestige_slab); then the freeze pool + its record scratch (freeze side,
+  // vestige_freeze_slab). slab_/cap_ = the row each slot owns and its length.
+  float*     slab_[VESTIGE_SLOTS] = {nullptr};
+  size_t     cap_[VESTIGE_SLOTS]  = {0};
   RingBuffer ring_[VESTIGE_SLOTS];
   size_t     loop_len_[VESTIGE_SLOTS] = {0};
   size_t     play_pos_[VESTIGE_SLOTS] = {0};
   int        timer_[VESTIGE_SLOTS]    = {0};
   bool       active_[VESTIGE_SLOTS]   = {false};
-  bool       dying_[VESTIGE_VOICE_SLABS]  = {false}; // voiced slot fading out → free when silent
-  bool       stolen_[VESTIGE_VOICE_SLABS] = {false}; // dying voice being fast-released (voice-steal)
+  bool       dying_[VESTIGE_SLOTS]  = {false}; // voice slot fading out → free when silent
+  bool       stolen_[VESTIGE_SLOTS] = {false}; // dying voice being fast-released (voice-steal)
   float      steal_inc_ = 1.f;                        // fast-release phase step for stolen voices
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
@@ -1354,9 +2109,12 @@ class Vestige : public Module {
   float      fade_from_[VESTIGE_SLOTS]  = {0.f};   // gain the current fade started at
   float      atk_inc_ = 1.f;                       // attack phase step (1/(atk_s*sr))
   float      rel_inc_ = 1.f;                       // release phase step (1/(rel_s*sr))
-  // Output routing (K6 looper volume + SW2 dry gate) — vestige owns its mix.
+  // ARCHIVED — output routing (K6 looper volume + SW2 dry gate). Unused since
+  // vestige stopped owning its output; kept for the revival path (see Process).
   float      k6_vol_    = 1.f, k6_vol_s_   = 1.f;  // looper volume target / smoothed
   float      dry_gain_  = 1.f, dry_gain_s_ = 1.f;  // dry (clean) gain target / smoothed
+  // K2 CCW half: reverse loop playback (loop modes only).
+  bool       rev_play_  = false;
 
   // Cached K3 grain-macro params (Controls → Process)
   size_t grain_len_    = VESTIGE_CCW_GRAIN_LEN;
@@ -1370,8 +2128,12 @@ class Vestige : public Module {
   float  freeze_pos_frac_ = 0.f;  // freeze point: 0 = start (noon) → 1 = end (CW)
   float  k3_amt_          = 0.f;  // raw K3 (first-grain attack softening toward freeze)
 
-  // Topology
+  // Topology. target_voices_ comes from SW1 (1 / 6 / 1).
   int  target_voices_ = 1;
+  int  sw1_prev_      = -1;     // SW1 edge detect (close a capture on mode change)
+  // ARCHIVED — frippertronics: never set true since rework stage 0, so all the
+  // frip state below and every `if (fripp_mode_)` branch is dead but compiled.
+  // Revive via the K1 block in Controls() (see the ARCHIVED note there).
   bool fripp_mode_    = false;
   size_t frip_len_    = 0;
   float  frip_decay_  = 1.f;
@@ -1419,14 +2181,62 @@ class Vestige : public Module {
   size_t pending_len_   = 0;
   int    overhang_left_ = 0;
 
-  // Transport / capture
+  // Transport / capture (FS2). engaged_ = capture + playback on (off at power-up,
+  // as before: nothing captured until FS2). held_ = buffer hold (no resampling,
+  // buffers survive switching off). hold_latched_ = the hold fired this press.
   bool     muted_        = false;
-  bool     clear_latched_= false;
-  bool     auto_armed_   = false;
+  bool     engaged_      = false;
+  bool     held_         = false;
+  bool     hold_latched_ = false;
   int      flash_        = 0;
   uint32_t silence_since_= 0;
   float    auto_thresh_  = VESTIGE_AUTO_THRESH_MIN;
   float    env_          = 0.f;
 
   int blink_ = 0;
+
+  // Stage-2 capture machine (see IsrCapture). ISR-owned unless noted.
+  volatile bool cap_allow_ = false;    // control -> ISR: a capture may start
+  volatile bool drop_req_  = false;    // control -> ISR: drop in-flight + pending captures
+  volatile bool end_req_   = false;    // control -> ISR: end the capture at the next sample
+  volatile int  arm_slot_  = -1;       // control reserves (when -1), ISR consumes
+  bool     rearm_block_ = false;       // ceiling stop: hold off until env falls
+  size_t   rec_stop_    = 0;           // record up to here (loop end + overhang); 0 = end unknown
+  size_t   cap_ceil_    = 0;           // this capture's ceiling (latched T, or the freeze window)
+  uint32_t sil_run_     = 0;           // consecutive below-close samples
+  size_t   sil_onset_   = 0;           // index where the current silence began
+  uint32_t release_samples_ = (uint32_t)(VESTIGE_AUTO_RELEASE_MS * 48);  // set from sr_ in Init
+  uint32_t cap_start_[VESTIGE_SLOTS] = {0};   // capture start sample = its grid's "one"
+  size_t   cap_T_[VESTIGE_SLOTS]     = {0};   // T latched at that start (loop side)
+  size_t   cap_raw_[VESTIGE_SLOTS]   = {0};   // raw length before quantising (diagnostics)
+  size_t   cap_len_[VESTIGE_SLOTS]   = {0};   // decided (quantised) length; 0 = not yet
+  bool     pend_[VESTIGE_SLOTS]      = {false}; // decided, waiting for its grid point
+  uint32_t act_at_[VESTIGE_SLOTS]    = {0};   // sample it starts playing
+  int      npend_ = 0;
+  size_t   gfill_base_[VESTIGE_SLOTS] = {0};  // loop length the guard job is for
+  size_t   gfill_k_[VESTIGE_SLOTS]    = {0};  // next guard cell (offset past the base)
+  size_t   gfill_src_[VESTIGE_SLOTS]  = {0};  // its source cell (k mod base)
+  size_t   gfill_end_[VESTIGE_SLOTS]  = {0};  // guard extent
+  size_t   gready_[VESTIGE_SLOTS]     = {0};  // extent a grain can read (reverse start gate)
+  bool     gfill_idle_ = true;                // no guard job pending (fast path)
+  uint32_t act_phase_[VESTIGE_SLOTS] = {0}; // grid phase it entered at (0 = on its "one")
+  // Diagnostics (host test): the last activation.
+  int      last_act_slot_ = -1;
+  uint32_t last_act_at_   = 0;
+  uint32_t act_count_     = 0;
+
+  // T, the master period (samples), and its K2 / FS1 arbitration. Control
+  // thread only. tap_period_ = 0 means "no tap: the knob sets T".
+  size_t   period_       = VESTIGE_T_MIN_SAMPLES;
+  size_t   tap_period_   = 0;
+  uint32_t tap_prev_ms_  = 0;     // last committed tap down-press (0 = no chain)
+  uint32_t f1_down_ms_   = 0;     // current FS1 press start (own timestamp)
+  float    k2_last_      = 0.f;   // last seen raw K2 (move detector)
+  bool     k2_seeded_    = false;
+  // Sample count (audio thread writes, control thread reads — one aligned
+  // 32-bit word). A timestamp source, NOT a grid: see Process.
+  volatile uint32_t sample_clock_ = 0;
+  // LED1 anchor per side = that side's most recent capture start (sample_clock_
+  // value), or the tap / engage / switch-in while that side holds nothing.
+  uint32_t led_anchor_[2] = {0, 0};
 };
