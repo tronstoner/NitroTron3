@@ -549,6 +549,9 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // REVERSE
   1.f,   // CLEAN
 };
+// RATCHET only from this K3 level on (below it: weight 0; ones already placed
+// age out). 0.5 = noon.
+static constexpr float  VESTIGE_TIMING_RATCHET_FROM = 0.5f;
 // Where figures land: steps in the back half of the pass weigh this much vs 1
 // for the front half (a fill leads into the one).
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;

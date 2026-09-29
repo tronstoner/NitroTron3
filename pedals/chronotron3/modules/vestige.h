@@ -1633,9 +1633,11 @@ class Vestige : public Module {
       return false;
     };
     bool tok[VESTIGE_TIMING_FIGS]; float tot = 0.f;
+    const bool rat_on = err_level_[kErrTiming] >= VESTIGE_TIMING_RATCHET_FROM;
     for (int t = 0; t < VESTIGE_TIMING_FIGS; t++) {
       tok[t] = false;
       if (!(VESTIGE_TIMING_FIG_WEIGHT[t] > 0.f)) continue;
+      if (t == kFigRatchet && !rat_on) continue;
       const int nl = TimingFigLens(t, lens);
       for (int i = 0; i < nl && !tok[t]; i++) tok[t] = any(t, lens[i]);
       if (tok[t]) tot += VESTIGE_TIMING_FIG_WEIGHT[t];
