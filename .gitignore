@@ -6,3 +6,4 @@ build/
 
 # serial-diag captures (tools/diag/capture.sh writes into the cwd)
 sprawl-*.log
+vestige-*.log
