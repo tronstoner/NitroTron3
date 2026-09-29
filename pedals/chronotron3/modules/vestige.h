@@ -1581,7 +1581,7 @@ class Vestige : public Module {
   }
   uint32_t TimingMemCover(int s) const {
     uint32_t m = 0;
-    for (int i = 0; i < pm_nf_[s]; i++) m |= TimingFigCover(pm_fig_[s][i], pm_n_[s]);
+    for (int i = 0; i < pm_nf_[s][pm_cur_[s]]; i++) m |= TimingFigCover(pm_fig_[s][pm_cur_[s]][i], pm_n_[s][pm_cur_[s]]);
     return m;
   }
   static int TimingBits(uint32_t m) { int c = 0; while (m) { c += (int)(m & 1u); m >>= 1; } return c; }
@@ -1590,8 +1590,8 @@ class Vestige : public Module {
   // by step weight (back half x VESTIGE_TIMING_MEM_BACK_WEIGHT). ratchet_div =
   // the finest ratchet that fits this loop (4, 2, or 0 = none).
   void TimingMemAdd(int s, int room, int ratchet_div) {
-    const int n = pm_n_[s];
-    if (room < 1 || pm_nf_[s] >= VESTIGE_TIMING_MEM_FIGS) return;
+    const int n = pm_n_[s][pm_cur_[s]];
+    if (room < 1 || pm_nf_[s][pm_cur_[s]] >= VESTIGE_TIMING_MEM_FIGS) return;
     const uint32_t used = TimingMemCover(s);
     TimingFig cand[VESTIGE_TIMING_FIGS][2 * VESTIGE_TIMING_SLICE_MAX];
     float     cw[VESTIGE_TIMING_FIGS][2 * VESTIGE_TIMING_SLICE_MAX];
@@ -1635,15 +1635,18 @@ class Vestige : public Module {
     float q = TimingRand() * tw[t];
     int i = 0;
     for (; i < nc[t] - 1; i++) { if (q < cw[t][i]) break; q -= cw[t][i]; }
-    pm_fig_[s][pm_nf_[s]++] = cand[t][i];
+    pm_fig_[s][pm_cur_[s]][pm_nf_[s][pm_cur_[s]]++] = cand[t][i];
+  }
+  void TimingMemClear(int s) {
+    for (int m = 0; m < VESTIGE_TIMING_MEM_PASSES; m++) { pm_nf_[s][m] = 0; pm_n_[s][m] = 0; }
   }
   // Remove one figure placed on an earlier pass (age > 0); false = none.
   bool TimingMemRemove(int s) {
     int old[VESTIGE_TIMING_MEM_FIGS]; int no = 0;
-    for (int i = 0; i < pm_nf_[s]; i++) if (pm_fig_[s][i].age > 0) old[no++] = i;
+    for (int i = 0; i < pm_nf_[s][pm_cur_[s]]; i++) if (pm_fig_[s][pm_cur_[s]][i].age > 0) old[no++] = i;
     if (no == 0) return false;
     const int i = old[TimingPick(no)];
-    pm_fig_[s][i] = pm_fig_[s][--pm_nf_[s]];
+    pm_fig_[s][pm_cur_[s]][i] = pm_fig_[s][pm_cur_[s]][--pm_nf_[s][pm_cur_[s]]];
     return true;
   }
   // Pass start (or loop start, el0 = the elapsed pass it joins at) with a
@@ -1651,23 +1654,24 @@ class Vestige : public Module {
   // render it into this pass's events — read jumps and rest/break mute changes
   // at step (and ratchet sub-step) boundaries, in material units.
   void TimingPlanMem(int s, bool rev, size_t L, double rho, float el0) {
+    pm_cur_[s] = (pm_cur_[s] + 1) % VESTIGE_TIMING_MEM_PASSES;   // this pass's own memory (A B C A B C ...)
     trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
     trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
     sl_n_[s] = 0; mute_dt_[s] = 0.f;                          // the one always sounds
     const float level = err_level_[kErrTiming];
-    if (!(level > 0.f)) { pm_nf_[s] = 0; var_last_[s] = false; return; }   // level 0: memory cleared
+    if (!(level > 0.f)) { TimingMemClear(s); var_last_[s] = false; return; }   // level 0: memory cleared
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
     int tier = 0;
     const int n = TimingSliceN(pass_out, &tier);
-    if (n == 0) { timing_skipped_++; pm_nf_[s] = 0; var_last_[s] = false; return; }
+    if (n == 0) { timing_skipped_++; TimingMemClear(s); var_last_[s] = false; return; }
     if (n != VESTIGE_TIMING_SLICES) timing_fallbacks_++;
-    if (pm_n_[s] != n) { pm_nf_[s] = 0; pm_n_[s] = n; }      // steps changed: the memory no longer fits
+    if (pm_n_[s][pm_cur_[s]] != n) { pm_nf_[s][pm_cur_[s]] = 0; pm_n_[s][pm_cur_[s]] = n; }      // steps changed: the memory no longer fits
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
     const int rdiv = (pass_out / (double)n / 4.0 >= min_step) ? 4
                    : (pass_out / (double)n / 2.0 >= min_step) ? 2 : 0;
     // 1. Age: a figure that has played its VESTIGE_TIMING_MEM_LIFE passes goes.
-    for (int i = 0; i < pm_nf_[s];) {
-      if (++pm_fig_[s][i].age >= VESTIGE_TIMING_MEM_LIFE) pm_fig_[s][i] = pm_fig_[s][--pm_nf_[s]];
+    for (int i = 0; i < pm_nf_[s][pm_cur_[s]];) {
+      if (++pm_fig_[s][pm_cur_[s]][i].age >= VESTIGE_TIMING_MEM_LIFE) pm_fig_[s][pm_cur_[s]][i] = pm_fig_[s][pm_cur_[s]][--pm_nf_[s][pm_cur_[s]]];
       else i++;
     }
     // 2. The edits (at least one every pass).
@@ -1688,8 +1692,8 @@ class Vestige : public Module {
     // Render: which slice each step plays, muted or not, ratchet division.
     int8_t play[VESTIGE_TIMING_SLICE_MAX], mute[VESTIGE_TIMING_SLICE_MAX], rat[VESTIGE_TIMING_SLICE_MAX];
     for (int i = 0; i < n; i++) { play[i] = (int8_t)i; mute[i] = 0; rat[i] = 1; }
-    for (int f = 0; f < pm_nf_[s]; f++) {
-      const TimingFig& g = pm_fig_[s][f];
+    for (int f = 0; f < pm_nf_[s][pm_cur_[s]]; f++) {
+      const TimingFig& g = pm_fig_[s][pm_cur_[s]][f];
       const int k = g.step;
       switch (g.type) {
         case kFigRest:    mute[k] = 1; break;
@@ -1733,7 +1737,7 @@ class Vestige : public Module {
       }
     }
     sl_n_[s] = n; cur_pat_[s] = 0; timing_patterns_++;
-    if (pm_nf_[s] > 0) { cur_var_[s] = kVarRot; timing_vars_++; }
+    if (pm_nf_[s][pm_cur_[s]] > 0) { cur_var_[s] = kVarRot; timing_vars_++; }
     var_last_[s] = false;
   }
   // Per sample, per loop voice (after the head advance): instance-start plan,
@@ -2403,7 +2407,8 @@ class Vestige : public Module {
       trig_off_[s] = 0.f; trig_cnt_[s] = trig_next_[s] = 0; cur_pat_[s] = -1; trig_pass_[s] = pass_[s];   // (pass_ set just above)
       rot_seed_[s] = TimingRandU();                         // this loop's rotation, for its whole life
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
-      pm_nf_[s] = 0; pm_n_[s] = 0; mute_d_[s] = mute_dt_[s] = 0.f;   // mode 2: a fresh, empty memory
+      TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
+      mute_d_[s] = mute_dt_[s] = 0.f;                          //  the first pass plays memory 0
       var_last_[s] = false; cur_var_[s] = kVarNone;
     }
     rho_t_[s] = TapeTarget(s);
@@ -3299,9 +3304,10 @@ class Vestige : public Module {
   int8_t   sl_arr_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_SLICE_MAX]   = {};   // the arrangement before variation (diag)
   float    sl_off_[VESTIGE_VOICE_SLABS][kTimingEvents]   = {};   // read offset per jump
   // Timing mode 2 (pass memory), per loop voice slot.
-  TimingFig pm_fig_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_MEM_FIGS] = {};   // the remembered pass
-  int      pm_nf_[VESTIGE_VOICE_SLABS]       = {0};      // figures in it
-  int      pm_n_[VESTIGE_VOICE_SLABS]        = {0};      // the step count they were placed on
+  TimingFig pm_fig_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_MEM_PASSES][VESTIGE_TIMING_MEM_FIGS] = {};   // the remembered passes
+  int      pm_nf_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_MEM_PASSES] = {};   // figures in each
+  int      pm_n_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_MEM_PASSES]  = {};   // the step count they were placed on
+  int      pm_cur_[VESTIGE_VOICE_SLABS]      = {0};      // the memory this pass plays
   int8_t   pm_mute_ev_[VESTIGE_VOICE_SLABS][kTimingEvents] = {};   // per event: -1 jump only, 0 unmute, 1 mute
   bool     pm_jump_ev_[VESTIGE_VOICE_SLABS][kTimingEvents] = {};   // per event: the read jumps
   float    mute_d_[VESTIGE_VOICE_SLABS]      = {0.f};    // rest/break depth (0 = open, 1 = silent)

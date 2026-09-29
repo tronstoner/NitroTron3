@@ -499,8 +499,10 @@ static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIM
 
 // ---- Timing mode 2: PASS MEMORY ---------------------------------------------
 // The pass is cut into VESTIGE_TIMING_SLICES steps (same short-loop guard as
-// mode 1). Each loop voice remembers ONE pass: a small set of FIGURES placed on
-// its steps. Every pass start, in this order:
+// mode 1). Each loop voice remembers VESTIGE_TIMING_MEM_PASSES passes that take
+// turns (A B C A B C ...), each a small set of FIGURES placed on its steps, each
+// evolving on its own: everything below happens to the memory whose turn it
+// is (a figure's LIFE counts that memory's turns). Every pass start, in order:
 //   1. every figure that has played VESTIGE_TIMING_MEM_LIFE passes is removed
 //      (its steps go back to the edits below: clean or another figure);
 //   2. EDITS figures are edited — always at least one, every pass: a figure
@@ -517,7 +519,8 @@ static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIM
 static constexpr float  VESTIGE_TIMING_MEM_TARGET_A = 0.4f;
 static constexpr float  VESTIGE_TIMING_MEM_TARGET_B = 6.6f;     // D(1) = 7 = every step of 8
 static constexpr float  VESTIGE_TIMING_MEM_EDITS_B  = 1.0f;     // 1 = one edit per step at L = 1
-static constexpr int    VESTIGE_TIMING_MEM_LIFE     = 3;        // passes a figure plays, at most
+static constexpr int    VESTIGE_TIMING_MEM_LIFE     = 3;        // turns a figure plays, at most
+static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taking turns (1 = one pass)
 // FIGURES (a figure's size = the steps it holds; figures never overlap):
 //   REST     one step silent                              (size 1)
 //   BREAK    silent from a step to the end of the pass    (size n - k)
