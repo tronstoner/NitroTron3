@@ -1566,8 +1566,8 @@ class Vestige : public Module {
     sl_n_[s] = nsl; cur_pat_[s] = 0; timing_patterns_++;
   }
   // ---- Timing mode 2: PASS MEMORY ------------------------------------------
-  struct TimingFig { int8_t type, step, param; };   // a figure on the remembered pass
-  enum TimingFigType { kFigRest = 0, kFigBreak, kFigStutter, kFigRepeat, kFigRatchet, kFigRetrig };
+  struct TimingFig { int8_t type, step, param, age; };   // a figure on the remembered pass (age = passes played before this one)
+  enum TimingFigType { kFigRest = 0, kFigBreak, kFigStutter, kFigRepeat, kFigRatchet, kFigRetrig, kFigClean };
   // The steps a figure changes on an n-step pass (bit i = step i; never step 0).
   // Single-step figures change their step; BREAK / REPEAT / RETRIG change from
   // their step to the end of the pass (RETRIG's step = its pattern's 2nd hit).
@@ -1601,7 +1601,7 @@ class Vestige : public Module {
       if (!(VESTIGE_TIMING_FIG_WEIGHT[t] > 0.f)) continue;
       if (t == kFigRatchet && ratchet_div == 0) continue;
       auto put = [&](int k, int param) {
-        TimingFig f{(int8_t)t, (int8_t)k, (int8_t)param};
+        TimingFig f{(int8_t)t, (int8_t)k, (int8_t)param, 0};
         const uint32_t c = TimingFigCover(f, n);
         if ((c & used) || TimingBits(c) > room) return;
         const float w = (2 * k >= n) ? VESTIGE_TIMING_MEM_BACK_WEIGHT : 1.f;
@@ -1634,10 +1634,14 @@ class Vestige : public Module {
     for (; i < nc[t] - 1; i++) { if (q < cw[t][i]) break; q -= cw[t][i]; }
     pm_fig_[s][pm_nf_[s]++] = cand[t][i];
   }
-  void TimingMemRemove(int s) {
-    if (pm_nf_[s] <= 0) return;
-    const int i = TimingPick(pm_nf_[s]);
+  // Remove one figure placed on an earlier pass (age > 0); false = none.
+  bool TimingMemRemove(int s) {
+    int old[VESTIGE_TIMING_MEM_FIGS]; int no = 0;
+    for (int i = 0; i < pm_nf_[s]; i++) if (pm_fig_[s][i].age > 0) old[no++] = i;
+    if (no == 0) return false;
+    const int i = old[TimingPick(no)];
     pm_fig_[s][i] = pm_fig_[s][--pm_nf_[s]];
+    return true;
   }
   // Pass start (or loop start, el0 = the elapsed pass it joins at) with a
   // level > 0: maybe edit the remembered pass (see vestige_constants.h), then
@@ -1658,20 +1662,24 @@ class Vestige : public Module {
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
     const int rdiv = (pass_out / (double)n / 4.0 >= min_step) ? 4
                    : (pass_out / (double)n / 2.0 >= min_step) ? 2 : 0;
-    // The edit.
-    float E = VESTIGE_TIMING_MEM_EDIT_A + VESTIGE_TIMING_MEM_EDIT_B * level;
-    if (E >= 1.f || TimingRand() < E) {
-      const float D = VESTIGE_TIMING_MEM_TARGET_A + VESTIGE_TIMING_MEM_TARGET_B * level;
+    // 1. Age: a figure that has played its VESTIGE_TIMING_MEM_LIFE passes goes.
+    for (int i = 0; i < pm_nf_[s];) {
+      if (++pm_fig_[s][i].age >= VESTIGE_TIMING_MEM_LIFE) pm_fig_[s][i] = pm_fig_[s][--pm_nf_[s]];
+      else i++;
+    }
+    // 2. The edits (at least one every pass).
+    int edits = (int)(VESTIGE_TIMING_MEM_EDITS_B * level * (float)(n - 1) + 0.5f);
+    if (edits < 1) edits = 1;
+    const float D = VESTIGE_TIMING_MEM_TARGET_A + VESTIGE_TIMING_MEM_TARGET_B * level;
+    for (int e = 0; e < edits; e++) {
       int tgt = (int)D;
       if (TimingRand() < D - (float)tgt) tgt++;
       if (tgt > n - 1) tgt = n - 1;
       const int c = TimingBits(TimingMemCover(s));
       if (c > tgt)      TimingMemRemove(s);
       else if (c < tgt) TimingMemAdd(s, tgt - c, rdiv);
-      else if (pm_nf_[s] > 0) {                                // swap
-        TimingMemRemove(s);
+      else if (TimingMemRemove(s))                             // swap (an earlier figure)
         TimingMemAdd(s, tgt - TimingBits(TimingMemCover(s)), rdiv);
-      }
       timing_edits_++;
     }
     // Render: which slice each step plays, muted or not, ratchet division.
@@ -1691,6 +1699,7 @@ class Vestige : public Module {
           int last = 0;
           for (int i = 0; i < n; i++) { if (m & (1u << i)) last = i; if (i >= k) play[i] = (int8_t)(i - last); }
         } break;
+        default: break;                                      // CLEAN: plays as recorded
       }
     }
     for (int i = 0; i < n; i++) sl_order_[s][i] = mute[i] ? (int8_t)-1 : play[i];
