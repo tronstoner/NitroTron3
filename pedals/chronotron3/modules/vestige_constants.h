@@ -475,8 +475,11 @@ static constexpr int    VESTIGE_TIMING_MODE = 1;
 // step a replacement slice (any slice but its own: repeats and drops allowed).
 // The level L rearranges the first round(L*(N-1)) steps in that order, so
 // raising K3 adds swaps and lowering removes them without reshuffling.
-// VARIATION (VESTIGE_TIMING_VAR_PROB, never two passes running): one step
-// 1..N-1 plays another slice for that pass only.
+// RANDOMNESS: on every pass each step 1..N-1 independently plays a fresh
+// random slice (any slice but the one it would play) for that pass only, with
+// probability r = L^VESTIGE_TIMING_RAND_CURVE; step 0 never. L = 0 nothing,
+// low L = steady with rare random slices, L = 1 = every step random every pass.
+// (VESTIGE_TIMING_VAR_PROB is mode 0 only.)
 // Playback: a step whose slice is the natural continuation of what the read is
 // playing runs on; any other jumps the read to its slice's start (5 ms stream
 // restart). Reverse: the same arrangement on the REVERSED loop (its pass
@@ -484,6 +487,7 @@ static constexpr int    VESTIGE_TIMING_MODE = 1;
 // Short-loop guard: a slice shorter than VESTIGE_TIMING_MIN_STEP_MS (output
 // time) halves N (8 -> 4 -> 2); 2 don't fit = no rearrangement.
 static constexpr int    VESTIGE_TIMING_SLICES = 8;
+static constexpr float  VESTIGE_TIMING_RAND_CURVE = 2.0f;       // per-step random chance = L^curve
 static constexpr int    VESTIGE_TIMING_SLICE_MAX = 16;          // table size bound
 static constexpr int    VESTIGE_TIMING_SLICE_TIERS = 4;         // N, N/2, N/4, N/8 tables
 static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIMING_SLICE_MAX, "2..16 slices");

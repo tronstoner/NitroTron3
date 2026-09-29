@@ -1510,7 +1510,7 @@ class Vestige : public Module {
     }
   }
   // Pass start (or loop start, el0 = the elapsed pass it joins at) with a
-  // level > 0: the arrangement for the level (+ rarely a one-pass variation),
+  // level > 0: the arrangement for the level (+ per-step random slices),
   // then its JUMPS: every step whose slice is not the natural continuation of
   // what the read plays there, with the read offset that puts the read on its
   // slice's start (elapsed units: offset = step start - slice start). Steps
@@ -1518,7 +1518,7 @@ class Vestige : public Module {
   void TimingPlanSlices(int s, bool rev, size_t L, double rho, float el0) {
     trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
     trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
-    sl_n_[s] = 0; sl_var_step_[s] = -1;
+    sl_n_[s] = 0; sl_rand_mask_[s] = 0;
     const float level = err_level_[kErrTiming];
     if (!(level > 0.f)) { var_last_[s] = false; return; }     // level 0: nothing drawn
     int tier = 0;
@@ -1530,13 +1530,17 @@ class Vestige : public Module {
     int cnt = (int)(level * (float)(nsl - 1) + 0.5f); if (cnt > nsl - 1) cnt = nsl - 1;
     for (int k = 0; k < cnt; k++) { const int st = sl_prio_[s][tier][k]; ord[st] = sl_repl_[s][tier][st]; }
     for (int i = 0; i < nsl; i++) sl_arr_[s][i] = ord[i];
-    // Variation: one step 1..N-1, another slice, this pass only.
-    if (!var_last_[s] && TimingRand() < VESTIGE_TIMING_VAR_PROB) {
-      const int st = 1 + TimingPick(nsl - 1);
+    // Randomness: each step 1..N-1, independently, with r = L^curve, plays a
+    // fresh random slice other than its own for this pass only (r >= 1: every
+    // step, no roll).
+    const float rr = powf(level, VESTIGE_TIMING_RAND_CURVE);
+    for (int st = 1; st < nsl; st++) {
+      if (!(rr >= 1.f || TimingRand() < rr)) continue;
       int r = TimingPick(nsl - 1); if (r >= ord[st]) r++;
-      ord[st] = (int8_t)r; sl_var_step_[s] = st; cur_var_[s] = kVarRot; timing_vars_++;
+      ord[st] = (int8_t)r; sl_rand_mask_[s] |= (1u << st); timing_vars_++;
     }
-    var_last_[s] = (sl_var_step_[s] >= 0);
+    if (sl_rand_mask_[s]) cur_var_[s] = kVarRot;
+    var_last_[s] = false;
     // Jumps. prev = the slice the read plays in the step before (the timeline's
     // own before el0).
     int i0 = 0;
@@ -3103,7 +3107,7 @@ class Vestige : public Module {
   int8_t   sl_arr_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_SLICE_MAX]   = {};   // the arrangement before variation (diag)
   float    sl_off_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_MAX_STEPS]   = {};   // read offset per jump
   int      sl_n_[VESTIGE_VOICE_SLABS]        = {0};      // this pass's slice count (0 = none) (diag)
-  int      sl_var_step_[VESTIGE_VOICE_SLABS] = {0};      // the varied step (-1 = none) (diag)
+  uint32_t sl_rand_mask_[VESTIGE_VOICE_SLABS] = {0};    // the steps playing a random slice this pass (diag)
   int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
   uint32_t timing_rng_ = 0x9E3779B9u;                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag

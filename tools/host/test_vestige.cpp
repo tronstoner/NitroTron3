@@ -2976,7 +2976,7 @@ static void TestTimingError() {
 
 // ---------------------------------------------------------------------------
 // Timing mode 1: SLICE REARRANGEMENT.
-struct SlRec { long start; int n; int ord[VESTIGE_TIMING_SLICE_MAX]; int arr[VESTIGE_TIMING_SLICE_MAX]; int vstep; bool ret = false; int planned = 0;
+struct SlRec { long start; int n; int ord[VESTIGE_TIMING_SLICE_MAX]; int arr[VESTIGE_TIMING_SLICE_MAX]; uint32_t rmask; bool ret = false; int planned = 0;
                std::vector<long> jumps_el; std::vector<long> jumps_at; };
 struct SlLog { std::vector<SlRec> p; long rh_bad = 0, half_jumps = 0; };
 static SlLog RunSl(int s, int passes, float max_secs = 60.f, bool track_half = false) {
@@ -2990,7 +2990,7 @@ static SlLog RunSl(int s, int passes, float max_secs = 60.f, bool track_half = f
     if (v.pass_[s] != pp) {
       pp = v.pass_[s];
       if (!lg.p.empty()) lg.p.back().ret = ret;
-      SlRec r; r.start = n - 1; r.n = v.sl_n_[s]; r.vstep = v.sl_var_step_[s]; r.planned = v.trig_cnt_[s];
+      SlRec r; r.start = n - 1; r.n = v.sl_n_[s]; r.rmask = v.sl_rand_mask_[s]; r.planned = v.trig_cnt_[s];
       for (int i = 0; i < VESTIGE_TIMING_SLICE_MAX; i++) { r.ord[i] = v.sl_order_[s][i]; r.arr[i] = v.sl_arr_[s][i]; }
       lg.p.push_back(r);
     } else if (trig && v.last_trig_slot_ == s && !lg.p.empty()) {
@@ -3034,9 +3034,10 @@ static void WantJumps(const int* ord, int nsl, size_t L, std::vector<long>* jump
     else { jumps->push_back(SlB(L, nsl, i)); (*rstart)[i] = SlB(L, nsl, ord[i]); }
   }
 }
-struct SlStats { int passes = 0, played = 0, var = 0, eligible = 0, eligible_var = 0, jumps = 0, naturals = 0, swapped = 0;
-                 int bad_n = 0, bad_arr = 0, bad_step0 = 0, bad_var = 0, var_twice = 0, bad_jumps = 0, bad_ret = 0, arr_moved = 0, bad_grid = 0;
-                 bool ok() const { return bad_n + bad_arr + bad_step0 + bad_var + var_twice + bad_jumps + bad_ret + arr_moved + bad_grid == 0; } };
+struct SlStats { int passes = 0, played = 0, steps = 0, rsteps = 0, rpasses = 0, jumps = 0, naturals = 0, swapped = 0;
+                 int hist[VESTIGE_TIMING_SLICE_MAX] = {0};    // random slice - planned slice (mod N)
+                 int bad_n = 0, bad_arr = 0, bad_step0 = 0, bad_var = 0, bad_jumps = 0, bad_ret = 0, arr_moved = 0, bad_grid = 0;
+                 bool ok() const { return bad_n + bad_arr + bad_step0 + bad_var + bad_jumps + bad_ret + arr_moved + bad_grid == 0; } };
 static SlStats CheckSl(const SlLog& lg, int s, size_t L, float level, int want_n, int tier, bool rate1) {
   SlStats st; int want_arr[VESTIGE_TIMING_SLICE_MAX];
   for (size_t p = 0; p < lg.p.size(); p++) {
@@ -3051,10 +3052,13 @@ static SlStats CheckSl(const SlLog& lg, int s, size_t L, float level, int want_n
     st.swapped = sw;
     if (p > 0 && lg.p[p - 1].n == r.n) for (int i = 0; i < r.n; i++) if (lg.p[p - 1].arr[i] != r.arr[i]) { st.arr_moved++; break; }
     if (r.ord[0] != 0 || r.arr[0] != 0) st.bad_step0++;
-    int nd = 0, dstep = -1; for (int i = 0; i < r.n; i++) if (r.ord[i] != r.arr[i]) { nd++; dstep = i; }
-    if (nd > 1 || (nd == 1 && dstep != r.vstep) || (nd == 0 && r.vstep >= 0) || dstep == 0) st.bad_var++;
-    if (nd == 1) st.var++;
-    if (p > 0) { if (lg.p[p - 1].vstep < 0) { st.eligible++; if (nd == 1) st.eligible_var++; } else if (nd == 1) st.var_twice++; }
+    // Random steps, from the played vs planned slices: the module's own mask
+    // must agree (a random slice equal to the planned one would show as a
+    // masked step that does not differ), never step 0.
+    uint32_t dm = 0; for (int i = 0; i < r.n; i++) if (r.ord[i] != r.arr[i]) { dm |= 1u << i; st.hist[((r.ord[i] - r.arr[i]) % r.n + r.n) % r.n]++; }
+    if (dm != r.rmask) st.bad_var++;
+    if (dm & 1u) st.bad_step0++;
+    st.steps += r.n - 1; st.rsteps += Pop(dm); if (dm) st.rpasses++;
     std::vector<long> w, rs; WantJumps(r.ord, r.n, L, &w, &rs);
     st.jumps += (int)w.size(); st.naturals += r.n - 1 - (int)w.size();
     if (r.ret != (r.ord[r.n - 1] != r.n - 1)) st.bad_ret++;
@@ -3065,8 +3069,8 @@ static SlStats CheckSl(const SlLog& lg, int s, size_t L, float level, int want_n
   return st;
 }
 static void PrintSl(const char* what, const SlStats& st) {
-  printf("      %s: %d passes, %d rearranged (%d steps swapped), %d jumps, %d steps ran on; variations %d; bad: slices %d arrangement %d step0 %d variation %d twice %d jumps %d return %d moved %d grid %d\n",
-         what, st.passes, st.played, st.swapped, st.jumps, st.naturals, st.var, st.bad_n, st.bad_arr, st.bad_step0, st.bad_var, st.var_twice,
+  printf("      %s: %d passes, %d rearranged (%d steps swapped), %d jumps, %d steps ran on; random steps %d of %d (in %d passes); bad: slices %d arrangement %d step0 %d random %d jumps %d return %d moved %d grid %d\n",
+         what, st.passes, st.played, st.swapped, st.jumps, st.naturals, st.rsteps, st.steps, st.rpasses, st.bad_n, st.bad_arr, st.bad_step0, st.bad_var,
          st.bad_jumps, st.bad_ret, st.arr_moved, st.bad_grid);
 }
 static std::string ArrStr(const int* a, int nsl) { std::string r; for (int i = 0; i < nsl; i++) r += (char)('A' + a[i]); return r; }
@@ -3159,16 +3163,36 @@ static void TestTimingSlices() {
     Realign();
     Check(kept && sw == 2, "a K3 change applies at the next pass start (that pass: 2 swaps), not mid-pass"); }
 
-  // Variation rate: per pass, one step, back to the arrangement next pass.
-  { v.err_level_[0] = 0.5f;
-    const SlLog lv = RunSl(s, 300, 200.f);
-    const SlStats sv = CheckSl(lv, s, Q, 0.5f, n8, tier8, true);
-    PrintSl("level 0.5, 300 passes", sv);
-    const double p = VESTIGE_TIMING_VAR_PROB, rate = (double)sv.eligible_var / sv.eligible, sd = sqrt(p * (1 - p) / sv.eligible);
-    printf("      variation rate on eligible passes: %d / %d = %.3f (constant %.3f +- %.3f); overall %.3f\n",
-           sv.eligible_var, sv.eligible, rate, p, 3 * sd, (double)sv.var / sv.passes);
-    Check(sv.ok(), "variations: exactly one step (never step 0) plays another slice for one pass, never two passes running");
-    Check(fabs(rate - p) < 3 * sd, "variation rate ~ VESTIGE_TIMING_VAR_PROB (on passes that may vary)");
+  // Randomness: per step, per pass, independently, with r = L^curve; a random
+  // slice is never the planned one; at L = 1 every step every pass; the
+  // arrangement core stays as drawn.
+  { struct Lv { float level; int passes; };
+    bool ok_all = true, rate_ok = true; std::string line;
+    for (const Lv& lv : {Lv{2.f / 7.f, 200}, Lv{0.5f, 150}, Lv{5.f / 7.f, 100}, Lv{1.f, 80}}) {
+      v.err_level_[0] = lv.level;
+      const SlLog ll = RunSl(s, lv.passes, 200.f);
+      const SlStats sv = CheckSl(ll, s, Q, lv.level, n8, tier8, true);
+      const double r = pow((double)lv.level, (double)VESTIGE_TIMING_RAND_CURVE);
+      const double rate = (double)sv.rsteps / sv.steps, sd = sqrt(r * (1 - r) / sv.steps);
+      // Passes: are the random steps independent? The number of passes with
+      // no random step ~ (1-r)^7.
+      const double p0 = pow(1.0 - r, (double)(n8 - 1)), none = (double)(sv.passes - sv.rpasses) / sv.passes, sd0 = sqrt(p0 * (1 - p0) / sv.passes);
+      char b2[200]; snprintf(b2, sizeof b2, "\n        L=%.2f: %d / %d steps random = %.4f (r = L^%.1f = %.4f +- %.4f); passes with none %.3f (expect %.3f +- %.3f)",
+                             lv.level, sv.rsteps, sv.steps, rate, VESTIGE_TIMING_RAND_CURVE, r, 4 * sd, none, p0, 4 * sd0);
+      line += b2;
+      if (!sv.ok() || sv.played != sv.passes) ok_all = false;
+      if (r >= 1.0 ? sv.rsteps != sv.steps : (fabs(rate - r) > 4 * sd || fabs(none - p0) > 4 * sd0 + 1e-9)) rate_ok = false;
+      if (lv.level == 1.f) {                                   // the random slice: uniform over the other N-1
+        const double e = sv.rsteps / (double)(n8 - 1), sde = sqrt(sv.rsteps * (1.0 / (n8 - 1)) * (1 - 1.0 / (n8 - 1)));
+        std::string hs; bool uni = sv.hist[0] == 0;
+        for (int k = 1; k < n8; k++) { char c[16]; snprintf(c, sizeof c, "%d ", sv.hist[k]); hs += c; if (fabs(sv.hist[k] - e) > 4 * sde) uni = false; }
+        printf("      L=1 random slice - planned slice (mod 8), counts for +1..+7: %s(expect %.0f +- %.0f), +0: %d\n", hs.c_str(), e, 4 * sde, sv.hist[0]);
+        Check(uni, "a random slice is uniform over the N-1 slices other than the planned one (never the planned one)");
+      }
+    }
+    printf("      per-step randomness:%s\n", line.c_str());
+    Check(ok_all, "randomness: step 0 never random, the module's random steps = the steps that differ, the arrangement core as drawn and stable");
+    Check(rate_ok, "per-step random rate ~ L^curve, steps independent (tolerance 4 sd); L = 1: every step random every pass");
     v.err_level_[0] = 0.f; }
   hist_on = false; in_hist.clear(); wet_hist.clear();
 
@@ -3176,7 +3200,7 @@ static void TestTimingSlices() {
   // arrangement is played from the join on — the steps behind the join count
   // as the timeline's (so a step right after it that is its own slice runs on).
   { int ok = 0, tot = 0, differ = 0; std::string line;
-    for (float lv : {1.f, 4.f / 7.f, 2.f / 7.f, 3.f / 7.f, 5.f / 7.f}) {
+    for (float lv : {1.f, 4.f / 7.f, 2.f / 7.f, 3.f / 7.f, 5.f / 7.f, 1.f / 7.f, 2.f / 7.f, 3.f / 7.f, 6.f / 7.f, 1.f / 7.f}) {
       Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.6f);
       v.err_level_[0] = lv;
       seen_acts = v.act_count_;
@@ -3195,16 +3219,17 @@ static void TestTimingSlices() {
         if (ord[i] != (ord[i - 1] + 1) % nsl) naive++;
       }
       tot++; if (q.phase > 0 && nsl == 8 && (int)(tin - t0) == want) ok++; if (naive != want) differ++;
-      char b[96]; snprintf(b, sizeof b, "L=%.2f phase %u step %d: %u jumps (model %d, arrangement-only %d)  ", lv, q.phase, i0, tin - t0, want, naive); line += b;
+      char b[112]; snprintf(b, sizeof b, "\n        L=%.2f phase %u step %d: %u jumps (model %d, arrangement-only rule %d)", lv, q.phase, i0, tin - t0, want, naive); line += b;
     }
-    printf("      late joins: %s\n", line.c_str());
+    printf("      late joins:%s\n", line.c_str());
     Check(ok == tot && differ >= 1, "a loop joining mid-pass plays its arrangement from the join on (steps behind it = the timeline's)");
     v.err_level_[0] = 0.f; }
 
   // A loop whose length the slices do not divide, and a FORCED arrangement
-  // A H A B C D E F (host-only: this loop's drawn tables overwritten): one jump
-  // (step 1 -> H), then H runs on over the loop's seam into A, B, ... — no
-  // restart there, the half-speed head continuous; a return at the pass end.
+  // A H A D E F G H at level 2/7 (host-only: this loop's drawn tables
+  // overwritten): a jump to H at step 1, H runs on over the loop's seam into
+  // A (no restart there), a jump to D at step 3, the rest on the timeline, no
+  // return; the half-speed head continuous.
   { size_t T = 0; float k2 = 0.f;
     for (float k = 0.64f; k < 0.74f; k += 0.001f) { const size_t t = Vestige::KnobPeriod(RemapKnob(k)); if (t >= 16000 && t <= 30000 && t % 8 != 0) { T = t; k2 = k; break; } }
     Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = k2; RunFor(0.5f);
@@ -3221,17 +3246,18 @@ static void TestTimingSlices() {
     printf("      K2 at %.3f -> T %zu; loop %zu (%% 8 = %zu, %d slices): %d / %d steps = their slice at lag 0 (worst c %.4f)\n", k2, T, L, L % 8, nw, ok, tot, worst);
     Check(L == T && L % 8 != 0 && so.ok() && so.played == so.passes && ok == tot && tot >= 40,
           "a loop the slices do not divide: boundaries at round(L x i / N), jumps and continuations as the model");
-    const int forced[8] = {0, 7, 0, 1, 2, 3, 4, 5};
     for (int i = 0; i < 7; i++) v.sl_prio_[qs][0][i] = (int8_t)(i + 1);
-    for (int i = 1; i < 8; i++) v.sl_repl_[qs][0][i] = (int8_t)forced[i];
+    v.sl_repl_[qs][0][1] = 7; v.sl_repl_[qs][0][2] = 0;       // steps 1, 2 first: H, A
+    v.err_level_[0] = 2.f / 7.f;
     RunSl(qs, 1);
-    const SlLog lf = RunSl(qs, 16, 60.f, true);
-    const SlStats sf = CheckSl(lf, qs, L, 1.f, 8, 0, true);
+    const SlLog lf = RunSl(qs, 24, 60.f, true);
+    const SlStats sf = CheckSl(lf, qs, L, 2.f / 7.f, 8, 0, true);
     StepWindows(lf, qs, L, false, &ok, &tot, &worst);
-    int base_one = 0, base_n = 0; for (const SlRec& pr : lf.p) if (pr.vstep < 0) { base_n++; if (pr.jumps_el.size() == 1 && pr.jumps_el[0] == SlB(L, 8, 1) && pr.ret) base_one++; }
-    PrintSl("forced A H A B C D E F", sf);
-    printf("      forced: %d / %d arrangement passes = one jump (step 1) + a return; %d / %d steps = their slice (lag 0); half-speed jumps outside restarts %ld; read out of range %ld\n",
-           base_one, base_n, ok, tot, lf.half_jumps, lf.rh_bad);
+    int base_one = 0, base_n = 0;
+    for (const SlRec& pr : lf.p) if (pr.rmask == 0) { base_n++; if (pr.jumps_el.size() == 2 && pr.jumps_el[0] == SlB(L, 8, 1) && pr.jumps_el[1] == SlB(L, 8, 3) && !pr.ret) base_one++; }
+    PrintSl("forced A H A D E F G H", sf);
+    printf("      forced: %s; %d / %d passes without random steps = jumps at steps 1 and 3 only, no return; %d / %d steps = their slice (lag 0); half-speed jumps outside restarts %ld; read out of range %ld\n",
+           ArrStr(lf.p[0].arr, 8).c_str(), base_one, base_n, ok, tot, lf.half_jumps, lf.rh_bad);
     Check(sf.ok() && base_n >= 10 && base_one == base_n && ok == tot && lf.rh_bad == 0,
           "a slice that continues over the loop's seam (H -> A) runs on: no restart there");
     Check(lf.half_jumps == 0, "K1 half-speed head: continuous where the read runs over the seam inside a pass");
@@ -3384,25 +3410,26 @@ static void TestTimingSlices() {
   noise_from = noise_to = -1;
   RunFor(1.0f);
   { int slots[3]; int ns = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS && ns < 3; q++) if (v.active_[q] && !v.dying_[q]) slots[ns++] = q;
-    v.err_level_[0] = 1.f;
+    v.err_level_[0] = 0.5f;                                    // r = 0.25: random steps now and then
     blk = 1; int32_t pp[3]; for (int i = 0; i < ns; i++) pp[i] = v.pass_[slots[i]];
     std::vector<std::vector<int>> vars(3); std::string arr[3];
     for (long j = 0; j < 48000L * 10; j++) {
       RunFor(1.f / sr);
       for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) {
-        pp[i] = v.pass_[slots[i]]; vars[i].push_back(v.sl_var_step_[slots[i]]);
+        pp[i] = v.pass_[slots[i]]; vars[i].push_back((int)v.sl_rand_mask_[slots[i]]);
         int a[VESTIGE_TIMING_SLICE_MAX]; for (int k = 0; k < v.sl_n_[slots[i]]; k++) a[k] = v.sl_arr_[slots[i]][k];
         arr[i] = ArrStr(a, v.sl_n_[slots[i]]);
       }
     }
     Realign();
     int vdiff = 0, nvar[3] = {0, 0, 0}; const size_t m = std::min(vars[0].size(), std::min(vars[1].size(), vars[2].size()));
-    for (size_t k = 0; k < m; k++) if ((vars[0][k] >= 0) != (vars[1][k] >= 0) || (vars[1][k] >= 0) != (vars[2][k] >= 0)) vdiff++;
-    for (int i = 0; i < ns; i++) for (int x : vars[i]) if (x >= 0) nvar[i]++;
-    printf("      3 voices, level 1, 10 s: arrangements %s / %s / %s; variations %d / %d / %d; variation passes differ in %d of %zu\n",
+    for (size_t k = 0; k < m; k++) if (vars[0][k] != vars[1][k] || vars[1][k] != vars[2][k]) vdiff++;
+    for (int i = 0; i < ns; i++) for (int x : vars[i]) nvar[i] += Pop((uint32_t)x);
+    printf("      3 voices, level 0.5, 10 s: arrangements %s / %s / %s; random steps %d / %d / %d; random-step masks differ in %d of %zu pass indices\n",
            arr[0].c_str(), arr[1].c_str(), arr[2].c_str(), nvar[0], nvar[1], nvar[2], vdiff, m);
     Check(ns == 3 && arr[0] != arr[1] && arr[1] != arr[2] && arr[0] != arr[2], "3 voices: each has its own arrangement");
-    Check(nvar[0] > 0 && nvar[1] > 0 && nvar[2] > 0 && vdiff > 0, "3 voices vary independently");
+    Check(nvar[0] > 0 && nvar[1] > 0 && nvar[2] > 0 && vdiff >= (int)m / 2, "3 voices roll their random steps independently");
+    v.err_level_[0] = 1.f;
     const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
     cs.knob[0] = kmid; RunFor(1.5f);
     max_grains = 0; max_counted = 0; const uint32_t d0 = v.grain_cap_drops_, pf0 = v.pool_full_, t0 = v.timing_trigs_;
