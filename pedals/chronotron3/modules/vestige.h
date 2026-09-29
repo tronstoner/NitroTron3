@@ -1604,8 +1604,7 @@ class Vestige : public Module {
         TimingFig f{(int8_t)t, (int8_t)k, (int8_t)param, 0};
         const uint32_t c = TimingFigCover(f, n);
         if ((c & used) || TimingBits(c) > room) return;
-        const float w = (k == 0) ? VESTIGE_TIMING_MEM_ONE_WEIGHT
-                      : (2 * k >= n) ? VESTIGE_TIMING_MEM_BACK_WEIGHT : 1.f;
+        const float w = (2 * k >= n) ? VESTIGE_TIMING_MEM_BACK_WEIGHT : 1.f;
         if (!(w > 0.f)) return;
         cand[t][nc[t]] = f; cw[t][nc[t]] = w; nc[t]++; tw[t] += w;
       };
@@ -1617,8 +1616,7 @@ class Vestige : public Module {
           if (k < n) put(k, hits);
         }
       } else {
-        const bool one_ok = (t == kFigRest || t == kFigStutter || t == kFigRatchet || t == kFigClean);
-        for (int k = one_ok ? 0 : 1; k < n; k++) put(k, t == kFigRatchet ? ratchet_div : 0);
+        for (int k = 0; k < n; k++) put(k, t == kFigRatchet ? ratchet_div : 0);
       }
     }
     float tot = 0.f;
@@ -1675,13 +1673,13 @@ class Vestige : public Module {
       else i++;
     }
     // 2. The edits (at least one every pass).
-    int edits = (int)(VESTIGE_TIMING_MEM_EDITS_B * level * (float)(n - 1) + 0.5f);
+    int edits = (int)(VESTIGE_TIMING_MEM_EDITS_B * level * (float)n + 0.5f);
     if (edits < 1) edits = 1;
     const float D = VESTIGE_TIMING_MEM_TARGET_A + VESTIGE_TIMING_MEM_TARGET_B * level;
     for (int e = 0; e < edits; e++) {
       int tgt = (int)D;
       if (TimingRand() < D - (float)tgt) tgt++;
-      if (tgt > n - 1) tgt = n - 1;
+      if (tgt > n) tgt = n;
       const int c = TimingBits(TimingMemCover(s));
       if (c > tgt)      TimingMemRemove(s);
       else if (c < tgt) TimingMemAdd(s, tgt - c, rdiv);
@@ -1699,7 +1697,7 @@ class Vestige : public Module {
         case kFigRest:    mute[k] = 1; break;
         case kFigBreak:   for (int i = k; i < n; i++) mute[i] = 1; break;
         case kFigStutter: play[k] = (int8_t)((k + n - 1) % n); break;   // (on step 1: the loop's last step)
-        case kFigRepeat:  for (int i = k; i < n; i++) play[i] = (int8_t)(k - 1); break;
+        case kFigRepeat:  for (int i = k; i < n; i++) play[i] = (int8_t)((k + n - 1) % n); break;
         case kFigRatchet: rat[k] = g.param; break;
         case kFigRetrig: {
           const uint32_t m = Bjorklund(g.param, n);

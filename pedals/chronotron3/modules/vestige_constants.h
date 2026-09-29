@@ -508,16 +508,17 @@ static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIM
 //   2. EDITS figures are edited — always at least one, every pass: a figure
 //      added when the pass holds fewer steps than the TARGET, one removed when
 //      more, one swapped (removed + a new one added) when it matches. Removals
-//      only take figures placed on an earlier pass, so at EDITS = n - 1 every
+//      only take figures placed on an earlier pass, so at EDITS = n every
 //      step is re-rolled every pass. The target is drawn per edit: floor(D) +
-//      (1 with chance frac(D)), at most n - 1.
-// Step 1 (the downbeat) is rarely touched: see VESTIGE_TIMING_MEM_ONE_WEIGHT.
+//      (1 with chance frac(D)), at most n.
+// The downbeat is NOT protected: step 1 takes any figure, like every step
+// (there STUTTER / REPEAT play the loop's last step; BREAK silences the pass).
 //   D     = TARGET_A + TARGET_B * L                      steps held (L = K3 level > 0)
-//   EDITS = max(1, round(EDITS_B * L * (n - 1)))         per pass
-// At L = 1: every step 2..n holds a figure (CLEAN among them) and every one of
+//   EDITS = max(1, round(EDITS_B * L * n))               per pass
+// At L = 1: every step holds a figure (CLEAN among them) and every one of
 // them is re-rolled every pass.
 static constexpr float  VESTIGE_TIMING_MEM_TARGET_A = 0.4f;
-static constexpr float  VESTIGE_TIMING_MEM_TARGET_B = 6.6f;     // D(1) = 7 = every step of 8
+static constexpr float  VESTIGE_TIMING_MEM_TARGET_B = 7.6f;     // D(1) = 8 = every step of 8
 static constexpr float  VESTIGE_TIMING_MEM_EDITS_B  = 1.0f;     // 1 = one edit per step at L = 1
 static constexpr int    VESTIGE_TIMING_MEM_LIFE     = 3;        // turns a figure plays, at most
 static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taking turns (1 = one pass)
@@ -546,10 +547,6 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
 // Where figures land: steps in the back half of the pass weigh this much vs 1
 // for the front half (a fill leads into the one).
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
-// Step 1 (the downbeat) weighs this much (0 = never touched). Only the one-step
-// figures go there: REST (the one drops out), STUTTER (the loop's last step
-// again over the one), RATCHET, CLEAN.
-static constexpr float  VESTIGE_TIMING_MEM_ONE_WEIGHT  = 0.25f;
 static constexpr int    VESTIGE_TIMING_MEM_FIGS   = 8;           // figures a pass can hold
 static constexpr int    VESTIGE_TIMING_MAX_EVENTS = 48;          // jumps + mute changes per pass
 static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest / break fade (each way)
