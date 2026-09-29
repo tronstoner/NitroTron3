@@ -10,6 +10,38 @@ freeze the builder considers correct).
 
 ---
 
+## Status — 2026-09-29 (read this first when resuming)
+
+**Build to test: `fe056f3`** (= `build/NitroTron3.bin`). Nothing changes until the
+builder has reported feedback on it. All of it is host-verified, none of it heard
+end to end.
+
+In the build:
+- Stages 0–2: new control map, freeze on its own buffer, T from K2 / FS1 tap,
+  captures quantised to divisions of T, sample-accurate start and playback.
+- K1 speed crossfade (half / clean / double). Poly mode = 4 voices.
+- Loops follow T when it changes, mode chosen by SW2 (temporary):
+  UP = A tape · MIDDLE = B stretch · DOWN = C re-cut.
+- Onset detection: a re-pluck while a ceiling-stopped note rings starts a new
+  capture.
+
+Scope for re-testing: every change made on 2026-09-29 is bit-identical to
+`eab03ca` unless (a) T changes while loops play, or (b) a note is re-plucked
+while an earlier note still rings after hitting the T ceiling. Feedback on
+anything else carries over between these builds.
+
+Open decisions (recommendation in brackets):
+1. K2 direction flip sweeps T through 100 ms and disturbs following loops
+   (follow T only after K2 is still for ~300 ms).
+2. A decaying low note can be re-captured several times at the end of its decay
+   — pre-existing gate issue (minimum time below the close level before re-open).
+3. The first tap of a new tap sequence pairs with the previous one if < 8 s
+   apart, briefly re-timing loops (require two agreeing intervals = 3 taps).
+4. Possible level dip in A/B when the grain length changes — unmeasured (measure;
+   reuse C's 5 ms restart if needed).
+
+---
+
 ## 1. Why
 
 vestige was influenced by the Chase Bliss Onward from the start. Two things
