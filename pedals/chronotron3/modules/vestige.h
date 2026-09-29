@@ -1339,12 +1339,19 @@ class Vestige : public Module {
   // Per sample: one pass compare, plus one head compare while a hit is
   // pending. The draws (rotation at loop start, variation roll per pass) use
   // their own RNG, so level 0 never draws from the shared VestigeRand sequence.
-  float ReadHead(int s) const {
+  // *rpass (optional): the pass the READ head is in — pass_ unless the offset
+  // carries it across the seam (the read runs on through a pass wrap inside a
+  // pattern span), so the K1 half-speed version stays continuous there too.
+  float ReadHead(int s, int32_t* rpass = nullptr) const {
+    if (rpass) *rpass = pass_[s];
     if (s >= VESTIGE_VOICE_SLABS || trig_off_[s] == 0.f) return fwd_[s];
     const float L = (float)PlayLen(s);
     float h = trig_rev_[s] ? fwd_[s] + trig_off_[s] : fwd_[s] - trig_off_[s];
-    if (h >= L) h -= L;
-    if (h < 0.f) h += L;
+    // (A span of 1 keeps the pass counter as it was: a pattern never carries
+    // the read across a wrap there, so this only changes spans > 1.)
+    const bool carry = (rpass != nullptr) && VESTIGE_TIMING_PATTERN_PASSES > 1;
+    if (h >= L) { h -= L; if (carry) (*rpass)++; }
+    if (h < 0.f) { h += L; if (carry) (*rpass)--; }
     return h;
   }
   uint32_t TimingRandU() {                   // xorshift32, audio thread only
@@ -1391,32 +1398,44 @@ class Vestige : public Module {
   }
   // Short-loop guard: the base itself if its step fits, else the densest pattern
   // below it that does; nothing below fits (a low level on a short loop): the
-  // sparsest one above it that does; -1 = none fits at all. (pass_out: output
-  // samples per pass.)
-  int TimingFit(int base, double pass_out) const {
+  // sparsest one above it that does; -1 = none fits at all. (span_out: output
+  // samples per pattern span.)
+  int TimingFit(int base, double span_out) const {
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
     for (int i = base; i >= 0; i--)
-      if (pass_out / (double)VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+      if (span_out / (double)VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
     for (int i = base + 1; i < VESTIGE_TIMING_PATTERNS; i++)
-      if (pass_out / (double)VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+      if (span_out / (double)VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
     return -1;
+  }
+  // Which pass of its pattern span pass `p` is (0 = the instance's first).
+  // Instances are aligned to the loop's own pass counter: forward they start
+  // on multiples of the span, reverse (pass_ counts down) on span-1 mod span —
+  // for a span of 2 exactly the K1 half-speed cycle in either direction.
+  static int TimingSpanK(int32_t p, bool rev) {
+    const int S = VESTIGE_TIMING_PATTERN_PASSES;
+    const int m = (int)(((p % S) + S) % S);
+    return rev ? S - 1 - m : m;
   }
   static uint32_t TimingRotate(uint32_t m, int n, int h0) {
     uint32_t r = 0;
     for (int i = 0; i < n; i++) if (m & (1u << ((i + h0) % n))) r |= (1u << i);
     return r;
   }
-  // Pass start (or loop start, el0 = the elapsed pass it joins at) with a
+  // Instance start (or loop start, el0 = the elapsed SPAN it joins at) with a
   // timing level > 0: the base pattern in the loop's rotation, or — rarely,
-  // never twice running — a one-pass variation; lay out its hit positions in
-  // material units (the pass's own length). Hits at or before el0 are skipped.
+  // never twice running — a one-instance variation; lay out its hit positions
+  // in material units over the span (span x the pass's own length). Hits at or
+  // before el0 are skipped.
   void TimingPlanPass(int s, bool rev, size_t L, double rho, float el0) {
     trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
+    trig_L_[s] = L; trig_rev_[s] = rev;
+    trig_start_[s] = rev ? pass_[s] + TimingSpanK(pass_[s], rev) : pass_[s] - TimingSpanK(pass_[s], rev);
     const float level = err_level_[kErrTiming];
     if (!(level > 0.f)) { var_last_[s] = false; return; }     // level 0: nothing drawn
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);   // output samples
     const int want = TimingBaseIndex(level);
-    const int pat  = TimingFit(want, pass_out);
+    const int pat  = TimingFit(want, (double)VESTIGE_TIMING_PATTERN_PASSES * pass_out);
     if (pat < 0) { timing_skipped_++; var_last_[s] = false; return; }   // nothing fits this loop
     if (pat != want) timing_fallbacks_++;
     const int n = VESTIGE_TIMING_PAT_STEPS[pat];
@@ -1451,39 +1470,62 @@ class Vestige : public Module {
       }
     }
     var_last_[s] = (var != kVarNone);
-    // Hit positions (step 0 = the pass start: no extra restart there).
+    // Hit positions (step 0 = the instance start: no extra restart there).
+    const double span = (double)VESTIGE_TIMING_PATTERN_PASSES * (double)L;
     for (int i = 1; i < n; i++)
-      if (rm & (1u << i)) trig_pos_[s][trig_cnt_[s]++] = (float)(size_t)((double)L * (double)i / (double)n + 0.5);
+      if (rm & (1u << i)) trig_pos_[s][trig_cnt_[s]++] = (float)(size_t)(span * (double)i / (double)n + 0.5);
     while (trig_next_[s] < trig_cnt_[s] && trig_pos_[s][trig_next_[s]] <= el0) trig_next_[s]++;
     trig_rev_[s] = rev;
     cur_pat_[s] = pat; cur_mask_[s] = rm; cur_rot_[s] = rot; cur_var_[s] = var;
     base_mask_[s] = base; base_rot_[s] = h0; timing_patterns_++;
   }
-  // Per sample, per loop voice (after the head advance): pass-start plan, then
-  // the next pending hit. Cost: one compare while nothing is pending; one more
-  // float compare while a pattern plays.
+  // Per sample, per loop voice (after the head advance): instance-start plan,
+  // then the next pending hit. Cost: one compare while nothing is pending; one
+  // more float compare while a pattern plays.
   void TimingStep(int s, bool rev, size_t L) {
     if (pass_[s] != trig_pass_[s]) {                        // a new pass began (this sample)
       trig_pass_[s] = pass_[s];
-      if (trig_off_[s] != 0.f) {                            // leaving a pattern pass:
-        trig_off_[s] = 0.f;                                 // back on the timeline, at the one
-        RestartStreams(s);
-        timing_returns_++;
+      const int k = TimingSpanK(pass_[s], rev);
+      if (k == 0) {                                         // a new pattern instance, on the one
+        if (trig_off_[s] != 0.f) {                          // leaving a pattern instance:
+          trig_off_[s] = 0.f;                               // back on the timeline, at the one
+          RestartStreams(s);
+          timing_returns_++;
+        }
+        TimingPlanPass(s, rev, L, rho_d_[s], 0.f);
+        return;
       }
-      TimingPlanPass(s, rev, L, rho_d_[s], 0.f);
-      return;
+      // A pass wrap INSIDE the span: the read simply runs on (no restart) —
+      // unless the instance no longer matches the loop (its length changed at
+      // this wrap — a C re-cut —, the direction flipped, or it is not this
+      // span's): then its remaining hits are dropped and the read goes back to
+      // the timeline, at the one.
+      const int32_t kk = trig_rev_[s] ? trig_start_[s] - pass_[s] : pass_[s] - trig_start_[s];
+      if (L != trig_L_[s] || rev != trig_rev_[s] || kk != k) {
+        trig_next_[s] = trig_cnt_[s];
+        if (trig_off_[s] != 0.f) { trig_off_[s] = 0.f; RestartStreams(s); timing_returns_++; }
+        timing_aborts_++;
+        return;
+      }
     }
     if (trig_next_[s] >= trig_cnt_[s]) return;
-    // Elapsed pass (material units): forward = the head (a pass starts at 0),
-    // reverse = (L - 1) - head (a reverse pass starts at L - 1). With that, the
-    // read head lands exactly on 0 (forward) / L - 1 (reverse) at each hit.
+    // Elapsed span (material units): the pass within the span x L, plus the
+    // elapsed pass: forward = the head (a pass starts at 0), reverse = (L - 1)
+    // - head (a reverse pass starts at L - 1). With that, the read head lands
+    // exactly on 0 (forward) / L - 1 (reverse) at each hit.
     const float el = trig_rev_[s] ? (float)L - 1.f - fwd_[s] : fwd_[s];
+    const float kL = (float)(trig_rev_[s] ? trig_start_[s] - pass_[s] : pass_[s] - trig_start_[s]) * (float)L;
     const float at = trig_pos_[s][trig_next_[s]];
-    if (el >= at) {
+    if (kL + el >= at) {
       trig_next_[s]++;
-      trig_off_[s] = at;                                    // read head -> the loop's start (rev: end)
-      RestartStreams(s);
-      timing_trigs_++; last_trig_slot_ = s; last_trig_at_ = rec_clock_now_;
+      const float off = at - kL;                            // read head -> the loop's start (rev: end)
+      if (off != trig_off_[s]) {                            // (already there: a hit on a pass start
+        trig_off_[s] = off;                                 //  with the read on the timeline — no jump)
+        RestartStreams(s);
+        timing_trigs_++; last_trig_slot_ = s; last_trig_at_ = rec_clock_now_;
+      } else {
+        timing_inplace_++;
+      }
     }
   }
 
@@ -1496,8 +1538,9 @@ class Vestige : public Module {
   // every two loop periods, exactly as the plan's power-of-two argument says.
   float SpeedHead(int s, float r) const {
     const float L = (float)PlayLen(s);
-    const float c = ReadHead(s);           // derived from the clean READ head: retriggers together
-    if (r < 1.f) return (c + ((pass_[s] & 1) ? L : 0.f)) * 0.5f;
+    int32_t rp;
+    const float c = ReadHead(s, &rp);      // derived from the clean READ head: retriggers together
+    if (r < 1.f) return (c + ((rp & 1) ? L : 0.f)) * 0.5f;
     float h = c * 2.f;
     if (h >= L) h -= L;
     return h;
@@ -2099,7 +2142,7 @@ class Vestige : public Module {
     // TIMING: the pattern starts with the loop (this first pass may be joined
     // mid-way: elapsed p, the hits already behind it are skipped).
     if (s < VESTIGE_VOICE_SLABS && !eng_[PoolOf(s)].frozen)
-      TimingPlanPass(s, rev, L, rho_d_[s], (float)p);
+      TimingPlanPass(s, rev, L, rho_d_[s], (float)TimingSpanK(pass_[s], rev) * (float)L + (float)p);
     rho_s_[s] = (float)rho_d_[s];
     fwd_d_[s] = (double)fwd_[s];
     active_[s] = true; dying_[s] = false; stolen_[s] = false;
@@ -2967,6 +3010,9 @@ class Vestige : public Module {
   bool     var_last_[VESTIGE_VOICE_SLABS]     = {false}; // the previous pass was a variation
   uint32_t timing_patterns_ = 0, timing_skipped_ = 0;    // diag
   uint32_t timing_vars_ = 0, timing_fallbacks_ = 0;      // diag
+  size_t   trig_L_[VESTIGE_VOICE_SLABS]       = {0};     // the play length the instance was laid out for
+  int32_t  trig_start_[VESTIGE_VOICE_SLABS]   = {0};     // pass_ of the instance's first pass
+  uint32_t timing_inplace_ = 0, timing_aborts_ = 0;      // diag: hits with no jump / instances dropped
   int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
   uint32_t timing_rng_ = 0x9E3779B9u;                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag

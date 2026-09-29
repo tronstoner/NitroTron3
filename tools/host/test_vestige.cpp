@@ -2341,72 +2341,117 @@ static void TestFollowRecut() {
 }
 
 // ---------------------------------------------------------------------------
-// Stage 3: the TIMING error — a steady Euclidean groove inside a pass.
-struct PassRec { long start; int pat; int rot; uint32_t mask; uint32_t base; int brot; int var;
-                 std::vector<long> hits_el; std::vector<long> hits_at; };
-struct TrigLog { std::vector<PassRec> passes; };
-// Run per sample for `passes` wraps of slot s; per pass: its pattern and every
-// restart (elapsed samples from the pass start, absolute sample).
-static TrigLog RunPasses(int s, int passes, float max_secs = 60.f) {
+// Stage 3: the TIMING error — a Euclidean groove, one instance per
+// VESTIGE_TIMING_PATTERN_PASSES passes (HALF TIME at 2).
+static constexpr int kSpan = VESTIGE_TIMING_PATTERN_PASSES;
+struct InstRec { long start; int pat; int rot; uint32_t mask; uint32_t base; int brot; int var; bool ret = false; float half0 = 0.f;
+                 std::vector<long> passes; std::vector<long> hits_el; std::vector<long> hits_at; };
+struct TrigLog { std::vector<InstRec> inst; long rh_bad = 0, half_jumps = 0, half_carry = 0, inner_wraps = 0, inner_xfades = 0; };
+// Run per sample for `count` pattern instances of slot s (recording starts at
+// the next instance start): per instance its pattern, its pass starts and
+// every restart (elapsed from the instance start, absolute sample); whether it
+// ended with a return to the one. Also, every sample: the read head in range,
+// and (track_half) the K1 half-speed head continuous except at restarts.
+static TrigLog RunInst(int s, int count, float max_secs = 60.f, bool track_half = false) {
   TrigLog lg; blk = 1;
-  int32_t pp = v.pass_[s]; uint32_t tc = v.timing_trigs_;
+  int32_t pp = v.pass_[s]; uint32_t tc = v.timing_trigs_, rc = v.timing_returns_;
+  float hprev = v.SpeedHead(s, 0.5f);
   const long end = n + (long)(max_secs * sr);
-  while (n < end && (int)lg.passes.size() < passes + 1) {
+  while (n < end && (int)lg.inst.size() < count + 1) {
     RunFor(1.f / sr);
+    const bool trig = v.timing_trigs_ != tc, ret = v.timing_returns_ != rc;
     if (v.pass_[s] != pp) {
       pp = v.pass_[s];
-      PassRec r; r.start = n - 1; r.pat = v.cur_pat_[s]; r.rot = v.cur_rot_[s]; r.mask = v.cur_mask_[s];
-      r.base = v.base_mask_[s]; r.brot = v.base_rot_[s]; r.var = v.cur_var_[s];
-      lg.passes.push_back(r);
-    }
-    if (v.timing_trigs_ != tc) {
-      tc = v.timing_trigs_;
-      if (v.last_trig_slot_ == s && !lg.passes.empty()) {
-        lg.passes.back().hits_el.push_back((n - 1) - lg.passes.back().start);
-        lg.passes.back().hits_at.push_back(n - 1);
+      if (v.trig_start_[s] == v.pass_[s]) {                // a new instance was laid out here
+        if (!lg.inst.empty()) lg.inst.back().ret = ret;
+        InstRec r; r.start = n - 1; r.pat = v.cur_pat_[s]; r.rot = v.cur_rot_[s]; r.mask = v.cur_mask_[s];
+        r.base = v.base_mask_[s]; r.brot = v.base_rot_[s]; r.var = v.cur_var_[s];
+        r.half0 = v.SpeedHead(s, 0.5f);                      // where the K1 half-speed cycle is
+        lg.inst.push_back(r);
       }
+      if (!lg.inst.empty()) lg.inst.back().passes.push_back(n - 1);
+      if (!lg.inst.empty() && v.trig_start_[s] != v.pass_[s] && !trig) {   // an inner wrap with no hit on it
+        lg.inner_wraps++;
+        bool xf = v.restart_[s][0] || v.restart_[s][1];
+        for (int g = 0; g < VESTIGE_GRAINS; g++) if (v.grain_slot_[g] == s && v.grains_[g].IsActive() && v.grains_[g].FadingOut()) xf = true;
+        if (xf) lg.inner_xfades++;
+      }
+      if (track_half && !trig && !ret && v.trig_off_[s] != 0.f) lg.half_carry++;   // a wrap the read runs through
+    }
+    if (trig) {
+      if (v.last_trig_slot_ == s && !lg.inst.empty()) {
+        lg.inst.back().hits_el.push_back((n - 1) - lg.inst.back().start);
+        lg.inst.back().hits_at.push_back(n - 1);
+      }
+    }
+    tc = v.timing_trigs_; rc = v.timing_returns_;
+    const float L = (float)v.PlayLen(s), h = v.ReadHead(s);
+    if (!(h >= 0.f && h < L)) lg.rh_bad++;
+    if (track_half) {
+      const float h2 = v.SpeedHead(s, 0.5f);
+      float d = h2 - hprev; if (d > 0.5f * L) d -= L; if (d < -0.5f * L) d += L;
+      if (!trig && !ret && fabsf(d - 0.5f) > 1e-3f) lg.half_jumps++;
+      hprev = h2;
     }
   }
   Realign();
-  if (!lg.passes.empty()) lg.passes.pop_back();              // the last one is incomplete
+  if (!lg.inst.empty()) lg.inst.pop_back();                  // the last one is incomplete
   return lg;
 }
 static std::string MaskStr(uint32_t m, int n) { std::string r; for (int i = 0; i < n; i++) r += (m & (1u << i)) ? 'x' : '.'; return r; }
 static uint32_t RotMask(uint32_t m, int n, int h) { uint32_t r = 0; for (int i = 0; i < n; i++) if (m & (1u << ((i + h) % n))) r |= 1u << i; return r; }
 static int Pop(uint32_t m) { int c = 0; while (m) { c += m & 1u; m >>= 1; } return c; }
 // The test's own model of the level -> pattern rule: list position round(L*9);
-// short-loop guard = densest fitting at or below, else sparsest fitting above.
+// short-loop guard on the SPAN's step = densest fitting at or below, else
+// sparsest fitting above.
 static int WantBase(float level) { return (int)(level * (float)(VESTIGE_TIMING_PATTERNS - 1) + 0.5f); }
 static int WantFit(float level, double pass_out) {
-  const double min_step = VESTIGE_TIMING_MIN_STEP_MS * 0.001 * sr;
+  const double min_step = VESTIGE_TIMING_MIN_STEP_MS * 0.001 * sr, span = kSpan * pass_out;
   const int b = WantBase(level);
-  for (int i = b; i >= 0; i--) if (pass_out / VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
-  for (int i = b + 1; i < VESTIGE_TIMING_PATTERNS; i++) if (pass_out / VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+  for (int i = b; i >= 0; i--) if (span / VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+  for (int i = b + 1; i < VESTIGE_TIMING_PATTERNS; i++) if (span / VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
   return -1;
 }
-struct PassStats {
-  int passes = 0, played = 0, var = 0, eligible = 0, eligible_var = 0, add = 0, drop = 0, rot = 0;
-  int bad_pat = 0, bad_base = 0, bad_var = 0, bad_hits = 0, bad_step0 = 0, var_twice = 0, rot_moved = 0;
-  bool ok() const { return bad_pat + bad_base + bad_var + bad_hits + bad_step0 + var_twice + rot_moved == 0; }
+// The test's model of where an instance restarts (elapsed material samples
+// from its start): hit i at round(span x L x i / n); a hit whose landing point
+// (pos mod L) equals the read's current offset is no jump (the read is already
+// at the loop's start). *last = the offset at the instance's end (!= 0: a
+// return to the one follows).
+static std::vector<long> WantRestarts(uint32_t mask, int nst, size_t L, long* last, std::vector<long>* all = nullptr) {
+  std::vector<long> w; long off = 0;
+  for (int i = 1; i < nst; i++) if (mask & (1u << i)) {
+    const long pos = (long)((double)kSpan * (double)L * i / nst + 0.5);
+    if (all) all->push_back(pos);
+    if (pos % (long)L != off) { w.push_back(pos); off = pos % (long)L; }
+  }
+  *last = off; return w;
+}
+struct InstStats {
+  int inst = 0, played = 0, var = 0, eligible = 0, eligible_var = 0, add = 0, drop = 0, rot = 0, restarts = 0, inplace = 0;
+  int bad_pat = 0, bad_base = 0, bad_var = 0, bad_hits = 0, bad_step0 = 0, var_twice = 0, rot_moved = 0, bad_ret = 0, bad_grid = 0;
+  bool ok() const { return bad_pat + bad_base + bad_var + bad_hits + bad_step0 + var_twice + rot_moved + bad_ret + bad_grid == 0; }
 };
-// Every pass of slot s (play length L) against the model: the expected pattern
-// (want, -1 = none), its base = the table mask in ONE hit-starting rotation
-// fixed across the log, the pass = the base or exactly one variation (one hit
-// added / dropped off step 0, or another hit-starting rotation) — classified
-// from the masks, and the module's own label must agree — never two variation
-// passes running, step 0 always a hit, and restarts exactly at round(L*i/n)
-// (rate1; else only their count).
-static PassStats CheckPasses(const TrigLog& lg, size_t L, int want, bool rate1) {
-  PassStats st;
-  for (size_t p = 0; p < lg.passes.size(); p++) {
-    const PassRec& r = lg.passes[p]; st.passes++;
+// Every instance of slot s (play length L) against the model: the expected
+// pattern (want, -1 = none), its base = the table mask in ONE hit-starting
+// rotation fixed across the log, the instance = the base or exactly one
+// variation (one hit added / dropped off step 0, or another hit-starting
+// rotation) — classified from the masks, the module's own label must agree —
+// never two variation instances running, step 0 always a hit, span passes each
+// L long (rate1), restarts exactly at the model's points (rate1; else only
+// their count) and nowhere else, a return at its end iff the model says so.
+static InstStats CheckInst(const TrigLog& lg, size_t L, int want, bool rate1) {
+  InstStats st;
+  for (size_t p = 0; p < lg.inst.size(); p++) {
+    const InstRec& r = lg.inst[p]; st.inst++;
+    if ((int)r.passes.size() != kSpan) st.bad_grid++;
+    if (rate1) for (size_t k = 0; k < r.passes.size(); k++) if (r.passes[k] != r.start + (long)(k * L)) st.bad_grid++;
     if (r.pat != want) st.bad_pat++;
-    if (r.pat < 0) { if (!r.hits_el.empty()) st.bad_hits++; continue; }
+    if (r.pat < 0) { if (!r.hits_el.empty() || r.ret) st.bad_hits++; continue; }
     st.played++;
     const int nst = VESTIGE_TIMING_PAT_STEPS[r.pat]; const uint32_t tm = v.timing_mask_[r.pat];
     if (!(tm & (1u << r.brot)) || r.base != RotMask(tm, nst, r.brot)) st.bad_base++;
     if (!(r.mask & 1u)) st.bad_step0++;
-    if (p > 0 && lg.passes[p - 1].pat == r.pat && lg.passes[p - 1].brot != r.brot) st.rot_moved++;
+    if (p > 0 && lg.inst[p - 1].pat == r.pat && lg.inst[p - 1].brot != r.brot) st.rot_moved++;
     const uint32_t d = r.mask ^ r.base; int cls = 0;
     if (d == 0) cls = 0;
     else if (Pop(d) == 1 && !(d & 1u) && (d & r.mask)) cls = 1;          // added
@@ -2416,23 +2461,59 @@ static PassStats CheckPasses(const TrigLog& lg, size_t L, int want, bool rate1) 
     if (cls == 3 && (!(tm & (1u << r.rot)) || RotMask(tm, nst, r.rot) != r.mask)) st.bad_var++;
     if (cls > 0) { st.var++; if (cls == 1) st.add++; if (cls == 2) st.drop++; if (cls == 3) st.rot++; }
     if (p > 0) {
-      if (lg.passes[p - 1].var == 0) { st.eligible++; if (cls > 0) st.eligible_var++; }
+      if (lg.inst[p - 1].var == 0) { st.eligible++; if (cls > 0) st.eligible_var++; }
       else if (cls != 0) st.var_twice++;
     }
-    std::vector<long> w;
-    for (int i = 1; i < nst; i++) if (r.mask & (1u << i)) w.push_back((long)((double)L * i / nst + 0.5));
+    long last = 0; std::vector<long> all;
+    const std::vector<long> w = WantRestarts(r.mask, nst, L, &last, &all);
+    st.restarts += (int)r.hits_el.size(); st.inplace += (int)(all.size() - w.size());
+    if (r.ret != (last != 0)) st.bad_ret++;
     if (w.size() != r.hits_el.size()) { st.bad_hits++; continue; }
     if (rate1) for (size_t k = 0; k < w.size(); k++) if (r.hits_el[k] != w[k]) st.bad_hits++;
   }
   return st;
 }
-static void PrintStats(const char* what, const PassStats& st) {
-  printf("      %s: %d passes, %d played; variations %d (add %d, drop %d, rotation %d); bad: pattern %d base %d variation %d step0 %d hits %d twice %d rotation-moved %d\n",
-         what, st.passes, st.played, st.var, st.add, st.drop, st.rot, st.bad_pat, st.bad_base, st.bad_var, st.bad_step0, st.bad_hits, st.var_twice, st.rot_moved);
+static void PrintStats(const char* what, const InstStats& st) {
+  printf("      %s: %d instances, %d played, %d restarts, %d hits in place; variations %d (add %d, drop %d, rotation %d); bad: pattern %d base %d variation %d step0 %d hits %d return %d grid %d twice %d rotation-moved %d\n",
+         what, st.inst, st.played, st.restarts, st.inplace, st.var, st.add, st.drop, st.rot, st.bad_pat, st.bad_base, st.bad_var,
+         st.bad_step0, st.bad_hits, st.bad_ret, st.bad_grid, st.var_twice, st.rot_moved);
+}
+// Forward, rate 1: the output around every point where the read runs on
+// seamlessly — a pass wrap inside the span (read not on the timeline), or the
+// read crossing the loop's seam inside a segment longer than a pass — equals
+// the loop material around the read position there (lag 0, c > 0.99).
+static float seam_ref = 1.f;                                  // c of a natural (level 0) wrap window
+static void SeamlessWindows(const TrigLog& lg, int s, size_t L, int* wrap_ok, int* wrap_tot, int* seam_ok, int* seam_tot, float* seam_worst) {
+  *wrap_ok = *wrap_tot = *seam_ok = *seam_tot = 0; *seam_worst = 1.f;
+  for (const InstRec& r : lg.inst) {
+    if (r.pat < 0) continue;
+    const long span = (long)(kSpan * L);
+    std::vector<long> rs = r.hits_el;                        // restart points; segment [a, b)
+    std::vector<long> bounds; bounds.push_back(0); for (long h : rs) bounds.push_back(h); bounds.push_back(span);
+    for (size_t g = 0; g + 1 < bounds.size(); g++) {
+      const long a = bounds[g], b = bounds[g + 1];
+      // read(E) = (E - a) mod L for a hit segment; the first segment is the timeline.
+      for (long c = a + 1; c < b; c++) {
+        const bool pass_wrap = (c % (long)L == 0), seam = (g > 0 && (c - a) % (long)L == 0);
+        if (!(pass_wrap || seam)) continue;
+        if (pass_wrap && seam) continue;                     // both at once = on the timeline's own wrap
+        if (pass_wrap && g == 0) continue;                   // timeline's own wrap
+        if (c - a < 1080 || b - c < 2520) continue;          // restart-free window
+        const long rp = (g == 0) ? c % (long)L : (c - a) % (long)L;
+        std::vector<float> ref(2400); for (int j = 0; j < 2400; j++) ref[j] = v.slab_[s][((rp - 480 + j) % (long)L + (long)L) % (long)L];
+        float cc = 0.f; const int lagv = BestLagRef(r.start + c - 480, ref, 50, &cc);
+        // (Across the loop's own seam the reference is the natural wrap's
+        // correlation, measured at level 0: the capture seam crossfade.)
+        const bool good = (lagv == 0 && cc > (pass_wrap ? 0.99f : seam_ref - 0.002f));
+        if (!pass_wrap && cc < *seam_worst) *seam_worst = cc;
+        if (pass_wrap) { (*wrap_tot)++; if (good) (*wrap_ok)++; } else { (*seam_tot)++; if (good) (*seam_ok)++; }
+      }
+    }
+  }
 }
 
 static void TestTimingError() {
-  printf("-- stage 3: the TIMING error (a steady Euclidean groove inside a pass)\n");
+  printf("-- stage 3: the TIMING error (a Euclidean groove over %d pass(es))\n", kSpan);
   // The generated patterns are the table's rhythms. Bjorklund's output is a
   // ROTATION of the written form for some (the written forms follow different
   // conventions); an event draws its rotation uniformly from the hit-starting
@@ -2464,6 +2545,24 @@ static void TestTimingError() {
       if (Vestige::TimingBaseIndex(lv) != WantBase(lv)) ok = false;
     Check(ok && Vestige::TimingBaseIndex(0.001f) == 0 && Vestige::TimingBaseIndex(1.f) == VESTIGE_TIMING_PATTERNS - 1,
           "base pattern = list position round(L x (N-1)): smallest level -> E(2,8), full -> E(7,8)"); }
+  // Segments over the span: every base pattern (any rotation) keeps each
+  // stretch between hits within one pass; which variations exceed it.
+  { bool ok = true; std::string over;
+    for (int p = 0; p < VESTIGE_TIMING_PATTERNS; p++) {
+      const int nst = VESTIGE_TIMING_PAT_STEPS[p]; const uint32_t m = v.timing_mask_[p];
+      int gap = 0, run = 0; for (int i = 1; i <= 2 * nst; i++) { if (m & (1u << (i % nst))) { if (run + 1 > gap) gap = run + 1; run = 0; } else run++; }
+      if (gap * kSpan > nst) ok = false;
+      int dgap = 0;                                          // worst gap with one hit dropped
+      for (int h = 1; h < nst; h++) if (m & (1u << h)) {
+        const uint32_t dm = m & ~(1u << h); int g2 = 0, r2 = 0;
+        for (int i = 1; i <= 2 * nst; i++) { if (dm & (1u << (i % nst))) { if (r2 + 1 > g2) g2 = r2 + 1; r2 = 0; } else r2++; }
+        if (g2 > dgap) dgap = g2;
+      }
+      if (dgap * kSpan > nst) { char b[48]; snprintf(b, sizeof b, "E(%d,%d) %.2f  ", VESTIGE_TIMING_PAT_HITS[p], nst, (double)dgap * kSpan / nst); over += b; }
+    }
+    printf("      span %d: longest stretch between hits of any base <= 1 pass: %s; a dropped hit makes it > 1 pass (passes) in: %s\n",
+           kSpan, ok ? "yes" : "NO", over.empty() ? "none" : over.c_str());
+    Check(ok, "every base pattern over the span: no stretch between hits longer than one pass"); }
 
   // Level 0: nothing drawn.
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
@@ -2472,111 +2571,151 @@ static void TestTimingError() {
   CapRec r{}; noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
   const int s = r.s; const size_t Q = r.Q;
   RunFor(0.8f);
-  TrigLog lg0;
+  long grid0 = 0;
   { const uint32_t rng0 = v.timing_rng_, t0 = v.timing_trigs_, p0 = v.timing_patterns_;
-    lg0 = RunPasses(s, 6);
+    blk = 1; const int32_t pp = v.pass_[s]; while (v.pass_[s] == pp) RunFor(1.f / sr); grid0 = n - 1;
+    RunFor(3.0f); Realign();
+    // The natural wrap: the window across the loop's own seam, for reference.
+    seam_ref = 1.f;
+    for (int k = 1; k <= 4; k++) {
+      std::vector<float> ref(2400); for (int j = 0; j < 2400; j++) ref[j] = v.slab_[s][((long)Q - 480 + j) % (long)Q];
+      float cc = 0.f; const int lagv = BestLagRef(grid0 + k * (long)Q - 480, ref, 50, &cc);
+      if (lagv != 0) cc = 0.f; if (cc < seam_ref) seam_ref = cc;
+    }
+    printf("      level 0: window across the loop's own wrap = its material at lag 0 with c = %.4f (the capture seam crossfade)\n", seam_ref);
     Check(v.timing_rng_ == rng0 && v.timing_trigs_ == t0 && v.timing_patterns_ == p0 && v.trig_off_[s] == 0.f,
           "timing level 0: nothing drawn, no pattern, no restart, the read head is the timeline head"); }
 
-  // Level 1: the base E(7,8) on every pass, in one rotation, with rare
-  // one-pass variations; the grid holds.
+  // Level 1: E(7,8) over the span; the grid holds, restarts only at hits.
   v.err_level_[0] = 1.f;
-  const TrigLog lg = RunPasses(s, 30);
-  const PassStats st1 = CheckPasses(lg, Q, WantBase(1.f), true);
-  int len_bad = 0; bool grid_ok = true; size_t restarts = 0;
-  for (size_t p = 0; p < lg.passes.size(); p++) {
-    if (p > 0 && lg.passes[p].start - lg.passes[p - 1].start != (long)Q) len_bad++;
-    if ((lg.passes[p].start - lg0.passes[0].start) % (long)Q != 0) grid_ok = false;
-    restarts += lg.passes[p].hits_el.size();
-  }
+  const TrigLog lg = RunInst(s, 15);
+  const InstStats st1 = CheckInst(lg, Q, WantBase(1.f), true);
+  bool grid_ok = true;
+  for (const InstRec& ir : lg.inst) for (long ps : ir.passes) if ((ps - grid0) % (long)Q != 0) grid_ok = false;
+  for (size_t p = 0; p < lg.inst.size(); p++) if ((lg.inst[p].start - grid0) % (long)(kSpan * Q) != 0 && ((grid0 - lg.inst[p].start) % (long)(kSpan * Q)) != 0) {}
   PrintStats("level 1 (E(7,8))", st1);
-  printf("      level 1: base %s (rotation from hit %d), %zu restarts, length off %d, grid %s\n",
-         MaskStr(lg.passes[0].base, 8).c_str(), lg.passes[0].brot, restarts, len_bad, grid_ok ? "unchanged" : "MOVED");
-  Check(st1.played == st1.passes && st1.ok(),
-        "level 1: every pass plays E(7,8) in the loop's fixed rotation or one variation of it; restarts exactly at round(pass x i / n)");
-  Check(len_bad == 0 && grid_ok, "patterns never move the grid: every pass is Q long, every wrap on the no-error grid");
+  printf("      level 1: base %s (rotation from hit %d), grid %s, read head out of range %ld\n",
+         MaskStr(lg.inst[0].base, 8).c_str(), lg.inst[0].brot, grid_ok ? "unchanged" : "MOVED", lg.rh_bad);
+  Check(st1.played == st1.inst && st1.ok() && st1.restarts > 0,
+        "level 1: every instance plays E(7,8) (or one variation) over the span; restarts exactly at round(span x L x i / n), none elsewhere");
+  Check(grid_ok && lg.rh_bad == 0, "the span never moves the grid: every pass Q long, on the no-error grid; the read head stays in the loop");
+  { int al = 0; for (const InstRec& ir : lg.inst) if (ir.half0 < 1.f) al++;
+    printf("      instance starts on the K1 half-speed cycle's start (half-speed head at 0): %d / %zu\n", al, lg.inst.size());
+    Check(al == (int)lg.inst.size(), "forward: every instance starts where the K1 half-speed cycle does (the loop's own pass counter)"); }
 
   // After each restart the output is the loop's start (past the 5 ms fade);
-  // after a pattern pass, the next pass starts on the one.
+  // after an instance the next one starts on the one.
   { int ok = 0, tot = 0; float worst = 1.f;
-    for (const PassRec& pr : lg.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 40; k++) {
-      const long next = (k + 1 < pr.hits_el.size()) ? pr.hits_el[k + 1] : (long)Q;
-      const int N = (int)(next - pr.hits_el[k] - 600); if (N < 600) continue;
+    for (const InstRec& ir : lg.inst) for (size_t k = 0; k < ir.hits_at.size() && tot < 40; k++) {
+      const long next = (k + 1 < ir.hits_el.size()) ? ir.hits_el[k + 1] : (long)(kSpan * Q);
+      const int N = (int)(next - ir.hits_el[k] - 600); if (N < 600) continue;
       const int NN = N < 2400 ? N : 2400;
       std::vector<float> ref(NN); for (int j = 0; j < NN; j++) ref[j] = v.slab_[s][480 + j];
-      float c = 0.f; const int lagv = BestLagRef(pr.hits_at[k] + 480, ref, 50, &c);
+      float c = 0.f; const int lagv = BestLagRef(ir.hits_at[k] + 480, ref, 50, &c);
       tot++; if (lagv == 0 && c > 0.99f) ok++; if (c < worst) worst = c;
     }
     printf("      after each restart: %d / %d windows = the loop's start at lag 0 (worst c = %.4f)\n", ok, tot, worst);
     Check(tot >= 20 && ok == tot, "after every restart the output is the loop's start (lag 0, c > 0.99)"); }
   { int ok = 0, tot = 0;
-    for (size_t p = 1; p < lg.passes.size() && tot < 10; p++) {
-      if (lg.passes[p - 1].pat < 0) continue;
-      const long first = lg.passes[p].hits_el.empty() ? (long)Q : lg.passes[p].hits_el[0];
+    for (size_t p = 1; p < lg.inst.size() && tot < 10; p++) {
+      if (lg.inst[p - 1].pat < 0) continue;
+      const long first = lg.inst[p].hits_el.empty() ? (long)Q : lg.inst[p].hits_el[0];
       const int N = (int)((first - 600 < 2400) ? first - 600 : 2400); if (N < 600) continue;
       std::vector<float> ref(N); for (int j = 0; j < N; j++) ref[j] = v.slab_[s][480 + j];
-      float c = 0.f; const int lagv = BestLagRef(lg.passes[p].start + 480, ref, 50, &c);
+      float c = 0.f; const int lagv = BestLagRef(lg.inst[p].start + 480, ref, 50, &c);
       tot++; if (lagv == 0 && c > 0.99f) ok++;
     }
-    Check(tot >= 5 && ok == tot, "after a pattern pass the next pass starts on the loop's one (lag 0)"); }
-  hist_on = false; in_hist.clear(); wet_hist.clear();
+    Check(tot >= 5 && ok == tot, "after an instance the next one starts on the loop's one (lag 0)"); }
 
-  // K3 change mid-pass: the pass keeps its pattern, the next one takes the new
-  // base; the rotation stays the loop's drawn index (mod the hit count), so K3
-  // back gives the same rotation again.
+  // Seamless read through a pass wrap inside the span: E(3,8) (no hit on the
+  // span's middle), also for the K1 half-speed head.
+  { v.err_level_[0] = 2.f / 9.f;
+    const TrigLog lw = RunInst(s, 20, 60.f, true);
+    const InstStats sw = CheckInst(lw, Q, 2, true);
+    int wo, wt, so, st_; float sw_c;
+    SeamlessWindows(lw, s, Q, &wo, &wt, &so, &st_, &sw_c);
+    PrintStats("level 2/9 (E(3,8))", sw);
+    printf("      through an in-span pass wrap: %d / %d windows = the material the read runs on (lag 0); half-speed head: %ld wraps run through, %ld jumps outside restarts; read out of range %ld\n",
+           wo, wt, lw.half_carry, lw.half_jumps, lw.rh_bad);
+    Check(sw.ok() && sw.played == sw.inst, "level 2/9: every instance E(3,8) (or one variation) over the span");
+    printf("      inner wraps with no hit: %ld, with a crossfade / restart in flight: %ld\n", lw.inner_wraps, lw.inner_xfades);
+    Check(wt >= 15 && wo == wt && lw.inner_wraps >= 15 && lw.inner_xfades == 0,
+          "a pass wrap inside the span: no restart, no crossfade, the read simply runs on (the loop material continues, lag 0)");
+    Check(lw.half_carry >= 15 && lw.half_jumps == 0 && lw.rh_bad == 0, "K1 half-speed head: continuous through those wraps too (jumps only at restarts)"); }
+
+  // E(2,8) over 2 passes: a hit exactly on every pass start = the untouched
+  // loop (no restart, no return, the read stays on the timeline).
+  { v.err_level_[0] = 0.05f;
+    const uint32_t t0 = v.timing_trigs_, r0 = v.timing_returns_, ip0 = v.timing_inplace_;
+    const TrigLog le = RunInst(s, 20);
+    const InstStats se = CheckInst(le, Q, 0, true);
+    int base_restarts = 0, base_n = 0; for (const InstRec& ir : le.inst) if (ir.var == 0) { base_n++; base_restarts += (int)ir.hits_el.size() + (ir.ret ? 1 : 0); }
+    PrintStats("level 0.05 (E(2,8))", se);
+    printf("      E(2,8): %d base instances, %d restarts/returns in them; in-place hits %u; all restarts %u, returns %u (from the variations)\n",
+           base_n, base_restarts, v.timing_inplace_ - ip0, v.timing_trigs_ - t0, v.timing_returns_ - r0);
+    Check(se.ok() && se.played == se.inst && base_n >= 10 && base_restarts == 0,
+          kSpan == 2 ? "E(2,8) over 2 passes: its hit lands on every pass start = the untouched loop (no restart, no return)"
+                     : "E(2,8): every instance as the model says"); }
+
+  // K3 change mid-instance: the instance keeps its pattern through its inner
+  // wrap; the next instance takes the new base; the rotation stays the loop's
+  // drawn index (mod the hit count), so K3 back gives the same rotation again.
   { const auto hit_index = [](int pat, int h) { int k = 0; for (int i = 0; i < h; i++) if (v.timing_mask_[pat] & (1u << i)) k++; return k; };
-    blk = 1; const int32_t p0 = v.pass_[s]; while (v.pass_[s] == p0) RunFor(1.f / sr);
+    v.err_level_[0] = 1.f; RunInst(s, 1);
+    blk = 1; while (v.trig_start_[s] != v.pass_[s] || v.cur_pat_[s] != 9) RunFor(1.f / sr);   // an E(7,8) instance began
     for (long j = 0; j < (long)Q / 2; j++) RunFor(1.f / sr);
-    const int pat_a = v.cur_pat_[s], rot_a = v.base_rot_[s]; const uint32_t mask_a = v.cur_mask_[s];
+    const int pat_a = v.cur_pat_[s], rot_a = v.base_rot_[s]; const uint32_t mask_a = v.cur_mask_[s]; const int32_t st_a = v.trig_start_[s];
     v.err_level_[0] = 6.f / 9.f;                            // -> E(5,8)
-    const int32_t p1 = v.pass_[s]; bool kept = true;
-    while (v.pass_[s] == p1) { RunFor(1.f / sr); if (v.pass_[s] == p1 && (v.cur_pat_[s] != pat_a || v.cur_mask_[s] != mask_a)) kept = false; }
+    bool kept = true;
+    while (v.trig_start_[s] == st_a) { RunFor(1.f / sr); if (v.trig_start_[s] == st_a && (v.cur_pat_[s] != pat_a || v.cur_mask_[s] != mask_a)) kept = false; }
     const int pat_b = v.cur_pat_[s], rot_b = v.base_rot_[s];
     Realign();
-    const TrigLog lb = RunPasses(s, 6);
+    const TrigLog lb = RunInst(s, 4);
     v.err_level_[0] = 1.f;
-    const TrigLog lc = RunPasses(s, 2);
-    const int rot_c = lc.passes.empty() ? -1 : lc.passes[0].brot;
+    const TrigLog lc = RunInst(s, 1);
+    const int rot_c = lc.inst.empty() ? -1 : lc.inst[0].brot;
     const uint32_t seed = v.rot_seed_[s];
     const int ia = hit_index(pat_a, rot_a), ib = hit_index(pat_b, rot_b);
-    printf("      K3 1 -> 6/9 mid-pass: pass kept E(%d,%d) = %s; next pass E(%d,%d); rotation hit index %d of 7 -> %d of 5 -> back %s (seed %% 7 = %u, %% 5 = %u)\n",
+    printf("      K3 1 -> 6/9 mid-instance: instance kept E(%d,%d) through its inner wrap = %s; next instance E(%d,%d); rotation hit index %d of 7 -> %d of 5 -> back %s (seed %% 7 = %u, %% 5 = %u)\n",
            VESTIGE_TIMING_PAT_HITS[pat_a], VESTIGE_TIMING_PAT_STEPS[pat_a], kept ? "yes" : "NO",
            VESTIGE_TIMING_PAT_HITS[pat_b], VESTIGE_TIMING_PAT_STEPS[pat_b], ia, ib, rot_c == rot_a ? "same" : "DIFFERENT", seed % 7u, seed % 5u);
-    Check(kept && pat_a == 9 && pat_b == 6, "a K3 change applies at the next pass start, not mid-pass");
-    const PassStats sb = CheckPasses(lb, Q, 6, true);
-    Check(sb.ok() && sb.played == sb.passes, "after the change every pass is the new base (or one variation of it)");
+    Check(kept && pat_a == 9 && pat_b == 6, "a K3 change applies at the next instance start, not mid-instance");
+    const InstStats sb = CheckInst(lb, Q, 6, true);
+    Check(sb.ok() && sb.played == sb.inst, "after the change every instance is the new base (or one variation of it)");
     Check(ia == (int)(seed % 7u) && ib == (int)(seed % 5u) && rot_c == rot_a,
           "rotation = the loop's drawn index modulo the hit count: kept across K3 changes, K3 back = the same rotation"); }
 
-  // Variation rate and kinds over many passes (mid level: E(7,12)).
+  // Variation rate and kinds, per INSTANCE (mid level: E(7,12)).
   { v.err_level_[0] = 0.5f;
-    const TrigLog lv = RunPasses(s, 300, 200.f);
-    const PassStats sv = CheckPasses(lv, Q, WantBase(0.5f), true);
+    const TrigLog lv = RunInst(s, 200, 250.f);
+    const InstStats sv = CheckInst(lv, Q, WantBase(0.5f), true);
     PrintStats("level 0.5 (E(7,12))", sv);
     const double p = VESTIGE_TIMING_VAR_PROB, rate = (double)sv.eligible_var / sv.eligible, sd = sqrt(p * (1 - p) / sv.eligible);
     const double e3 = sv.var / 3.0, sd3 = sqrt(sv.var * (1.0 / 3) * (2.0 / 3));
-    printf("      variation rate on eligible passes (not right after a variation): %d / %d = %.3f (constant %.3f +- %.3f); overall %.3f\n",
-           sv.eligible_var, sv.eligible, rate, p, 3 * sd, (double)sv.var / sv.passes);
-    Check(sv.ok() && sv.played == sv.passes, "level 0.5: every pass = the base or exactly one variation (added / dropped / rotated), never two running");
-    Check(fabs(rate - p) < 3 * sd, "variation rate ~ VESTIGE_TIMING_VAR_PROB (on passes that may roll)");
+    printf("      variation rate on eligible instances (not right after a variation): %d / %d = %.3f (constant %.3f +- %.3f); overall %.3f\n",
+           sv.eligible_var, sv.eligible, rate, p, 3 * sd, (double)sv.var / sv.inst);
+    Check(sv.ok() && sv.played == sv.inst, "level 0.5: every instance = the base or exactly one variation (added / dropped / rotated), never two running");
+    Check(fabs(rate - p) < 3 * sd, "variation rate per instance ~ VESTIGE_TIMING_VAR_PROB (on instances that may roll)");
     Check(fabs(sv.add - e3) < 3 * sd3 && fabs(sv.drop - e3) < 3 * sd3 && fabs(sv.rot - e3) < 3 * sd3,
           "the three variation kinds are ~uniform"); }
-  // A rotation-symmetric base (E(3,6)): its rotations are all the same mask, so
-  // its variations are only added / dropped hits.
+  // A rotation-symmetric base (E(3,6)): variations are only added / dropped
+  // hits. A dropped hit stretches a segment past one pass: the read then runs
+  // over the loop's seam by itself, seamlessly.
   { v.err_level_[0] = 4.f / 9.f;
-    const TrigLog ly = RunPasses(s, 60, 60.f);
-    const PassStats sy = CheckPasses(ly, Q, 4, true);
+    const TrigLog ly = RunInst(s, 80, 120.f, true);
+    const InstStats sy = CheckInst(ly, Q, 4, true);
+    int wo, wt, so, st_; float sw_c; SeamlessWindows(ly, s, Q, &wo, &wt, &so, &st_, &sw_c);
     PrintStats("level 4/9 (E(3,6), symmetric)", sy);
-    Check(sy.ok() && sy.var > 0 && sy.rot == 0, "symmetric base: variations are real changes (no rotation that sounds the same)"); }
-  // Low level: the sparse base on every pass (no probability any more).
-  { v.err_level_[0] = 0.05f;
-    const TrigLog ll = RunPasses(s, 20);
-    const PassStats sl = CheckPasses(ll, Q, 0, true);
-    Check(sl.ok() && sl.played == sl.passes, "level 0.05: E(2,8) on every pass");
+    printf("      E(3,6): %d / %d in-span wraps and %d / %d in-segment seam crossings (dropped hits) seamless (worst c %.4f vs natural wrap %.4f); half-speed jumps %ld; read out of range %ld\n",
+           wo, wt, so, st_, sw_c, seam_ref, ly.half_jumps, ly.rh_bad);
+    Check(sy.ok() && sy.var > 0 && sy.rot == 0, "symmetric base: variations are real changes (no rotation that sounds the same)");
+    Check((kSpan == 1 || (sy.drop > 0 && st_ >= 1)) && so == st_ && wo == wt && ly.half_jumps == 0 && ly.rh_bad == 0,
+          "a segment longer than a pass (dropped hit): the read wraps the loop by itself, seamless, in range");
     v.err_level_[0] = 0.f; }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
 
-  // The loop's first pass: with the level already up, the pattern starts with
-  // the loop (joined mid-pass: only the hits still ahead).
+  // The loop's first instance: with the level already up, the pattern starts
+  // with the loop (joined mid-pass: only the hits still ahead).
   for (long burst : {36000L, 25400L}) {                      // T 500: on its one / T 1 s: 1/2 round-down, joins late
     Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({burst == 36000L ? 500 : 1000}); RunFor(0.6f);
     v.err_level_[0] = 1.f;
@@ -2584,27 +2723,32 @@ static void TestTimingError() {
     const uint32_t p0 = v.timing_patterns_, t0 = v.timing_trigs_;
     CapRec q{}; noise_from = n; noise_to = n + burst; WaitActivation(3.f, &q); noise_from = noise_to = -1;
     const int qs = q.s; const size_t L = q.Q;
-    const int pat = v.cur_pat_[qs]; const uint32_t mask = v.cur_mask_[qs];
-    blk = 1; std::vector<long> at; uint32_t tc = v.timing_trigs_; const int32_t pp = v.pass_[qs];
-    while (v.pass_[qs] == pp) { RunFor(1.f / sr); if (v.timing_trigs_ != tc) { tc = v.timing_trigs_; at.push_back((long)v.last_trig_at_); } }
-    Realign();
-    const uint32_t planned = v.timing_patterns_ - p0;          // incl. the first wrap's
+    const int pat = v.cur_pat_[qs]; const uint32_t mask = v.cur_mask_[qs]; const int32_t st0 = v.trig_start_[qs];
+    blk = 1; std::vector<long> at; uint32_t tc = v.timing_trigs_, tc_in = tc;
+    while (v.trig_start_[qs] == st0) {
+      tc_in = v.timing_trigs_;                                 // restarts inside this instance so far
+      RunFor(1.f / sr); if (v.timing_trigs_ != tc) { tc = v.timing_trigs_; at.push_back((long)v.last_trig_at_); }
+    }
+    const uint32_t planned = v.timing_patterns_ - p0;          // incl. the next instance's
+    if (v.timing_trigs_ != tc_in) at.pop_back();               // (a restart at the next instance's start sample)
+    const uint32_t ntrig = tc_in - t0;                         // ALL restarts of this instance, incl. at activation
+    long last = 0; std::vector<long> w = WantRestarts(mask, 8, L, &last);
     int want = 0, off = 0; size_t k = 0;
-    for (int i = 1; i < 8; i++) if (mask & (1u << i)) {
-      const long pos = (long)((double)L * i / 8 + 0.5);
+    for (long pos : w) {
       if (pos <= (long)q.phase) continue;
       want++;
       const long exp_at = q.act + (pos - (long)q.phase);
       if (k < at.size() && labs(at[k] - exp_at) > 1) off++; k++;
     }
-    printf("      first pass (joined at phase %u of %zu): pattern %d planned at loop start, %u restarts in it (expected %d, %zu seen per sample, %d off), %u plans until the first wrap\n",
-           q.phase, L, pat, (unsigned)(tc - t0), want, at.size(), off, planned);
-    Check(pat == 9 && (int)(tc - t0) == want && off == 0 && planned == 2 && (burst == 36000L ? q.phase == 0 : q.phase > 0),
-          burst == 36000L ? "the pattern starts with the loop: a loop entering on its one plays the whole pattern in its first pass"
-                          : "a loop joining late (mid-pass) plays only the hits still ahead in its first pass, each once");
+    printf("      first instance (joined at phase %u of %zu): pattern %d planned at loop start, %u restarts in it (expected %d; %zu timed per sample, %d off), %u plans until the next instance\n",
+           q.phase, L, pat, ntrig, want, at.size(), off, planned);
+    Check(pat == 9 && (int)ntrig == want && (int)at.size() == want && off == 0 && planned == 2 && (burst == 36000L ? q.phase == 0 : q.phase > 0),
+          burst == 36000L ? "the pattern starts with the loop: a loop entering on its one plays the whole instance"
+                          : "a loop joining late (mid-pass) plays only the hits still ahead in its first instance, each once");
     v.err_level_[0] = 0.f; }
 
-  // No click at any restart, on a sine loop (restarts land mid-cycle).
+  // No click at any restart, on a sine loop (restarts land mid-cycle); also
+  // with the K1 half-speed version up (through the in-span wraps).
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
   seen_acts = v.act_count_;
   sustain_hz = 220.f; sustain_input = true; play_input = true; WaitActivation(2.f, &r);
@@ -2612,15 +2756,20 @@ static void TestTimingError() {
   { const int q = r.s;
     maxd = 0.f; RunFor(2.0f); const float st = maxd;
     size_t nr = 0; int nv = 0;
-    for (float lv : {1.f, 0.5f}) {
+    for (float lv : {1.f, 0.5f, 2.f / 9.f}) {
       v.err_level_[0] = lv; maxd = 0.f;
-      const TrigLog lc = RunPasses(q, 12);
-      for (const PassRec& pr : lc.passes) { nr += pr.hits_at.size(); if (pr.var) nv++; }
+      const TrigLog lc = RunInst(q, 6);
+      for (const InstRec& ir : lc.inst) { nr += ir.hits_at.size(); if (ir.var) nv++; }
     }
     const float sj = maxd;
-    printf("      sine loop max step: steady %.5f | 24 passes (%d variations), %zu restarts + returns: %.5f (bound %.5f)\n", st, nv, nr, sj, 1.5f * st);
+    const float khalf = 0.5f - (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
+    cs.knob[0] = khalf; v.err_level_[0] = 0.f; RunFor(1.5f); maxd = 0.f; RunFor(2.0f); const float sth = maxd;
+    v.err_level_[0] = 2.f / 9.f; maxd = 0.f; const TrigLog lh = RunInst(q, 6); const float sh = maxd;
+    printf("      sine loop max step: steady %.5f | 18 instances (%d variations), %zu restarts: %.5f (bound %.5f) | K1 half side: steady %.5f, E(3,8) %.5f (bound %.5f)\n",
+           st, nv, nr, sj, 1.5f * st, sth, sh, 1.5f * sth);
     Check(nr >= 40 && sj <= 1.5f * st, "pattern restarts and returns: no step above 1.5x steady (5 ms restarts)");
-    v.err_level_[0] = 0.f; }
+    Check(lh.inst.size() >= 5 && sh <= 1.5f * sth, "K1 half-speed version through the in-span wraps: no step above 1.5x steady");
+    v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; }
 
   // Reverse: every restart jumps to the loop's END.
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(0.6f);
@@ -2630,21 +2779,24 @@ static void TestTimingError() {
   RunFor(0.8f);
   { const int q = r.s; const long L = (long)r.Q;
     v.err_level_[0] = 1.f;
-    const TrigLog lr = RunPasses(q, 10);
-    const PassStats sr_ = CheckPasses(lr, (size_t)L, 9, true);
+    const TrigLog lr = RunInst(q, 6);
+    const InstStats sr_ = CheckInst(lr, (size_t)L, 9, true);
     int ok = 0, tot = 0;
-    for (const PassRec& pr : lr.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 30; k++) {
-      const long next = (k + 1 < pr.hits_el.size()) ? pr.hits_el[k + 1] : L;
-      const int N = (int)(next - pr.hits_el[k] - 600); if (N < 600) continue;
+    for (const InstRec& ir : lr.inst) for (size_t k = 0; k < ir.hits_at.size() && tot < 30; k++) {
+      const long next = (k + 1 < ir.hits_el.size()) ? ir.hits_el[k + 1] : kSpan * L;
+      const int N = (int)(next - ir.hits_el[k] - 600); if (N < 600) continue;
       const int NN = N < 2400 ? N : 2400;
       std::vector<float> ref(NN); for (int j = 0; j < NN; j++) ref[j] = v.slab_[q][L - 1 - 480 - j];
-      float c = 0.f; const int lagv = BestLagRef(pr.hits_at[k] + 480, ref, 50, &c);
+      float c = 0.f; const int lagv = BestLagRef(ir.hits_at[k] + 480, ref, 50, &c);
       tot++; if (lagv == 0 && c > 0.99f) ok++;
     }
-    printf("      reverse, level 1: %d patterns in %d passes, off-step %d; %d / %d restarts play the loop's END backward (lag 0)\n",
-           sr_.played, sr_.passes, sr_.bad_hits, ok, tot);
-    Check(v.rev_play_ && sr_.ok() && sr_.played == sr_.passes && tot >= 10 && ok == tot,
+    PrintStats("reverse, level 1", sr_);
+    int al = 0; for (const InstRec& ir : lr.inst) if (ir.half0 > (float)L - 2.f) al++;
+    printf("      reverse: %d / %d restarts play the loop's END backward (lag 0); instance starts on the half-speed cycle's start (its tail): %d / %zu; read out of range %ld\n",
+           ok, tot, al, lr.inst.size(), lr.rh_bad);
+    Check(v.rev_play_ && sr_.ok() && sr_.played == sr_.inst && tot >= 10 && ok == tot && lr.rh_bad == 0,
           "reverse: every restart jumps back to the loop's end");
+    Check(al == (int)lr.inst.size(), "reverse: every instance starts where the reverse K1 half-speed cycle does (from the tail)");
     v.err_level_[0] = 0.f; cs.knob[1] = 0.85f; }
   hist_on = false; in_hist.clear(); wet_hist.clear();
 
@@ -2657,15 +2809,15 @@ static void TestTimingError() {
     const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
     cs.knob[0] = kmid; RunFor(1.5f);
     v.err_level_[0] = 0.5f;                                   // mid pattern: steps long enough to measure
-    const TrigLog lk = RunPasses(q, 10);
+    const TrigLog lk = RunInst(q, 5);
     int ok = 0, tot = 0;
-    for (const PassRec& pr : lk.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 20; k++) {
-      const long next = (k + 1 < pr.hits_el.size()) ? pr.hits_el[k + 1] : L;
-      const int N = (int)(next - pr.hits_el[k] - 600); if (N < 600) continue;
+    for (const InstRec& ir : lk.inst) for (size_t k = 0; k < ir.hits_at.size() && tot < 20; k++) {
+      const long next = (k + 1 < ir.hits_el.size()) ? ir.hits_el[k + 1] : kSpan * L;
+      const int N = (int)(next - ir.hits_el[k] - 600); if (N < 600) continue;
       const int NN = N < 2400 ? N : 2400;
       std::vector<float> rc(NN), rs(NN);
       for (int j = 0; j < NN; j++) { rc[j] = v.slab_[q][480 + j]; rs[j] = v.slab_[q][(2 * (480 + j)) % L]; }
-      float gc = 0, gs = 0, res = 0; Split(pr.hits_at[k] + 480, rc, rs, &gc, &gs, &res);
+      float gc = 0, gs = 0, res = 0; Split(ir.hits_at[k] + 480, rc, rs, &gc, &gs, &res);
       tot++; if (fabsf(gc - v.g_c_) < 0.05f && fabsf(gs - v.g_sp_) < 0.05f && res < 0.05f) ok++;
     }
     printf("      K1 midpoint, level 0.5: %d / %d restarts = clean from the start + double speed from the start\n", ok, tot);
@@ -2673,32 +2825,36 @@ static void TestTimingError() {
     v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; }
   hist_on = false; in_hist.clear(); wet_hist.clear();
 
-  // Stretch at a rate != 1: patterns laid out on the pass, length unchanged.
+  // Stretch at a rate != 1: patterns laid out on the span, lengths unchanged.
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
   seen_acts = v.act_count_;
   noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
   { const int q = r.s;
     Taps({700}); RunFor(1.0f);
     v.err_level_[0] = 1.f;
-    const TrigLog ls = RunPasses(q, 8);
+    const TrigLog ls = RunInst(q, 5);
     const long Lt = (long)GridQuantize::Boundary(v.div_[q], v.period_);
-    const PassStats ss = CheckPasses(ls, v.PlayLen(q), 9, false);   // hit COUNT per pass
-    int len_bad = 0; for (size_t p = 1; p < ls.passes.size(); p++) if (labs(ls.passes[p].start - ls.passes[p - 1].start - Lt) > 1) len_bad++;
-    // Hit times in output samples ~ i/n of the pass (rate != 1: el / rate).
+    const InstStats ss = CheckInst(ls, v.PlayLen(q), 9, false);   // restart COUNT per instance
+    int len_bad = 0;
+    for (const InstRec& ir : ls.inst) for (size_t k = 0; k < ir.passes.size(); k++) if (labs(ir.passes[k] - ir.start - (long)k * Lt) > 1) len_bad++;
+    for (size_t p = 1; p < ls.inst.size(); p++) if (labs(ls.inst[p].start - ls.inst[p - 1].start - kSpan * Lt) > 1) len_bad++;
+    // Restart times in output samples ~ the model's points / rate.
     int tbad = 0;
-    for (const PassRec& pr : ls.passes) { if (pr.pat < 0) continue; const int nst = VESTIGE_TIMING_PAT_STEPS[pr.pat]; size_t k = 0;
-      for (int i = 1; i < nst; i++) if (pr.mask & (1u << i)) { if (k < pr.hits_el.size() && labs(pr.hits_el[k] - (long)((double)Lt * i / nst)) > 2) tbad++; k++; } }
-    printf("      stretch at rate %.4f: pass %ld, %d patterns in %d passes, hit counts off %d, hit times off %d, lengths off %d\n",
-           v.rho_d_[q], Lt, ss.played, ss.passes, ss.bad_hits, tbad, len_bad);
-    Check(v.rho_d_[q] != 1.0 && ss.ok() && ss.played == ss.passes && tbad == 0 && len_bad == 0,
-          "stretch at rate != 1: patterns on i/n of the pass, the pass stays d x T_now");
+    for (const InstRec& ir : ls.inst) { if (ir.pat < 0) continue; long last = 0;
+      const std::vector<long> w = WantRestarts(ir.mask, VESTIGE_TIMING_PAT_STEPS[ir.pat], v.PlayLen(q), &last);
+      for (size_t k = 0; k < w.size() && k < ir.hits_el.size(); k++)
+        if (labs(ir.hits_el[k] - (long)((double)w[k] / v.rho_d_[q])) > 2) tbad++; }
+    printf("      stretch at rate %.4f: pass %ld, %d patterns in %d instances, restart counts off %d, times off %d, lengths off %d\n",
+           v.rho_d_[q], Lt, ss.played, ss.inst, ss.bad_hits, tbad, len_bad);
+    Check(v.rho_d_[q] != 1.0 && ss.ok() && ss.played == ss.inst && tbad == 0 && len_bad == 0,
+          "stretch at rate != 1: restarts on i/n of the span, every pass stays d x T_now");
     v.err_level_[0] = 0.f; }
 
   // Hold: patterns continue. Freeze: never.
   { Hold(); v.err_level_[0] = 1.f;
-    const int q = FirstLive(); const TrigLog lh = RunPasses(q, 4);
-    const PassStats sh = CheckPasses(lh, v.PlayLen(q), 9, false);
-    Check(v.held_ && sh.played >= 3 && sh.ok(), "held loop: patterns play too");
+    const int q = FirstLive(); const TrigLog lh = RunInst(q, 3);
+    const InstStats sh = CheckInst(lh, v.PlayLen(q), 9, false);
+    Check(v.held_ && sh.played >= 2 && sh.ok(), "held loop: patterns play too");
     v.err_level_[0] = 0.f; Unhold(); }
   { Reset(); cs.sw[0] = 2; cs.knob[4] = 0.0f; RunFor(1.0f);
     seen_acts = v.act_count_;
@@ -2710,43 +2866,57 @@ static void TestTimingError() {
           "freeze: the timing error never touches it (also not at its start)");
     v.err_level_[0] = 0.f; cs.sw[0] = 0; RunFor(1.0f); }
 
-  // Short-loop guard: a base whose step is under VESTIGE_TIMING_MIN_STEP_MS
-  // falls back to the densest pattern below it that fits (nothing below: the
-  // sparsest above); nothing fits: no pattern.
+  // C re-cut with an instance in flight: a new length landing on the span's
+  // inner wrap drops the instance's remaining hits (back to the one); the read
+  // head never leaves the loop.
+  { Reset(); v.follow_mode_cfg_ = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 36000; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    RunFor(0.5f);
+    v.err_level_[0] = 2.f / 9.f;
+    const uint32_t ab0 = v.timing_aborts_, ra0 = v.recut_applied_; const long bad0 = bad; maxd = 0.f;
+    long rh_bad = 0, inner = 0;
+    for (int i = 0; i < 8; i++) {
+      Taps({(i & 1) ? 500 : 330});
+      const TrigLog lt = RunInst(q.s, 2, 10.f);
+      rh_bad += lt.rh_bad;
+    }
+    inner = (long)(v.timing_aborts_ - ab0);
+    printf("      C re-cuts with the pattern running: %u length changes applied, %ld landed on an inner wrap (instance dropped); read out of range %ld, bad samples %ld, max step %.4f\n",
+           v.recut_applied_ - ra0, inner, rh_bad, bad - bad0, maxd);
+    Check(v.recut_applied_ - ra0 >= 6 && (kSpan == 1 || inner >= 1) && rh_bad == 0 && bad == bad0,
+          "C re-cut inside a span: the instance is dropped at that wrap, the read head stays in the (new) loop");
+    v.err_level_[0] = 0.f; v.follow_mode_cfg_ = 0; RunFor(0.5f); }
+
+  // Short-loop guard on the span's step: a base whose step is under
+  // VESTIGE_TIMING_MIN_STEP_MS falls back to the densest pattern below it that
+  // fits (nothing below: the sparsest above); nothing fits: no pattern.
   { struct G { int tap_ms; long burst; };
-    for (const G& g : {G{200, 14400}, G{150, 10800}}) {
+    for (const G& g : {G{100, 9000}, G{100, 3300}, G{100, 2100}}) {
       Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({g.tap_ms}); RunFor(0.6f);
       seen_acts = v.act_count_;
       noise_from = n; noise_to = n + g.burst; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
       RunFor(0.3f);
-      std::string line; bool ok = true; int nfb = 0;
+      std::string line; bool ok = true; int nfb = 0, nnone = 0;
       for (float lv : {0.05f, 1.f / 9.f, 5.f / 9.f, 6.f / 9.f, 1.f}) {
         v.err_level_[0] = lv;
         const int want = WantFit(lv, (double)q.Q);
-        const uint32_t fb0 = v.timing_fallbacks_;
-        const TrigLog lt = RunPasses(q.s, 8);
-        const PassStats sg = CheckPasses(lt, q.Q, want, true);
-        if (!sg.ok() || sg.played != sg.passes || want < 0) ok = false;
-        if (want != WantBase(lv)) { nfb++; if (v.timing_fallbacks_ - fb0 < (uint32_t)sg.passes) ok = false; }
-        char b[64]; snprintf(b, sizeof b, "E(%d,%d)->E(%d,%d) ", VESTIGE_TIMING_PAT_HITS[WantBase(lv)], VESTIGE_TIMING_PAT_STEPS[WantBase(lv)],
-                             want >= 0 ? VESTIGE_TIMING_PAT_HITS[want] : 0, want >= 0 ? VESTIGE_TIMING_PAT_STEPS[want] : 0);
+        const uint32_t fb0 = v.timing_fallbacks_, sk0 = v.timing_skipped_, t0 = v.timing_trigs_;
+        const TrigLog lt = RunInst(q.s, 6);
+        const InstStats sg = CheckInst(lt, q.Q, want, true);
+        if (!sg.ok() || lt.inst.size() < 5) ok = false;
+        if (want < 0) { nnone++; if (v.timing_skipped_ - sk0 < 5 || v.timing_trigs_ != t0) ok = false; }
+        else if (sg.played != sg.inst) ok = false;
+        if (want >= 0 && want != WantBase(lv)) { nfb++; if (v.timing_fallbacks_ - fb0 < (uint32_t)sg.inst) ok = false; }
+        char b[64]; snprintf(b, sizeof b, "E(%d,%d)->%s ", VESTIGE_TIMING_PAT_HITS[WantBase(lv)], VESTIGE_TIMING_PAT_STEPS[WantBase(lv)],
+                             want >= 0 ? (std::string("E(") + std::to_string(VESTIGE_TIMING_PAT_HITS[want]) + "," + std::to_string(VESTIGE_TIMING_PAT_STEPS[want]) + ")").c_str() : "none");
         line += b;
       }
-      printf("      %.0f ms loop (%zu): %s\n", q.Q / 48.0, q.Q, line.c_str());
-      char msg[128]; snprintf(msg, sizeof msg, "short-loop guard, %.0f ms loop: too-fine bases fall back to the densest fitting pattern (%d levels)", q.Q / 48.0, nfb);
-      Check(ok && nfb >= 2, msg);
+      printf("      %.0f ms loop (%zu), span step: %s\n", q.Q / 48.0, q.Q, line.c_str());
+      char msg[160]; snprintf(msg, sizeof msg, "short-loop guard, %.0f ms loop (step = span x pass / n): %d fallbacks, %d levels with nothing that fits", q.Q / 48.0, nfb, nnone);
+      Check(ok && (q.Q == 2400 ? nnone == 5 : nfb >= 2), msg);
       v.err_level_[0] = 0.f;
-    }
-    // 100 ms loop: every pattern's step < 20 ms -> no pattern, no restart.
-    Reset(); cs.knob[4] = 0.0f; Taps({100}); RunFor(0.6f);
-    seen_acts = v.act_count_;
-    CapRec q{}; noise_from = n; noise_to = n + 9600; WaitActivation(3.f, &q); noise_from = noise_to = -1;
-    v.err_level_[0] = 1.f;
-    const uint32_t sk0 = v.timing_skipped_, t0 = v.timing_trigs_;
-    const TrigLog lt = RunPasses(q.s, 40);
-    printf("      %zu-sample loop at level 1: %zu passes, %u with nothing that fits, %u restarts\n", q.Q, lt.passes.size(), v.timing_skipped_ - sk0, v.timing_trigs_ - t0);
-    Check(WantFit(1.f, (double)q.Q) < 0 && v.timing_skipped_ - sk0 >= 39 && v.timing_trigs_ == t0, "short-loop guard: nothing fits -> no pattern");
-    v.err_level_[0] = 0.f; }
+    } }
 
   // 3 voices, each with its own rotation and its own variation rolls; budget
   // and the PHYSICAL pool.
@@ -2762,10 +2932,12 @@ static void TestTimingError() {
     blk = 1;
     int32_t pp[3]; for (int i = 0; i < ns; i++) pp[i] = v.pass_[slots[i]];
     std::vector<std::vector<int>> vars(3); uint32_t bases[3] = {0, 0, 0}; bool base_moved = false;
-    for (long j = 0; j < 48000L * 10; j++) {
+    for (long j = 0; j < 48000L * 12; j++) {
       RunFor(1.f / sr);
       for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) {
-        pp[i] = v.pass_[slots[i]]; vars[i].push_back(v.cur_var_[slots[i]]);
+        pp[i] = v.pass_[slots[i]];
+        if (v.trig_start_[slots[i]] != v.pass_[slots[i]]) continue;   // inner wrap: same instance
+        vars[i].push_back(v.cur_var_[slots[i]]);
         if (vars[i].size() > 1 && v.base_mask_[slots[i]] != bases[i]) base_moved = true;
         bases[i] = v.base_mask_[slots[i]];
       }
@@ -2775,20 +2947,20 @@ static void TestTimingError() {
     int vdiff = 0, nvar[3] = {0, 0, 0}; const size_t m = std::min(vars[0].size(), std::min(vars[1].size(), vars[2].size()));
     for (size_t k = 0; k < m; k++) if ((vars[0][k] != 0) != (vars[1][k] != 0) || (vars[1][k] != 0) != (vars[2][k] != 0)) vdiff++;
     for (int i = 0; i < ns; i++) for (int x : vars[i]) if (x) nvar[i]++;
-    printf("      3 voices, level 1, 10 s: bases %s / %s / %s; variations %d / %d / %d; variation passes differ in %d of %zu pass indices\n",
+    printf("      3 voices, level 1, 12 s: bases %s / %s / %s; variations %d / %d / %d; variation instances differ in %d of %zu instance indices\n",
            MaskStr(bases[0], 8).c_str(), MaskStr(bases[1], 8).c_str(), MaskStr(bases[2], 8).c_str(), nvar[0], nvar[1], nvar[2], vdiff, m);
     Check(rot_differ && !base_moved, "3 voices: each keeps its own rotation of the same groove (they differ)");
     Check(nvar[0] > 0 && nvar[1] > 0 && nvar[2] > 0 && vdiff > 0, "3 voices roll their variations independently");
-    // Step rounding on a loop whose length n does not divide (12800 / 12).
-    { int q12 = -1; for (int i = 0; i < ns; i++) if (v.PlayLen(slots[i]) % 12 != 0) q12 = slots[i];
+    // Step rounding on a loop whose span does not divide by n (25600 / 12).
+    { int q12 = -1; for (int i = 0; i < ns; i++) if ((kSpan * v.PlayLen(slots[i])) % 12 != 0) q12 = slots[i];
       if (q12 < 0) q12 = slots[1];
       v.err_level_[0] = 0.5f;
-      const TrigLog lq = RunPasses(q12, 40, 60.f);
-      const PassStats sq = CheckPasses(lq, v.PlayLen(q12), WantFit(0.5f, (double)v.PlayLen(q12)), true);
-      printf("      loop %zu (not a multiple of 12): %d patterns E(%d,%d), restarts off round(L*i/n): %d\n", v.PlayLen(q12), sq.played,
-             VESTIGE_TIMING_PAT_HITS[lq.passes[0].pat], VESTIGE_TIMING_PAT_STEPS[lq.passes[0].pat], sq.bad_hits);
-      Check(v.PlayLen(q12) % 12 != 0 && sq.played >= 10 && sq.ok() && VESTIGE_TIMING_PAT_STEPS[lq.passes[0].pat] == 12,
-            "restarts land at round(pass x i / n) exactly, also when n does not divide the pass"); }
+      const TrigLog lq = RunInst(q12, 20, 60.f);
+      const InstStats sq = CheckInst(lq, v.PlayLen(q12), WantFit(0.5f, (double)v.PlayLen(q12)), true);
+      printf("      loop %zu (span %zu not a multiple of 12): %d instances E(%d,%d), restarts off the model: %d\n", v.PlayLen(q12), kSpan * v.PlayLen(q12), sq.played,
+             VESTIGE_TIMING_PAT_HITS[lq.inst[0].pat], VESTIGE_TIMING_PAT_STEPS[lq.inst[0].pat], sq.bad_hits);
+      Check((kSpan * v.PlayLen(q12)) % 12 != 0 && sq.played >= 10 && sq.ok() && VESTIGE_TIMING_PAT_STEPS[lq.inst[0].pat] == 12,
+            "restarts land at round(span x L x i / n) exactly, also when n does not divide the span"); }
     const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
     cs.knob[0] = kmid; RunFor(1.5f);
     v.err_level_[0] = 1.f;

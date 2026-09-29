@@ -419,8 +419,9 @@ static constexpr int      VESTIGE_FOLLOW_MODE    = 1;
 static constexpr float    VESTIGE_ERR_K3_EPS     = 0.02f;  // raw knob travel (= VESTIGE_K2_MOVE_EPS)
 
 // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass ---
-// Level L = err_level_[kErrTiming]. L == 0: off. For any L > 0 EVERY pass of a
-// loop voice plays a EUCLIDEAN PATTERN E(k, n): the pass is cut into n equal
+// Level L = err_level_[kErrTiming]. L == 0: off. For any L > 0 a loop voice
+// plays a EUCLIDEAN PATTERN E(k, n) all the time, one instance per
+// VESTIGE_TIMING_PATTERN_PASSES passes (below): the span is cut into n equal
 // steps and at every hit step the playback restarts from the loop's start
 // (reverse: its end); step 0 is always a hit (the pass start itself). The pass
 // keeps its length, the grid never moves.
@@ -435,16 +436,26 @@ static constexpr float    VESTIGE_ERR_K3_EPS     = 0.02f;  // raw knob travel (=
 // when it starts playing, and kept: rotation = the loop's drawn index modulo
 // the pattern's hit count, so K3 moving the pattern keeps it as close as the
 // hit counts allow (and K3 back = the same rotation again).
-// VARIATION: each pass, with chance VESTIGE_TIMING_VAR_PROB, that one pass
-// plays a variation — uniformly one of: a hit added (a rest step, not step 0),
-// a hit dropped (not step 0), another hit-starting rotation. The pass after a
-// variation is always the base (it does not roll).
+// VARIATION: each pattern instance, with chance VESTIGE_TIMING_VAR_PROB, that
+// one instance plays a variation — uniformly one of: a hit added (a rest step,
+// not step 0), a hit dropped (not step 0), another hit-starting rotation. The
+// instance after a variation is always the base (it does not roll).
 static constexpr float  VESTIGE_TIMING_VAR_PROB   = 1.f / 6.f;
+// HALF TIME: one pattern instance spans this many passes. Its n steps are
+// spread over the whole span (step = span x pass / n); an instance starts on
+// the loop's "one" at every span-th pass of the loop's own pass counter (the
+// K1 half-speed parity), so the grid is unchanged. Between hits the read runs
+// on — also THROUGH a pass wrap inside the span, with no restart there; a hit
+// that lands where the read already is (on a pass start, read on the
+// timeline) is not restarted. Base / rotation / variation / short-loop guard
+// are per instance. 1 = one pattern per pass.
+static constexpr int    VESTIGE_TIMING_PATTERN_PASSES = 2;
+static_assert(VESTIGE_TIMING_PATTERN_PASSES >= 1, "a pattern spans at least one pass");
 static constexpr int    VESTIGE_TIMING_PATTERNS   = 10;
 static constexpr int    VESTIGE_TIMING_PAT_HITS[VESTIGE_TIMING_PATTERNS]  = {2,  4, 3,  5, 3,  7, 5, 4, 5, 7};
 static constexpr int    VESTIGE_TIMING_PAT_STEPS[VESTIGE_TIMING_PATTERNS] = {8, 12, 8, 12, 6, 12, 8, 6, 6, 8};
 static constexpr int    VESTIGE_TIMING_MAX_STEPS  = 16;          // upper bound on n (bit mask + hit list)
-// Short-loop guard: when the base pattern's step (pass / n, in output time)
+// Short-loop guard: when the base pattern's step (span x pass / n, output time)
 // would be shorter than this, the pass plays the densest pattern BELOW it in the
 // list that fits (nothing below fits: the sparsest one above that does); none
 // fits at all = no pattern that pass. Variations keep n, so they
