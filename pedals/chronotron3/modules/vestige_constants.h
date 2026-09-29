@@ -611,8 +611,8 @@ static_assert(VESTIGE_TIMING_LINE_STEPS <= VESTIGE_TIMING_LINE_MAX_CELLS, "line 
 // weights are all 0 is off.
 static constexpr float  VESTIGE_TIMING_W_STUTTER = 1.f;         // TIMING
 static constexpr float  VESTIGE_TIMING_W_REPEAT  = 1.f;
-static constexpr float  VESTIGE_TIMING_W_DOUBLE  = 1.f;
-static constexpr float  VESTIGE_TIMING_W_RATCHET = 1.f;         // (only from VESTIGE_TIMING_RATCHET_FROM)
+static constexpr float  VESTIGE_TIMING_W_DOUBLE  = 0.f;
+static constexpr float  VESTIGE_TIMING_W_RATCHET = 0.f;         // (only from VESTIGE_TIMING_RATCHET_FROM)
 static constexpr float  VESTIGE_TIMING_W_RETRIG  = 1.f;         // the hit plays the loop from its start
 static constexpr float  VESTIGE_TIMING_W_REST    = 1.f;         // CONDITION
 static constexpr float  VESTIGE_TIMING_W_DECIM   = 1.f;
