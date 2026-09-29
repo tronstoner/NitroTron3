@@ -1858,7 +1858,7 @@ class Vestige : public Module {
     if (l == kErrPlayback) return kFigReverse;
     if (l == kErrCondition) {
       const float t = VESTIGE_TIMING_W_REST + VESTIGE_TIMING_W_DECIM;
-      if (!(t > 0.f) || TimingRand() * t < VESTIGE_TIMING_W_REST) { *sub = 1; return kFigRest; }
+      if (TimingRand() * t < VESTIGE_TIMING_W_REST) { *sub = 1; return kFigRest; }
       *sub = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)];
       return kFigDecimate;
     }
@@ -1867,10 +1867,10 @@ class Vestige : public Module {
     const float w[5]  = {VESTIGE_TIMING_W_STUTTER, VESTIGE_TIMING_W_REPEAT, VESTIGE_TIMING_W_DOUBLE,
                          rat ? VESTIGE_TIMING_W_RATCHET : 0.f, VESTIGE_TIMING_W_RETRIG};
     float tot = 0.f; for (int i = 0; i < 5; i++) tot += w[i];
-    if (!(tot > 0.f)) return kFigStutter;
-    float r = TimingRand() * tot;
-    for (int i = 0; i < 5; i++) { if (r < w[i]) return ty[i]; r -= w[i]; }
-    return kFigStutter;
+    if (!(tot > 0.f)) return kFigClean;                   // (only RATCHET on, below its level: a silent hit)
+    float r = TimingRand() * tot; int last = kFigClean;
+    for (int i = 0; i < 5; i++) { if (!(w[i] > 0.f)) continue; last = ty[i]; if (r < w[i]) return ty[i]; r -= w[i]; }
+    return last;
   }
   void LineRetype(int l, LineHit& h) {
     int8_t sub = 0; int t = h.type;
@@ -1959,6 +1959,14 @@ class Vestige : public Module {
       }
     }
   }
+  // A layer with all its type weights at 0 is off (RATCHET counts as on: its
+  // level gate only delays it).
+  static bool LayerOn(int l) {
+    if (l == kErrPlayback)  return VESTIGE_TIMING_W_REVERSE > 0.f;
+    if (l == kErrCondition) return VESTIGE_TIMING_W_REST + VESTIGE_TIMING_W_DECIM > 0.f;
+    return VESTIGE_TIMING_W_STUTTER + VESTIGE_TIMING_W_REPEAT + VESTIGE_TIMING_W_DOUBLE +
+           VESTIGE_TIMING_W_RATCHET + VESTIGE_TIMING_W_RETRIG > 0.f;
+  }
   void LineClear(int s) { for (int l = 0; l < kErrTypes; l++) ln_nh_[s][l] = 0; ln_cells_[s] = 0; }
   // Pass start (or loop start, el0 = the elapsed pass it joins at): evolve
   // each live layer, then render this pass's segment of the three lines into
@@ -1994,7 +2002,7 @@ class Vestige : public Module {
     // Evolve + age.
     for (int l = 0; l < kErrTypes; l++) {
       const float lv = err_level_[l];
-      if (!(lv > 0.f)) { ln_nh_[s][l] = 0; continue; }
+      if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; continue; }
       if (ln_nh_[s][l] == 0) LineSeed(s, l, lv); else LineMutate(s, l, lv);
       for (int h = 0; h < ln_nh_[s][l]; h++) {               // a hit in this pass plays once more
         LineHit& x = ln_hit_[s][l][h];

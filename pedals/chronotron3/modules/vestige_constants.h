@@ -607,7 +607,8 @@ static constexpr int    VESTIGE_TIMING_LINE_LIFE    = 3;
 static constexpr int    VESTIGE_TIMING_LAYER_MAX_STEPS = 64;    // G bound (steps per pass)
 static constexpr int    VESTIGE_TIMING_LINE_MAX_CELLS  = 64;    // line bound (64-bit cell masks)
 static_assert(VESTIGE_TIMING_LINE_STEPS <= VESTIGE_TIMING_LINE_MAX_CELLS, "line too long");
-// Type weights per layer — EDITABLE:
+// Type weights per layer — EDITABLE. 0 = that type is off; a layer whose
+// weights are all 0 is off.
 static constexpr float  VESTIGE_TIMING_W_STUTTER = 1.f;         // TIMING
 static constexpr float  VESTIGE_TIMING_W_REPEAT  = 1.f;
 static constexpr float  VESTIGE_TIMING_W_DOUBLE  = 1.f;
@@ -615,6 +616,7 @@ static constexpr float  VESTIGE_TIMING_W_RATCHET = 1.f;         // (only from VE
 static constexpr float  VESTIGE_TIMING_W_RETRIG  = 1.f;         // the hit plays the loop from its start
 static constexpr float  VESTIGE_TIMING_W_REST    = 1.f;         // CONDITION
 static constexpr float  VESTIGE_TIMING_W_DECIM   = 1.f;
+static constexpr float  VESTIGE_TIMING_W_REVERSE = 1.f;         // PLAYBACK
 
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC
