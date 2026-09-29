@@ -110,6 +110,11 @@ class Vestige : public Module {
     warble_base_ = VESTIGE_WARBLE_BASE_MS * 0.001f * sr_;
     warble_int_  = 0.f;
     mute_inc_    = 1.f / (VESTIGE_TIMING_MUTE_MS * 0.001f * sr_);   // timing mode 2 rest fade step
+    for (int k = 0; k < VESTIGE_TIMING_CRUSH_N; k++) {                // CRUSH post-hold low-passes
+      float fc = VESTIGE_TIMING_CRUSH_LP_MULT * 0.5f * sr_ / (float)VESTIGE_TIMING_CRUSH_FACTORS[k];
+      if (fc > 0.45f * sr_) fc = 0.45f * sr_;
+      MBSetLP(crush_lp_[k], fc);
+    }
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
@@ -680,8 +685,21 @@ class Vestige : public Module {
           float& d = crush_d_[s]; const float t = crush_dt_[s];
           if (d < t) { d += mute_inc_; if (d > t) d = t; }
           else if (d > t) { d -= mute_inc_; if (d < t) d = t; }
+          const int ck = crush_k_[s];
+          if (crush_init_[s]) {                             // start at the signal: no bump
+            crush_init_[s] = false; crush_c_[s] = 0; crush_h_[s] = pv;
+            if (ck >= 0) { const float* c = crush_lp_[ck]; crush_z1_[s] = pv * (1.f - c[0]); crush_z2_[s] = pv * (c[2] - c[4]); }
+          }
           if (++crush_c_[s] >= crush_n_[s]) { crush_c_[s] = 0; crush_h_[s] = pv; }
-          pv = (d >= 1.f) ? crush_h_[s] : pv + (crush_h_[s] - pv) * d;
+          float yc = crush_h_[s];
+          if (ck >= 0) {                                    // post-hold 2-pole LP (TDF-II)
+            const float* c = crush_lp_[ck];
+            const float x = yc;
+            yc = c[0] * x + crush_z1_[s];
+            crush_z1_[s] = c[1] * x - c[3] * yc + crush_z2_[s];
+            crush_z2_[s] = c[2] * x - c[4] * yc;
+          }
+          pv = (d >= 1.f) ? yc : pv + (yc - pv) * d;
         }
         //     TIMING mode 2 rests: a linear VESTIGE_TIMING_MUTE_MS fade.
         if (s < VESTIGE_VOICE_SLABS && (mute_d_[s] != 0.f || mute_dt_[s] != 0.f)) {
@@ -1684,7 +1702,11 @@ class Vestige : public Module {
   // A step's condition: 0 clean, 1 silent, N >= 2 sample-rate reduced (hold N).
   void TimingCond(int s, int c) {
     mute_dt_[s] = (c == 1) ? 1.f : 0.f;
-    if (c >= 2) { crush_n_[s] = c; crush_dt_[s] = 1.f; } else crush_dt_[s] = 0.f;
+    if (c >= 2) {
+      if (crush_d_[s] == 0.f) crush_init_[s] = true;       // fresh: hold + filter start on the signal
+      crush_n_[s] = c; crush_dt_[s] = 1.f; crush_k_[s] = -1;
+      for (int k = 0; k < VESTIGE_TIMING_CRUSH_N; k++) if (VESTIGE_TIMING_CRUSH_FACTORS[k] == c) crush_k_[s] = k;
+    } else crush_dt_[s] = 0.f;
   }
   void TimingMemClear(int s) {
     for (int m = 0; m < VESTIGE_TIMING_MEM_PASSES; m++) { pm_nf_[s][m] = 0; pm_n_[s][m] = 0; }
@@ -3398,6 +3420,11 @@ class Vestige : public Module {
   int      crush_n_[VESTIGE_VOICE_SLABS]     = {0};      // hold length (samples)
   int      crush_c_[VESTIGE_VOICE_SLABS]     = {0};      // samples since the last hold
   float    crush_h_[VESTIGE_VOICE_SLABS]     = {0.f};    // the held sample
+  float    crush_z1_[VESTIGE_VOICE_SLABS]    = {0.f};    // its low-pass state
+  float    crush_z2_[VESTIGE_VOICE_SLABS]    = {0.f};
+  int      crush_k_[VESTIGE_VOICE_SLABS]     = {0};      // its factor's table index (-1 = no LP)
+  bool     crush_init_[VESTIGE_VOICE_SLABS]  = {false};  // start the hold + LP on the next sample
+  float    crush_lp_[VESTIGE_TIMING_CRUSH_N][5] = {};     // LP coefs per factor (MBSetLP)
   uint32_t timing_edits_ = 0;                             // diag: memory edits
   int      sl_n_[VESTIGE_VOICE_SLABS]        = {0};      // this pass's slice count (0 = none) (diag)
   uint32_t sl_rand_mask_[VESTIGE_VOICE_SLABS] = {0};    // the steps playing a random slice this pass (diag)

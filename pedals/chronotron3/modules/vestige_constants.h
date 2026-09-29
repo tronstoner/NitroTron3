@@ -555,10 +555,13 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
 // age out). 0.5 = noon.
 static constexpr float  VESTIGE_TIMING_RATCHET_FROM = 0.5f;
 // CRUSH: the loop's output is held for N samples (48 kHz / N, an integer: no
-// rounding), no anti-alias filter. N drawn per figure from the table. Fades
-// in/out over VESTIGE_TIMING_MUTE_MS.
+// rounding), with no filter BEFORE the hold (the folded-down aliasing is the
+// character), then a 2-pole low-pass AFTER it at LP_MULT x the reduced rate's
+// Nyquist (48 kHz / N / 2), which takes off the fizzy steps. N drawn per
+// figure from the table. Fades in/out over VESTIGE_TIMING_MUTE_MS.
 static constexpr int    VESTIGE_TIMING_CRUSH_N = 4;
-static constexpr int    VESTIGE_TIMING_CRUSH_FACTORS[VESTIGE_TIMING_CRUSH_N] = {2, 3, 4, 6};   // 24, 16, 12, 8 kHz
+static constexpr int    VESTIGE_TIMING_CRUSH_FACTORS[VESTIGE_TIMING_CRUSH_N] = {6, 8, 12, 16};   // 8, 6, 4, 3 kHz
+static constexpr float  VESTIGE_TIMING_CRUSH_LP_MULT = 1.5f;     // lower = darker, higher = harsher
 // Where figures land: steps in the back half of the pass weigh this much vs 1
 // for the front half (a fill leads into the one).
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
