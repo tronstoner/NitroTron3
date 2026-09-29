@@ -136,6 +136,13 @@ static_assert(VESTIGE_T_MIN_SAMPLES / 8 >= 2 * VESTIGE_SEAM_XFADE_MAX,
 // new chain). Moving K2 past K2_MOVE_EPS cancels the tapped T; K2 keeps its
 // direction job either way.
 static constexpr uint32_t VESTIGE_TAP_RELEASE_MS = 300;    // = SPRAWL_TAP_RELEASE_MS
+// Tap tempo needs TWO AGREEING intervals (three taps): a new interval only sets T
+// when it is within this fraction of the previous one; T is then their mean.
+// Why: with loops following T, a single stray press after a pause paired with the
+// last tap of the previous sequence (anything under 8 s is a valid interval) and
+// briefly re-timed every playing loop to that accidental T. A stray interval never
+// agrees with its neighbours, so it now changes nothing. (Sprawl keeps two taps.)
+static constexpr float    VESTIGE_TAP_AGREE      = 0.15f;
 static constexpr float    VESTIGE_K2_MOVE_EPS    = 0.02f;  // = SPRAWL_K2_MOVE_EPS (raw knob travel)
 // LED1 clock: one flash per T, anchored to the most recent capture start.
 static constexpr uint32_t VESTIGE_LED1_FLASH_MS  = 40;     // = SPRAWL_LED1_FLASH_MS
@@ -394,6 +401,13 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // stretch, DOWN = C re-cut). Each loop keeps its division d; its target length
 // is Boundary(d, T_now). A (tape): rate = material / target on the head and the
 // grain read rate — pitch and time together, composed with K1.
+// How playing loops follow a T change. Fixed at stretch — the builder's choice
+// on hardware; tape and re-cut are kept, selectable here, and may come back on a
+// control later. SW2 no longer selects this (it is reserved for the error type).
+//   0 = tape (speed + pitch follow T) · 1 = stretch (speed follows, pitch stays)
+//   2 = re-cut (cut / pad the end, non-destructive)
+static constexpr int      VESTIGE_FOLLOW_MODE    = 1;
+
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC
 // jitter would otherwise reach every following loop as pitch warble (at mid

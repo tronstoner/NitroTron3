@@ -442,8 +442,11 @@ static void TestBufferSeparation() {
 static void PressFS1(int ticks) { fs_down_ticks[0] = ticks; }
 // A chain of FS1 taps: each press lasts 50 ms, successive DOWN-presses `ivs`
 // ms apart (multiples of the 10 ms tick, so the intervals are exact).
+// Tap tempo needs two agreeing intervals (VESTIGE_TAP_AGREE), so the last
+// interval is repeated once: Taps({500}) is three taps 500 ms apart.
 static void Taps(const std::vector<int>& ivs) {
   for (int iv : ivs) { PressFS1(5); RunFor((float)iv * 0.001f); }
+  if (!ivs.empty()) { PressFS1(5); RunFor((float)ivs.back() * 0.001f); }
   PressFS1(5); RunFor(0.1f);                        // the closing tap
 }
 static size_t TapT(int ms) { return (size_t)((float)ms * 0.001f * sr + 0.5f); }
@@ -504,7 +507,16 @@ static void TestTimeBase() {
   RunFor(8.2f);
   // Multi-tap chain: the LAST interval is T (no averaging, like sprawl).
   Taps({600, 610, 450});
-  Check(v.period_ == TapT(450), "tap chain 600/610/450 ms -> T = last interval (450 ms)");
+  Check(v.period_ == TapT(450), "tap chain 600/610/450(/450) ms -> T = the last two agreeing intervals (450 ms)");
+  // A stray press after a pause must not re-time anything: its interval agrees
+  // with nothing. Then two agreeing intervals at a new tempo set T.
+  { RunFor(3.0f); PressFS1(5); RunFor(0.8f);                      // stray press, ~3 s after the chain
+    const bool kept1 = (v.period_ == TapT(450));
+    PressFS1(5); RunFor(0.8f);                                   // first 800 ms interval: vs ~3 s, disagree
+    const bool kept2 = (v.period_ == TapT(450));
+    PressFS1(5); RunFor(0.1f);                                   // second 800 ms interval: agree
+    Check(kept1 && kept2 && v.period_ == TapT(800),
+          "stray tap after a pause changes nothing; two agreeing intervals then set T"); }
   // A long press is not a tap: T unchanged, chain untouched.
   const size_t before = v.period_;
   PressFS1(40); RunFor(0.8f);                         // 400 ms press
@@ -1201,7 +1213,7 @@ static std::vector<float> ExpectTape(int s, double rho, int N) {
 static void TestFollowTape() {
   printf("-- follow T, A: tape (SW2 UP)\n");
   Reset();
-  cs.sw[0] = 0; cs.sw[1] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
   Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -1273,9 +1285,9 @@ static void TestFollowTape() {
   maxd = 0.f; RunFor(1.0f); const float st2 = maxd;
   maxd = 0.f; Taps({1000}); RunFor(1.0f); const float st_tap_dn = maxd;
   maxd = 0.f; RunFor(1.0f); const float st05 = maxd;
-  maxd = 0.f; cs.sw[1] = 2; RunFor(1.0f); const float st_sw = maxd;   // -> C (latched until its step): rate glides back to 1
+  maxd = 0.f; v.follow_mode_cfg_ = 2; RunFor(1.0f); const float st_sw = maxd;   // -> C (latched until its step): rate glides back to 1
   Check(v.rho_s_[ss] == 1.f, "SW2 to a latched position: the loop glides back to its own length (rate exactly 1)");
-  cs.sw[1] = 0; RunFor(1.0f);
+  v.follow_mode_cfg_ = 0; RunFor(1.0f);
   const float big = (st1 > st2 ? st1 : st2);
   printf("      max step: steady x1 %.5f, x2 %.5f, x0.5 %.5f | tap x1->x2 %.5f, tap x2->x0.5 %.5f, SW2 x0.5->x1 %.5f (bound 1.5 x the faster side)\n",
          st1, st2, st05, st_tap_up, st_tap_dn, st_sw);
@@ -1564,7 +1576,7 @@ static void TestFollowStretch() {
   const size_t gst = (size_t)((float)VESTIGE_STRETCH_GRAIN_MS * 0.001f * sr) & ~(size_t)1;
   // Sine loop: pitch must stay, time must follow.
   Reset();
-  cs.sw[0] = 0; cs.sw[1] = 1; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  cs.sw[0] = 0; v.follow_mode_cfg_ = 1; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
   Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -1640,10 +1652,10 @@ static void TestFollowStretch() {
   maxd = 0.f; RunFor(1.0f); const float st05 = maxd;
   maxd = 0.f; Taps({250}); RunFor(1.0f); const float s_up = maxd;
   maxd = 0.f; RunFor(1.0f); const float st2 = maxd;
-  maxd = 0.f; cs.sw[1] = 0; RunFor(1.0f); const float s_ab = maxd;   // B -> A: same head rate, pitch follows
+  maxd = 0.f; v.follow_mode_cfg_ = 0; RunFor(1.0f); const float s_ab = maxd;   // B -> A: same head rate, pitch follows
   maxd = 0.f; RunFor(1.0f); const float stA = maxd;
-  maxd = 0.f; cs.sw[1] = 2; RunFor(1.0f); const float s_ac = maxd;   // -> C (latched): back to its own length
-  maxd = 0.f; cs.sw[1] = 1; RunFor(1.0f); const float s_cb = maxd;   // -> B again
+  maxd = 0.f; v.follow_mode_cfg_ = 2; RunFor(1.0f); const float s_ac = maxd;   // -> C (latched): back to its own length
+  maxd = 0.f; v.follow_mode_cfg_ = 1; RunFor(1.0f); const float s_cb = maxd;   // -> B again
   float big = st1; if (st05 > big) big = st05; if (st2 > big) big = st2; if (stA > big) big = stA;
   printf("      max step: steady B x1 %.5f, x0.5 %.5f, x2 %.5f, A x2 %.5f | tap x1->x0.5 %.5f, x0.5->x2 %.5f, B->A %.5f, A->C %.5f, C->B %.5f (bound %.5f)\n",
          st1, st05, st2, stA, s_dn, s_up, s_ab, s_ac, s_cb, 1.5f * big);
@@ -1671,7 +1683,7 @@ static void TestFollowStretch() {
 
   // Attack repetition when slowing down: a loop of 4 sharp clicks per pass.
   {
-    Reset(); cs.sw[1] = 1; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+    Reset(); v.follow_mode_cfg_ = 1; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
     hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
     seen_acts = v.act_count_;
     // 4 clicks, 125 ms apart, on a low bed so the gate stays open to the ceiling.
@@ -1696,7 +1708,7 @@ static void TestFollowStretch() {
   }
 
   // Grain budget: full pool, stretch + K1 midpoint, steady and during a glide.
-  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.sw[1] = 1; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; v.follow_mode_cfg_ = 1; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
   seen_acts = v.act_count_;
   const long bursts[4] = {3000, 14000, 21000, 30500};
   for (int i = 0; i < 4; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
@@ -1724,7 +1736,7 @@ static void TestFollowStretch() {
   };
   const long bad0 = audit_bad; audit_max_over = 0;
   for (const Aud& a : au) {
-    Reset(); cs.sw[1] = 1; cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
+    Reset(); v.follow_mode_cfg_ = 1; cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
     Taps({a.tap0}); RunFor(0.3f);
     seen_acts = v.act_count_;
     noise_from = n; noise_to = n + a.burst;
@@ -1745,7 +1757,7 @@ static void TestFollowStretch() {
            GridQuantize::Boundary(v.div_[q], v.period_), v.rho_d_[q], P);
     Check(labs(P - (long)GridQuantize::Boundary(v.div_[q], v.period_)) <= 1,
           "stretch, extreme re-tap (40x): pass = exactly d x T_now (no octave folding)"); }
-  cs.sw[1] = 0; RunFor(0.5f);
+  v.follow_mode_cfg_ = 0; RunFor(0.5f);
   Unhold();
 }
 
@@ -1830,7 +1842,7 @@ static void TestOnsetRearm() {
   for (const Sc& c : scs) {
     // 1. Ringing note hits the T ceiling; a re-pluck while it still rings above
     //    the close level starts a new capture at the onset sample.
-    Reset(); cs.sw[0] = 0; cs.sw[1] = 0; cs.knob[3] = c.k4; cs.knob[4] = 0.0f;
+    Reset(); cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.knob[3] = c.k4; cs.knob[4] = 0.0f;
     Taps({300}); RunFor(0.8f);
     StartHist();
     seen_acts = v.act_count_;
@@ -2060,7 +2072,7 @@ static std::vector<Change> WatchChanges(int s, float secs) {
 static void TestFollowRecut() {
   printf("-- follow T, C: re-cut (SW2 DOWN)\n");
   Reset();
-  cs.sw[0] = 0; cs.sw[1] = 2; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  cs.sw[0] = 0; v.follow_mode_cfg_ = 2; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
   Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -2126,7 +2138,7 @@ static void TestFollowRecut() {
 
   // No clicks at the new seams, on a sine loop: a cut off any period, a pad
   // (fade-out at the material end, silence -> head).
-  Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; Taps({500}); RunFor(0.6f);
+  Reset(); v.follow_mode_cfg_ = 2; cs.knob[4] = 0.0f; Taps({500}); RunFor(0.6f);
   seen_acts = v.act_count_;
   sustain_hz = 220.f; sustain_input = true; play_input = true;
   WaitActivation(2.f, &r);
@@ -2161,7 +2173,7 @@ static void TestFollowRecut() {
   // Level through a cut: the old grains fade out as the restarted stream fades
   // in (identical material across the wrap) — no dip, no bump.
   for (float k2 : {0.85f, 0.2f}) {
-    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = k2; RunFor(0.3f); Taps({500}); RunFor(0.6f);
+    Reset(); v.follow_mode_cfg_ = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = k2; RunFor(0.3f); Taps({500}); RunFor(0.6f);
     hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
     seen_acts = v.act_count_;
     sustain_hz = 220.f; sustain_input = true; play_input = true; CapRec q{}; WaitActivation(3.f, &q);
@@ -2184,7 +2196,7 @@ static void TestFollowRecut() {
 
   // Reverse: cut and pad backwards.
   {
-    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(0.6f);
+    Reset(); v.follow_mode_cfg_ = 2; cs.knob[4] = 0.0f; cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(0.6f);
     hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
     seen_acts = v.act_count_;
     noise_from = n; noise_to = n + 36000; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
@@ -2210,7 +2222,7 @@ static void TestFollowRecut() {
   // K1 half speed audible: a change waits for an EVEN pass (its own wrap), so
   // the half-speed version never jumps mid-pass. Counted as parity slips.
   {
-    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.0f; RunFor(1.5f); Taps({500}); RunFor(0.6f);
+    Reset(); v.follow_mode_cfg_ = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.0f; RunFor(1.5f); Taps({500}); RunFor(0.6f);
     seen_acts = v.act_count_;
     noise_from = n; noise_to = n + 36000; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
     RunFor(0.8f);
@@ -2233,7 +2245,7 @@ static void TestFollowRecut() {
   }
 
   // Poly: every voice follows its own division; budget; held.
-  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.sw[1] = 2; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; v.follow_mode_cfg_ = 2; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
   seen_acts = v.act_count_;
   const long bursts[4] = {3000, 14000, 21000, 30500};
   for (int i = 0; i < 4; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
@@ -2272,7 +2284,7 @@ static void TestFollowRecut() {
   };
   const long bad0 = audit_bad; audit_max_over = 0;
   for (const Aud& a : au) {
-    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
+    Reset(); v.follow_mode_cfg_ = 2; cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
     Taps({a.tap0}); RunFor(0.3f);
     seen_acts = v.act_count_;
     noise_from = n; noise_to = n + a.burst;
@@ -2290,7 +2302,7 @@ static void TestFollowRecut() {
 
   // Slips: a change requested just before a wrap cannot be built in time.
   {
-    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.6f);
+    Reset(); v.follow_mode_cfg_ = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.6f);
     seen_acts = v.act_count_;
     noise_from = n; noise_to = n + 60000; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
     RunFor(1.0f);
@@ -2313,13 +2325,13 @@ static void TestFollowRecut() {
   }
   printf("      slips over the whole C section: build %u, parity %u, applied %u\n",
          v.recut_slip_build_ - slip_b0, v.recut_slip_parity_ - slip_p0, v.recut_applied_);
-  cs.sw[1] = 0; RunFor(0.5f);
+  v.follow_mode_cfg_ = 0; RunFor(0.5f);
   Unhold();
 }
 
 int main() {
   v.Init(sr);
-  cs.sw[0] = 0; cs.sw[1] = 0; cs.sw[2] = 0;
+  cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.sw[2] = 0;
   cs.knob[1] = 0.85f;   // K2 CW: forward, long-ish
   cs.knob[3] = 0.1f;    // K4 sensitive
   cs.knob[4] = 0.05f;   // K5 short fades (0.3 s)
@@ -2331,7 +2343,10 @@ int main() {
         "freeze slab zeroed at init");
   TestStage0();
   TestBufferSeparation();
-  TestTimeBase();
+  TestTimeBase();                  // the tap rule itself: real three-tap agreement
+  // Later sections re-tap at sample-exact moments to test how loops FOLLOW T;
+  // they keep the two-tap timing they were written for (host-only hook).
+  v.tap_accept_one_ = true;
   TestQuantisedCapture();
   TestSpeedXfade();
   TestFollowTape();
@@ -2342,6 +2357,10 @@ int main() {
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
   Check(bad == 0, "no non-finite / >10 samples");
+  { const int before = v.follow_mode_; cs.sw[1] = 2; RunFor(0.1f); cs.sw[1] = 0; RunFor(0.1f);
+    Check(v.follow_mode_ == before && v.follow_mode_ == v.follow_mode_cfg_, "SW2 no longer selects the follow mode"); }
+  { Vestige fresh; Check(fresh.follow_mode_cfg_ == VESTIGE_FOLLOW_MODE && VESTIGE_FOLLOW_MODE == Vestige::kFollowStretch,
+                         "default follow mode is stretch"); }
   printf(fails ? "FAILURES: %d\n" : "ALL OK\n", fails);
   return fails ? 1 : 0;
 }

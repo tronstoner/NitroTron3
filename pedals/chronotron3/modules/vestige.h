@@ -185,13 +185,13 @@ class Vestige : public Module {
     diag_k4_ = k4;                            // DIAG heartbeat only
     const float k5  = RemapKnob(cs.Knob(4)); // loop fade in/out
     const int   sw1 = cs.Switch(0);          // 0=UP 1-voice · 1=MID 6-voice · 2=DOWN freeze
-    const int   sw2 = cs.Switch(1);          // TEMPORARY: follow mode (A tape / B stretch / C re-cut)
+    const int   sw2 = cs.Switch(1);          // reserved: error type (plan stage 2.5)
     const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
-    (void)k3;
-    // ---- SW2 = how playing loops follow a T change (temporary selector) ----
-    // A (tape), B (stretch) and C (re-cut) all follow T.
-    follow_mode_ = (sw2 == 0) ? kFollowTape : (sw2 == 1) ? kFollowStretch : kFollowRecut;
+    (void)k3; (void)sw2;
+    // ---- How playing loops follow a T change: VESTIGE_FOLLOW_MODE (stretch) ----
+    // Was temporarily on SW2 (A tape / B stretch / C re-cut); all three are kept.
+    follow_mode_ = follow_mode_cfg_;
 
 
     // ---- K1 = playback speed crossfade (rework stage 6, plan §4.2) -------------
@@ -2023,8 +2023,16 @@ class Vestige : public Module {
       if (press < VESTIGE_TAP_RELEASE_MS) {
         if (tap_prev_ms_ != 0) {
           const uint32_t iv = f1_down_ms_ - tap_prev_ms_;
-          if (iv >= VESTIGE_T_MIN_MS && iv <= VESTIGE_T_MAX_MS) {
-            size_t t = (size_t)((float)iv * 0.001f * sr_ + 0.5f);
+          const bool valid = (iv >= VESTIGE_T_MIN_MS && iv <= VESTIGE_T_MAX_MS);
+          // VESTIGE_TAP_AGREE: only a SECOND interval agreeing with the previous
+          // one sets T (their mean), so one stray press cannot re-time the loops.
+          const uint32_t pv = tap_prev_iv_ms_;
+          const bool agree = valid && (tap_accept_one_ || (pv != 0 &&
+              fabsf((float)iv - (float)pv) <= VESTIGE_TAP_AGREE * (float)pv));
+          tap_prev_iv_ms_ = valid ? iv : 0;          // an invalid interval breaks the chain
+          if (agree) {
+            const float mean_ms = tap_accept_one_ ? (float)iv : 0.5f * ((float)iv + (float)pv);
+            size_t t = (size_t)(mean_ms * 0.001f * sr_ + 0.5f);
             if (t < VESTIGE_T_MIN_SAMPLES) t = VESTIGE_T_MIN_SAMPLES;
             if (t > VESTIGE_T_MAX_SAMPLES) t = VESTIGE_T_MAX_SAMPLES;
             tap_period_ = t;
@@ -2754,6 +2762,7 @@ class Vestige : public Module {
   // Loops follow T (SW2 temporary selector). follow_mode_: control -> ISR.
   enum FollowMode { kFollowTape = 0, kFollowStretch = 1, kFollowRecut = 2 };
   volatile int follow_mode_ = kFollowTape;
+  int follow_mode_cfg_ = VESTIGE_FOLLOW_MODE;   // the configured mode (host tests set it directly)
   double   rho_t_[VESTIGE_SLOTS];            // tape-rate target per slot (ISR, per block)
   double   rho_d_[VESTIGE_SLOTS];            // glide state (double: see SmoothTape)
   float    rho_s_[VESTIGE_SLOTS];            // float copy for grain rates / diagnostics
@@ -2772,6 +2781,11 @@ class Vestige : public Module {
   size_t   period_       = VESTIGE_T_MIN_SAMPLES;
   size_t   tap_period_   = 0;
   uint32_t tap_prev_ms_  = 0;     // last committed tap down-press (0 = no chain)
+  uint32_t tap_prev_iv_ms_ = 0;   // previous valid tap interval (0 = none): the agreement check
+  // HOST-TEST HOOK, never set by the firmware: accept a single interval (the old
+  // two-tap rule), for tests that re-tap at a sample-exact moment to exercise
+  // how loops follow T — not the tap rule itself, which is tested without it.
+  bool     tap_accept_one_ = false;
   uint32_t f1_down_ms_   = 0;     // current FS1 press start (own timestamp)
   float    k2_last_      = 0.f;   // last seen raw K2 (move detector)
   bool     k2_seeded_    = false;
