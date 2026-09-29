@@ -42,6 +42,11 @@ Decided / parked, with the reason:
 4. **K4 → constant, degrade back on K4** (§9); **freeze as a loop source** (Q1);
    **sprawl DIAG log** has the same blocking-USB hang the vestige log had. Later.
 5. **Docs** (README, CONTROLS, layout SVGs): after the rework is done.
+6. **Slice mode for the timing error** (builder's idea, 2026-09-29): cut the
+   loop into e.g. 8 slices; on each pattern hit play from a randomly chosen
+   slice instead of the loop start, but always slice 1 on the downbeat. Keeps
+   the rhythm and the whole loop's material in play, and anchors the "one" —
+   like classic stutter/mangler pedals. Needs its own control; later.
 
 ---
 
