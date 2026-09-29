@@ -1674,14 +1674,16 @@ class Vestige : public Module {
     // above a slow baseline, above a floor tied to the K4 open threshold, with
     // a refractory so one pluck is one onset. Runs every sample so its
     // baseline never goes stale; it is USED only to lift the re-arm block.
-    onset_slow_ += VESTIGE_ONSET_SLOW_COEF * (env_ - onset_slow_);
+    // VESTIGE_ONSET_ON_GATE: read the smooth gate meter, not the fast one.
+    const float oe = VESTIGE_ONSET_ON_GATE ? env_gate_ : env_;
+    onset_slow_ += VESTIGE_ONSET_SLOW_COEF * (oe - onset_slow_);
     if (onset_refr_ > 0) onset_refr_--;
-    const bool onset = (onset_refr_ == 0 && env_ > auto_thresh_ * VESTIGE_ONSET_FLOOR_REL &&
-                        env_ > onset_slow_ * VESTIGE_ONSET_RISE);
+    const bool onset = (onset_refr_ == 0 && oe > auto_thresh_ * VESTIGE_ONSET_FLOOR_REL &&
+                        oe > onset_slow_ * VESTIGE_ONSET_RISE);
     if (onset) {
       onset_refr_ = onset_refr_len_; onset_count_++;
       if (CT3_DIAG) DiagPush(GateDiag{'O', recording_ ? 'R' : '-', (uint8_t)rearm_block_, now,
-                                      env_, onset_slow_, env_ / (onset_slow_ > 1e-9f ? onset_slow_ : 1e-9f),
+                                      env_, onset_slow_, oe / (onset_slow_ > 1e-9f ? onset_slow_ : 1e-9f),
                                       env_gate_, 0u, 0u});
     }
     const float g = env_gate_;                    // the gate's meter: start / silence / re-arm

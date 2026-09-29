@@ -334,6 +334,17 @@ static constexpr float    VESTIGE_ONSET_FLOOR_REL     = 1.0f;    // x the K4 ope
 // (short + sustained); 100 for margin. Only the first onset after a ceiling
 // stop matters, so this costs nothing musically.
 static constexpr uint32_t VESTIGE_ONSET_REFRACTORY_MS = 100;     // one pluck = one onset
+// The onset detector reads the GATE meter (fast rise, slow fall), and its
+// baseline follows that meter too — not the fast env_.
+// Why (hardware DIAG log, 2026-09-29, vestige-20260929-1228.log): on a real
+// ringing low E the fast meter jumps around far more than any host model showed.
+// The detector fired every 100 ms — exactly its refractory time — with ratios
+// just over 1.8 (1.80..2.5), all on ONE ringing note. With a short T each capture
+// hits the ceiling, and the next false onset lifted the re-arm block at once:
+// 9 captures in 2.5 s from one note, every one "why=O". The gate meter has its
+// valleys filled, so a ringing note looks flat to the detector, while a new
+// pluck is still a sharp jump (the gate meter follows the fast meter UP at once).
+static constexpr bool     VESTIGE_ONSET_ON_GATE       = true;
 // Stage 2: background wrap-guard writer (vestige.h IsrFillGuards). Cells per
 // sample; anything >= 1 keeps ahead of forward grains (they first read the
 // guard one loop after playback starts). 8 = a full 21504-cell guard in ~56 ms,

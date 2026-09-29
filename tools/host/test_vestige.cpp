@@ -1714,7 +1714,21 @@ static float BeatIn(long k) {
   const float a = (t < 0.002f ? t / 0.002f : 1.f) * expf(-t / bt_tau);
   return bt_amp * a * (sinf(2.f * 3.14159265f * bt_f1 * t) + bt_d * sinf(2.f * 3.14159265f * bt_f2 * t)) / (1.f + bt_d);
 }
+// A SPIKY low E: harmonics 1..16 in phase give one sharp peak per cycle, the
+// way a real bass DI signal does. On the FAST meter that peak jumps ~2x over the
+// onset baseline every cycle — this is the model that reproduces the hardware
+// DIAG log (false onsets every 100 ms on one ringing note). Sines never do.
+static bool sp_on = false; static long sp_from = 0; static float sp_amp = 0.3f, sp_hz = 41.2f, sp_tau = 2.0f;
+static float SpikyIn(long k) {
+  if (k < sp_from) return 0.f;
+  const float t = (float)(k - sp_from) / sr;
+  const float a = (t < 0.002f ? t / 0.002f : 1.f) * expf(-t / sp_tau);
+  float y = 0.f;
+  for (int h = 1; h <= 16; h++) y += cosf(2.f * 3.14159265f * sp_hz * h * t) / sqrtf((float)h);
+  return sp_amp * a * y / 7.0f;
+}
 static float NoteIn(long k) {
+  if (sp_on) return SpikyIn(k);
   if (bt_on) return BeatIn(k);
   if (nt.count <= 0 || k < nt.from) return 0.f;
   const long rel = k - nt.from; const long i = rel / nt.gap;
@@ -1733,21 +1747,25 @@ static float NoteIn(long k) {
 // Replicated detector: the module's own envelope + onset arithmetic run over
 // the recorded input from a snapshot of its state. Returns the first sample at
 // or after `from` where an onset fires.
-static float rep_env0 = 0.f, rep_slow0 = 0.f; static int rep_refr0 = 0;
+static float rep_env0 = 0.f, rep_gate0 = 0.f, rep_slow0 = 0.f; static int rep_refr0 = 0;
 static long ReplicatedOnset(long from) {
-  float env = rep_env0, slow = rep_slow0; int refr = rep_refr0;
+  float env = rep_env0, gate = rep_gate0, slow = rep_slow0; int refr = rep_refr0;
   for (long k = hist_n0; k < hist_n0 + (long)in_hist.size(); k++) {
     env += VESTIGE_ENV_COEF * (fabsf(InH(k)) - env);
-    slow += VESTIGE_ONSET_SLOW_COEF * (env - slow);
+    // The gate meter (VESTIGE_GATE_ENV_MODE 1): follows env up, falls slowly.
+    if (VESTIGE_GATE_ENV_MODE == 1) { if (env > gate) gate = env; else gate += v.gate_rel_coef_ * (env - gate); }
+    else gate = env;
+    const float oe = VESTIGE_ONSET_ON_GATE ? gate : env;     // what the detector reads
+    slow += VESTIGE_ONSET_SLOW_COEF * (oe - slow);
     if (refr > 0) refr--;
-    const bool on = (refr == 0 && env > v.auto_thresh_ * VESTIGE_ONSET_FLOOR_REL && env > slow * VESTIGE_ONSET_RISE);
+    const bool on = (refr == 0 && oe > v.auto_thresh_ * VESTIGE_ONSET_FLOOR_REL && oe > slow * VESTIGE_ONSET_RISE);
     if (on) { refr = v.onset_refr_len_; if (k >= from) return k; }
   }
   return -1;
 }
 static void StartHist() {
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
-  rep_env0 = v.env_; rep_slow0 = v.onset_slow_; rep_refr0 = v.onset_refr_;
+  rep_env0 = v.env_; rep_gate0 = v.env_gate_; rep_slow0 = v.onset_slow_; rep_refr0 = v.onset_refr_;
 }
 
 static void TestOnsetRearm() {
@@ -1888,6 +1906,30 @@ static void TestGateMeter() {
     }
     printf("      one beating low E (1 Hz beat), 6 level/K4 settings: at most %d capture(s)\n", worst);
     if (VESTIGE_REARM_EVERY_END) Check(worst == 1, "a beating note is captured exactly once (swells do not re-open the gate)");
+  }
+
+  // A spiky ringing low E at a short T: every capture hits the ceiling, so a
+  // false onset would start the next one at once (the hardware failure). With
+  // the detector on the gate meter it is one capture and one onset.
+  {
+    int worst_caps = 0; uint32_t worst_onsets = 0, worst_os = 0;
+    const float amps[] = {0.2f, 0.3f};
+    for (float amp : amps) {
+      Reset(); cs.sw[0] = 0; cs.knob[3] = 0.45f; cs.knob[4] = 0.0f; Taps({230}); RunFor(0.8f);
+      seen_acts = v.act_count_;
+      const uint32_t oc0 = v.onset_count_, os0 = v.onset_starts_;
+      int starts = 0; bool was = v.recording_;
+      sp_amp = amp; sp_from = n + 480; sp_on = true; note_on = true;
+      for (int i = 0; i < 600; i++) { RunFor(0.01f); if (v.recording_ && !was) starts++; was = v.recording_; }
+      if (starts > worst_caps) worst_caps = starts;
+      if (v.onset_count_ - oc0 > worst_onsets) worst_onsets = v.onset_count_ - oc0;
+      if (v.onset_starts_ - os0 > worst_os) worst_os = v.onset_starts_ - os0;
+      note_on = false; sp_on = false; RunFor(1.0f);
+    }
+    printf("      spiky ringing low E, T = 230 ms: at most %d capture(s), %u onset(s), %u onset-started\n",
+           worst_caps, worst_onsets, worst_os);
+    Check(worst_caps == 1 && worst_onsets == 1 && worst_os == 0,
+          "a spiky ringing note at short T: one capture, no false onsets restarting it");
   }
 
   // Stab separation: two 60 ms noise stabs, gap g, T = 2 s (no ceiling).
