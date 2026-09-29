@@ -727,7 +727,17 @@ static constexpr float  VESTIGE_AGE_FADE_DEPTH     = 0.4f;
 // they share one scale and their ratio is explicit — no runaway one-pole tail.
 static constexpr float  VESTIGE_FADE_ATTACK_MAX_S  = 6.0f;  // K5 CW: swell-in finishes in this
 static constexpr float  VESTIGE_FADE_RELEASE_MAX_S = 6.0f;  // K5 CW: fade-out finishes in this (symmetric)
-static constexpr float  VESTIGE_FADE_MIN_S         = 0.003f; // K5 CCW floor: declick, not a 1-sample step (voice-steal click)
+static constexpr float  VESTIGE_FADE_MIN_S         = 0.003f; // K5 noon / CCW: declick, not a 1-sample step (voice-steal click)
+// K5 is bipolar: CCW half = decay over N repeats · noon = endless · CW half =
+// the fade above (0 -> max over the half). Dead zone around noon (remapped
+// knob units), like K4's.
+static constexpr float  VESTIGE_K5_DEADZONE        = 0.06f;
+// DECAY (K5 CCW half): every loop voice falls smoothly (exponentially, like
+// tape-echo feedback) from its first pass, to -60 dB after N of its passes, and
+// is then freed. N = DECAY_N_MAX just past the dead zone, down to 1 at full
+// CCW (one fading pass: a blip), log taper between. Counted in passes, so it
+// stays tempo-synced. FS2 hold pauses it; K5 back to noon stops it where it is.
+static constexpr float  VESTIGE_DECAY_N_MAX        = 64.f;
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
 // volume knob and the SW2 dry gate are gone. VESTIGE_LOOP_BOOST_MAX is kept for
