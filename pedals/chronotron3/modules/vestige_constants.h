@@ -355,7 +355,7 @@ static constexpr bool     VESTIGE_ONSET_ON_GATE       = true;
 // after a capture: tape reaches 80x (T range) x 2 (K1) = 160 cells/sample. At 256
 // the whole guard (21504 cells) is written in ~84 samples, a CPU burst of ~2 ms
 // once per capture. (Was 8, which is why tape used to be capped at 4x.)
-static constexpr uint32_t VESTIGE_GUARD_FILL_PER_SAMPLE = 256;
+static constexpr uint32_t VESTIGE_GUARD_FILL_PER_SAMPLE = 8;     // TEST BUILD: back to 8 to A/B the loop-replace click (256 in 1280dad)
 // Stage 2: a loop whose end is decided AFTER its first grid boundary (every
 // round-down, and any round-up within the 80 ms release of its boundary) can
 // no longer start on its "one". true = it joins immediately, IN PHASE with its
