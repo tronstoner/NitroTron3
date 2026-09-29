@@ -1566,18 +1566,23 @@ class Vestige : public Module {
     sl_n_[s] = nsl; cur_pat_[s] = 0; timing_patterns_++;
   }
   // ---- Timing mode 2: PASS MEMORY ------------------------------------------
-  struct TimingFig { int8_t type, step, param, age; };   // a figure on the remembered pass (age = passes played before this one)
-  enum TimingFigType { kFigRest = 0, kFigBreak, kFigStutter, kFigRepeat, kFigRatchet, kFigRetrig, kFigClean };
-  // The steps a figure changes on an n-step pass (bit i = step i).
-  // Single-step figures change their step; BREAK / REPEAT / RETRIG change from
-  // their step to the end of the pass (RETRIG's step = its pattern's 2nd hit).
+  struct TimingFig { int8_t type, step, len, age; };   // a figure on a remembered pass (len = span in
+                                                        //  steps; RETRIG: its hits. age = turns played)
+  enum TimingFigType { kFigRest = 0, kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig, kFigClean };
+  // RETRIG with `hits`: the step it starts changing (its pattern's 2nd hit), -1 = does not fit n.
+  static int TimingRetrigStep(int hits, int n) {
+    if (n < 2 * hits) return -1;                            // E(2,4+) and E(3,6+) only
+    const uint32_t m = Bjorklund(hits, n);
+    int k = 1; while (k < n && !(m & (1u << k))) k++;
+    return k < n ? k : -1;
+  }
+  // The steps a figure holds on an n-step pass (bit i = step i): its span
+  // [step, step + len); RETRIG from its step to the end of the pass.
   static uint32_t TimingFigCover(const TimingFig& f, int n) {
-    if (f.type == kFigBreak || f.type == kFigRepeat || f.type == kFigRetrig) {
-      uint32_t m = 0;
-      for (int i = f.step; i < n; i++) m |= (1u << i);
-      return m;
-    }
-    return 1u << f.step;
+    const int e = (f.type == kFigRetrig) ? n : f.step + f.len;
+    uint32_t m = 0;
+    for (int i = f.step; i < e && i < n; i++) m |= (1u << i);
+    return m;
   }
   uint32_t TimingMemCover(int s) const {
     uint32_t m = 0;
@@ -1585,55 +1590,70 @@ class Vestige : public Module {
     return m;
   }
   static int TimingBits(uint32_t m) { int c = 0; while (m) { c += (int)(m & 1u); m >>= 1; } return c; }
-  // Add one figure of at most `room` steps on the free steps: the type by
-  // VESTIGE_TIMING_FIG_WEIGHT among the types that fit somewhere, then its step
-  // by step weight (back half x VESTIGE_TIMING_MEM_BACK_WEIGHT). ratchet_div =
-  // the finest ratchet that fits this loop (4, 2, or 0 = none).
-  void TimingMemAdd(int s, int room, int ratchet_div) {
-    const int n = pm_n_[s][pm_cur_[s]];
-    if (room < 1 || pm_nf_[s][pm_cur_[s]] >= VESTIGE_TIMING_MEM_FIGS) return;
+  // The lengths a type can take (RETRIG: its hit counts).
+  static int TimingFigLens(int t, int* lens) {
+    if (t == kFigRetrig) { lens[0] = 2; lens[1] = 3; return 2; }
+    int c = 0;
+    for (int l = 1; l <= VESTIGE_TIMING_SPAN_MAX; l++) lens[c++] = l;
+    return c;
+  }
+  // Does figure (t, k, len) fit: inside the pass, on free steps, within `room`,
+  // and (the ratchets) its sub-steps long enough for this loop.
+  bool TimingFigFits(int t, int k, int len, int n, uint32_t used, int room, bool ok2, bool ok4) const {
+    if ((t == kFigDouble && !ok2) || (t == kFigRatchet && !ok4)) return false;
+    if (t == kFigRetrig) { if (k != TimingRetrigStep(len, n)) return false; }
+    else if (k + len > n) return false;
+    const uint32_t c = TimingFigCover(TimingFig{(int8_t)t, (int8_t)k, (int8_t)len, 0}, n);
+    return !(c & used) && TimingBits(c) <= room;
+  }
+  static float TimingStepWeight(int k, int n) { return (2 * k >= n) ? VESTIGE_TIMING_MEM_BACK_WEIGHT : 1.f; }
+  // Add one figure of at most `room` steps on the free steps: its type by
+  // VESTIGE_TIMING_FIG_WEIGHT among the types that fit somewhere, then its
+  // length uniformly among the lengths that fit, then its first step by step
+  // weight (back half x VESTIGE_TIMING_MEM_BACK_WEIGHT). ok2 / ok4: a step
+  // split in 2 / 4 is long enough for this loop (double / ratchet).
+  void TimingMemAdd(int s, int room, bool ok2, bool ok4) {
+    const int m = pm_cur_[s];
+    const int n = pm_n_[s][m];
+    if (room < 1 || pm_nf_[s][m] >= VESTIGE_TIMING_MEM_FIGS) return;
     const uint32_t used = TimingMemCover(s);
-    TimingFig cand[VESTIGE_TIMING_FIGS][2 * VESTIGE_TIMING_SLICE_MAX];
-    float     cw[VESTIGE_TIMING_FIGS][2 * VESTIGE_TIMING_SLICE_MAX];
-    int nc[VESTIGE_TIMING_FIGS] = {0};
-    float tw[VESTIGE_TIMING_FIGS] = {0.f};
+    int lens[VESTIGE_TIMING_SPAN_MAX + 2];
+    auto any = [&](int t, int len) {
+      for (int k = 0; k < n; k++) if (TimingFigFits(t, k, len, n, used, room, ok2, ok4)) return true;
+      return false;
+    };
+    bool tok[VESTIGE_TIMING_FIGS]; float tot = 0.f;
     for (int t = 0; t < VESTIGE_TIMING_FIGS; t++) {
+      tok[t] = false;
       if (!(VESTIGE_TIMING_FIG_WEIGHT[t] > 0.f)) continue;
-      if (t == kFigRatchet && ratchet_div == 0) continue;
-      auto put = [&](int k, int param) {
-        TimingFig f{(int8_t)t, (int8_t)k, (int8_t)param, 0};
-        const uint32_t c = TimingFigCover(f, n);
-        if ((c & used) || TimingBits(c) > room) return;
-        const float w = (2 * k >= n) ? VESTIGE_TIMING_MEM_BACK_WEIGHT : 1.f;
-        if (!(w > 0.f)) return;
-        cand[t][nc[t]] = f; cw[t][nc[t]] = w; nc[t]++; tw[t] += w;
-      };
-      if (t == kFigRetrig) {
-        for (int hits = 2; hits <= 3; hits++) {
-          if (n < 2 * hits) continue;                       // E(2,4+) and E(3,6+) only
-          const uint32_t m = Bjorklund(hits, n);
-          int k = 1; while (k < n && !(m & (1u << k))) k++; // its 2nd hit
-          if (k < n) put(k, hits);
-        }
-      } else {
-        for (int k = 0; k < n; k++) put(k, t == kFigRatchet ? ratchet_div : 0);
-      }
+      const int nl = TimingFigLens(t, lens);
+      for (int i = 0; i < nl && !tok[t]; i++) tok[t] = any(t, lens[i]);
+      if (tok[t]) tot += VESTIGE_TIMING_FIG_WEIGHT[t];
     }
-    float tot = 0.f;
-    for (int t = 0; t < VESTIGE_TIMING_FIGS; t++) if (nc[t] > 0) tot += VESTIGE_TIMING_FIG_WEIGHT[t];
     if (!(tot > 0.f)) return;
     float r = TimingRand() * tot;
-    int t = 0;
-    for (; t < VESTIGE_TIMING_FIGS - 1; t++) {
-      if (nc[t] == 0) continue;
-      if (r < VESTIGE_TIMING_FIG_WEIGHT[t]) break;
-      r -= VESTIGE_TIMING_FIG_WEIGHT[t];
+    int t = -1;
+    for (int i = 0; i < VESTIGE_TIMING_FIGS; i++) {
+      if (!tok[i]) continue;
+      t = i;
+      if (r < VESTIGE_TIMING_FIG_WEIGHT[i]) break;
+      r -= VESTIGE_TIMING_FIG_WEIGHT[i];
     }
-    while (nc[t] == 0) t--;                                  // (float edge: the last type that fits)
-    float q = TimingRand() * tw[t];
-    int i = 0;
-    for (; i < nc[t] - 1; i++) { if (q < cw[t][i]) break; q -= cw[t][i]; }
-    pm_fig_[s][pm_cur_[s]][pm_nf_[s][pm_cur_[s]]++] = cand[t][i];
+    int fl[VESTIGE_TIMING_SPAN_MAX + 2]; int nf = 0;
+    const int nl = TimingFigLens(t, lens);
+    for (int i = 0; i < nl; i++) if (any(t, lens[i])) fl[nf++] = lens[i];
+    const int len = fl[TimingPick(nf)];
+    float tw = 0.f;
+    for (int k = 0; k < n; k++) if (TimingFigFits(t, k, len, n, used, room, ok2, ok4)) tw += TimingStepWeight(k, n);
+    float q = TimingRand() * tw;
+    int k = -1;
+    for (int i = 0; i < n; i++) {
+      if (!TimingFigFits(t, i, len, n, used, room, ok2, ok4)) continue;
+      k = i;
+      if (q < TimingStepWeight(i, n)) break;
+      q -= TimingStepWeight(i, n);
+    }
+    pm_fig_[s][m][pm_nf_[s][m]++] = TimingFig{(int8_t)t, (int8_t)k, (int8_t)len, 0};
   }
   void TimingMemClear(int s) {
     for (int m = 0; m < VESTIGE_TIMING_MEM_PASSES; m++) { pm_nf_[s][m] = 0; pm_n_[s][m] = 0; }
@@ -1649,7 +1669,7 @@ class Vestige : public Module {
   }
   // Pass start (or loop start, el0 = the elapsed pass it joins at) with a
   // level > 0: maybe edit the remembered pass (see vestige_constants.h), then
-  // render it into this pass's events — read jumps and rest/break mute changes
+  // render it into this pass's events — read jumps and rest mute changes
   // at step (and ratchet sub-step) boundaries, in material units.
   void TimingPlanMem(int s, bool rev, size_t L, double rho, float el0) {
     pm_cur_[s] = (pm_cur_[s] + 1) % VESTIGE_TIMING_MEM_PASSES;   // this pass's own memory (A B C A B C ...)
@@ -1665,8 +1685,8 @@ class Vestige : public Module {
     if (n != VESTIGE_TIMING_SLICES) timing_fallbacks_++;
     if (pm_n_[s][pm_cur_[s]] != n) { pm_nf_[s][pm_cur_[s]] = 0; pm_n_[s][pm_cur_[s]] = n; }      // steps changed: the memory no longer fits
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
-    const int rdiv = (pass_out / (double)n / 4.0 >= min_step) ? 4
-                   : (pass_out / (double)n / 2.0 >= min_step) ? 2 : 0;
+    const bool ok4 = pass_out / (double)n / 4.0 >= min_step;   // a step split in 4 (ratchet) fits
+    const bool ok2 = pass_out / (double)n / 2.0 >= min_step;   // split in 2 (double) fits
     // 1. Age: a figure that has played its VESTIGE_TIMING_MEM_LIFE passes goes.
     for (int i = 0; i < pm_nf_[s][pm_cur_[s]];) {
       if (++pm_fig_[s][pm_cur_[s]][i].age >= VESTIGE_TIMING_MEM_LIFE) pm_fig_[s][pm_cur_[s]][i] = pm_fig_[s][pm_cur_[s]][--pm_nf_[s][pm_cur_[s]]];
@@ -1682,9 +1702,9 @@ class Vestige : public Module {
       if (tgt > n) tgt = n;
       const int c = TimingBits(TimingMemCover(s));
       if (c > tgt)      TimingMemRemove(s);
-      else if (c < tgt) TimingMemAdd(s, tgt - c, rdiv);
+      else if (c < tgt) TimingMemAdd(s, tgt - c, ok2, ok4);
       else if (TimingMemRemove(s))                             // swap (an earlier figure)
-        TimingMemAdd(s, tgt - TimingBits(TimingMemCover(s)), rdiv);
+        TimingMemAdd(s, tgt - TimingBits(TimingMemCover(s)), ok2, ok4);
       timing_edits_++;
     }
     // Render: which slice each step plays, muted or not, ratchet division.
@@ -1692,15 +1712,16 @@ class Vestige : public Module {
     for (int i = 0; i < n; i++) { play[i] = (int8_t)i; mute[i] = 0; rat[i] = 1; }
     for (int f = 0; f < pm_nf_[s][pm_cur_[s]]; f++) {
       const TimingFig& g = pm_fig_[s][pm_cur_[s]][f];
-      const int k = g.step;
+      const int k = g.step, e = (k + g.len < n) ? k + g.len : n;
+      // (Steps before step 1 are the loop's last steps.)
       switch (g.type) {
-        case kFigRest:    mute[k] = 1; break;
-        case kFigBreak:   for (int i = k; i < n; i++) mute[i] = 1; break;
-        case kFigStutter: play[k] = (int8_t)((k + n - 1) % n); break;   // (on step 1: the loop's last step)
-        case kFigRepeat:  for (int i = k; i < n; i++) play[i] = (int8_t)((k + n - 1) % n); break;
-        case kFigRatchet: rat[k] = g.param; break;
+        case kFigRest:    for (int i = k; i < e; i++) mute[i] = 1; break;
+        case kFigStutter: for (int i = k; i < e; i++) play[i] = (int8_t)((i - g.len + n) % n); break;   // the len steps before, again
+        case kFigRepeat:  for (int i = k; i < e; i++) play[i] = (int8_t)((k - 1 + n) % n); break;       // the step before, len times
+        case kFigDouble:  for (int i = k; i < e; i++) rat[i] = 2; break;
+        case kFigRatchet: for (int i = k; i < e; i++) rat[i] = 4; break;
         case kFigRetrig: {
-          const uint32_t m = Bjorklund(g.param, n);
+          const uint32_t m = Bjorklund(g.len, n);
           int last = 0;
           for (int i = 0; i < n; i++) { if (m & (1u << i)) last = i; if (i >= k) play[i] = (int8_t)(i - last); }
         } break;

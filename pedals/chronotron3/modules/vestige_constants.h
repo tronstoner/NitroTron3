@@ -512,7 +512,6 @@ static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIM
 //      step is re-rolled every pass. The target is drawn per edit: floor(D) +
 //      (1 with chance frac(D)), at most n.
 // The downbeat is NOT protected: step 1 takes any figure, like every step
-// (there STUTTER / REPEAT play the loop's last step; BREAK silences the pass).
 //   D     = TARGET_A + TARGET_B * L                      steps held (L = K3 level > 0)
 //   EDITS = max(1, round(EDITS_B * L * n))               per pass
 // At L = 1: every step holds a figure (CLEAN among them) and every one of
@@ -522,24 +521,27 @@ static constexpr float  VESTIGE_TIMING_MEM_TARGET_B = 7.6f;     // D(1) = 8 = ev
 static constexpr float  VESTIGE_TIMING_MEM_EDITS_B  = 1.0f;     // 1 = one edit per step at L = 1
 static constexpr int    VESTIGE_TIMING_MEM_LIFE     = 3;        // turns a figure plays, at most
 static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taking turns (1 = one pass)
-// FIGURES (a figure's size = the steps it holds; figures never overlap):
-//   REST     one step silent                              (size 1)
-//   BREAK    silent from a step to the end of the pass    (size n - k)
-//   STUTTER  a step plays the step before it again        (size 1)
-//   REPEAT   from a step to the end, the step before it repeats (size n - k) —
-//            beat repeat; on step 2 the downbeat repeats for the whole pass
-//   RATCHET  a step split into 4 (or 2) fast repeats      (size 1)
+// FIGURES — each spans 1..VESTIGE_TIMING_SPAN_MAX steps (length drawn
+// uniformly among those that fit), inside the pass; figures never overlap:
+//   REST     the span is silent
+//   STUTTER  the span plays the same number of steps before it again
+//   REPEAT   the step before the span plays over the whole span (beat repeat)
+//   DOUBLE   each step of the span squeezed in twice (double time)
+//   RATCHET  each step of the span squeezed in 4 times
 //   RETRIG   back to the one in Euclidean groups: E(2,n) = 4+4, E(3,8) = 3+3+2
-//   CLEAN    a step plays as recorded                     (size 1) — the
-//            no-glitch choice in the random set
-// A new figure only goes where its size fits the room left to the target.
+//            (from its 2nd hit to the end of the pass; not 1..4)
+//   CLEAN    the span plays as recorded — the no-glitch choice in the set
+// Steps before step 1 are the loop's last steps (a STUTTER / REPEAT at the
+// start of the pass replays the end of the loop).
+// A new figure only goes where its span fits the room left to the target.
+static constexpr int    VESTIGE_TIMING_SPAN_MAX = 4;
 // Weights (relative chance of each figure being picked) — EDITABLE:
 static constexpr int    VESTIGE_TIMING_FIGS = 7;
 static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // REST
-  1.f,   // BREAK
   1.f,   // STUTTER
   1.f,   // REPEAT
+  1.f,   // DOUBLE
   1.f,   // RATCHET
   1.f,   // RETRIG
   1.f,   // CLEAN
@@ -549,7 +551,7 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
 static constexpr int    VESTIGE_TIMING_MEM_FIGS   = 8;           // figures a pass can hold
 static constexpr int    VESTIGE_TIMING_MAX_EVENTS = 48;          // jumps + mute changes per pass
-static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest / break fade (each way)
+static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (each way)
 
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC
