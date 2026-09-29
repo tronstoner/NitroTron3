@@ -487,7 +487,12 @@ static constexpr int    VESTIGE_TIMING_MODE = 1;
 // Short-loop guard: a slice shorter than VESTIGE_TIMING_MIN_STEP_MS (output
 // time) halves N (8 -> 4 -> 2); 2 don't fit = no rearrangement.
 static constexpr int    VESTIGE_TIMING_SLICES = 8;
-static constexpr float  VESTIGE_TIMING_RAND_CURVE = 2.0f;       // per-step random chance = L^curve
+static constexpr float  VESTIGE_TIMING_RAND_CURVE = 1.0f;       // per-step random chance = L^curve (was 2: too tame)
+// Heard on ed8f8a1 (fixed nested arrangement + random slices on top): "too
+// static — mixed up concepts". The builder's concept is simpler: on every step,
+// a jump to a random slice, with K3 as the chance; slice 1 on the downbeat. So
+// the fixed arrangement is OFF (kept, one constant away) and the chance is linear.
+static constexpr bool   VESTIGE_TIMING_FIXED_ARRANGEMENT = false;
 static constexpr int    VESTIGE_TIMING_SLICE_MAX = 16;          // table size bound
 static constexpr int    VESTIGE_TIMING_SLICE_TIERS = 4;         // N, N/2, N/4, N/8 tables
 static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIMING_SLICE_MAX, "2..16 slices");

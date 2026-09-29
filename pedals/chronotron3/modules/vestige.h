@@ -1527,7 +1527,8 @@ class Vestige : public Module {
     if (nsl != VESTIGE_TIMING_SLICES) timing_fallbacks_++;
     int8_t* ord = sl_order_[s];
     for (int i = 0; i < nsl; i++) ord[i] = (int8_t)i;
-    int cnt = (int)(level * (float)(nsl - 1) + 0.5f); if (cnt > nsl - 1) cnt = nsl - 1;
+    int cnt = VESTIGE_TIMING_FIXED_ARRANGEMENT ? (int)(level * (float)(nsl - 1) + 0.5f) : 0;
+    if (cnt > nsl - 1) cnt = nsl - 1;
     for (int k = 0; k < cnt; k++) { const int st = sl_prio_[s][tier][k]; ord[st] = sl_repl_[s][tier][st]; }
     for (int i = 0; i < nsl; i++) sl_arr_[s][i] = ord[i];
     // Randomness: each step 1..N-1, independently, with r = L^curve, plays a
