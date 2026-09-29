@@ -1703,7 +1703,19 @@ static void TestFollowStretch() {
 // Onset detection lifts the re-arm block after a ceiling stop.
 struct NoteTrain { long from = -1; long gap = 0; int count = 0; float hz = 110.f, amp = 0.3f, atk_s = 0.004f, tau_s = 0.4f; };
 static NoteTrain nt;
+// A BEATING string: two close partials make one ringing note's level swell and
+// dip slowly (here 1 Hz, depth 0.6) — what a real bass string does, and what a
+// pure sine never shows.
+static bool bt_on = false; static long bt_from = 0;
+static float bt_f1 = 41.2f, bt_f2 = 42.2f, bt_d = 0.6f, bt_amp = 0.3f, bt_tau = 1.5f;
+static float BeatIn(long k) {
+  if (k < bt_from) return 0.f;
+  const float t = (float)(k - bt_from) / sr;
+  const float a = (t < 0.002f ? t / 0.002f : 1.f) * expf(-t / bt_tau);
+  return bt_amp * a * (sinf(2.f * 3.14159265f * bt_f1 * t) + bt_d * sinf(2.f * 3.14159265f * bt_f2 * t)) / (1.f + bt_d);
+}
 static float NoteIn(long k) {
+  if (bt_on) return BeatIn(k);
   if (nt.count <= 0 || k < nt.from) return 0.f;
   const long rel = k - nt.from; const long i = rel / nt.gap;
   if (i >= nt.count) {                                     // last note keeps ringing
@@ -1858,6 +1870,24 @@ static void TestGateMeter() {
       Check(caps == 1, msg);
     }
     note_on = false; nt.count = 0; RunFor(1.0f);
+  }
+
+  // A beating note: its slow swells must not re-open the gate on the tail
+  // (VESTIGE_REARM_EVERY_END). Without it, most settings capture it twice.
+  {
+    int worst = 0;
+    const float amps[] = {0.3f, 0.1f}; const float k4s[] = {0.0f, 0.1f, 0.3f};
+    for (float amp : amps) for (float k4 : k4s) {
+      Reset(); cs.sw[0] = 0; cs.knob[3] = k4; cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
+      seen_acts = v.act_count_;
+      int starts = 0; bool was = v.recording_;
+      bt_amp = amp; bt_from = n + 480; bt_on = true; note_on = true;
+      for (int i = 0; i < 1000; i++) { RunFor(0.01f); if (v.recording_ && !was) starts++; was = v.recording_; }
+      if (starts > worst) worst = starts;
+      note_on = false; bt_on = false; RunFor(1.0f);
+    }
+    printf("      one beating low E (1 Hz beat), 6 level/K4 settings: at most %d capture(s)\n", worst);
+    if (VESTIGE_REARM_EVERY_END) Check(worst == 1, "a beating note is captured exactly once (swells do not re-open the gate)");
   }
 
   // Stab separation: two 60 ms noise stabs, gap g, T = 2 s (no ceiling).

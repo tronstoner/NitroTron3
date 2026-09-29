@@ -1670,8 +1670,10 @@ class Vestige : public Module {
     if (onset) { onset_refr_ = onset_refr_len_; onset_count_++; }
     const float g = env_gate_;                    // the gate's meter: start / silence / re-arm
     if (!recording_) {
-      if (rearm_block_) {                         // after a ceiling stop: wait for the note to die...
-        if (g < close) {
+      if (rearm_block_) {                         // after a capture end: wait for the note to die...
+        // With VESTIGE_REARM_EVERY_END the note must really have gone quiet
+        // (well below the close level), so a beating tail cannot re-open it.
+        if (g < close * (VESTIGE_REARM_EVERY_END ? VESTIGE_REARM_DEEP : 1.f)) {
           rearm_block_ = false;
         } else if (onset) {
           // ...or for a NEW attack. The old note may still be ringing above
@@ -1735,6 +1737,7 @@ class Vestige : public Module {
         } else if (g < close) {
           if (sil_run_ == 0) sil_onset_ = r;      // this sample is the first silent one
           if (++sil_run_ >= release_samples_) {
+            if (VESTIGE_REARM_EVERY_END) rearm_block_ = true;   // next capture: onset or real quiet
             const size_t raw_end = (VESTIGE_GATE_ENV_MODE == 0) ? sil_onset_ : last_loud_ + 1;
             IsrDecide(s, (PoolOf(s) == kPoolLoop) ? raw_end : rec_idx_, now);
           }

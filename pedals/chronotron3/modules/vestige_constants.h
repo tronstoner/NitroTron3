@@ -298,6 +298,20 @@ static constexpr int      VESTIGE_GATE_ENV_MODE   = 1;
 static constexpr float    VESTIGE_GATE_RELEASE_MS = 40.f;   // mode 1: fall time constant
 static_assert(VESTIGE_GATE_ENV_MODE == 0 || VESTIGE_GATE_ENV_MODE == 1,
               "VESTIGE_GATE_ENV_MODE 2 (peak hold) is not implemented yet");
+// Re-arm after EVERY capture end, not only after the T ceiling. While the
+// re-arm block is on, only an ONSET (a sudden jump, see VESTIGE_ONSET_*) may
+// start the next capture; plain level changes may not. The block lifts once
+// the gate meter has fallen to VESTIGE_REARM_DEEP x the close level — i.e. the
+// string has really gone quiet.
+// Why: bass strings BEAT — two close partials make the level of one ringing
+// note swell and dip slowly (~1 Hz). Near the threshold a swell rises by more
+// than the gate's 1.8x hysteresis and re-opened the gate on the same note's
+// tail. The gate meter's slow fall cannot help (the swell is far slower than
+// 40 ms); the onset detector ignores slow changes by design and catches a new
+// pluck. Cost: a very soft note with no attack, played while the previous one
+// still rings faintly (above this level), does not start a capture.
+static constexpr bool  VESTIGE_REARM_EVERY_END = true;
+static constexpr float VESTIGE_REARM_DEEP      = 0.3f;   // x close level
 static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K4 CCW: sensitive
 static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K4 CW:  insensitive
 static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold = open * hyst
