@@ -3231,6 +3231,33 @@ static void TestK4Degrade() {
         "K4 into / out of / across the colour: no step above 1.5x the engaged sound's own");
   blk = 48; cs.knob[3] = 0.5f; Realign();
 }
+// Voice cap = the live voices + ONE fading tail: SW1 UP, a long K5 fade and
+// three captures in quick succession never leave more than two loops
+// granulating; the oldest tail is stolen (fast release) and freed at once.
+// MIDDLE keeps VESTIGE_MAX_VOICES.
+static void TestFadeVoiceCap() {
+  printf("-- voice cap: live voices + one fading tail\n");
+  auto sounding = []() { int c = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) if (v.active_[q]) c++; return c; };
+  auto unstolen = []() { int c = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) if (v.active_[q] && !v.stolen_[q]) c++; return c; };
+  Reset(); cs.knob[4] = 1.0f; cs.knob[0] = 0.5f; cs.sw[0] = 0; Taps({1000}); RunFor(0.5f);   // K5 CW: the longest fade
+  seen_acts = v.act_count_;
+  int worst_unstolen = 0, worst_after = 0; bool freed_fast = true;
+  for (int i = 0; i < 3; i++) {
+    CapRec q{}; noise_from = n; noise_to = n + 12000; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    worst_unstolen = std::max(worst_unstolen, unstolen());
+    RunFor(0.02f);                                           // 20 ms: a stolen tail (6 ms release) is gone
+    if (sounding() > 2) freed_fast = false;
+    worst_after = std::max(worst_after, sounding());
+    RunFor(0.3f);
+  }
+  printf("      SW1 UP, K5 max, 3 captures: at most %d unstolen, %d sounding 20 ms after an activation\n", worst_unstolen, worst_after);
+  Check(worst_unstolen <= 2 && freed_fast, "SW1 UP: a third capture during a long fade steals the oldest tail (at most 2 loops granulate)");
+  Reset(); cs.knob[4] = 1.0f; cs.sw[0] = 1; Taps({1000}); RunFor(0.5f);
+  Check(v.VoiceCap() == VESTIGE_MAX_VOICES, "SW1 MIDDLE: the cap stays VESTIGE_MAX_VOICES");
+  cs.sw[0] = 0; RunFor(0.1f);
+  Check(v.VoiceCap() == 2, "SW1 UP: the cap is 2 (one live + one fading)");
+  cs.knob[4] = 0.05f; noise_from = noise_to = -1;
+}
 static void TestTimingSlices() {
   printf("-- stage 3: the TIMING error, mode 1: SLICE REARRANGEMENT (%d slices)\n", VESTIGE_TIMING_SLICES);
   // Level 0: nothing drawn.
@@ -3612,6 +3639,7 @@ int main() {
   else if (VESTIGE_TIMING_FIXED_ARRANGEMENT) TestTimingSlices();
   else printf("-- slice / pass-memory mode: behaviour tests skipped (discovery phase)\n");
   TestK4Degrade();
+  TestFadeVoiceCap();
   TestFollowRecut();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);

@@ -3249,9 +3249,17 @@ class Vestige : public Module {
     if (!dying_[s]) { dying_[s] = true; SetFade(s, 0.f); }
   }
   // Keep total granulating voices within the CPU/grain budget by stealing the
-  // oldest not-already-stolen voice until the count is back under the cap.
+  // oldest not-already-stolen voice until the count is back under the cap:
+  // the live voices plus ONE fading tail (SW1 UP / DOWN: 2 — a third capture
+  // during a long K5 crossfade steals the oldest tail; MIDDLE: 3 as before),
+  // never above VESTIGE_MAX_VOICES. Checked at each activation only.
+  int VoiceCap() const {
+    const int c = target_voices_ + 1;
+    return c < VESTIGE_MAX_VOICES ? c : VESTIGE_MAX_VOICES;
+  }
   void EnforceVoiceCap() {
-    while (CountUnstolen() > VESTIGE_MAX_VOICES) {
+    const int cap = VoiceCap();
+    while (CountUnstolen() > cap) {
       int o = OldestUnstolen();
       if (o < 0) break;
       StealVoice(o);
