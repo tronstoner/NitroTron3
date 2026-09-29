@@ -326,6 +326,11 @@ static constexpr uint32_t VESTIGE_TAPE_SMOOTH_MS = 40;     // rate glide: a tap 
 // reader at up to TAPE_RATE_MAX x K1's 2) always hold.
 static constexpr float    VESTIGE_TAPE_RATE_MAX  = 4.f;
 static constexpr float    VESTIGE_TAPE_RATE_MIN  = 0.25f;
+// B (stretch): the head moves at material / target, grains read at the K1 rate
+// only, so pitch stays. While the rate is not 1 the grains are this long
+// (instead of the ~400 ms clean-loop grains, which would smear time); 2 per
+// stream as always. At rate 1 the clean-loop grains return.
+static constexpr uint32_t VESTIGE_STRETCH_GRAIN_MS = 80;
 
 // ---------------------------------------------------------------------------
 // K4 = tape varispeed (pitch + speed COUPLED — the whole loop plays faster &

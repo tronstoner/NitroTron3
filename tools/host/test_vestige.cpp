@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <new>
 #include <vector>
+#include <algorithm>
 #include "daisy.h"
 #include "hothouse.h"
 #include "control_surface.h"
@@ -44,6 +45,8 @@ static bool sustain_input = false;   // steady tone instead of plucks
 // Deterministic noise bursts [noise_from, noise_to) (sample numbers): a sharp
 // autocorrelation, so the output can be lined up against the input exactly.
 static long noise_from = -1, noise_to = -1;
+// Click train: 4 sharp decaying clicks per 500 ms on a low bed (keeps the gate open).
+static bool click_on = false; static long click_from = 0;
 static float Noise(long k) {
   uint32_t h = (uint32_t)k * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
   return ((float)(h & 0xFFFF) / 32768.f - 1.f);
@@ -59,6 +62,11 @@ static size_t frz_rec_max = 0;   // furthest index the freeze scratch reached
 
 static float Input(long k) {
   if (k >= noise_from && k < noise_to) return 0.25f * Noise(k);
+  if (click_on) {
+    const long ph = (k - click_from) % 6000;             // 125 ms
+    const float click = (ph < 480) ? 0.5f * expf(-(float)ph / 60.f) * Noise(k) : 0.f;
+    return click + 0.03f * sinf(2.f * 3.14159265f * 110.f * (float)k / sr);
+  }
   if (!play_input) return 0.f;
   if (sustain_input) return 0.25f * sinf(2.f * 3.14159265f * sustain_hz * (float)k / sr);
   const float period = 0.7f;
@@ -552,9 +560,9 @@ static void TestTimeBase() {
   late = LedWorstLate(a2, T, a2, n, &cnt);
   Check(a2 != a1 && cnt >= 2 && late >= 0, "next capture start re-anchors LED1 again");
   // (d) a tap while a loop exists changes the period but not the anchor —
-  // for a LATCHED loop. SW2 MIDDLE (B stretch) stays latched until its step
-  // lands; the tape-mode LED (the loop follows T) is tested in TestFollowTape.
-  cs.sw[1] = 1;
+  // for a LATCHED loop. SW2 DOWN (C re-cut) stays latched until C is decided;
+  // the LED of a following loop (A, B) is tested in TestFollowTape/Stretch.
+  cs.sw[1] = 2;
   Taps({700});
   Check(v.period_ == TapT(700) && (long)v.led_anchor_[Vestige::kPoolLoop] == a2,
         "tap with a loop playing: new T, anchor stays on the capture start");
@@ -1422,6 +1430,251 @@ static void TestFollowTape() {
   Unhold();
 }
 
+// ---------------------------------------------------------------------------
+// Loops follow T — B: stretch (SW2 MIDDLE).
+// Dominant frequency of the wet over [from, from+N): Goertzel scan 100..900 Hz
+// in 1 Hz steps (a spectral peak: robust to the grain overlap's phase jumps,
+// which fool a zero-crossing count).
+static float PitchOf(long from, int N) {
+  float best_f = 0.f; double best = -1;
+  for (int f = 100; f <= 900; f++) {
+    const double w = 2.0 * M_PI * f / sr, c = 2.0 * cos(w);
+    double s1 = 0, s2 = 0;
+    for (int t = 0; t < N; t++) { const double s0 = WetH(from + t) + c * s1 - s2; s2 = s1; s1 = s0; }
+    const double pw = s1 * s1 + s2 * s2 - c * s1 * s2;
+    if (pw > best) { best = pw; best_f = (float)f; }
+  }
+  return best_f;
+}
+// Wet power in [f0-bw, f0+bw] Hz (Goertzel, 1 Hz steps).
+static double BandPower(long from, int N, float f0, float bw) {
+  double sum = 0;
+  for (int f = (int)(f0 - bw); f <= (int)(f0 + bw); f++) {
+    const double w = 2.0 * M_PI * f / sr, c = 2.0 * cos(w);
+    double s1 = 0, s2 = 0;
+    for (int t = 0; t < N; t++) { const double s0 = WetH(from + t) + c * s1 - s2; s2 = s1; s1 = s0; }
+    sum += s1 * s1 + s2 * s2 - c * s1 * s2;
+  }
+  return sum;
+}
+// Level ripple of the wet: (p90 - p10) / (p90 + p10) of 5 ms RMS frames.
+static float RippleOf(long from, long N) {
+  std::vector<float> fr;
+  for (long t = 0; t + 240 <= N; t += 240) { double e = 0; for (int k = 0; k < 240; k++) { const double x = WetH(from + t + k); e += x * x; } fr.push_back((float)sqrt(e / 240)); }
+  std::sort(fr.begin(), fr.end());
+  const float lo = fr[fr.size() / 10], hi = fr[fr.size() * 9 / 10];
+  return (hi + lo > 0.f) ? (hi - lo) / (hi + lo) : 0.f;
+}
+// Attacks in the wet over [from, from+N): 1 ms RMS frames, an onset when a frame
+// jumps 4x above the mean of the previous 10 frames (and above a floor), with a
+// 10 ms refractory.
+static int OnsetsIn(long from, long N) {
+  std::vector<float> fr;
+  for (long t = 0; t + 48 <= N; t += 48) { double e = 0; for (int k = 0; k < 48; k++) { const double x = WetH(from + t + k); e += x * x; } fr.push_back((float)sqrt(e / 48)); }
+  int on = 0; int refr = 0;
+  for (size_t i = 10; i < fr.size(); i++) {
+    if (refr > 0) { refr--; continue; }
+    float m = 0; for (int k = 1; k <= 10; k++) m += fr[i - k]; m /= 10.f;
+    if (fr[i] > 0.01f && fr[i] > 4.f * m) { on++; refr = 10; }
+  }
+  return on;
+}
+static size_t CleanGrainLen(int s) {
+  for (int g = 0; g < VESTIGE_GRAINS; g++)
+    if (v.grains_[g].IsActive() && v.grain_slot_[g] == s && v.grain_ver_[g] == 0) return v.grains_[g].grain_len_;
+  return 0;
+}
+
+static void TestFollowStretch() {
+  printf("-- follow T, B: stretch (SW2 MIDDLE)\n");
+  const size_t gst = (size_t)((float)VESTIGE_STRETCH_GRAIN_MS * 0.001f * sr) & ~(size_t)1;
+  // Sine loop: pitch must stay, time must follow.
+  Reset();
+  cs.sw[0] = 0; cs.sw[1] = 1; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  sustain_hz = 220.f; sustain_input = true; play_input = true;
+  CapRec r{}; WaitActivation(2.f, &r);
+  sustain_input = false; play_input = false; RunFor(0.8f);
+  const int s = r.s;
+  Check(r.Q == 24000 && v.div_[s] == 0, "setup: 500 ms sine loop (division 1)");
+  const float p0 = PitchOf(n - 12000, 12000);
+  printf("      captured sine loop: %.0f Hz, level ripple at rate 1: %.3f\n", p0, RippleOf(n - 24000, 24000));
+  const uint32_t tg0 = v.tape_grains_;
+  RunFor(1.0f);
+  Check(v.rho_d_[s] == 1.0 && v.tape_grains_ == tg0 && CleanGrainLen(s) != gst,
+        "T unchanged: rate exactly 1, original path, clean-loop grains (not stretch grains)");
+  struct St { int tap; size_t Lt; double sig; float k1; float pitch; };
+  const St sts[] = { {1000, 48000, 0.5, 0.5f, 220.f}, {250, 12000, 2.0, 0.5f, 220.f},
+                     {700, 33600, 24000.0 / 33600.0, 0.5f, 220.f}, {1000, 48000, 0.5, 1.0f, 440.f} };
+  bool grains_ok = true;
+  for (const St& t : sts) {
+    cs.knob[0] = t.k1; Taps({t.tap}); RunFor(0.8f);
+    const long P = PassLength(s, 3.f);
+    const size_t gl = CleanGrainLen(s);
+    const long at = n; RunFor(0.5f);
+    const float pz = PitchOf(at, 12000);
+    const float rip = RippleOf(at, 24000);
+    // Where the energy is: around the expected pitch vs around where TAPE
+    // would have put it (pitch x rate).
+    const double pin  = BandPower(at, 12000, t.pitch, 30.f);
+    const double ptap = BandPower(at, 12000, t.pitch * (float)t.sig, 30.f);
+    const float  frac = (float)(pin / (pin + ptap));
+    printf("      tap %4d ms, K1 %.1f: rate %.4f (expect %.4f)  pass %ld (expect %zu)  peak %.0f Hz  energy at %.0f Hz vs tape's %.0f Hz: %.3f  level ripple %.2f  grain %zu\n",
+           t.tap, t.k1, v.rho_d_[s], t.sig, P, t.Lt, pz, t.pitch, t.pitch * (float)t.sig, frac, rip, gl);
+    char msg[160]; snprintf(msg, sizeof msg, "stretch, tap %d ms%s: pass = d x T_now = %zu, pitch stays %.0f Hz", t.tap,
+                            t.k1 > 0.9f ? " + K1 x2" : "", t.Lt, t.pitch);
+    Check(fabs(v.rho_d_[s] - t.sig) < 1e-9 && labs(P - (long)t.Lt) <= 1 && frac > 0.9f, msg);
+    if (t.k1 < 0.9f && gl != gst) grains_ok = false;
+  }
+  Check(grains_ok, "while stretching, the clean stream uses the stretch grain length");
+  cs.knob[0] = 0.5f; RunFor(0.8f);
+  // Back to the original T: rate 1, the clean-loop reconstruction as before.
+  hist_on = true;
+  Taps({500}); RunFor(1.0f);
+  { const long at = n;
+    const std::vector<float> ref = ExpectTape(s, v.rho_d_[s], 4800);
+    RunFor(0.2f);
+    float c = 0.f; const int lag = BestLagRef(at, ref, 300, &c);
+    const size_t gl = CleanGrainLen(s);
+    printf("      back to 500 ms: rate %.6f, grain %zu, content vs the material at rate 1: lag %d c=%.4f\n", v.rho_d_[s], gl, lag, c);
+    Check(v.rho_d_[s] == 1.0 && gl != gst && lag == 0 && c > 0.999f,
+          "stretch rate back to 1: clean-loop grains, the loop reconstructs as before (lag 0)"); }
+
+  // Phase continuity through a re-tap, in B.
+  {
+    blk = 1;
+    double worst = 0; double prevf = v.fwd_d_[s]; const double L = (double)v.loop_len_[s]; long moved = 0;
+    PressFS1(5);
+    for (int j = 0; j < 48000; j++) {
+      RunFor(1.f / sr);
+      double d = v.fwd_d_[s] - prevf; if (d < -L * 0.5) d += L;
+      const double e = fabs(d - v.rho_d_[s]); if (e > worst) worst = e;
+      if (v.rho_d_[s] != 1.0) moved++;
+      prevf = v.fwd_d_[s];
+    }
+    Realign(); PressFS1(5); RunFor(0.1f); RunFor(1.0f);
+    printf("      stretch phase continuity: worst |step - rate| %.2e over 1 s across a re-tap (%ld samples at rate != 1)\n", worst, moved);
+    Check(worst < 1e-6 && moved > 0, "stretch: the head moves by its own rate every sample (no jump)");
+  }
+
+  // Clicks: rate jumps and A/B/C switches, on the sine loop.
+  Taps({500}); RunFor(1.0f);
+  maxd = 0.f; RunFor(1.0f); const float st1 = maxd;
+  maxd = 0.f; Taps({1000}); RunFor(1.0f); const float s_dn = maxd;
+  maxd = 0.f; RunFor(1.0f); const float st05 = maxd;
+  maxd = 0.f; Taps({250}); RunFor(1.0f); const float s_up = maxd;
+  maxd = 0.f; RunFor(1.0f); const float st2 = maxd;
+  maxd = 0.f; cs.sw[1] = 0; RunFor(1.0f); const float s_ab = maxd;   // B -> A: same head rate, pitch follows
+  maxd = 0.f; RunFor(1.0f); const float stA = maxd;
+  maxd = 0.f; cs.sw[1] = 2; RunFor(1.0f); const float s_ac = maxd;   // -> C (latched): back to its own length
+  maxd = 0.f; cs.sw[1] = 1; RunFor(1.0f); const float s_cb = maxd;   // -> B again
+  float big = st1; if (st05 > big) big = st05; if (st2 > big) big = st2; if (stA > big) big = stA;
+  printf("      max step: steady B x1 %.5f, x0.5 %.5f, x2 %.5f, A x2 %.5f | tap x1->x0.5 %.5f, x0.5->x2 %.5f, B->A %.5f, A->C %.5f, C->B %.5f (bound %.5f)\n",
+         st1, st05, st2, stA, s_dn, s_up, s_ab, s_ac, s_cb, 1.5f * big);
+  Check(s_dn <= 1.5f * big && s_up <= 1.5f * big && s_ab <= 1.5f * big && s_ac <= 1.5f * big && s_cb <= 1.5f * big,
+        "stretch: rate jumps and SW2 A/B/C switches: no step above 1.5x the largest steady step");
+
+  // LED1 on the loop's actual one in B.
+  {
+    Taps({800}); RunFor(1.0f);
+    blk = 1;
+    std::vector<long> wraps; float prev = v.fwd_[s];
+    const size_t r0 = led1_rises.size(); const long from = n;
+    for (int j = 0; j < 48000 * 4; j++) { RunFor(1.f / sr); if (v.fwd_[s] < prev) wraps.push_back(n - 1); prev = v.fwd_[s]; }
+    Realign();
+    int ok = 0, bad = 0;
+    for (size_t i = r0; i < led1_rises.size(); i++) {
+      const long lr = led1_rises[i]; if (lr < from + 480) continue;
+      bool near = false; for (long w : wraps) if (lr >= w && lr - w <= 480) near = true;
+      if (near) ok++; else bad++;
+    }
+    printf("      LED1 in B after re-tap: %d flashes on the loop's wraps, %d elsewhere\n", ok, bad);
+    Check(ok >= 3 && bad == 0, "stretch: LED1 keeps flashing on the loop's actual one after T changed");
+  }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // Attack repetition when slowing down: a loop of 4 sharp clicks per pass.
+  {
+    Reset(); cs.sw[1] = 1; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+    hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+    seen_acts = v.act_count_;
+    // 4 clicks, 125 ms apart, on a low bed so the gate stays open to the ceiling.
+    click_from = n; click_on = true;
+    CapRec q{}; WaitActivation(2.f, &q);
+    click_on = false; RunFor(0.8f);
+    const int qs = q.s;
+    printf("      attack repetition (loop of 4 clicks per pass, stretch grains %u ms):\n", VESTIGE_STRETCH_GRAIN_MS);
+    struct Sg { int tap; double sig; };
+    const Sg sgs[] = { {500, 1.0}, {1000, 0.5}, {2000, 0.25}, {250, 2.0} };
+    int base = 0;
+    for (const Sg& g : sgs) {
+      Taps({g.tap}); RunFor(1.0f);
+      const size_t Lt = GridQuantize::Boundary(v.div_[qs], v.period_);
+      const long at = n; RunFor((float)(2 * Lt) / sr + 0.05f);
+      const int on = OnsetsIn(at, (long)(2 * Lt));
+      if (g.sig == 1.0) base = on;
+      printf("        rate %.2f: %d attacks per pass (source has 4)\n", g.sig, on / 2);
+    }
+    Check(base / 2 == 4, "click loop at rate 1: 4 attacks per pass (the detector sees the source)");
+    hist_on = false; in_hist.clear(); wet_hist.clear();
+  }
+
+  // Grain budget: full pool, stretch + K1 midpoint, steady and during a glide.
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.sw[1] = 1; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
+  seen_acts = v.act_count_;
+  const long bursts[4] = {3000, 14000, 21000, 30500};
+  for (int i = 0; i < 4; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
+  noise_from = noise_to = -1;
+  RunFor(1.0f);
+  Taps({1300}); RunFor(1.0f);
+  cs.knob[0] = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f); RunFor(1.5f);
+  max_grains = 0; uint32_t d0 = v.grain_cap_drops_; RunFor(3.0f);
+  const int gm = max_grains; const uint32_t dr = v.grain_cap_drops_ - d0;
+  max_grains = 0; d0 = v.grain_cap_drops_; Taps({700}); RunFor(1.0f);
+  printf("      4 voices, stretch + K1 midpoint: max active %d, refused %u steady | re-tap glide: max %d, refused %u\n",
+         gm, dr, max_grains, v.grain_cap_drops_ - d0);
+  Check(dr == 0 && v.grain_cap_drops_ - d0 == 0 && gm <= VESTIGE_MB_GRAIN_CAP,
+        "stretch, full pool + K1 crossfade: no grain refused, steady or gliding (2 per stream)");
+  cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f);
+
+  // Guard audit, and no folding in B.
+  printf("      guard-read audit, stretch rates:\n");
+  struct Aud { const char* name; float k1; float k2; int tap0; long burst; int tap1; };
+  const Aud au[] = {
+    {"x4 . K1x2 fwd (400ms->100ms, 1/8)",   1.0f, 0.85f, 400, 1500, 100},
+    {"x4 . K1x2 rev",                        1.0f, 0.20f, 400, 1500, 100},
+    {"x0.25 . K1half rev (100ms->400ms)",    0.0f, 0.20f, 100, 9000, 400},
+    {"x40 unfolded (4 s -> 100 ms) fwd",     0.5f, 0.85f, 4000, 250000, 100},
+  };
+  const long bad0 = audit_bad; audit_max_over = 0;
+  for (const Aud& a : au) {
+    Reset(); cs.sw[1] = 1; cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
+    Taps({a.tap0}); RunFor(0.3f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + a.burst;
+    CapRec q{}; WaitActivation(8.f, &q);
+    noise_from = noise_to = -1;
+    const long b1 = audit_bad, r1 = audit_reads;
+    blk = 1; audit_on = true;
+    PressFS1(5); RunFor((float)a.tap1 / 1000.f); PressFS1(5); RunFor(0.1f);
+    RunFor(1.5f);
+    audit_on = false; Realign();
+    printf("        %-36s Q %6zu -> target %6zu  rate %.4f  reads %ld, bad %ld\n", a.name, q.Q,
+           GridQuantize::Boundary(v.div_[q.s], v.period_), v.rho_s_[q.s], audit_reads - r1, audit_bad - b1);
+  }
+  Check(audit_bad == bad0 && audit_max_over <= 1, "stretch rates (x0.25..x40, with K1): no unwritten guard read, none past L + min(L, guard)");
+  { const int q = FirstLive();
+    const long P = PassLength(q, 3.f);
+    printf("      no folding in B: material %zu, target %zu, rate %.2f, pass %ld\n", v.loop_len_[q],
+           GridQuantize::Boundary(v.div_[q], v.period_), v.rho_d_[q], P);
+    Check(labs(P - (long)GridQuantize::Boundary(v.div_[q], v.period_)) <= 1,
+          "stretch, extreme re-tap (40x): pass = exactly d x T_now (no octave folding)"); }
+  cs.sw[1] = 0; RunFor(0.5f);
+  Unhold();
+}
+
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; cs.sw[1] = 0; cs.sw[2] = 0;
@@ -1440,6 +1693,7 @@ int main() {
   TestQuantisedCapture();
   TestSpeedXfade();
   TestFollowTape();
+  TestFollowStretch();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
   Check(bad == 0, "no non-finite / >10 samples");

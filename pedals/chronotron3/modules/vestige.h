@@ -18,7 +18,8 @@
 //   K6   = dry/wet mix (shell-owned, equal-power). vestige no longer owns output.
 //   SW2  = TEMPORARY: how playing loops follow a T change (stage 2.5 takes SW2
 //          for the error editor). UP = A tape (speed + pitch follow) · MIDDLE =
-//          B stretch · DOWN = C re-cut. Unimplemented positions stay latched.
+//          B stretch (time follows, pitch stays) · DOWN = C re-cut (not yet:
+//          latched).
 //   FS1  = tap tempo, dedicated: the interval between taps IS T; overrides K2's
 //          magnitude until K2 moves (stage 1).
 //   FS2  = tap: capture + playback on/off · hold: toggle buffer hold (in either
@@ -177,8 +178,9 @@ class Vestige : public Module {
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
     (void)k3;
     // ---- SW2 = how playing loops follow a T change (temporary selector) ----
-    // Only A (tape) is implemented yet; B and C behave as before (latched).
+    // A (tape) and B (stretch) are implemented; C behaves as before (latched).
     follow_mode_ = (sw2 == 0) ? kFollowTape : (sw2 == 1) ? kFollowStretch : kFollowRecut;
+    // (A tape and B stretch are implemented; C re-cut is still latched.)
 
     // ---- K1 = playback speed crossfade (rework stage 6, plan §4.2) -------------
     // A CROSSFADE between versions of the same loop, not an added voice: CCW end
@@ -888,6 +890,10 @@ class Vestige : public Module {
       AdvanceBeat(s, rho_d);
     }
     const bool orig = OrigPath(s, rho_d);   // no T change has touched this loop
+    // Grain read rate: tape reads at the head rate (pitch follows), stretch at
+    // 1 (pitch stays; only the head moves at rho). K1 multiplies either.
+    const bool  stretch = (follow_mode_ == kFollowStretch);
+    const float gr      = stretch ? 1.f : rho;
     const float head = is_frip ? frip_head_ : fwd_[s];
     // Seam-crossing (non-frozen) grains need the head-continuation guard behind
     // L; clamp to what this row actually has. Loop rows always have the full
@@ -911,7 +917,18 @@ class Vestige : public Module {
       mb_scan_[s][bi] += 1.f;
       if (mb_scan_[s][bi] >= (float)scanlen) mb_scan_[s][bi] -= (float)scanlen;
       // Clean-stream grain at the tape rate (== glen when rho == 1).
-      const size_t glen_c = (!e.frozen && !orig) ? CoverGrain(glen, L, gcap, rho) : glen;
+      // Stretching (rate != 1) uses short stretch grains; at rate 1 — also
+      // after a stretch, head no longer on an integer — the long loop grains,
+      // i.e. the reconstruction as before.
+      size_t glen_c = glen;
+      if (!e.frozen && !orig) {
+        if (stretch && rho_d != 1.0) {
+          const size_t gst = (size_t)((float)VESTIGE_STRETCH_GRAIN_MS * 0.001f * sr_);
+          glen_c = CoverGrain(glen < gst ? glen : gst, L, gcap, 1.f);
+        } else {
+          glen_c = CoverGrain(glen, L, gcap, gr);
+        }
+      }
       // A version returning from silence emits its restart grain (instant
       // attack) the very sample its gain crosses the gate — i.e. while it is
       // still ~VESTIGE_K1_GATE_EPS — not a hop later at an audible gain.
@@ -945,7 +962,7 @@ class Vestige : public Module {
             EmitBandGrain(s, glen, posf, coef, spray_width, e.frozen);
           } else {
             const float atk = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
-            EmitStreamGrain(s, glen_c, head, rho, rev, coef, atk, 0, true);
+            EmitStreamGrain(s, glen_c, head, gr, rev, coef, atk, 0, true);
             first_grain_[s] = false;
           }
           ver_idle_[s][0] = false;
@@ -966,7 +983,7 @@ class Vestige : public Module {
         // within the loop AND the guard, so a read never passes L + min(L,
         // guard) — the extent the stage-2 guard gate already guarantees.
         size_t gsp = orig ? glen : glen_c;
-        const float Rsp = r * rho;
+        const float Rsp = r * gr;
         {
           const size_t span = (L < gcap) ? L : gcap;
           if (Rsp > 1.f && (float)gsp * Rsp > (float)span) gsp = (size_t)((float)span / Rsp);
@@ -1013,14 +1030,22 @@ class Vestige : public Module {
   // rho is folded by octaves into [TAPE_RATE_MIN, TAPE_RATE_MAX]: past that the
   // pass length is target x 2^k — still a power-of-two multiple of the grid —
   // instead of unbounded rates that no grain or guard could cover.
+  //
+  // B = stretch uses the same HEAD rate (so the same continuity, glide, grid
+  // and LED), but its grains read at the K1 rate only: pitch stays, time
+  // follows. Its grains never read faster for it, so it needs no folding —
+  // the loop takes exactly Boundary(d, T_now) at any rate.
   double TapeTarget(int s) const {
-    if (follow_mode_ != kFollowTape || div_[s] < 0) return 1.0;
+    const int fm = follow_mode_;
+    if ((fm != kFollowTape && fm != kFollowStretch) || div_[s] < 0) return 1.0;
     const size_t M  = loop_len_[s];
     const size_t Lt = GridQuantize::Boundary(div_[s], period_);
     if (Lt == 0 || Lt == M) return 1.0;                     // unchanged T: exactly 1
     double r = (double)M / (double)Lt;
-    while (r > (double)VESTIGE_TAPE_RATE_MAX) r *= 0.5;
-    while (r < (double)VESTIGE_TAPE_RATE_MIN) r *= 2.0;
+    if (fm == kFollowTape) {
+      while (r > (double)VESTIGE_TAPE_RATE_MAX) r *= 0.5;
+      while (r < (double)VESTIGE_TAPE_RATE_MIN) r *= 2.0;
+    }
     return r;
   }
   // Audio thread, once per block: targets for every loop-side slot.
@@ -2171,7 +2196,7 @@ class Vestige : public Module {
     if (engaged_ && period_ > 0) {
       const uint32_t width = (uint32_t)((float)VESTIGE_LED1_FLASH_MS * 0.001f * sr_);
       const int ls = led_slot_[pool_];
-      if (follow_mode_ == kFollowTape && pool_ == kPoolLoop && !recording_ &&
+      if ((follow_mode_ == kFollowTape || follow_mode_ == kFollowStretch) && pool_ == kPoolLoop && !recording_ &&
           ls >= 0 && active_[ls] && !dying_[ls] && div_[ls] >= 0) {
         // A following loop's "one" is no longer A + k*T once it has changed
         // speed: flash on its own loop time instead (integer beats of T).
