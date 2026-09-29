@@ -532,7 +532,7 @@ static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taki
 //   RETRIG   back to the one in Euclidean groups: E(2,n) = 4+4, E(3,8) = 3+3+2
 //            (from its 2nd hit to the end of the pass; not 1..4)
 //   REVERSE  the span plays backward (once the loop's guard copy is ready)
-//   CRUSH    the span is sample-rate reduced (see below)
+//   DECIMATE the span is sample-rate reduced (see below)
 //   CLEAN    the span plays as recorded — the no-glitch choice in the set
 // Steps before step 1 are the loop's last steps (a STUTTER / REPEAT at the
 // start of the pass replays the end of the loop).
@@ -548,20 +548,20 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // RATCHET
   1.f,   // RETRIG
   1.f,   // REVERSE
-  1.f,   // CRUSH
+  1.f,   // DECIMATE
   1.f,   // CLEAN
 };
 // RATCHET only from this K3 level on (below it: weight 0; ones already placed
 // age out). 0.5 = noon.
 static constexpr float  VESTIGE_TIMING_RATCHET_FROM = 0.5f;
-// CRUSH: the loop's output is held for N samples (48 kHz / N, an integer: no
+// DECIMATE: the loop's output is held for N samples (48 kHz / N, an integer: no
 // rounding), with no filter BEFORE the hold (the folded-down aliasing is the
 // character), then a 2-pole low-pass AFTER it at LP_MULT x the reduced rate's
 // Nyquist (48 kHz / N / 2), which takes off the fizzy steps. N drawn per
 // figure from the table. Fades in/out over VESTIGE_TIMING_MUTE_MS.
-static constexpr int    VESTIGE_TIMING_CRUSH_N = 4;
-static constexpr int    VESTIGE_TIMING_CRUSH_FACTORS[VESTIGE_TIMING_CRUSH_N] = {6, 8, 12, 16};   // 8, 6, 4, 3 kHz
-static constexpr float  VESTIGE_TIMING_CRUSH_LP_MULT = 1.5f;     // lower = darker, higher = harsher
+static constexpr int    VESTIGE_TIMING_DECIM_N = 4;
+static constexpr int    VESTIGE_TIMING_DECIM_FACTORS[VESTIGE_TIMING_DECIM_N] = {6, 8, 12, 16};   // 8, 6, 4, 3 kHz
+static constexpr float  VESTIGE_TIMING_DECIM_LP_MULT = 1.5f;     // lower = darker, higher = harsher
 // Where figures land: steps in the back half of the pass weigh this much vs 1
 // for the front half (a fill leads into the one).
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
@@ -652,8 +652,8 @@ static constexpr float  VESTIGE_WARBLE_CENTS_TO_RATE = 0.00057762f; // ln2/1200 
 static constexpr float  VESTIGE_TEX_DEADZONE   = 0.06f;  // clean band around noon
 static constexpr float  VESTIGE_TAPE_DRIVE_MAX = 8.f;    // tanh drive at full CCW (grit, gain-compensated)
 static constexpr float  VESTIGE_DECIM_HOLD_MAX = 96.f;   // sample-hold length (samples) at full CW
-static constexpr float  VESTIGE_CRUSH_BITS_HI  = 16.f;   // bit depth near noon
-static constexpr float  VESTIGE_CRUSH_BITS_LO  = 2.5f;   // bit depth at full CW
+static constexpr float  VESTIGE_DECIMATE_BITS_HI  = 16.f;   // bit depth near noon
+static constexpr float  VESTIGE_DECIMATE_BITS_LO  = 2.5f;   // bit depth at full CW
 
 // ---------------------------------------------------------------------------
 // K5 loop fade in/out (per-slot envelope). Voiced age-fade is now fixed.
