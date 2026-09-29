@@ -464,9 +464,9 @@ static constexpr float  VESTIGE_TIMING_MIN_STEP_MS = 20.f;
 
 // ---- Timing error MODE ------------------------------------------------------
 // 0 = RETRIGGER (the Euclidean patterns above, as heard in ae31f88); 1 = SLICE
-// REARRANGEMENT (below, as heard in e7afd92); 2 = PASS MEMORY (below that).
-// Modes 0 and 1 stay intact, one constant away.
-static constexpr int    VESTIGE_TIMING_MODE = 2;
+// REARRANGEMENT (below, as heard in e7afd92); 2 = PASS MEMORY (below that, as
+// heard in 1379252); 3 = LAYERS (after it). Older modes stay, one constant away.
+static constexpr int    VESTIGE_TIMING_MODE = 3;
 // SLICES: the pass is cut into N equal slices (boundaries round(L*i/N) in
 // material; in stretch at i/N of the pass in output time). Each loop has an
 // ARRANGEMENT: which slice plays at each step; step 0 is always slice 0 (the
@@ -566,8 +566,55 @@ static constexpr float  VESTIGE_TIMING_DECIM_LP_MULT = 1.5f;     // lower = dark
 // for the front half (a fill leads into the one).
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
 static constexpr int    VESTIGE_TIMING_MEM_FIGS   = 8;           // figures a pass can hold
-static constexpr int    VESTIGE_TIMING_MAX_EVENTS = 48;          // jumps + mute changes per pass
+static constexpr int    VESTIGE_TIMING_MAX_EVENTS = 96;          // jumps + mute changes per pass
 static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (each way)
+
+// ---- Timing mode 3: LAYERS ---------------------------------------------------
+// Three error LAYERS play at once, on top of each other, each its own rhythm
+// line — like drum parts. SW2 picks the layer K3 edits (the stage 2.5 editor):
+//   UP     TIMING     STUTTER, REPEAT, DOUBLE, RATCHET, RETRIG
+//   MIDDLE CONDITION  REST, DECIMATE
+//   DOWN   PLAYBACK   REVERSE
+// A layer at level 0 is off. The pass is cut into VESTIGE_TIMING_LAYER_STEPS
+// steps (halved for short loops, min VESTIGE_TIMING_MIN_STEP_MS each). Each
+// layer's LINE covers VESTIGE_TIMING_LINE_PASSES passes of cells: HITS (1 ..
+// VESTIGE_TIMING_SPAN_MAX cells, always at least one pause cell between two
+// hits) and pauses. The line plays pass by pass and repeats.
+//   SEED   k hits spread evenly (Bjorklund) over the pulse = every other cell
+//          ("x-x-"), a random rotation; each grows by a cell with chance FILL
+//          ("xx", "xxx").
+//   EVERY PASS, per layer: 1 + round(OPS_B * L) changes, each one of: add a hit
+//          (on a free pulse cell) when the line has fewer than the target,
+//          remove one when more, else shift a hit by one cell (syncopation) or
+//          grow / shrink it by one cell. From RAND_FROM on, a change is, with
+//          rising chance (1 at L = 1), a random hit anywhere instead.
+//   TYPE   each hit has a type from its layer (weights below); after
+//          VESTIGE_TIMING_LINE_LIFE plays it takes another — the rhythm stays,
+//          the content varies.
+// Where layers overlap they stack: TIMING decides which step plays, PLAYBACK
+// reverses what TIMING made, CONDITION silences / decimates the result.
+//   hits per pass (target) = HITS_A + HITS_B * L
+//   FILL                   = FILL_A + FILL_B * L
+static constexpr int    VESTIGE_TIMING_LAYER_STEPS  = 16;
+static constexpr int    VESTIGE_TIMING_LINE_PASSES  = 2;
+static constexpr float  VESTIGE_TIMING_LINE_HITS_A  = 0.5f;
+static constexpr float  VESTIGE_TIMING_LINE_HITS_B  = 7.5f;     // L = 1: 8 hits per pass = the full pulse
+static constexpr float  VESTIGE_TIMING_LINE_FILL_A  = 0.1f;
+static constexpr float  VESTIGE_TIMING_LINE_FILL_B  = 0.5f;
+static constexpr float  VESTIGE_TIMING_LINE_OPS_B   = 6.f;
+static constexpr float  VESTIGE_TIMING_LINE_RAND_FROM = 0.67f;
+static constexpr int    VESTIGE_TIMING_LINE_LIFE    = 3;
+static constexpr int    VESTIGE_TIMING_LINE_MAX_CELLS = 64;     // bound on steps x passes
+static_assert(VESTIGE_TIMING_LAYER_STEPS * VESTIGE_TIMING_LINE_PASSES <= VESTIGE_TIMING_LINE_MAX_CELLS, "line too long");
+static_assert(VESTIGE_TIMING_LAYER_STEPS <= 16, "layer steps <= 16 (Bjorklund table bound)");
+// Type weights per layer — EDITABLE:
+static constexpr float  VESTIGE_TIMING_W_STUTTER = 1.f;         // TIMING
+static constexpr float  VESTIGE_TIMING_W_REPEAT  = 1.f;
+static constexpr float  VESTIGE_TIMING_W_DOUBLE  = 1.f;
+static constexpr float  VESTIGE_TIMING_W_RATCHET = 1.f;         // (only from VESTIGE_TIMING_RATCHET_FROM)
+static constexpr float  VESTIGE_TIMING_W_RETRIG  = 1.f;         // the hit plays the loop from its start
+static constexpr float  VESTIGE_TIMING_W_REST    = 1.f;         // CONDITION
+static constexpr float  VESTIGE_TIMING_W_DECIM   = 1.f;
 
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC

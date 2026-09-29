@@ -1830,6 +1830,259 @@ class Vestige : public Module {
     if (pm_nf_[s][pm_cur_[s]] > 0) { cur_var_[s] = kVarRot; timing_vars_++; }
     var_last_[s] = false;
   }
+  // ---- Timing mode 3: LAYERS -------------------------------------------------
+  // Three rhythm lines (TIMING / CONDITION / PLAYBACK) per loop voice, each a
+  // list of hits on a line of ln_cells_ cells (steps x VESTIGE_TIMING_LINE_PASSES).
+  struct LineHit { int8_t start, len, type, sub, age; };
+  static constexpr int kLineMaxHits = VESTIGE_TIMING_LINE_MAX_CELLS / 2;
+  static uint64_t LineMask(int start, int len) {
+    uint64_t m = 0;
+    for (int i = start; i < start + len; i++) m |= (1ull << i);
+    return m;
+  }
+  // Cells a new hit may not touch: every other hit plus one pause cell on each
+  // side (cyclic: the line loops). skip = a hit to leave out (-1 none).
+  uint64_t LineBlocked(int s, int l, int skip) const {
+    const int C = ln_cells_[s];
+    uint64_t b = 0;
+    for (int h = 0; h < ln_nh_[s][l]; h++) {
+      if (h == skip) continue;
+      const LineHit& x = ln_hit_[s][l][h];
+      b |= LineMask(x.start, x.len);
+      b |= 1ull << ((x.start - 1 + C) % C);
+      b |= 1ull << ((x.start + x.len) % C);
+    }
+    return b;
+  }
+  bool LineFits(int s, int l, int start, int len, int skip) const {
+    const int C = ln_cells_[s];
+    if (start < 0 || len < 1 || start + len > C || len > VESTIGE_TIMING_SPAN_MAX) return false;
+    return (LineMask(start, len) & LineBlocked(s, l, skip)) == 0;
+  }
+  // A type for a new hit on layer l (weights; RATCHET only from its level).
+  int LineDrawType(int l, int8_t* sub) {
+    *sub = 0;
+    if (l == kErrPlayback) return kFigReverse;
+    if (l == kErrCondition) {
+      const float t = VESTIGE_TIMING_W_REST + VESTIGE_TIMING_W_DECIM;
+      if (!(t > 0.f) || TimingRand() * t < VESTIGE_TIMING_W_REST) { *sub = 1; return kFigRest; }
+      *sub = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)];
+      return kFigDecimate;
+    }
+    const bool rat = err_level_[kErrTiming] >= VESTIGE_TIMING_RATCHET_FROM;
+    const int   ty[5] = {kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig};
+    const float w[5]  = {VESTIGE_TIMING_W_STUTTER, VESTIGE_TIMING_W_REPEAT, VESTIGE_TIMING_W_DOUBLE,
+                         rat ? VESTIGE_TIMING_W_RATCHET : 0.f, VESTIGE_TIMING_W_RETRIG};
+    float tot = 0.f; for (int i = 0; i < 5; i++) tot += w[i];
+    if (!(tot > 0.f)) return kFigStutter;
+    float r = TimingRand() * tot;
+    for (int i = 0; i < 5; i++) { if (r < w[i]) return ty[i]; r -= w[i]; }
+    return kFigStutter;
+  }
+  void LineRetype(int l, LineHit& h) {
+    int8_t sub = 0; int t = h.type;
+    for (int tries = 0; tries < 4 && t == h.type; tries++) t = LineDrawType(l, &sub);
+    if (t == h.type) t = LineDrawType(l, &sub);            // (a one-type layer keeps its type)
+    h.type = (int8_t)t; h.sub = sub; h.age = 0;
+  }
+  // Grow hit h cell by cell with chance fill (up to VESTIGE_TIMING_SPAN_MAX).
+  void LineGrow(int s, int l, int h, float fill) {
+    LineHit& x = ln_hit_[s][l][h];
+    while (x.len < VESTIGE_TIMING_SPAN_MAX && TimingRand() < fill && LineFits(s, l, x.start, x.len + 1, h)) x.len++;
+  }
+  bool LineAdd(int s, int l, int start, float fill) {
+    if (ln_nh_[s][l] >= kLineMaxHits || !LineFits(s, l, start, 1, -1)) return false;
+    LineHit& x = ln_hit_[s][l][ln_nh_[s][l]++];
+    x.start = (int8_t)start; x.len = 1; x.age = 0;
+    int8_t sub; x.type = (int8_t)LineDrawType(l, &sub); x.sub = sub;
+    LineGrow(s, l, ln_nh_[s][l] - 1, fill);
+    return true;
+  }
+  // A free cell for a new hit: a pulse (even) cell, or any cell if !pulse;
+  // -1 = none.
+  int LineFreeCell(int s, int l, bool pulse) {
+    const int C = ln_cells_[s];
+    int c[VESTIGE_TIMING_LINE_MAX_CELLS]; int nc = 0;
+    for (int i = 0; i < C; i += (pulse ? 2 : 1)) if (LineFits(s, l, i, 1, -1)) c[nc++] = i;
+    if (nc == 0) return -1;
+    return c[TimingPick(nc)];
+  }
+  float LineTarget(float level) const {
+    return (VESTIGE_TIMING_LINE_HITS_A + VESTIGE_TIMING_LINE_HITS_B * level) * (float)VESTIGE_TIMING_LINE_PASSES;
+  }
+  int LineDrawTarget(float level) {
+    const float D = LineTarget(level);
+    int t = (int)D; if (TimingRand() < D - (float)t) t++;
+    return t;
+  }
+  void LineSeed(int s, int l, float level) {
+    const int C = ln_cells_[s];
+    ln_nh_[s][l] = 0;
+    const int P = C / 2;                                    // pulse cells
+    int k = (int)(LineTarget(level) + 0.5f); if (k < 1) k = 1; if (k > P) k = P;
+    const uint32_t m = Bjorklund(k, P);
+    const int rot = TimingPick(P);
+    const float fill = VESTIGE_TIMING_LINE_FILL_A + VESTIGE_TIMING_LINE_FILL_B * level;
+    for (int i = 0; i < P; i++) if (m & (1u << i)) LineAdd(s, l, 2 * ((i + rot) % P), 0.f);
+    for (int h = 0; h < ln_nh_[s][l]; h++) LineGrow(s, l, h, fill);
+  }
+  void LineMutate(int s, int l, float level) {
+    const int C = ln_cells_[s];
+    const float fill = VESTIGE_TIMING_LINE_FILL_A + VESTIGE_TIMING_LINE_FILL_B * level;
+    float rnd = (level - VESTIGE_TIMING_LINE_RAND_FROM) / (1.f - VESTIGE_TIMING_LINE_RAND_FROM);
+    if (rnd < 0.f) rnd = 0.f;
+    const int ops = 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * level + 0.5f);
+    for (int o = 0; o < ops; o++) {
+      int& nh = ln_nh_[s][l];
+      const int tgt = LineDrawTarget(level);
+      if (rnd > 0.f && nh > 0 && TimingRand() < rnd) {          // break-up: a random hit anywhere
+        const int h = TimingPick(nh);
+        ln_hit_[s][l][h] = ln_hit_[s][l][--nh];
+        const int c = LineFreeCell(s, l, false);
+        if (c >= 0) LineAdd(s, l, c, fill);
+        continue;
+      }
+      if (nh < tgt) {
+        const int c = LineFreeCell(s, l, true);
+        if (c >= 0) { LineAdd(s, l, c, fill); continue; }
+      } else if (nh > tgt && nh > 0) {
+        const int h = TimingPick(nh);
+        ln_hit_[s][l][h] = ln_hit_[s][l][--nh];
+        continue;
+      }
+      if (nh == 0) continue;
+      const int h = TimingPick(nh);
+      LineHit& x = ln_hit_[s][l][h];
+      switch (TimingPick(2)) {
+        case 0: {                                               // shift by one cell
+          const int d = TimingPick(2) ? 1 : -1;
+          const int ns = (x.start + d + C) % C;
+          if (LineFits(s, l, ns, x.len, h)) x.start = (int8_t)ns;
+        } break;
+        default: {                                              // grow / shrink by one cell
+          if (TimingPick(2) && LineFits(s, l, x.start, x.len + 1, h)) x.len++;
+          else if (x.len > 1) x.len--;
+        } break;
+      }
+    }
+  }
+  void LineClear(int s) { for (int l = 0; l < kErrTypes; l++) ln_nh_[s][l] = 0; ln_cells_[s] = 0; }
+  // Pass start (or loop start, el0 = the elapsed pass it joins at): evolve
+  // each live layer, then render this pass's segment of the three lines into
+  // per-step (source step, direction, ratchet, condition) and from those the
+  // pass's events.
+  void TimingPlanLayers(int s, bool rev, size_t L, double rho, float el0) {
+    trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
+    trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
+    sl_n_[s] = 0; TimingCond(s, 0);
+    var_last_[s] = false;
+    const bool any = err_level_[kErrTiming] > 0.f || err_level_[kErrCondition] > 0.f || err_level_[kErrPlayback] > 0.f;
+    if (!any) { LineClear(s); return; }
+    const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
+    const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+    int G = VESTIGE_TIMING_LAYER_STEPS;
+    while (G >= 2 && pass_out / (double)G < min_step) G /= 2;
+    if (G < 2) { timing_skipped_++; LineClear(s); return; }
+    if (G != VESTIGE_TIMING_LAYER_STEPS) timing_fallbacks_++;
+    const int C = G * VESTIGE_TIMING_LINE_PASSES;
+    if (ln_cells_[s] != C) { LineClear(s); ln_cells_[s] = C; ln_pass_[s] = -1; }
+    ln_pass_[s] = (ln_pass_[s] + 1) % VESTIGE_TIMING_LINE_PASSES;
+    const int seg0 = ln_pass_[s] * G;
+    const bool ok4 = pass_out / (double)G / 4.0 >= min_step;
+    const bool ok2 = pass_out / (double)G / 2.0 >= min_step;
+    const bool okr = GuardReady(s);
+    // Evolve + age.
+    for (int l = 0; l < kErrTypes; l++) {
+      const float lv = err_level_[l];
+      if (!(lv > 0.f)) { ln_nh_[s][l] = 0; continue; }
+      if (ln_nh_[s][l] == 0) LineSeed(s, l, lv); else LineMutate(s, l, lv);
+      for (int h = 0; h < ln_nh_[s][l]; h++) {               // a hit in this pass plays once more
+        LineHit& x = ln_hit_[s][l][h];
+        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= VESTIGE_TIMING_LINE_LIFE) LineRetype(l, x);
+      }
+      timing_edits_++;
+    }
+    // Render. src = which step's material plays (0..G-1), dir = +1 / -1.
+    int8_t src[16], dir[16], rat[16], cnd[16];
+    for (int i = 0; i < G; i++) { src[i] = (int8_t)i; dir[i] = 1; rat[i] = 1; cnd[i] = 0; }
+    auto seg_cells = [&](const LineHit& x, int* a, int* b) {  // the hit's steps in this pass [a, b)
+      int lo = x.start - seg0, hi = x.start + x.len - seg0;
+      if (lo < 0) lo = 0;
+      if (hi > G) hi = G;
+      *a = lo; *b = hi; return lo < hi;
+    };
+    for (int h = 0; h < ln_nh_[s][kErrTiming]; h++) {
+      const LineHit& x = ln_hit_[s][kErrTiming][h];
+      int a, b; if (!seg_cells(x, &a, &b)) continue;
+      for (int i = a; i < b; i++) {
+        const int c = i + seg0, j = c - x.start;             // line cell, cell within the hit
+        switch (x.type) {
+          case kFigStutter: src[i] = (int8_t)(((c - x.len) % G + G) % G); break;   // the len steps before, again
+          case kFigRepeat:  src[i] = (int8_t)(((x.start - 1) % G + G) % G); break; // the step before, held
+          case kFigDouble:  if (ok2) rat[i] = 2; break;
+          case kFigRatchet: rat[i] = ok4 ? 4 : (ok2 ? 2 : 1); break;
+          case kFigRetrig:  src[i] = (int8_t)(j % G); break;                       // the loop from its start
+          default: break;
+        }
+      }
+    }
+    if (okr) for (int h = 0; h < ln_nh_[s][kErrPlayback]; h++) {
+      const LineHit& x = ln_hit_[s][kErrPlayback][h];
+      int a, b; if (!seg_cells(x, &a, &b)) continue;
+      int8_t ts[16], td[16], tr[16];
+      for (int i = a; i < b; i++) { ts[i] = src[i]; td[i] = dir[i]; tr[i] = rat[i]; }
+      for (int i = a; i < b; i++) { const int mI = a + b - 1 - i; src[i] = ts[mI]; dir[i] = (int8_t)-td[mI]; rat[i] = tr[mI]; }
+    }
+    for (int h = 0; h < ln_nh_[s][kErrCondition]; h++) {
+      const LineHit& x = ln_hit_[s][kErrCondition][h];
+      int a, b; if (!seg_cells(x, &a, &b)) continue;
+      for (int i = a; i < b; i++) cnd[i] = x.sub;
+    }
+    for (int i = 0; i < G; i++) {
+      sl_order_[s][i] = (cnd[i] == 1) ? (int8_t)-1 : src[i];
+      tl_src_[s][i] = src[i]; tl_dir_[s][i] = dir[i]; tl_rat_[s][i] = rat[i]; tl_cnd_[s][i] = cnd[i];   // (diag)
+    }
+    // Events.
+    auto bnd = [&](int i) { return (i >= G) ? (float)L : (float)(size_t)((double)L * (double)i / (double)G + 0.5); };
+    // Read mapping at elapsed position `at` for step i: forward = restart at
+    // its source step's start (offset); reverse = read its source step from
+    // its end backward (mirror M, converted for a reversed loop).
+    auto emit = [&](float at, int i, int8_t mc) {
+      if (trig_cnt_[s] >= kTimingEvents) return;
+      const int e = trig_cnt_[s]++;
+      trig_pos_[s][e] = at; pm_mute_ev_[s][e] = mc; pm_jump_ev_[s][e] = true;
+      if (dir[i] > 0) { sl_off_[s][e] = at - bnd(src[i]); pm_rev_ev_[s][e] = 0; }
+      else {
+        const float Me = at + bnd(src[i] + 1) - 1.f;
+        sl_off_[s][e] = rev ? 2.f * (float)L - 2.f - Me : Me; pm_rev_ev_[s][e] = 1;
+      }
+    };
+    if (!(el0 > 0.f)) {                                     // step 0, at the pass start itself
+      TimingCond(s, cnd[0]);
+      if (dir[0] < 0) { lrev_[s] = true; lrev_m_[s] = rev ? 2.f * (float)L - 2.f - (bnd(src[0] + 1) - 1.f) : bnd(src[0] + 1) - 1.f;
+                        RestartStreams(s); timing_trigs_++; }
+      else if (src[0] != 0) { trig_off_[s] = -bnd(src[0]); RestartStreams(s); timing_trigs_++; }
+    }
+    for (int i = 0; i < G; i++) {
+      const float b0 = bnd(i), b1 = bnd(i + 1);
+      for (int j = 0; j < rat[i]; j++) {
+        const float at = (j == 0) ? b0 : (float)(size_t)(b0 + (b1 - b0) * (float)j / (float)rat[i] + 0.5f);
+        if (at <= el0 || (i == 0 && j == 0)) continue;
+        int8_t mc = -1; bool map = (j > 0);
+        if (j == 0) {
+          if (cnd[i] != cnd[i - 1]) mc = cnd[i];
+          map = !(dir[i] == dir[i - 1] && rat[i - 1] == 1 && src[i] == src[i - 1] + dir[i]);
+        }
+        if (map) emit(at, i, mc);
+        else if (mc >= 0 && trig_cnt_[s] < kTimingEvents) {
+          const int e = trig_cnt_[s]++;
+          trig_pos_[s][e] = at; pm_mute_ev_[s][e] = mc; pm_jump_ev_[s][e] = false; pm_rev_ev_[s][e] = -1;
+        }
+      }
+    }
+    sl_n_[s] = G; cur_pat_[s] = 0; timing_patterns_++;
+    if (ln_nh_[s][0] + ln_nh_[s][1] + ln_nh_[s][2] > 0) { cur_var_[s] = kVarRot; timing_vars_++; }
+  }
   // Per sample, per loop voice (after the head advance): instance-start plan,
   // then the next pending hit. Cost: one compare while nothing is pending; one
   // more float compare while a pattern plays.
@@ -1843,7 +2096,8 @@ class Vestige : public Module {
           RestartStreams(s);
           timing_returns_++;
         }
-        if (VESTIGE_TIMING_MODE == 2)      TimingPlanMem(s, rev, L, rho_d_[s], 0.f);
+        if (VESTIGE_TIMING_MODE == 3)      TimingPlanLayers(s, rev, L, rho_d_[s], 0.f);
+        else if (VESTIGE_TIMING_MODE == 2) TimingPlanMem(s, rev, L, rho_d_[s], 0.f);
         else if (VESTIGE_TIMING_MODE == 1) TimingPlanSlices(s, rev, L, rho_d_[s], 0.f);
         else                               TimingPlanPass(s, rev, L, rho_d_[s], 0.f);
         return;
@@ -1876,7 +2130,7 @@ class Vestige : public Module {
       const int ev = trig_next_[s];
       const float off = (VESTIGE_TIMING_MODE != 0) ? sl_off_[s][ev] : at - kL;
       trig_next_[s]++;
-      if (VESTIGE_TIMING_MODE == 2) {                       // pass memory: mute change and/or jump
+      if (VESTIGE_TIMING_MODE >= 2) {                       // pass memory / layers: mute change and/or jump
         if (pm_mute_ev_[s][ev] >= 0) TimingCond(s, pm_mute_ev_[s][ev]);
         const int8_t rv = pm_rev_ev_[s][ev];
         if (rv >= 0) {                                      // reverse span on (mirror) / off (offset)
@@ -2507,6 +2761,7 @@ class Vestige : public Module {
       rot_seed_[s] = TimingRandU();                         // this loop's rotation, for its whole life
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
+      LineClear(s);                                            // mode 3: fresh, empty lines
       mute_d_[s] = mute_dt_[s] = 0.f; lrev_[s] = false;        //  the first pass plays memory 0
       decim_d_[s] = decim_dt_[s] = 0.f; decim_c_[s] = 0;
       var_last_[s] = false; cur_var_[s] = kVarNone;
@@ -2516,7 +2771,8 @@ class Vestige : public Module {
     // TIMING: the pattern starts with the loop (this first pass may be joined
     // mid-way: elapsed p, the hits already behind it are skipped).
     if (s < VESTIGE_VOICE_SLABS && !eng_[PoolOf(s)].frozen) {
-      if (VESTIGE_TIMING_MODE == 2) TimingPlanMem(s, rev, L, rho_d_[s], (float)p);
+      if (VESTIGE_TIMING_MODE == 3) TimingPlanLayers(s, rev, L, rho_d_[s], (float)p);
+      else if (VESTIGE_TIMING_MODE == 2) TimingPlanMem(s, rev, L, rho_d_[s], (float)p);
       else if (VESTIGE_TIMING_MODE == 1) TimingPlanSlices(s, rev, L, rho_d_[s], (float)p);
       else TimingPlanPass(s, rev, L, rho_d_[s], (float)TimingSpanK(pass_[s], rev) * (float)L + (float)p);
     }
@@ -3426,6 +3682,13 @@ class Vestige : public Module {
   bool     decim_init_[VESTIGE_VOICE_SLABS]  = {false};  // start the hold + LP on the next sample
   float    decim_lp_[VESTIGE_TIMING_DECIM_N][5] = {};     // LP coefs per factor (MBSetLP)
   uint32_t timing_edits_ = 0;                             // diag: memory edits
+  // Timing mode 3 (layers), per loop voice slot.
+  LineHit  ln_hit_[VESTIGE_VOICE_SLABS][kErrTypes][VESTIGE_TIMING_LINE_MAX_CELLS / 2] = {};
+  int      ln_nh_[VESTIGE_VOICE_SLABS][kErrTypes] = {};
+  int      ln_cells_[VESTIGE_VOICE_SLABS]    = {0};      // the line length the hits were placed on
+  int      ln_pass_[VESTIGE_VOICE_SLABS]     = {0};      // which pass of the line plays
+  int8_t   tl_src_[VESTIGE_VOICE_SLABS][16] = {}, tl_dir_[VESTIGE_VOICE_SLABS][16] = {},   // this pass's render (diag)
+           tl_rat_[VESTIGE_VOICE_SLABS][16] = {}, tl_cnd_[VESTIGE_VOICE_SLABS][16] = {};
   int      sl_n_[VESTIGE_VOICE_SLABS]        = {0};      // this pass's slice count (0 = none) (diag)
   uint32_t sl_rand_mask_[VESTIGE_VOICE_SLABS] = {0};    // the steps playing a random slice this pass (diag)
   int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
