@@ -10,35 +10,38 @@ freeze the builder considers correct).
 
 ---
 
-## Status — 2026-09-29 (read this first when resuming)
+## Status — milestone 2026-09-29 (read this first when resuming)
 
-**Build to test: `fe056f3`** (= `build/NitroTron3.bin`). Nothing changes until the
-builder has reported feedback on it. All of it is host-verified, none of it heard
-end to end.
+**The loop side is stable** (builder's verdict on hardware). Build `167c65f`.
 
-In the build:
+Done and heard on hardware:
 - Stages 0–2: new control map, freeze on its own buffer, T from K2 / FS1 tap,
   captures quantised to divisions of T, sample-accurate start and playback.
-- K1 speed crossfade (half / clean / double). Poly mode = 4 voices.
-- Loops follow T when it changes, mode chosen by SW2 (temporary):
-  UP = A tape · MIDDLE = B stretch · DOWN = C re-cut.
-- Onset detection: a re-pluck while a ceiling-stopped note rings starts a new
-  capture.
+- Stage 6: K1 speed crossfade (half / clean / double).
+- Loops follow T when it changes (§4.3b). **Fixed at stretch** (pitch stays) —
+  the builder's pick; tape and re-cut are kept, selectable via
+  `VESTIGE_FOLLOW_MODE`. SW2 is free again, reserved for stage 2.5.
+- Capture gate: slow-fall gate meter (low-note ripple), re-arm after every
+  capture, and the onset detector on the gate meter — found with the DIAG serial
+  log. Ringing-note misfires are gone across a wide K4 range: the first step
+  towards retiring the K4 threshold knob.
+- Poly mode = **3 voices** (4 glitched with K1 in the upper octave: CPU).
+- Adaptive guard-copy speed (a flat fast copy clicked on every loop replace).
+- Tap tempo needs **three taps** (two agreeing intervals) — a stray press can no
+  longer re-time the loops.
 
-Scope for re-testing: every change made on 2026-09-29 is bit-identical to
-`eab03ca` unless (a) T changes while loops play, or (b) a note is re-plucked
-while an earlier note still rings after hitting the T ceiling. Feedback on
-anything else carries over between these builds.
+Next: stages 2.5 (error-type editor on SW2/K3) and 3–5 (the errors).
 
-Open decisions (recommendation in brackets):
-1. K2 direction flip sweeps T through 100 ms and disturbs following loops
-   (follow T only after K2 is still for ~300 ms).
-2. A decaying low note can be re-captured several times at the end of its decay
-   — pre-existing gate issue (minimum time below the close level before re-open).
-3. The first tap of a new tap sequence pairs with the previous one if < 8 s
-   apart, briefly re-timing loops (require two agreeing intervals = 3 taps).
-4. Possible level dip in A/B when the grain length changes — unmeasured (measure;
-   reuse C's 5 ms restart if needed).
+Decided / parked, with the reason:
+1. **K2 direction flip** sweeps T through its 100 ms minimum on the way through
+   noon, briefly shortening following loops. Not noticed in playing — left as is.
+2. **Tap range**: tapping up to 8 s does not feel natural; limit it to a range
+   that feels right. Later optimisation.
+3. **CPU / grain budget review**: amend when needed. The K5 fade between loops
+   is a candidate for removal, which could win voices back. Not a priority now.
+4. **K4 → constant, degrade back on K4** (§9); **freeze as a loop source** (Q1);
+   **sprawl DIAG log** has the same blocking-USB hang the vestige log had. Later.
+5. **Docs** (README, CONTROLS, layout SVGs): after the rework is done.
 
 ---
 
