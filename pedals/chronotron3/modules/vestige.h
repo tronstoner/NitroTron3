@@ -674,7 +674,16 @@ class Vestige : public Module {
         //     head advance in ServiceMBFreeze — the speed crossfade needs no
         //     restructuring for either.
         pv = PlaybackErrors(s, pv);
-        //     TIMING mode 2 rests / breaks: a linear VESTIGE_TIMING_MUTE_MS fade.
+        //     TIMING mode 2 sample-rate reduction: hold every crush_n_-th
+        //     sample, crossfaded in/out over VESTIGE_TIMING_MUTE_MS.
+        if (s < VESTIGE_VOICE_SLABS && (crush_d_[s] != 0.f || crush_dt_[s] != 0.f)) {
+          float& d = crush_d_[s]; const float t = crush_dt_[s];
+          if (d < t) { d += mute_inc_; if (d > t) d = t; }
+          else if (d > t) { d -= mute_inc_; if (d < t) d = t; }
+          if (++crush_c_[s] >= crush_n_[s]) { crush_c_[s] = 0; crush_h_[s] = pv; }
+          pv = (d >= 1.f) ? crush_h_[s] : pv + (crush_h_[s] - pv) * d;
+        }
+        //     TIMING mode 2 rests: a linear VESTIGE_TIMING_MUTE_MS fade.
         if (s < VESTIGE_VOICE_SLABS && (mute_d_[s] != 0.f || mute_dt_[s] != 0.f)) {
           float& d = mute_d_[s]; const float t = mute_dt_[s];
           if (d < t) { d += mute_inc_; if (d > t) d = t; }
@@ -947,7 +956,7 @@ class Vestige : public Module {
       // TIMING error (stage 3): pass-start plan + in-pass retrigger. Loop side
       // only; nothing at all happens while the timing level is 0.
       if (s < VESTIGE_VOICE_SLABS && !e.frozen) TimingStep(s, rev, L);
-      else if (s < VESTIGE_VOICE_SLABS) { mute_dt_[s] = 0.f; lrev_[s] = false; }   // no timing: nothing hangs
+      else if (s < VESTIGE_VOICE_SLABS) { TimingCond(s, 0); lrev_[s] = false; }   // no timing: nothing hangs
     }
     const bool orig = OrigPath(s, rho_d) && cur_view_[s] < 0;   // no T change has touched this loop
     // Grain read rate: tape reads at the head rate (pitch follows), stretch at
@@ -1575,8 +1584,9 @@ class Vestige : public Module {
     sl_n_[s] = nsl; cur_pat_[s] = 0; timing_patterns_++;
   }
   // ---- Timing mode 2: PASS MEMORY ------------------------------------------
-  struct TimingFig { int8_t type, step, len, age; };   // a figure on a remembered pass (len = span in
-                                                        //  steps; RETRIG: its hits. age = turns played)
+  struct TimingFig { int8_t type, step, len, age, sub; };   // a figure on a remembered pass (len = span in
+                                                        //  steps; RETRIG: its hits. age = turns played.
+                                                        //  sub: REST 1 = silent, N >= 2 = hold N)
   enum TimingFigType { kFigRest = 0, kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig, kFigReverse, kFigClean };
   // RETRIG with `hits`: the step it starts changing (its pattern's 2nd hit), -1 = does not fit n.
   static int TimingRetrigStep(int hits, int n) {
@@ -1665,8 +1675,17 @@ class Vestige : public Module {
       if (q < TimingStepWeight(i, n)) break;
       q -= TimingStepWeight(i, n);
     }
-    pm_fig_[s][m][pm_nf_[s][m]++] = TimingFig{(int8_t)t, (int8_t)k, (int8_t)len, 0};
+    int8_t sub = 0;
+    if (t == kFigRest)
+      sub = (TimingRand() < VESTIGE_TIMING_CRUSH_SHARE)
+          ? (int8_t)VESTIGE_TIMING_CRUSH_FACTORS[TimingPick(VESTIGE_TIMING_CRUSH_N)] : (int8_t)1;
+    pm_fig_[s][m][pm_nf_[s][m]++] = TimingFig{(int8_t)t, (int8_t)k, (int8_t)len, 0, sub};
     return true;
+  }
+  // A step's condition: 0 clean, 1 silent, N >= 2 sample-rate reduced (hold N).
+  void TimingCond(int s, int c) {
+    mute_dt_[s] = (c == 1) ? 1.f : 0.f;
+    if (c >= 2) { crush_n_[s] = c; crush_dt_[s] = 1.f; } else crush_dt_[s] = 0.f;
   }
   void TimingMemClear(int s) {
     for (int m = 0; m < VESTIGE_TIMING_MEM_PASSES; m++) { pm_nf_[s][m] = 0; pm_n_[s][m] = 0; }
@@ -1688,7 +1707,7 @@ class Vestige : public Module {
     pm_cur_[s] = (pm_cur_[s] + 1) % VESTIGE_TIMING_MEM_PASSES;   // this pass's own memory (A B C A B C ...)
     trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
     trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
-    sl_n_[s] = 0; mute_dt_[s] = 0.f;                          // the one always sounds
+    sl_n_[s] = 0; TimingCond(s, 0);                           // a pass starts clean
     const float level = err_level_[kErrTiming];
     if (!(level > 0.f)) { TimingMemClear(s); var_last_[s] = false; return; }   // level 0: memory cleared
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
@@ -1731,7 +1750,7 @@ class Vestige : public Module {
       const int k = g.step, e = (k + g.len < n) ? k + g.len : n;
       // (Steps before step 1 are the loop's last steps.)
       switch (g.type) {
-        case kFigRest:    for (int i = k; i < e; i++) mute[i] = 1; break;
+        case kFigRest:    for (int i = k; i < e; i++) mute[i] = g.sub; break;   // 1 silent, N hold N
         case kFigStutter: for (int i = k; i < e; i++) play[i] = (int8_t)((i - g.len + n) % n); break;   // the len steps before, again
         case kFigRepeat:  for (int i = k; i < e; i++) play[i] = (int8_t)((k - 1 + n) % n); break;       // the step before, len times
         case kFigDouble:  for (int i = k; i < e; i++) rat[i] = 2; break;
@@ -1745,7 +1764,7 @@ class Vestige : public Module {
         default: break;                                      // CLEAN: plays as recorded
       }
     }
-    for (int i = 0; i < n; i++) sl_order_[s][i] = mute[i] ? (int8_t)-1 : play[i];
+    for (int i = 0; i < n; i++) sl_order_[s][i] = (mute[i] == 1) ? (int8_t)-1 : play[i];
     auto bnd = [&](int i) { return (float)(size_t)((double)L * (double)i / (double)n + 0.5); };
     // REVERSE: the read mirrors the timeline over the span, h = M - fwd_ (see
     // ReadHead): forward M = b0 + b1 - 1 (read from the span's end down to its
@@ -1757,7 +1776,7 @@ class Vestige : public Module {
     // Step 1 at the pass start itself: its mute and its slice apply right here
     // (the read was just put back on the timeline by TimingStep).
     if (!(el0 > 0.f)) {
-      mute_dt_[s] = (float)mute[0];
+      TimingCond(s, mute[0]);
       if (rvk[0] >= 0) { lrev_[s] = true; lrev_m_[s] = mirror(rvk[0], rve[0]); RestartStreams(s); timing_trigs_++; }
       else {
         const float off0 = 0.f - bnd(play[0]);
@@ -1836,7 +1855,7 @@ class Vestige : public Module {
       const float off = (VESTIGE_TIMING_MODE != 0) ? sl_off_[s][ev] : at - kL;
       trig_next_[s]++;
       if (VESTIGE_TIMING_MODE == 2) {                       // pass memory: mute change and/or jump
-        if (pm_mute_ev_[s][ev] >= 0) mute_dt_[s] = (float)pm_mute_ev_[s][ev];
+        if (pm_mute_ev_[s][ev] >= 0) TimingCond(s, pm_mute_ev_[s][ev]);
         const int8_t rv = pm_rev_ev_[s][ev];
         if (rv >= 0) {                                      // reverse span on (mirror) / off (offset)
           lrev_[s] = (rv == 1);
@@ -2467,6 +2486,7 @@ class Vestige : public Module {
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
       mute_d_[s] = mute_dt_[s] = 0.f; lrev_[s] = false;        //  the first pass plays memory 0
+      crush_d_[s] = crush_dt_[s] = 0.f; crush_c_[s] = 0;
       var_last_[s] = false; cur_var_[s] = kVarNone;
     }
     rho_t_[s] = TapeTarget(s);
@@ -3373,6 +3393,11 @@ class Vestige : public Module {
   bool     pm_jump_ev_[VESTIGE_VOICE_SLABS][kTimingEvents] = {};   // per event: the read jumps
   float    mute_d_[VESTIGE_VOICE_SLABS]      = {0.f};    // rest/break depth (0 = open, 1 = silent)
   float    mute_dt_[VESTIGE_VOICE_SLABS]     = {0.f};    // its target
+  float    crush_d_[VESTIGE_VOICE_SLABS]     = {0.f};    // sample-rate reduction mix (0 = clean)
+  float    crush_dt_[VESTIGE_VOICE_SLABS]    = {0.f};    // its target
+  int      crush_n_[VESTIGE_VOICE_SLABS]     = {0};      // hold length (samples)
+  int      crush_c_[VESTIGE_VOICE_SLABS]     = {0};      // samples since the last hold
+  float    crush_h_[VESTIGE_VOICE_SLABS]     = {0.f};    // the held sample
   uint32_t timing_edits_ = 0;                             // diag: memory edits
   int      sl_n_[VESTIGE_VOICE_SLABS]        = {0};      // this pass's slice count (0 = none) (diag)
   uint32_t sl_rand_mask_[VESTIGE_VOICE_SLABS] = {0};    // the steps playing a random slice this pass (diag)
