@@ -566,7 +566,7 @@ static constexpr float  VESTIGE_TIMING_DECIM_LP_MULT = 1.5f;     // lower = dark
 // for the front half (a fill leads into the one).
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
 static constexpr int    VESTIGE_TIMING_MEM_FIGS   = 8;           // figures a pass can hold
-static constexpr int    VESTIGE_TIMING_MAX_EVENTS = 96;          // jumps + mute changes per pass
+static constexpr int    VESTIGE_TIMING_MAX_EVENTS = 320;         // jumps + mute changes per pass (64 steps x ratchet 4 + changes)
 static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (each way)
 
 // ---- Timing mode 3: LAYERS ---------------------------------------------------
@@ -575,11 +575,16 @@ static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (e
 //   UP     TIMING     STUTTER, REPEAT, DOUBLE, RATCHET, RETRIG
 //   MIDDLE CONDITION  REST, DECIMATE
 //   DOWN   PLAYBACK   REVERSE
-// A layer at level 0 is off. The pass is cut into VESTIGE_TIMING_LAYER_STEPS
-// steps (halved for short loops, min VESTIGE_TIMING_MIN_STEP_MS each). Each
-// layer's LINE covers VESTIGE_TIMING_LINE_PASSES passes of cells: HITS (1 ..
-// VESTIGE_TIMING_SPAN_MAX cells, always at least one pause cell between two
-// hits) and pauses. The line plays pass by pass and repeats.
+// A layer at level 0 is off. STEPS: the pass is cut into G equal steps, G =
+// a power of two or 3 x one (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64), the
+// one whose step is closest to VESTIGE_TIMING_STEP_MS — so a step feels the
+// same at every loop length (2 s loop: 16 steps of 125 ms; 4 s: 32; 6 s = 3
+// bars: 48) while it always divides the loop exactly (tempo-synced, the grid
+// restarts on every pass's one). LINE: each layer's line is G x ceil(32 / G)
+// cells — about two bars of 16ths: a 2 s loop gets a 2-pass line, a 6 s loop
+// a 1-pass (3-bar) line. Cells are HITS (1 .. VESTIGE_TIMING_SPAN_MAX cells,
+// always at least one pause cell between two hits) and pauses. The line plays
+// pass by pass and repeats.
 //   SEED   k hits spread evenly (Bjorklund) over the pulse = every other cell
 //          ("x-x-"), a random rotation; each grows by a cell with chance FILL
 //          ("xx", "xxx").
@@ -593,20 +598,20 @@ static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (e
 //          the content varies.
 // Where layers overlap they stack: TIMING decides which step plays, PLAYBACK
 // reverses what TIMING made, CONDITION silences / decimates the result.
-//   hits per pass (target) = HITS_A + HITS_B * L
-//   FILL                   = FILL_A + FILL_B * L
-static constexpr int    VESTIGE_TIMING_LAYER_STEPS  = 16;
-static constexpr int    VESTIGE_TIMING_LINE_PASSES  = 2;
+//   hits per 16 steps (target) = HITS_A + HITS_B * L
+//   FILL                       = FILL_A + FILL_B * L
+static constexpr float  VESTIGE_TIMING_STEP_MS      = 125.f;    // 250 = half time, 62.5 = double time
+static constexpr int    VESTIGE_TIMING_LINE_STEPS   = 32;       // a line is at least this many steps
 static constexpr float  VESTIGE_TIMING_LINE_HITS_A  = 0.5f;
-static constexpr float  VESTIGE_TIMING_LINE_HITS_B  = 7.5f;     // L = 1: 8 hits per pass = the full pulse
+static constexpr float  VESTIGE_TIMING_LINE_HITS_B  = 7.5f;     // L = 1: 8 hits per 16 steps = the full pulse
 static constexpr float  VESTIGE_TIMING_LINE_FILL_A  = 0.1f;
 static constexpr float  VESTIGE_TIMING_LINE_FILL_B  = 0.5f;
 static constexpr float  VESTIGE_TIMING_LINE_OPS_B   = 6.f;
 static constexpr float  VESTIGE_TIMING_LINE_RAND_FROM = 0.67f;
 static constexpr int    VESTIGE_TIMING_LINE_LIFE    = 3;
-static constexpr int    VESTIGE_TIMING_LINE_MAX_CELLS = 64;     // bound on steps x passes
-static_assert(VESTIGE_TIMING_LAYER_STEPS * VESTIGE_TIMING_LINE_PASSES <= VESTIGE_TIMING_LINE_MAX_CELLS, "line too long");
-static_assert(VESTIGE_TIMING_LAYER_STEPS <= 16, "layer steps <= 16 (Bjorklund table bound)");
+static constexpr int    VESTIGE_TIMING_LAYER_MAX_STEPS = 64;    // G bound (steps per pass)
+static constexpr int    VESTIGE_TIMING_LINE_MAX_CELLS  = 64;    // line bound (64-bit cell masks)
+static_assert(VESTIGE_TIMING_LINE_STEPS <= VESTIGE_TIMING_LINE_MAX_CELLS, "line too long");
 // Type weights per layer — EDITABLE:
 static constexpr float  VESTIGE_TIMING_W_STUTTER = 1.f;         // TIMING
 static constexpr float  VESTIGE_TIMING_W_REPEAT  = 1.f;

@@ -1832,7 +1832,7 @@ class Vestige : public Module {
   }
   // ---- Timing mode 3: LAYERS -------------------------------------------------
   // Three rhythm lines (TIMING / CONDITION / PLAYBACK) per loop voice, each a
-  // list of hits on a line of ln_cells_ cells (steps x VESTIGE_TIMING_LINE_PASSES).
+  // list of hits on a line of ln_cells_ cells (G steps x the passes per line).
   struct LineHit { int8_t start, len, type, sub, age; };
   static constexpr int kLineMaxHits = VESTIGE_TIMING_LINE_MAX_CELLS / 2;
   static uint64_t LineMask(int start, int len) {
@@ -1907,11 +1907,11 @@ class Vestige : public Module {
     if (nc == 0) return -1;
     return c[TimingPick(nc)];
   }
-  float LineTarget(float level) const {
-    return (VESTIGE_TIMING_LINE_HITS_A + VESTIGE_TIMING_LINE_HITS_B * level) * (float)VESTIGE_TIMING_LINE_PASSES;
+  float LineTarget(int s, float level) const {
+    return (VESTIGE_TIMING_LINE_HITS_A + VESTIGE_TIMING_LINE_HITS_B * level) * (float)ln_cells_[s] / 16.f;
   }
-  int LineDrawTarget(float level) {
-    const float D = LineTarget(level);
+  int LineDrawTarget(int s, float level) {
+    const float D = LineTarget(s, level);
     int t = (int)D; if (TimingRand() < D - (float)t) t++;
     return t;
   }
@@ -1919,11 +1919,11 @@ class Vestige : public Module {
     const int C = ln_cells_[s];
     ln_nh_[s][l] = 0;
     const int P = C / 2;                                    // pulse cells
-    int k = (int)(LineTarget(level) + 0.5f); if (k < 1) k = 1; if (k > P) k = P;
-    const uint32_t m = Bjorklund(k, P);
+    if (P < 1) return;
+    int k = (int)(LineTarget(s, level) + 0.5f); if (k < 1) k = 1; if (k > P) k = P;
     const int rot = TimingPick(P);
     const float fill = VESTIGE_TIMING_LINE_FILL_A + VESTIGE_TIMING_LINE_FILL_B * level;
-    for (int i = 0; i < P; i++) if (m & (1u << i)) LineAdd(s, l, 2 * ((i + rot) % P), 0.f);
+    for (int i = 0; i < k; i++) LineAdd(s, l, 2 * (((i * P) / k + rot) % P), 0.f);   // evenly spread (Euclidean)
     for (int h = 0; h < ln_nh_[s][l]; h++) LineGrow(s, l, h, fill);
   }
   void LineMutate(int s, int l, float level) {
@@ -1934,7 +1934,7 @@ class Vestige : public Module {
     const int ops = 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * level + 0.5f);
     for (int o = 0; o < ops; o++) {
       int& nh = ln_nh_[s][l];
-      const int tgt = LineDrawTarget(level);
+      const int tgt = LineDrawTarget(s, level);
       if (rnd > 0.f && nh > 0 && TimingRand() < rnd) {          // break-up: a random hit anywhere
         const int h = TimingPick(nh);
         ln_hit_[s][l][h] = ln_hit_[s][l][--nh];
@@ -1980,13 +1980,20 @@ class Vestige : public Module {
     if (!any) { LineClear(s); return; }
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
-    int G = VESTIGE_TIMING_LAYER_STEPS;
-    while (G >= 2 && pass_out / (double)G < min_step) G /= 2;
-    if (G < 2) { timing_skipped_++; LineClear(s); return; }
-    if (G != VESTIGE_TIMING_LAYER_STEPS) timing_fallbacks_++;
-    const int C = G * VESTIGE_TIMING_LINE_PASSES;
+    // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to
+    // VESTIGE_TIMING_STEP_MS in output time.
+    const double want = (double)VESTIGE_TIMING_STEP_MS * 0.001 * (double)sr_;
+    int G = 1; double best = 1e30;
+    for (int base = 1; base <= 3; base += 2)
+      for (int g = base; g <= VESTIGE_TIMING_LAYER_MAX_STEPS; g *= 2) {
+        const double r = pass_out / (double)g / want;
+        const double d = r > 1.0 ? r : 1.0 / r;
+        if (d < best) { best = d; G = g; }
+      }
+    const int LP = (G >= VESTIGE_TIMING_LINE_STEPS) ? 1 : (VESTIGE_TIMING_LINE_STEPS + G - 1) / G;   // passes per line
+    const int C = G * LP;
     if (ln_cells_[s] != C) { LineClear(s); ln_cells_[s] = C; ln_pass_[s] = -1; }
-    ln_pass_[s] = (ln_pass_[s] + 1) % VESTIGE_TIMING_LINE_PASSES;
+    ln_pass_[s] = (ln_pass_[s] + 1) % LP;
     const int seg0 = ln_pass_[s] * G;
     const bool ok4 = pass_out / (double)G / 4.0 >= min_step;
     const bool ok2 = pass_out / (double)G / 2.0 >= min_step;
@@ -2003,7 +2010,8 @@ class Vestige : public Module {
       timing_edits_++;
     }
     // Render. src = which step's material plays (0..G-1), dir = +1 / -1.
-    int8_t src[16], dir[16], rat[16], cnd[16];
+    int8_t src[VESTIGE_TIMING_LAYER_MAX_STEPS], dir[VESTIGE_TIMING_LAYER_MAX_STEPS];
+    int8_t rat[VESTIGE_TIMING_LAYER_MAX_STEPS], cnd[VESTIGE_TIMING_LAYER_MAX_STEPS];
     for (int i = 0; i < G; i++) { src[i] = (int8_t)i; dir[i] = 1; rat[i] = 1; cnd[i] = 0; }
     auto seg_cells = [&](const LineHit& x, int* a, int* b) {  // the hit's steps in this pass [a, b)
       int lo = x.start - seg0, hi = x.start + x.len - seg0;
@@ -2029,7 +2037,7 @@ class Vestige : public Module {
     if (okr) for (int h = 0; h < ln_nh_[s][kErrPlayback]; h++) {
       const LineHit& x = ln_hit_[s][kErrPlayback][h];
       int a, b; if (!seg_cells(x, &a, &b)) continue;
-      int8_t ts[16], td[16], tr[16];
+      int8_t ts[VESTIGE_TIMING_LAYER_MAX_STEPS], td[VESTIGE_TIMING_LAYER_MAX_STEPS], tr[VESTIGE_TIMING_LAYER_MAX_STEPS];
       for (int i = a; i < b; i++) { ts[i] = src[i]; td[i] = dir[i]; tr[i] = rat[i]; }
       for (int i = a; i < b; i++) { const int mI = a + b - 1 - i; src[i] = ts[mI]; dir[i] = (int8_t)-td[mI]; rat[i] = tr[mI]; }
     }
@@ -2039,7 +2047,7 @@ class Vestige : public Module {
       for (int i = a; i < b; i++) cnd[i] = x.sub;
     }
     for (int i = 0; i < G; i++) {
-      sl_order_[s][i] = (cnd[i] == 1) ? (int8_t)-1 : src[i];
+      if (i < VESTIGE_TIMING_SLICE_MAX) sl_order_[s][i] = (cnd[i] == 1) ? (int8_t)-1 : src[i];
       tl_src_[s][i] = src[i]; tl_dir_[s][i] = dir[i]; tl_rat_[s][i] = rat[i]; tl_cnd_[s][i] = cnd[i];   // (diag)
     }
     // Events.
@@ -3687,8 +3695,10 @@ class Vestige : public Module {
   int      ln_nh_[VESTIGE_VOICE_SLABS][kErrTypes] = {};
   int      ln_cells_[VESTIGE_VOICE_SLABS]    = {0};      // the line length the hits were placed on
   int      ln_pass_[VESTIGE_VOICE_SLABS]     = {0};      // which pass of the line plays
-  int8_t   tl_src_[VESTIGE_VOICE_SLABS][16] = {}, tl_dir_[VESTIGE_VOICE_SLABS][16] = {},   // this pass's render (diag)
-           tl_rat_[VESTIGE_VOICE_SLABS][16] = {}, tl_cnd_[VESTIGE_VOICE_SLABS][16] = {};
+  int8_t   tl_src_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},   // this pass's render (diag)
+           tl_dir_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},
+           tl_rat_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},
+           tl_cnd_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};
   int      sl_n_[VESTIGE_VOICE_SLABS]        = {0};      // this pass's slice count (0 = none) (diag)
   uint32_t sl_rand_mask_[VESTIGE_VOICE_SLABS] = {0};    // the steps playing a random slice this pass (diag)
   int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
