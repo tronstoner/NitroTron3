@@ -7,6 +7,7 @@
 // surface — including both footswitches. Build: `make PEDAL=chronotron3`.
 
 #include "daisy.h"
+#include <cstdarg>        // va_list (DiagLine)
 #include "daisysp.h"
 #include "hothouse.h"
 
@@ -48,6 +49,25 @@ using clevelandmusicco::Hothouse;
   return b;
 }
 [[maybe_unused]] static constexpr int kSprawlDiagLines = 19;
+
+// Non-blocking line output for the vestige gate log. libDaisy's Logger is only
+// non-blocking until two lines have gone out: after that it switches itself to
+// blocking mode and waits in `while (!Transmit())` until the computer reads.
+// With the capture stopped nothing reads, the main loop hangs there, and the
+// controls freeze while audio keeps running (found on hardware, 2026-09-29).
+// This formats into its own buffer and calls the USB transmit ONCE: if the port
+// is busy or nobody is reading, the line is dropped and counted — never waited.
+[[maybe_unused]] static uint32_t g_diag_usb_drops = 0;
+[[maybe_unused]] static void DiagLine(const char* fmt, ...) {
+  static char buf[128];
+  va_list va; va_start(va, fmt);
+  int len = vsnprintf(buf, sizeof(buf) - 2, fmt, va);
+  va_end(va);
+  if (len < 0) return;
+  if (len > (int)sizeof(buf) - 3) len = (int)sizeof(buf) - 3;
+  buf[len++] = '\r'; buf[len++] = '\n';
+  if (!daisy::LoggerImpl<daisy::LOGGER_INTERNAL>::Transmit(buf, (size_t)len)) g_diag_usb_drops++;
+}
 
 // ---------------------------------------------------------------------------
 // Hardware + control surface + modules
@@ -221,23 +241,23 @@ int main() {
         return (x > 0.f && x < 40000.f) ? (unsigned)(x * 100000.f + 0.5f) : 0u;
       };
       if (!vs_banner) {
-        hw.seed.PrintLine("VS DIAG online (DIAG=1 build), levels x100000");
+        DiagLine("VS DIAG online (DIAG=1 build), levels x100000");
         vs_banner = true; vs_hb = now;
       } else if (now - vs_hb >= 2000) {
         vs_hb = now;
-        hw.seed.PrintLine("VS HB t=%u k4=%s open=%u close=%u T=%u drops=%u", (unsigned)now,
+        DiagLine("VS HB t=%u k4=%s open=%u close=%u T=%u drops=%u usb=%u", (unsigned)now,
             F3(vestige.DiagK4()), L(vestige.DiagOpen()), L(vestige.DiagOpen() * VESTIGE_AUTO_HYST),
-            (unsigned)vestige.DiagT(), (unsigned)vestige.DiagDrops());
+            (unsigned)vestige.DiagT(), (unsigned)vestige.DiagDrops(), (unsigned)g_diag_usb_drops);
       } else {
         Vestige::GateDiag r;
         if (vestige.DiagPop(r)) {
           const unsigned tms = r.t / 48u;
           switch (r.kind) {
-          case 'M': hw.seed.PrintLine("M %u f=%u g=%u base=%u %c b%d", tms, L(r.a), L(r.b), L(r.c), r.why, r.flag); break;
-          case 'O': hw.seed.PrintLine("O %u f=%u base=%u r=%s g=%u %c b%d", tms, L(r.a), L(r.b), F3(r.c), L(r.d), r.why, r.flag); break;
-          case 'S': hw.seed.PrintLine("S %u why=%c side=%d f=%u g=%u open=%u close=%u T=%u", tms, r.why, r.flag, L(r.a), L(r.b), L(r.c), L(r.d), (unsigned)r.u); break;
-          case 'E': hw.seed.PrintLine("E %u why=%c raw=%u Q=%u f=%u g=%u b%d", tms, r.why, (unsigned)r.u, (unsigned)r.w, L(r.a), L(r.b), r.flag); break;
-          case 'B': hw.seed.PrintLine("B %u lift=%c f=%u g=%u", tms, r.why, L(r.a), L(r.b)); break;
+          case 'M': DiagLine("M %u f=%u g=%u base=%u %c b%d", tms, L(r.a), L(r.b), L(r.c), r.why, r.flag); break;
+          case 'O': DiagLine("O %u f=%u base=%u r=%s g=%u %c b%d", tms, L(r.a), L(r.b), F3(r.c), L(r.d), r.why, r.flag); break;
+          case 'S': DiagLine("S %u why=%c side=%d f=%u g=%u open=%u close=%u T=%u", tms, r.why, r.flag, L(r.a), L(r.b), L(r.c), L(r.d), (unsigned)r.u); break;
+          case 'E': DiagLine("E %u why=%c raw=%u Q=%u f=%u g=%u b%d", tms, r.why, (unsigned)r.u, (unsigned)r.w, L(r.a), L(r.b), r.flag); break;
+          case 'B': DiagLine("B %u lift=%c f=%u g=%u", tms, r.why, L(r.a), L(r.b)); break;
           default: break;
           }
         }

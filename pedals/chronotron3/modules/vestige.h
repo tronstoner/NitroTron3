@@ -568,7 +568,9 @@ class Vestige : public Module {
       // DIAG: meter trace every 20 ms while anything is sounding or capturing.
       if (CT3_DIAG && ++diag_trace_ >= 960u) {
         diag_trace_ = 0;
-        if (env_gate_ > 0.0005f || recording_)
+        // Only once the level can matter to the gate (above the re-arm "quiet"
+        // level) — touching the strings must not flood the log.
+        if (env_gate_ > auto_thresh_ * VESTIGE_AUTO_HYST * VESTIGE_REARM_DEEP || recording_)
           DiagPush(GateDiag{'M', recording_ ? 'R' : '-', (uint8_t)rearm_block_, clk0 + (uint32_t)i,
                             env_, env_gate_, onset_slow_, 0.f, 0u, 0u});
       }
