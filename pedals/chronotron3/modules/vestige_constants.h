@@ -283,6 +283,24 @@ static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K4 CCW: sensitive
 static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K4 CW:  insensitive
 static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold = open * hyst
 static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 80;     // silence held this long ends a phrase
+// Onset detector — lifts the re-arm block after a ceiling stop when a NEW attack
+// arrives while the old note still rings above both gate levels (level
+// hysteresis cannot see that). Modelled on sprawl's note-on (TRANSIENT_*): the
+// envelope jumping a RATIO above a slow baseline — level-independent, one
+// firmware for bass and guitar — with a refractory. The floor is the K4 open
+// threshold x FLOOR_REL, so it is exactly as sensitive as the gate and K4 keeps
+// meaning sensitivity (no absolute trigger level). Used ONLY to lift the block;
+// never to end or split a capture.
+static constexpr float    VESTIGE_ONSET_SLOW_COEF     = 0.0006f; // baseline follower (= sprawl TRANSIENT_SLOW_COEF, ~35 ms)
+static constexpr float    VESTIGE_ONSET_RISE          = 1.8f;    // env > baseline x this = an attack (= sprawl)
+static constexpr float    VESTIGE_ONSET_FLOOR_REL     = 1.0f;    // x the K4 open threshold
+// Refractory: sprawl's 50 ms is too short for a sustained LOW note here: on a
+// 41 Hz string the envelope still carries its ripple when 50 ms end, and a
+// ripple peak clears 1.8 x the not-yet-settled baseline (host: 2nd onset at
+// 51 ms). 75 ms was the shortest that gave one onset per pluck down to 31 Hz
+// (short + sustained); 100 for margin. Only the first onset after a ceiling
+// stop matters, so this costs nothing musically.
+static constexpr uint32_t VESTIGE_ONSET_REFRACTORY_MS = 100;     // one pluck = one onset
 // Stage 2: background wrap-guard writer (vestige.h IsrFillGuards). Cells per
 // sample; anything >= 1 keeps ahead of forward grains (they first read the
 // guard one loop after playback starts). 8 = a full 21504-cell guard in ~56 ms,

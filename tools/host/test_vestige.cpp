@@ -60,7 +60,10 @@ static int bad = 0;
 static long rec_overrun = 0;     // blocks where rec_idx_ exceeded its scratch row
 static size_t frz_rec_max = 0;   // furthest index the freeze scratch reached
 
+static bool note_on = false;
+static float NoteIn(long k);
 static float Input(long k) {
+  if (note_on) return NoteIn(k);
   if (k >= noise_from && k < noise_to) return 0.25f * Noise(k);
   if (click_on) {
     const long ph = (k - click_from) % 6000;             // 125 ms
@@ -1675,6 +1678,142 @@ static void TestFollowStretch() {
   Unhold();
 }
 
+// ---------------------------------------------------------------------------
+// Onset detection lifts the re-arm block after a ceiling stop.
+struct NoteTrain { long from = -1; long gap = 0; int count = 0; float hz = 110.f, amp = 0.3f, atk_s = 0.004f, tau_s = 0.4f; };
+static NoteTrain nt;
+static float NoteIn(long k) {
+  if (nt.count <= 0 || k < nt.from) return 0.f;
+  const long rel = k - nt.from; const long i = rel / nt.gap;
+  if (i >= nt.count) {                                     // last note keeps ringing
+    const float t = (float)(rel - (nt.count - 1) * nt.gap) / sr;
+    return nt.amp * expf(-t / nt.tau_s) * sinf(2.f * 3.14159265f * nt.hz * (float)k / sr);
+  }
+  const float t = (float)(rel - i * nt.gap) / sr;
+  const float a = (t < nt.atk_s ? t / nt.atk_s : 1.f) * expf(-t / nt.tau_s);
+  // Each new note adds to the previous one's ring (a real re-pluck is louder
+  // than the decayed string), so the envelope RISES at every attack.
+  float prev = 0.f;
+  if (i > 0) { const float tp = t + (float)nt.gap / sr; prev = expf(-tp / nt.tau_s); }
+  return nt.amp * (a + prev * (t < nt.atk_s ? 1.f - t / nt.atk_s : 0.f)) * sinf(2.f * 3.14159265f * nt.hz * (float)k / sr);
+}
+// Replicated detector: the module's own envelope + onset arithmetic run over
+// the recorded input from a snapshot of its state. Returns the first sample at
+// or after `from` where an onset fires.
+static float rep_env0 = 0.f, rep_slow0 = 0.f; static int rep_refr0 = 0;
+static long ReplicatedOnset(long from) {
+  float env = rep_env0, slow = rep_slow0; int refr = rep_refr0;
+  for (long k = hist_n0; k < hist_n0 + (long)in_hist.size(); k++) {
+    env += VESTIGE_ENV_COEF * (fabsf(InH(k)) - env);
+    slow += VESTIGE_ONSET_SLOW_COEF * (env - slow);
+    if (refr > 0) refr--;
+    const bool on = (refr == 0 && env > v.auto_thresh_ * VESTIGE_ONSET_FLOOR_REL && env > slow * VESTIGE_ONSET_RISE);
+    if (on) { refr = v.onset_refr_len_; if (k >= from) return k; }
+  }
+  return -1;
+}
+static void StartHist() {
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  rep_env0 = v.env_; rep_slow0 = v.onset_slow_; rep_refr0 = v.onset_refr_;
+}
+
+static void TestOnsetRearm() {
+  printf("-- onset lifts the re-arm block\n");
+  const uint32_t starts_before = v.onset_starts_;
+  printf("      earlier sections: %u captures were started by an onset lifting the block\n", starts_before);
+
+  struct Sc { const char* name; float hz, amp, k4, atk; };
+  const Sc scs[] = { {"bass 110 Hz, 0.3", 110.f, 0.3f, 0.1f, 0.004f},
+                     {"bass 41 Hz, 0.3",   41.2f, 0.3f, 0.1f, 0.004f},
+                     {"guitar 330 Hz, 0.03, K4 CCW", 330.f, 0.03f, 0.0f, 0.002f} };
+  for (const Sc& c : scs) {
+    // 1. Ringing note hits the T ceiling; a re-pluck while it still rings above
+    //    the close level starts a new capture at the onset sample.
+    Reset(); cs.sw[0] = 0; cs.sw[1] = 0; cs.knob[3] = c.k4; cs.knob[4] = 0.0f;
+    Taps({300}); RunFor(0.8f);
+    StartHist();
+    seen_acts = v.act_count_;
+    nt = NoteTrain{}; nt.from = n + 480; nt.gap = 28800; nt.count = 2; nt.hz = c.hz; nt.amp = c.amp; nt.atk_s = c.atk; nt.tau_s = 0.4f;
+    note_on = true;
+    // Run to just before the second note, recording whether the block is on.
+    bool blocked = false; float env_at = 0.f;
+    while (n < nt.from + nt.gap - 480) { RunFor(0.01f); if (v.rearm_block_) blocked = true; }
+    env_at = v.env_;
+    const bool still_blocked = v.rearm_block_ && env_at > v.auto_thresh_ * VESTIGE_AUTO_HYST;
+    const uint32_t os0 = v.onset_starts_;
+    RunFor(0.05f);
+    const long det = ReplicatedOnset(nt.from + nt.gap);
+    const bool started = v.onset_starts_ == os0 + 1;
+    const long A = (long)v.cap_start_[v.rec_slot_];
+    printf("      %-28s blocked before re-pluck %d (env %.4f > close %.4f)  re-pluck at %ld: capture start %+ld, replicated onset %+ld\n",
+           c.name, (int)still_blocked, env_at, v.auto_thresh_ * VESTIGE_AUTO_HYST, nt.from + nt.gap,
+           A - (nt.from + nt.gap), det - (nt.from + nt.gap));
+    char msg[200];
+    snprintf(msg, sizeof msg, "%s: re-pluck while the ceiling-stopped note still rings starts a capture at the onset sample", c.name);
+    Check(blocked && still_blocked && started && det >= 0 && A == det, msg);
+    note_on = false; nt.count = 0; RunFor(1.0f);
+    hist_on = false; in_hist.clear(); wet_hist.clear();
+
+    // 2. A decaying note alone never re-triggers: one long-ringing note, ceiling
+    //    stop, nothing else played.
+    Reset(); cs.knob[3] = c.k4; cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
+    seen_acts = v.act_count_;
+    nt = NoteTrain{}; nt.from = n + 480; nt.gap = 48000 * 20; nt.count = 1; nt.hz = c.hz; nt.amp = c.amp; nt.atk_s = c.atk; nt.tau_s = 1.5f;
+    note_on = true;
+    const uint32_t oc0 = v.onset_count_, os1 = v.onset_starts_, ac0 = v.act_count_;
+    RunFor(6.0f);
+    const uint32_t onsets = v.onset_count_ - oc0, caps = v.act_count_ - ac0;
+    printf("      %-28s one note ringing 6 s: %u onset(s), %u capture(s), %u started by an onset\n", c.name, onsets, caps, v.onset_starts_ - os1);
+    // (Extra captures of a LOW note's tail come from the level gate, not the
+    // onset: its ripple crosses close/open near the thresholds. Pre-existing —
+    // identical on 6ec83de — and outside this step; counted, not asserted.)
+    snprintf(msg, sizeof msg, "%s: a decaying note alone never re-triggers (one onset, no onset-started capture)", c.name);
+    Check(onsets == 1 && v.onset_starts_ == os1, msg);
+    note_on = false; nt.count = 0; RunFor(1.0f);
+  }
+
+  // 3. One pluck = one onset, over plucks of different pitch, level and attack.
+  {
+    struct Pk { float hz, amp, atk, k4; };
+    const Pk pks[] = { {30.9f, 0.3f, 0.001f, 0.1f}, {41.2f, 0.3f, 0.001f, 0.1f}, {110.f, 0.3f, 0.004f, 0.1f},
+                       {110.f, 0.3f, 0.020f, 0.1f}, {330.f, 0.03f, 0.002f, 0.0f}, {82.4f, 0.1f, 0.010f, 0.0f},
+                       {196.f, 0.01f, 0.004f, 0.0f}, {61.7f, 0.05f, 0.002f, 0.0f} };
+    int worst = 0, best = 99;
+    for (const Pk& p : pks) {
+      Reset(); cs.knob[3] = p.k4; cs.knob[4] = 0.0f; RunFor(0.5f);
+      for (int i = 0; i < 6; i++) {
+        nt = NoteTrain{}; nt.from = n + 480; nt.gap = 48000 * 20; nt.count = 1; nt.hz = p.hz; nt.amp = p.amp; nt.atk_s = p.atk;
+        nt.tau_s = (i & 1) ? 1.5f : 0.3f;                   // short and sustained plucks
+        note_on = true;
+        const uint32_t oc0 = v.onset_count_;
+        RunFor(1.5f);
+        const int k = (int)(v.onset_count_ - oc0);
+        if (k > worst) worst = k; if (k < best) best = k;
+        note_on = false; nt.count = 0; RunFor(1.0f);
+      }
+    }
+    printf("      48 plucks (31-330 Hz, 0.01-0.3, 1-20 ms attacks, short + sustained): onsets per pluck min %d, max %d\n", best, worst);
+    Check(best == 1 && worst == 1, "one pluck never triggers twice (and always once)");
+  }
+
+  // 4. Onsets never end or split a capture: attacks inside one continuous phrase.
+  {
+    Reset(); cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; Taps({2000}); RunFor(1.0f);
+    seen_acts = v.act_count_;
+    nt = NoteTrain{}; nt.from = n + 480; nt.gap = 14400; nt.count = 5; nt.hz = 110.f; nt.amp = 0.3f; nt.tau_s = 0.12f;
+    note_on = true;
+    const uint32_t oc0 = v.onset_count_, ac0 = v.act_count_;
+    RunFor(1.5f);
+    const uint32_t mid_onsets = v.onset_count_ - oc0;
+    const bool still_rec = v.recording_ && v.act_count_ == ac0;
+    RunFor(1.5f);
+    printf("      one phrase with 5 plucks, T = 2 s: %u onsets inside it, still one capture recording at 1.5 s: %d\n", mid_onsets, (int)still_rec);
+    Check(mid_onsets >= 4 && still_rec, "onsets inside a phrase never end or split the capture");
+    note_on = false; nt.count = 0; RunFor(1.5f);
+  }
+  Unhold();
+}
+
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; cs.sw[1] = 0; cs.sw[2] = 0;
@@ -1694,6 +1833,7 @@ int main() {
   TestSpeedXfade();
   TestFollowTape();
   TestFollowStretch();
+  TestOnsetRearm();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
   Check(bad == 0, "no non-finite / >10 samples");

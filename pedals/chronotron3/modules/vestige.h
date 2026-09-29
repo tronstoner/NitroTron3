@@ -105,6 +105,7 @@ class Vestige : public Module {
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
+    onset_refr_len_  = (int)((float)VESTIGE_ONSET_REFRACTORY_MS * 0.001f * sr_);
     tape_coef_ = 1.f - expf(-1.f / ((float)VESTIGE_TAPE_SMOOTH_MS * 0.001f * sr_));
     for (int q = 0; q < VESTIGE_SLOTS; q++) { rho_s_[q] = 1.f; rho_t_[q] = rho_d_[q] = 1.0; fwd_d_[q] = 0.0; div_[q] = -1; beat_k_[q] = 0.0; }
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
@@ -1473,9 +1474,32 @@ class Vestige : public Module {
   void IsrCapture(float x, uint32_t now) {
     if (drop_req_) { drop_req_ = false; IsrDrop(); }
     const float close = auto_thresh_ * VESTIGE_AUTO_HYST;
+    // Onset detector (sprawl's note-on idiom): the envelope jumping a RATIO
+    // above a slow baseline, above a floor tied to the K4 open threshold, with
+    // a refractory so one pluck is one onset. Runs every sample so its
+    // baseline never goes stale; it is USED only to lift the re-arm block.
+    onset_slow_ += VESTIGE_ONSET_SLOW_COEF * (env_ - onset_slow_);
+    if (onset_refr_ > 0) onset_refr_--;
+    const bool onset = (onset_refr_ == 0 && env_ > auto_thresh_ * VESTIGE_ONSET_FLOOR_REL &&
+                        env_ > onset_slow_ * VESTIGE_ONSET_RISE);
+    if (onset) { onset_refr_ = onset_refr_len_; onset_count_++; }
     if (!recording_) {
-      if (rearm_block_) {                         // after a ceiling stop: wait for the note to die
-        if (env_ < close) rearm_block_ = false;
+      if (rearm_block_) {                         // after a ceiling stop: wait for the note to die...
+        if (env_ < close) {
+          rearm_block_ = false;
+        } else if (onset) {
+          // ...or for a NEW attack. The old note may still be ringing above
+          // both levels, so level hysteresis cannot see it; the onset can. It
+          // starts the capture at this very sample — the new capture's "one".
+          // (It never ends or splits a capture: phrase ends stay on the level
+          // gate + the 80 ms silence.)
+          const int a = arm_slot_;
+          if (cap_allow_ && a >= 0 && PoolOf(a) == pool_) {
+            rearm_block_ = false;
+            onset_starts_++;
+            IsrStart(a, now);
+          }
+        }
       } else {
         const int a = arm_slot_;
         if (cap_allow_ && a >= 0 && PoolOf(a) == pool_ && env_ > auto_thresh_)
@@ -2391,7 +2415,12 @@ class Vestige : public Module {
   volatile bool drop_req_  = false;    // control -> ISR: drop in-flight + pending captures
   volatile bool end_req_   = false;    // control -> ISR: end the capture at the next sample
   volatile int  arm_slot_  = -1;       // control reserves (when -1), ISR consumes
-  bool     rearm_block_ = false;       // ceiling stop: hold off until env falls
+  bool     rearm_block_ = false;       // ceiling stop: hold off until env falls (or an onset)
+  float    onset_slow_  = 0.f;         // onset detector: slow envelope baseline
+  int      onset_refr_  = 0;           // samples until another onset can fire
+  int      onset_refr_len_ = 2400;     // refractory, samples (set from sr_ in Init)
+  uint32_t onset_count_  = 0;          // onsets detected (diag)
+  uint32_t onset_starts_ = 0;          // captures started by an onset lifting the block (diag)
   size_t   rec_stop_    = 0;           // record up to here (loop end + overhang); 0 = end unknown
   size_t   cap_ceil_    = 0;           // this capture's ceiling (latched T, or the freeze window)
   uint32_t sil_run_     = 0;           // consecutive below-close samples
