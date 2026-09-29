@@ -55,6 +55,7 @@
 // Requires daisy.h + hothouse.h + control_surface.h + knob_map.h included first.
 //
 #include "module.h"
+#include "constants.h"         // pedals/chronotron3 — CT3_DIAG
 #include "vestige_constants.h"
 #include "grain_voice.h"   // core/blocks — pulls in ring_buffer.h
 #include "mnemonic_degrade.h" // BBD/Tape degradation engine (folded in on K4)
@@ -181,6 +182,7 @@ class Vestige : public Module {
     const float k2  = RemapKnob(cs.Knob(1)); // T (master period) + direction (bipolar)
     const float k3  = RemapKnob(cs.Knob(2)); // RESERVED — error intensity
     const float k4  = RemapKnob(cs.Knob(3)); // capture sensitivity (gate threshold)
+    diag_k4_ = k4;                            // DIAG heartbeat only
     const float k5  = RemapKnob(cs.Knob(4)); // loop fade in/out
     const int   sw1 = cs.Switch(0);          // 0=UP 1-voice · 1=MID 6-voice · 2=DOWN freeze
     const int   sw2 = cs.Switch(1);          // TEMPORARY: follow mode (A tape / B stretch / C re-cut)
@@ -563,6 +565,13 @@ class Vestige : public Module {
       }
       // ---- Voiced / freeze capture: the sample-accurate machine -----------
       if (!fripp_mode_) IsrCapture(x, clk0 + (uint32_t)i);
+      // DIAG: meter trace every 20 ms while anything is sounding or capturing.
+      if (CT3_DIAG && ++diag_trace_ >= 960u) {
+        diag_trace_ = 0;
+        if (env_gate_ > 0.0005f || recording_)
+          DiagPush(GateDiag{'M', recording_ ? 'R' : '-', (uint8_t)rearm_block_, clk0 + (uint32_t)i,
+                            env_, env_gate_, onset_slow_, 0.f, 0u, 0u});
+      }
       // ---- K1 speed crossfade amount (smoothed; version swap at silence) --
       UpdateSpeedXfade();
       // ---- C re-cut: background build of the spare view's guard ---------
@@ -1667,7 +1676,12 @@ class Vestige : public Module {
     if (onset_refr_ > 0) onset_refr_--;
     const bool onset = (onset_refr_ == 0 && env_ > auto_thresh_ * VESTIGE_ONSET_FLOOR_REL &&
                         env_ > onset_slow_ * VESTIGE_ONSET_RISE);
-    if (onset) { onset_refr_ = onset_refr_len_; onset_count_++; }
+    if (onset) {
+      onset_refr_ = onset_refr_len_; onset_count_++;
+      if (CT3_DIAG) DiagPush(GateDiag{'O', recording_ ? 'R' : '-', (uint8_t)rearm_block_, now,
+                                      env_, onset_slow_, env_ / (onset_slow_ > 1e-9f ? onset_slow_ : 1e-9f),
+                                      env_gate_, 0u, 0u});
+    }
     const float g = env_gate_;                    // the gate's meter: start / silence / re-arm
     if (!recording_) {
       if (rearm_block_) {                         // after a capture end: wait for the note to die...
@@ -1675,6 +1689,7 @@ class Vestige : public Module {
         // (well below the close level), so a beating tail cannot re-open it.
         if (g < close * (VESTIGE_REARM_EVERY_END ? VESTIGE_REARM_DEEP : 1.f)) {
           rearm_block_ = false;
+          if (CT3_DIAG) DiagPush(GateDiag{'B', 'Q', 0, now, env_, g, 0.f, 0.f, 0u, 0u});   // lifted: quiet
         } else if (onset) {
           // ...or for a NEW attack. The old note may still be ringing above
           // both levels, so level hysteresis cannot see it; the onset can. It
@@ -1685,13 +1700,17 @@ class Vestige : public Module {
           if (cap_allow_ && a >= 0 && PoolOf(a) == pool_) {
             rearm_block_ = false;
             onset_starts_++;
+            if (CT3_DIAG) DiagPush(GateDiag{'B', 'O', 0, now, env_, g, 0.f, 0.f, 0u, 0u});   // lifted: onset
+            diag_why_ = 'O';
             IsrStart(a, now);
           }
         }
       } else {
         const int a = arm_slot_;
-        if (cap_allow_ && a >= 0 && PoolOf(a) == pool_ && g > auto_thresh_)
+        if (cap_allow_ && a >= 0 && PoolOf(a) == pool_ && g > auto_thresh_) {
+          diag_why_ = 'L';
           IsrStart(a, now);
+        }
       }
     }
     if (recording_) {
@@ -1722,6 +1741,7 @@ class Vestige : public Module {
         // End not decided yet: request, ceiling, or sustained silence.
         if (end_req_) {
           end_req_ = false;
+          diag_end_ = 'R';
           IsrDecide(s, rec_idx_, now);
         } else if (rec_idx_ >= cap_ceil_) {
           // The note is usually still ringing when the ceiling cuts the
@@ -1733,11 +1753,13 @@ class Vestige : public Module {
           // ceiling first. If the FAST meter shows the sound already stopped,
           // this is really a phrase end: record its true length, not T.
           const bool ended = (VESTIGE_GATE_ENV_MODE != 0) && env_ < close && last_loud_ + 1 < rec_idx_;
+          diag_end_ = ended ? 'c' : 'C';          // C = ceiling, c = ceiling but the sound had ended
           IsrDecide(s, (ended && PoolOf(s) == kPoolLoop) ? last_loud_ + 1 : rec_idx_, now);
         } else if (g < close) {
           if (sil_run_ == 0) sil_onset_ = r;      // this sample is the first silent one
           if (++sil_run_ >= release_samples_) {
             if (VESTIGE_REARM_EVERY_END) rearm_block_ = true;   // next capture: onset or real quiet
+            diag_end_ = 'S';
             const size_t raw_end = (VESTIGE_GATE_ENV_MODE == 0) ? sil_onset_ : last_loud_ + 1;
             IsrDecide(s, (PoolOf(s) == kPoolLoop) ? raw_end : rec_idx_, now);
           }
@@ -1752,6 +1774,9 @@ class Vestige : public Module {
   }
 
   void IsrStart(int s, uint32_t now) {
+    if (CT3_DIAG) DiagPush(GateDiag{'S', diag_why_, (uint8_t)PoolOf(s), now, env_, env_gate_,
+                                    auto_thresh_, auto_thresh_ * VESTIGE_AUTO_HYST, (uint32_t)period_, 0u});
+    diag_why_ = '?';
     KillSlotGrains(s);                  // zombie grains from the slot's last life (audio thread owns grains)
     rec_slot_  = s;
     rec_idx_   = 0;
@@ -1786,6 +1811,9 @@ class Vestige : public Module {
     }
     cap_raw_[s] = raw;
     cap_decide_at_[s] = now;           // diagnostics / host test: when the end was known
+    if (CT3_DIAG) DiagPush(GateDiag{'E', diag_end_, (uint8_t)rearm_block_, now, env_, env_gate_,
+                                    0.f, 0.f, (uint32_t)raw, (uint32_t)Q});
+    diag_end_ = '?';
     cap_len_[s] = Q;
     float* m = slab_[s];
     const size_t xf = SeamXfadeLen(Q);
@@ -2653,6 +2681,39 @@ class Vestige : public Module {
   int      last_act_slot_ = -1;
   uint32_t last_act_at_   = 0;
   uint32_t cap_decide_at_[VESTIGE_SLOTS] = {};   // diagnostics: sample the capture's end was decided
+
+  // ---- DIAG (CT3_DIAG builds only): capture-gate event log ------------------
+  // The audio thread pushes fixed-size records into a single-producer /
+  // single-consumer ring; the main loop pops ONE per 10 ms tick and prints it
+  // (the logger drops bursts). Observation only: nothing here feeds back into
+  // the gate. In a normal build CT3_DIAG is constexpr false, every push is dead
+  // code and the ring is one element.
+ public:
+  struct GateDiag { char kind; char why; uint8_t flag; uint32_t t; float a, b, c, d; uint32_t u, w; };
+  bool DiagPop(GateDiag& out) {
+    const uint32_t h = diag_head_;
+    if (diag_tail_ == h) return false;
+    out = diag_ring_[diag_tail_ & (kDiagN - 1)];
+    diag_tail_ = diag_tail_ + 1;
+    return true;
+  }
+  uint32_t DiagDrops() const { return diag_drops_; }
+  float    DiagK4()    const { return diag_k4_; }
+  float    DiagOpen()  const { return auto_thresh_; }
+  size_t   DiagT()     const { return period_; }
+ private:
+  static constexpr uint32_t kDiagN = CT3_DIAG ? 512u : 1u;   // power of two
+  GateDiag diag_ring_[kDiagN] = {};
+  volatile uint32_t diag_head_ = 0, diag_tail_ = 0, diag_drops_ = 0;
+  float    diag_k4_ = 0.f;
+  char     diag_why_ = '?', diag_end_ = '?';
+  uint32_t diag_trace_ = 0;
+  void DiagPush(const GateDiag& r) {
+    const uint32_t h = diag_head_;
+    if (h - diag_tail_ >= kDiagN) { diag_drops_ = diag_drops_ + 1; return; }
+    diag_ring_[h & (kDiagN - 1)] = r;
+    diag_head_ = h + 1;
+  }
   uint32_t act_count_     = 0;
 
   // C re-cut (ISR-owned). play_len_ = the pass length in effect (== loop_len_

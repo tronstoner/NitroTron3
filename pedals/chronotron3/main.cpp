@@ -204,6 +204,46 @@ int main() {
       }
     }
 
+    // Vestige capture-gate log (DIAG builds only). One record per 10 ms tick —
+    // the logger drops bursts — plus a heartbeat every 2 s. Levels are printed
+    // x100000 as integers (1 = 0.00001), since %f does not exist here and F3's
+    // three decimals would flatten the quiet end of the meter to 0.000.
+    //   M t f= g= base= R|- b0|1   meter trace every 20 ms (fast, gate, onset baseline, recording, re-arm block)
+    //   O t f= base= r= g= ...     onset detected (r = fast / baseline)
+    //   S t why=L|O side= ...      capture start (L = level gate, O = onset)
+    //   E t why=S|C|c|R raw= Q=    capture end (S silence, C ceiling, c ceiling after the sound ended, R request)
+    //   B t lift=Q|O               re-arm block lifted (Q = went quiet, O = onset)
+    if (CT3_DIAG && g_active == CT3_MODE_VESTIGE) {
+      static uint32_t vs_hb = 0;
+      static bool vs_banner = false;
+      const uint32_t now = System::GetNow();
+      auto L = [](float x) -> unsigned {
+        return (x > 0.f && x < 40000.f) ? (unsigned)(x * 100000.f + 0.5f) : 0u;
+      };
+      if (!vs_banner) {
+        hw.seed.PrintLine("VS DIAG online (DIAG=1 build), levels x100000");
+        vs_banner = true; vs_hb = now;
+      } else if (now - vs_hb >= 2000) {
+        vs_hb = now;
+        hw.seed.PrintLine("VS HB t=%u k4=%s open=%u close=%u T=%u drops=%u", (unsigned)now,
+            F3(vestige.DiagK4()), L(vestige.DiagOpen()), L(vestige.DiagOpen() * VESTIGE_AUTO_HYST),
+            (unsigned)vestige.DiagT(), (unsigned)vestige.DiagDrops());
+      } else {
+        Vestige::GateDiag r;
+        if (vestige.DiagPop(r)) {
+          const unsigned tms = r.t / 48u;
+          switch (r.kind) {
+          case 'M': hw.seed.PrintLine("M %u f=%u g=%u base=%u %c b%d", tms, L(r.a), L(r.b), L(r.c), r.why, r.flag); break;
+          case 'O': hw.seed.PrintLine("O %u f=%u base=%u r=%s g=%u %c b%d", tms, L(r.a), L(r.b), F3(r.c), L(r.d), r.why, r.flag); break;
+          case 'S': hw.seed.PrintLine("S %u why=%c side=%d f=%u g=%u open=%u close=%u T=%u", tms, r.why, r.flag, L(r.a), L(r.b), L(r.c), L(r.d), (unsigned)r.u); break;
+          case 'E': hw.seed.PrintLine("E %u why=%c raw=%u Q=%u f=%u g=%u b%d", tms, r.why, (unsigned)r.u, (unsigned)r.w, L(r.a), L(r.b), r.flag); break;
+          case 'B': hw.seed.PrintLine("B %u lift=%c f=%u g=%u", tms, r.why, L(r.a), L(r.b)); break;
+          default: break;
+          }
+        }
+      }
+    }
+
     // Reserved gesture: both footswitches held → Daisy bootloader (DFU).
     // The pedal is sealed; this is the only entry path.
     if (cs.BothHeld(CT3_BOOTLOADER_HOLD_MS)) {

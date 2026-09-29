@@ -115,3 +115,23 @@ Read that block if a field is missing here; it is the source of truth.
 - Check **MAGNITUDE, not just finiteness.** The module's own guard catches
   `nan`/`inf`; the ReadFrac bug produced a huge *finite* value that walked
   straight through it. Any new check must test the magnitude too.
+
+## Vestige capture-gate log
+
+The same DIAG build also logs vestige's capture gate while **SW3 = vestige (UP)**.
+Capture with `NAME=vestige tools/diag/capture.sh` (file `vestige-*.log`). It is a
+continuous log, not a fault snapshot: play normally and let notes ring out.
+Levels are printed x100000 as integers. Line key (also in `main.cpp`):
+
+- `M t f= g= base= R|- b0|1` — meter trace every 20 ms while anything sounds:
+  fast meter, gate meter, onset baseline, recording, re-arm block.
+- `O t f= base= r= ...` — onset detected; `r` = fast / baseline (fires at >= 1.8).
+- `S t why=L|O ...` — capture start: `L` level gate, `O` onset.
+- `E t why=S|C|c|R raw= Q=` — capture end: silence, ceiling, ceiling after the
+  sound had ended, request.
+- `B t lift=Q|O` — re-arm block lifted: went quiet, or onset.
+- `VS HB ...` every 2 s — K4, open/close levels, T, dropped records.
+
+A rapid misfire on one ringing note shows as `S` lines close together: their
+`why=` says which path fired, and the `M` lines before them show the level shape.
+

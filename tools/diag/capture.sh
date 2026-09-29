@@ -13,7 +13,7 @@
 set -euo pipefail
 DEV="${1:-$(ls /dev/cu.usbmodem* 2>/dev/null | head -1)}"
 [ -n "$DEV" ] || { echo "no /dev/cu.usbmodem* device (is the pedal connected?)" >&2; exit 1; }
-OUT="sprawl-$(date +%Y%m%d-%H%M).log"
+OUT="${NAME:-sprawl}-$(date +%Y%m%d-%H%M).log"   # NAME=vestige tools/diag/capture.sh
 echo "capturing $DEV -> $OUT  (Ctrl-C to stop)"
 stty -f "$DEV" 115200 raw -echo
 cat "$DEV" | while IFS= read -r l; do printf '%s %s\n' "$(date +%T)" "$l"; done | tee "$OUT"
