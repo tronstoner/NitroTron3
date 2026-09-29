@@ -279,6 +279,25 @@ static constexpr uint32_t VESTIGE_FS_HOLD_MS    = 700;  // >= this while held = 
 // Auto capture (always on for SW1 UP / MIDDLE / DOWN while engaged and not held)
 // ---------------------------------------------------------------------------
 static constexpr float    VESTIGE_ENV_COEF        = 0.008f; // input |env| one-pole (~60 Hz; 0.002 was too lazy for onsets/short samples)
+// Gate meter: what the capture gate reads for its start, phrase-end (silence)
+// and re-arm decisions.
+//   0 = env_ itself (the behaviour before 2026-09-29)
+//   1 = fix A: follows env_ up instantly, falls slowly (VESTIGE_GATE_RELEASE_MS)
+//   2 = fix B: peak hold — not implemented yet
+// Why: env_ is a ~61 Hz one-pole, so on LOW notes it still carries the rectified
+// ripple at twice the note frequency — ~2.3x peak to valley at 41 Hz, ~2.8x at
+// 31 Hz. That is more than the gate's 1/VESTIGE_AUTO_HYST = 1.8x hysteresis, so
+// near threshold it crosses BOTH levels every ripple cycle: the 80 ms silence
+// never builds up (captures run on to the T ceiling), and the ripple peaks
+// re-open the gate on the decaying tail (the same note captured again).
+// The onset detector and the phrase-end TIMESTAMP stay on the fast env_, so
+// onset timing and recorded lengths are unchanged; only the gate's decisions
+// use the gate meter. Mode 1's cost: phrase ends are decided later, so two stabs
+// need a longer pause between them to become two captures.
+static constexpr int      VESTIGE_GATE_ENV_MODE   = 1;
+static constexpr float    VESTIGE_GATE_RELEASE_MS = 40.f;   // mode 1: fall time constant
+static_assert(VESTIGE_GATE_ENV_MODE == 0 || VESTIGE_GATE_ENV_MODE == 1,
+              "VESTIGE_GATE_ENV_MODE 2 (peak hold) is not implemented yet");
 static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K4 CCW: sensitive
 static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K4 CW:  insensitive
 static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold = open * hyst

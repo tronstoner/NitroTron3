@@ -620,7 +620,7 @@ template <class F> static int BestLag(long at, int N, int maxlag, F ref, float* 
   *corr_out = (float)bc; return best;
 }
 
-struct CapRec { int s; long A; size_t Q, raw, T; long act; uint32_t phase; };
+struct CapRec { int s; long A; size_t Q, raw, T; long act; uint32_t phase; long dec; };
 static uint32_t seen_acts = 0;
 // Wait (up to `secs`) for the next activation; fills a record from the module.
 static bool WaitActivation(float secs, CapRec* r) {
@@ -631,7 +631,7 @@ static bool WaitActivation(float secs, CapRec* r) {
       seen_acts = v.act_count_;
       const int s = v.last_act_slot_;
       *r = CapRec{s, (long)v.cap_start_[s], v.cap_len_[s], v.cap_raw_[s], v.cap_T_[s],
-                  (long)v.last_act_at_, v.act_phase_[s]};
+                  (long)v.last_act_at_, v.act_phase_[s], (long)v.cap_decide_at_[s]};
       return true;
     }
   }
@@ -726,7 +726,10 @@ static void TestQuantisedCapture() {
     if (r.Q < r.raw) saw_down = true;
     // On its grid: entered at phase (act - A) mod Q; on time = exactly A+Q, phase 0.
     if ((uint32_t)((size_t)(r.act - r.A) % r.Q) != r.phase || r.act < r.A + (long)r.Q) phase_ok = false;
-    const bool decided_early = (c.want == 0) || (r.Q > r.raw + VESTIGE_AUTO_RELEASE_MS * 48);
+    // "Known before the boundary" = the module actually decided the end at or
+    // before A + Q. (The old rule, raw + 80 ms < Q, assumed the gate meter falls
+    // instantly; with VESTIGE_GATE_ENV_MODE 1 the decision comes later.)
+    const bool decided_early = (r.dec - r.A) <= (long)r.Q;
     if (decided_early && !(r.act == r.A + (long)r.Q && r.phase == 0)) on_time_ok = false;
     if (c.want < 0) {
       // Truncated for real: nothing past Q is readable as loop — the cells a
@@ -1833,6 +1836,54 @@ static void TestOnsetRearm() {
 }
 
 // ---------------------------------------------------------------------------
+// The gate meter (VESTIGE_GATE_ENV_MODE). What it is FOR: a decaying low note is
+// captured exactly once. What it COSTS: the pause two stabs need between them to
+// become two captures — measured, not asserted, so the modes can be compared.
+static void TestGateMeter() {
+  printf("-- gate meter (VESTIGE_GATE_ENV_MODE %d)\n", VESTIGE_GATE_ENV_MODE);
+  const float hzs[] = {30.9f, 41.2f, 110.f};
+  for (float hz : hzs) {
+    Reset(); cs.sw[0] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
+    seen_acts = v.act_count_;
+    nt = NoteTrain{}; nt.from = n + 480; nt.gap = 48000 * 20; nt.count = 1; nt.hz = hz;
+    nt.amp = 0.3f; nt.atk_s = 0.002f; nt.tau_s = 1.5f;
+    note_on = true;
+    const uint32_t ac0 = v.act_count_;
+    RunFor(6.0f);
+    const uint32_t caps = v.act_count_ - ac0;
+    printf("      one decaying %5.1f Hz note, T = 300 ms: %u capture(s)\n", hz, caps);
+    if (VESTIGE_GATE_ENV_MODE != 0) {
+      char msg[160];
+      snprintf(msg, sizeof msg, "a decaying %.1f Hz note is captured exactly once (no tail re-capture)", hz);
+      Check(caps == 1, msg);
+    }
+    note_on = false; nt.count = 0; RunFor(1.0f);
+  }
+
+  // Stab separation: two 60 ms noise stabs, gap g, T = 2 s (no ceiling).
+  const int gaps_ms[] = {60, 80, 100, 120, 150, 200, 250, 300, 400};
+  int min_gap = -1;
+  printf("      two 60 ms stabs -> captures, by pause:");
+  for (int g : gaps_ms) {
+    Reset(); cs.sw[0] = 1; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; Taps({2000}); RunFor(1.0f);
+    seen_acts = v.act_count_;
+    const uint32_t ac0 = v.act_count_;
+    const long a0 = n + 480, a1 = a0 + 2880;
+    noise_from = a0; noise_to = a1;
+    while (n < a1 + 48) RunFor(0.001f);
+    noise_from = a1 + (long)g * 48; noise_to = noise_from + 2880;
+    RunFor(4.0f);
+    noise_from = noise_to = -1;
+    const uint32_t caps = v.act_count_ - ac0;
+    printf(" %d ms:%u", g, caps);
+    if (caps >= 2 && min_gap < 0) min_gap = g;
+    RunFor(0.5f);
+  }
+  printf("\n      shortest pause that gives two separate loops: %d ms\n", min_gap);
+  Unhold();
+}
+
+// ---------------------------------------------------------------------------
 // Loops follow T — C: re-cut (SW2 DOWN), non-destructive.
 static uint64_t RowHash(int s, size_t n_) { return Hash(v.slab_[s], n_); }
 // Expected clean output for the next N samples: the head at rate 1 through the
@@ -2164,6 +2215,7 @@ int main() {
   TestFollowTape();
   TestFollowStretch();
   TestOnsetRearm();
+  TestGateMeter();
   TestFollowRecut();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);

@@ -111,6 +111,7 @@ class Vestige : public Module {
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
+    gate_rel_coef_   = 1.f - expf(-1.f / (VESTIGE_GATE_RELEASE_MS * 0.001f * sr_)); // gate meter fall (mode 1)
     onset_refr_len_  = (int)((float)VESTIGE_ONSET_REFRACTORY_MS * 0.001f * sr_);
     tape_coef_ = 1.f - expf(-1.f / ((float)VESTIGE_TAPE_SMOOTH_MS * 0.001f * sr_));
     for (int q = 0; q < VESTIGE_SLOTS; q++) { rho_s_[q] = 1.f; rho_t_[q] = rho_d_[q] = 1.0; fwd_d_[q] = 0.0; div_[q] = -1; beat_k_[q] = 0.0; }
@@ -440,6 +441,15 @@ class Vestige : public Module {
       // ---- Input envelope (drives continuous-auto gate) -------------------
       float a = fabsf(x);
       env_ += VESTIGE_ENV_COEF * (a - env_);
+      // Gate meter (see VESTIGE_GATE_ENV_MODE). Mode 1 follows env_ UP at once,
+      // so a capture starts on the same sample as before, but falls slowly, so
+      // the low-note ripple on env_ cannot cross the close and open levels.
+      if (VESTIGE_GATE_ENV_MODE == 1) {
+        if (env_ > env_gate_) env_gate_ = env_;
+        else                  env_gate_ += gate_rel_coef_ * (env_ - env_gate_);
+      } else {
+        env_gate_ = env_;
+      }
 
       // ---- Recording ------------------------------------------------------
       if (recording_ && fripp_mode_) {   // ARCHIVED frippertronics recorder only
@@ -1658,9 +1668,10 @@ class Vestige : public Module {
     const bool onset = (onset_refr_ == 0 && env_ > auto_thresh_ * VESTIGE_ONSET_FLOOR_REL &&
                         env_ > onset_slow_ * VESTIGE_ONSET_RISE);
     if (onset) { onset_refr_ = onset_refr_len_; onset_count_++; }
+    const float g = env_gate_;                    // the gate's meter: start / silence / re-arm
     if (!recording_) {
       if (rearm_block_) {                         // after a ceiling stop: wait for the note to die...
-        if (env_ < close) {
+        if (g < close) {
           rearm_block_ = false;
         } else if (onset) {
           // ...or for a NEW attack. The old note may still be ringing above
@@ -1677,7 +1688,7 @@ class Vestige : public Module {
         }
       } else {
         const int a = arm_slot_;
-        if (cap_allow_ && a >= 0 && PoolOf(a) == pool_ && env_ > auto_thresh_)
+        if (cap_allow_ && a >= 0 && PoolOf(a) == pool_ && g > auto_thresh_)
           IsrStart(a, now);
       }
     }
@@ -1701,6 +1712,10 @@ class Vestige : public Module {
         }
         rec_idx_ = r + 1;
       }
+      // Where the sound last reached the close level, on the FAST meter. With a
+      // slow gate meter the silence is detected later than it began; the
+      // recorded length must not grow by that delay.
+      if (env_ >= close) last_loud_ = r;
       if (E == 0) {
         // End not decided yet: request, ceiling, or sustained silence.
         if (end_req_) {
@@ -1711,11 +1726,18 @@ class Vestige : public Module {
           // capture: block re-arming until the envelope has fallen below the
           // close threshold, so the next loop starts on a fresh onset.
           rearm_block_ = true;
-          IsrDecide(s, rec_idx_, now);
-        } else if (env_ < close) {
+          // Mode 1: the slow gate meter decides a phrase end later than it
+          // happened, so a phrase that ended shortly before T reaches the
+          // ceiling first. If the FAST meter shows the sound already stopped,
+          // this is really a phrase end: record its true length, not T.
+          const bool ended = (VESTIGE_GATE_ENV_MODE != 0) && env_ < close && last_loud_ + 1 < rec_idx_;
+          IsrDecide(s, (ended && PoolOf(s) == kPoolLoop) ? last_loud_ + 1 : rec_idx_, now);
+        } else if (g < close) {
           if (sil_run_ == 0) sil_onset_ = r;      // this sample is the first silent one
-          if (++sil_run_ >= release_samples_)
-            IsrDecide(s, (PoolOf(s) == kPoolLoop) ? sil_onset_ : rec_idx_, now);
+          if (++sil_run_ >= release_samples_) {
+            const size_t raw_end = (VESTIGE_GATE_ENV_MODE == 0) ? sil_onset_ : last_loud_ + 1;
+            IsrDecide(s, (PoolOf(s) == kPoolLoop) ? raw_end : rec_idx_, now);
+          }
         } else {
           sil_run_ = 0;
         }
@@ -1732,7 +1754,7 @@ class Vestige : public Module {
     rec_idx_   = 0;
     cap_len_[s] = 0;
     rec_stop_  = 0;
-    sil_run_   = 0; sil_onset_ = 0;
+    sil_run_   = 0; sil_onset_ = 0; last_loud_ = 0;
     end_req_   = false;                 // a stale request must not end this capture
     cap_start_[s] = now;
     const bool loop = (PoolOf(s) == kPoolLoop);
@@ -1760,6 +1782,7 @@ class Vestige : public Module {
       if (Q > cap_ceil_)                Q = cap_ceil_;
     }
     cap_raw_[s] = raw;
+    cap_decide_at_[s] = now;           // diagnostics / host test: when the end was known
     cap_len_[s] = Q;
     float* m = slab_[s];
     const size_t xf = SeamXfadeLen(Q);
@@ -2587,6 +2610,8 @@ class Vestige : public Module {
   uint32_t silence_since_= 0;
   float    auto_thresh_  = VESTIGE_AUTO_THRESH_MIN;
   float    env_          = 0.f;
+  float    env_gate_     = 0.f;          // the gate's meter (VESTIGE_GATE_ENV_MODE)
+  float    gate_rel_coef_ = 0.f;         // its fall coefficient (mode 1), set in Init
 
   int blink_ = 0;
 
@@ -2605,6 +2630,7 @@ class Vestige : public Module {
   size_t   cap_ceil_    = 0;           // this capture's ceiling (latched T, or the freeze window)
   uint32_t sil_run_     = 0;           // consecutive below-close samples
   size_t   sil_onset_   = 0;           // index where the current silence began
+  size_t   last_loud_   = 0;           // last index where the FAST meter reached the close level
   uint32_t release_samples_ = (uint32_t)(VESTIGE_AUTO_RELEASE_MS * 48);  // set from sr_ in Init
   uint32_t cap_start_[VESTIGE_SLOTS] = {0};   // capture start sample = its grid's "one"
   size_t   cap_T_[VESTIGE_SLOTS]     = {0};   // T latched at that start (loop side)
@@ -2623,6 +2649,7 @@ class Vestige : public Module {
   // Diagnostics (host test): the last activation.
   int      last_act_slot_ = -1;
   uint32_t last_act_at_   = 0;
+  uint32_t cap_decide_at_[VESTIGE_SLOTS] = {};   // diagnostics: sample the capture's end was decided
   uint32_t act_count_     = 0;
 
   // C re-cut (ISR-owned). play_len_ = the pass length in effect (== loop_len_
