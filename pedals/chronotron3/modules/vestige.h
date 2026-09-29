@@ -2798,9 +2798,13 @@ class Vestige : public Module {
       led1.Set(0.f);
     }
 
-    if (recording_)  led2.Set(1.f);
-    else if (held_)  led2.Set(slow ? 1.f : 0.f);
-    else             led2.Set(0.f);
+    // LED2 = the effect's state (builder's spec, 2026-09-29):
+    //   recording -> rapid flicker · held -> slow blink · on -> solid · off -> dark
+    const bool flicker = ((blink_ / VESTIGE_BLINK_FLICKER) & 1) != 0;
+    if (recording_)     led2.Set(flicker ? 1.f : 0.f);
+    else if (held_)     led2.Set(slow ? 1.f : 0.f);
+    else if (engaged_)  led2.Set(1.f);
+    else                led2.Set(0.f);
   }
 
   // -------------------------------------------------------------------------

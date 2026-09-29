@@ -3471,6 +3471,24 @@ int main() {
     Check(v.err_level_[0] == t, "back on timing: its level was kept");
     // leave the editor neutral for anything after this
     v.err_level_[0] = v.err_level_[1] = v.err_level_[2] = 0.f; cs.knob[2] = 0.5f; RunFor(0.1f); }
+  // LED2 = effect state: off dark, on solid, recording rapid flicker, held slow blink.
+  { printf("-- LED2\n");
+    auto Sample = [](float secs, int& ons, int& toggles) {   // LED2 over secs, per 10 ms tick
+      ons = 0; toggles = 0; bool prev = led2.v > 0.5f;
+      for (int i = 0; i < (int)(secs * 100.f); i++) { RunFor(0.01f); const bool on = led2.v > 0.5f; if (on) ons++; if (on != prev) toggles++; prev = on; }
+    };
+    int ons, tg;
+    Reset(); Unhold(); if (v.engaged_) Tap(); RunFor(0.5f);
+    Sample(0.5f, ons, tg); Check(!v.engaged_ && ons == 0, "LED2 dark while the effect is off");
+    Engage(); RunFor(0.2f);
+    Sample(0.5f, ons, tg); Check(v.engaged_ && !v.recording_ && ons == 50 && tg == 0, "LED2 solid while on and not recording");
+    Taps({2000}); sustain_hz = 110.f; sustain_input = true; play_input = true; RunFor(0.1f);
+    Sample(0.4f, ons, tg); const bool rec = v.recording_;
+    sustain_input = false; play_input = false; RunFor(1.0f);
+    Check(rec && tg >= 8 && ons > 5 && ons < 35, "LED2 flickers rapidly while recording");
+    Hold(); Sample(2.0f, ons, tg);
+    Check(v.held_ && tg >= 2 && tg <= 6, "LED2 blinks slowly while held");
+    Unhold(); RunFor(0.3f); }
   { const int before = v.follow_mode_; cs.sw[1] = 2; RunFor(0.1f); cs.sw[1] = 0; RunFor(0.1f);
     Check(v.follow_mode_ == before && v.follow_mode_ == v.follow_mode_cfg_, "SW2 no longer selects the follow mode"); }
   { Vestige fresh; Check(fresh.follow_mode_cfg_ == VESTIGE_FOLLOW_MODE && VESTIGE_FOLLOW_MODE == Vestige::kFollowStretch,
