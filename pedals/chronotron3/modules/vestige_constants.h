@@ -408,6 +408,16 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 //   2 = re-cut (cut / pad the end, non-destructive)
 static constexpr int      VESTIGE_FOLLOW_MODE    = 1;
 
+// ---- Stage 2.5: the error editor (TEMPORARY development UI, plan §6) --------
+// SW2 selects which error type K3 edits: UP timing · MIDDLE condition · DOWN
+// playback. K3 edits that type's stored level (0..1) — it is NOT an absolute
+// knob. JUMP pickup: the level snaps to the knob as soon as the knob moves more
+// than VESTIGE_ERR_K3_EPS from where it was when this type was selected; moving
+// SW2 alone changes nothing. All three levels stay live at once. They live in RAM
+// and start at 0 (no errors): values found by ear go into constants later, and
+// the editor is replaced by curated presets in stage 7.
+static constexpr float    VESTIGE_ERR_K3_EPS     = 0.02f;  // raw knob travel (= VESTIGE_K2_MOVE_EPS)
+
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC
 // jitter would otherwise reach every following loop as pitch warble (at mid
