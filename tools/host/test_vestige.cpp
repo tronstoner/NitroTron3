@@ -2341,8 +2341,9 @@ static void TestFollowRecut() {
 }
 
 // ---------------------------------------------------------------------------
-// Stage 3: the TIMING error — a Euclidean pattern inside a pass.
-struct PassRec { long start; int pat; int rot; uint32_t mask; std::vector<long> hits_el; std::vector<long> hits_at; };
+// Stage 3: the TIMING error — a steady Euclidean groove inside a pass.
+struct PassRec { long start; int pat; int rot; uint32_t mask; uint32_t base; int brot; int var;
+                 std::vector<long> hits_el; std::vector<long> hits_at; };
 struct TrigLog { std::vector<PassRec> passes; };
 // Run per sample for `passes` wraps of slot s; per pass: its pattern and every
 // restart (elapsed samples from the pass start, absolute sample).
@@ -2355,6 +2356,7 @@ static TrigLog RunPasses(int s, int passes, float max_secs = 60.f) {
     if (v.pass_[s] != pp) {
       pp = v.pass_[s];
       PassRec r; r.start = n - 1; r.pat = v.cur_pat_[s]; r.rot = v.cur_rot_[s]; r.mask = v.cur_mask_[s];
+      r.base = v.base_mask_[s]; r.brot = v.base_rot_[s]; r.var = v.cur_var_[s];
       lg.passes.push_back(r);
     }
     if (v.timing_trigs_ != tc) {
@@ -2371,32 +2373,66 @@ static TrigLog RunPasses(int s, int passes, float max_secs = 60.f) {
 }
 static std::string MaskStr(uint32_t m, int n) { std::string r; for (int i = 0; i < n; i++) r += (m & (1u << i)) ? 'x' : '.'; return r; }
 static uint32_t RotMask(uint32_t m, int n, int h) { uint32_t r = 0; for (int i = 0; i < n; i++) if (m & (1u << ((i + h) % n))) r |= 1u << i; return r; }
-// The window of patterns a level may pick from (before the short-loop guard).
-static bool InWindow(int pat, float level) {
-  const int c = (int)(level * (float)(VESTIGE_TIMING_PATTERNS - 1) + 0.5f);
-  return pat >= c - 1 && pat <= c + 1 && pat >= 0 && pat < VESTIGE_TIMING_PATTERNS;
+static int Pop(uint32_t m) { int c = 0; while (m) { c += m & 1u; m >>= 1; } return c; }
+// The test's own model of the level -> pattern rule: list position round(L*9);
+// short-loop guard = densest fitting at or below, else sparsest fitting above.
+static int WantBase(float level) { return (int)(level * (float)(VESTIGE_TIMING_PATTERNS - 1) + 0.5f); }
+static int WantFit(float level, double pass_out) {
+  const double min_step = VESTIGE_TIMING_MIN_STEP_MS * 0.001 * sr;
+  const int b = WantBase(level);
+  for (int i = b; i >= 0; i--) if (pass_out / VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+  for (int i = b + 1; i < VESTIGE_TIMING_PATTERNS; i++) if (pass_out / VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+  return -1;
 }
-// Pass records are correct for slot s with play length L: a pattern from the
-// window, a rotation starting on a hit, and restarts exactly at
-// round(L * i / n) for its hit steps i != 0 (output = material at rate 1).
-static int CheckPasses(const TrigLog& lg, size_t L, float level, bool rate1, int* fired, int* pattern_bad) {
-  int bad = 0; *fired = 0; *pattern_bad = 0;
-  for (const PassRec& r : lg.passes) {
-    if (r.pat < 0) { if (!r.hits_el.empty()) bad++; continue; }
-    (*fired)++;
-    if (!InWindow(r.pat, level)) (*pattern_bad)++;
-    const int nst = VESTIGE_TIMING_PAT_STEPS[r.pat];
-    if (!(r.mask & 1u) || r.mask != RotMask(v.timing_mask_[r.pat], nst, r.rot)) (*pattern_bad)++;
-    std::vector<long> want;
-    for (int i = 1; i < nst; i++) if (r.mask & (1u << i)) want.push_back((long)((double)L * i / nst + 0.5));
-    if (want.size() != r.hits_el.size()) { bad++; continue; }
-    if (rate1) for (size_t k = 0; k < want.size(); k++) if (r.hits_el[k] != want[k]) bad++;
+struct PassStats {
+  int passes = 0, played = 0, var = 0, eligible = 0, eligible_var = 0, add = 0, drop = 0, rot = 0;
+  int bad_pat = 0, bad_base = 0, bad_var = 0, bad_hits = 0, bad_step0 = 0, var_twice = 0, rot_moved = 0;
+  bool ok() const { return bad_pat + bad_base + bad_var + bad_hits + bad_step0 + var_twice + rot_moved == 0; }
+};
+// Every pass of slot s (play length L) against the model: the expected pattern
+// (want, -1 = none), its base = the table mask in ONE hit-starting rotation
+// fixed across the log, the pass = the base or exactly one variation (one hit
+// added / dropped off step 0, or another hit-starting rotation) — classified
+// from the masks, and the module's own label must agree — never two variation
+// passes running, step 0 always a hit, and restarts exactly at round(L*i/n)
+// (rate1; else only their count).
+static PassStats CheckPasses(const TrigLog& lg, size_t L, int want, bool rate1) {
+  PassStats st;
+  for (size_t p = 0; p < lg.passes.size(); p++) {
+    const PassRec& r = lg.passes[p]; st.passes++;
+    if (r.pat != want) st.bad_pat++;
+    if (r.pat < 0) { if (!r.hits_el.empty()) st.bad_hits++; continue; }
+    st.played++;
+    const int nst = VESTIGE_TIMING_PAT_STEPS[r.pat]; const uint32_t tm = v.timing_mask_[r.pat];
+    if (!(tm & (1u << r.brot)) || r.base != RotMask(tm, nst, r.brot)) st.bad_base++;
+    if (!(r.mask & 1u)) st.bad_step0++;
+    if (p > 0 && lg.passes[p - 1].pat == r.pat && lg.passes[p - 1].brot != r.brot) st.rot_moved++;
+    const uint32_t d = r.mask ^ r.base; int cls = 0;
+    if (d == 0) cls = 0;
+    else if (Pop(d) == 1 && !(d & 1u) && (d & r.mask)) cls = 1;          // added
+    else if (Pop(d) == 1 && !(d & 1u) && (d & r.base)) cls = 2;          // dropped
+    else { cls = -1; for (int h = 0; h < nst; h++) if ((tm & (1u << h)) && RotMask(tm, nst, h) == r.mask) cls = 3; }
+    if (cls < 0 || cls != r.var) st.bad_var++;
+    if (cls == 3 && (!(tm & (1u << r.rot)) || RotMask(tm, nst, r.rot) != r.mask)) st.bad_var++;
+    if (cls > 0) { st.var++; if (cls == 1) st.add++; if (cls == 2) st.drop++; if (cls == 3) st.rot++; }
+    if (p > 0) {
+      if (lg.passes[p - 1].var == 0) { st.eligible++; if (cls > 0) st.eligible_var++; }
+      else if (cls != 0) st.var_twice++;
+    }
+    std::vector<long> w;
+    for (int i = 1; i < nst; i++) if (r.mask & (1u << i)) w.push_back((long)((double)L * i / nst + 0.5));
+    if (w.size() != r.hits_el.size()) { st.bad_hits++; continue; }
+    if (rate1) for (size_t k = 0; k < w.size(); k++) if (r.hits_el[k] != w[k]) st.bad_hits++;
   }
-  return bad;
+  return st;
+}
+static void PrintStats(const char* what, const PassStats& st) {
+  printf("      %s: %d passes, %d played; variations %d (add %d, drop %d, rotation %d); bad: pattern %d base %d variation %d step0 %d hits %d twice %d rotation-moved %d\n",
+         what, st.passes, st.played, st.var, st.add, st.drop, st.rot, st.bad_pat, st.bad_base, st.bad_var, st.bad_step0, st.bad_hits, st.var_twice, st.rot_moved);
 }
 
 static void TestTimingError() {
-  printf("-- stage 3: the TIMING error (Euclidean patterns inside a pass)\n");
+  printf("-- stage 3: the TIMING error (a steady Euclidean groove inside a pass)\n");
   // The generated patterns are the table's rhythms. Bjorklund's output is a
   // ROTATION of the written form for some (the written forms follow different
   // conventions); an event draws its rotation uniformly from the hit-starting
@@ -2422,6 +2458,13 @@ static void TestTimingError() {
     Check(ok, "every generated pattern is the table's rhythm: k hits in n steps, the written rotation among its hit-start rotations");
     Check(rot_ok, "every rotation an event can pick starts with a hit"); }
 
+  // The level -> base pattern mapping.
+  { bool ok = true;
+    for (float lv : {0.001f, 0.05f, 0.3f, 4.f / 9.f, 0.5f, 0.6f, 0.95f, 1.f})
+      if (Vestige::TimingBaseIndex(lv) != WantBase(lv)) ok = false;
+    Check(ok && Vestige::TimingBaseIndex(0.001f) == 0 && Vestige::TimingBaseIndex(1.f) == VESTIGE_TIMING_PATTERNS - 1,
+          "base pattern = list position round(L x (N-1)): smallest level -> E(2,8), full -> E(7,8)"); }
+
   // Level 0: nothing drawn.
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
@@ -2430,28 +2473,27 @@ static void TestTimingError() {
   const int s = r.s; const size_t Q = r.Q;
   RunFor(0.8f);
   TrigLog lg0;
-  { const uint32_t rng0 = v.timing_rng_, t0 = v.timing_trigs_;
+  { const uint32_t rng0 = v.timing_rng_, t0 = v.timing_trigs_, p0 = v.timing_patterns_;
     lg0 = RunPasses(s, 6);
-    Check(v.timing_rng_ == rng0 && v.timing_trigs_ == t0 && v.trig_off_[s] == 0.f,
-          "timing level 0: no roll drawn, no restart, the read head is the timeline head"); }
+    Check(v.timing_rng_ == rng0 && v.timing_trigs_ == t0 && v.timing_patterns_ == p0 && v.trig_off_[s] == 0.f,
+          "timing level 0: nothing drawn, no pattern, no restart, the read head is the timeline head"); }
 
-  // Level 1: every pass plays exactly one pattern from the dense end, restarts
-  // on its hit steps; the grid holds.
+  // Level 1: the base E(7,8) on every pass, in one rotation, with rare
+  // one-pass variations; the grid holds.
   v.err_level_[0] = 1.f;
   const TrigLog lg = RunPasses(s, 30);
-  int fired = 0, patbad = 0; const int hitbad = CheckPasses(lg, Q, 1.f, true, &fired, &patbad);
-  int len_bad = 0; bool grid_ok = true; int npat[VESTIGE_TIMING_PATTERNS] = {0}; size_t restarts = 0;
+  const PassStats st1 = CheckPasses(lg, Q, WantBase(1.f), true);
+  int len_bad = 0; bool grid_ok = true; size_t restarts = 0;
   for (size_t p = 0; p < lg.passes.size(); p++) {
     if (p > 0 && lg.passes[p].start - lg.passes[p - 1].start != (long)Q) len_bad++;
     if ((lg.passes[p].start - lg0.passes[0].start) % (long)Q != 0) grid_ok = false;
-    if (lg.passes[p].pat >= 0) npat[lg.passes[p].pat]++;
     restarts += lg.passes[p].hits_el.size();
   }
-  printf("      level 1, %zu passes: %d with a pattern (E(5,6) %d, E(7,8) %d), %zu restarts; off-window/rotation %d, off-step %d, length off %d, grid %s\n",
-         lg.passes.size(), fired, npat[8], npat[9], restarts, patbad, hitbad, len_bad, grid_ok ? "unchanged" : "MOVED");
-  Check(fired == (int)lg.passes.size() && patbad == 0 && hitbad == 0,
-        "level 1: every pass plays one pattern from the dense end, restarting exactly at round(pass x i / n) on its hits");
-  Check(npat[8] > 0 && npat[9] > 0, "level 1: both dense-end patterns get picked");
+  PrintStats("level 1 (E(7,8))", st1);
+  printf("      level 1: base %s (rotation from hit %d), %zu restarts, length off %d, grid %s\n",
+         MaskStr(lg.passes[0].base, 8).c_str(), lg.passes[0].brot, restarts, len_bad, grid_ok ? "unchanged" : "MOVED");
+  Check(st1.played == st1.passes && st1.ok(),
+        "level 1: every pass plays E(7,8) in the loop's fixed rotation or one variation of it; restarts exactly at round(pass x i / n)");
   Check(len_bad == 0 && grid_ok, "patterns never move the grid: every pass is Q long, every wrap on the no-error grid");
 
   // After each restart the output is the loop's start (past the 5 ms fade);
@@ -2477,24 +2519,89 @@ static void TestTimingError() {
       tot++; if (lagv == 0 && c > 0.99f) ok++;
     }
     Check(tot >= 5 && ok == tot, "after a pattern pass the next pass starts on the loop's one (lag 0)"); }
-  v.err_level_[0] = 0.f;
   hist_on = false; in_hist.clear(); wet_hist.clear();
 
-  // Low / mid level: only its window (sparse end / middle).
-  { struct Lv { float level; int passes; };
-    for (const Lv& lv : {Lv{0.05f, 300}, Lv{0.5f, 120}}) {
-      v.err_level_[0] = lv.level;
-      const TrigLog ll = RunPasses(s, lv.passes, 200.f);
-      int f = 0, pb = 0; const int hb = CheckPasses(ll, Q, lv.level, true, &f, &pb);
-      int seen[VESTIGE_TIMING_PATTERNS] = {0}; for (const PassRec& pr : ll.passes) if (pr.pat >= 0) seen[pr.pat]++;
-      std::string used; for (int i = 0; i < VESTIGE_TIMING_PATTERNS; i++) if (seen[i]) { char b[16]; snprintf(b, sizeof b, "%d:%d ", i, seen[i]); used += b; }
-      const double rate = (double)f / (double)ll.passes.size(), sd = sqrt(lv.level * (1 - lv.level) / (double)ll.passes.size());
-      printf("      level %.2f: %d patterns in %zu passes (rate %.3f, expect %.2f +- %.3f), picked [pattern:count] %s, off-window %d, off-step %d\n",
-             lv.level, f, ll.passes.size(), rate, lv.level, 3 * sd, used.c_str(), pb, hb);
-      char msg[160]; snprintf(msg, sizeof msg, "level %.2f: fires at ~the level's rate and only picks its window (%s)", lv.level,
-                              lv.level < 0.1f ? "sparse end: E(2,8), E(4,12)" : "middle");
-      Check(pb == 0 && hb == 0 && fabs(rate - lv.level) < 3 * sd + 1e-9, msg);
+  // K3 change mid-pass: the pass keeps its pattern, the next one takes the new
+  // base; the rotation stays the loop's drawn index (mod the hit count), so K3
+  // back gives the same rotation again.
+  { const auto hit_index = [](int pat, int h) { int k = 0; for (int i = 0; i < h; i++) if (v.timing_mask_[pat] & (1u << i)) k++; return k; };
+    blk = 1; const int32_t p0 = v.pass_[s]; while (v.pass_[s] == p0) RunFor(1.f / sr);
+    for (long j = 0; j < (long)Q / 2; j++) RunFor(1.f / sr);
+    const int pat_a = v.cur_pat_[s], rot_a = v.base_rot_[s]; const uint32_t mask_a = v.cur_mask_[s];
+    v.err_level_[0] = 6.f / 9.f;                            // -> E(5,8)
+    const int32_t p1 = v.pass_[s]; bool kept = true;
+    while (v.pass_[s] == p1) { RunFor(1.f / sr); if (v.pass_[s] == p1 && (v.cur_pat_[s] != pat_a || v.cur_mask_[s] != mask_a)) kept = false; }
+    const int pat_b = v.cur_pat_[s], rot_b = v.base_rot_[s];
+    Realign();
+    const TrigLog lb = RunPasses(s, 6);
+    v.err_level_[0] = 1.f;
+    const TrigLog lc = RunPasses(s, 2);
+    const int rot_c = lc.passes.empty() ? -1 : lc.passes[0].brot;
+    const uint32_t seed = v.rot_seed_[s];
+    const int ia = hit_index(pat_a, rot_a), ib = hit_index(pat_b, rot_b);
+    printf("      K3 1 -> 6/9 mid-pass: pass kept E(%d,%d) = %s; next pass E(%d,%d); rotation hit index %d of 7 -> %d of 5 -> back %s (seed %% 7 = %u, %% 5 = %u)\n",
+           VESTIGE_TIMING_PAT_HITS[pat_a], VESTIGE_TIMING_PAT_STEPS[pat_a], kept ? "yes" : "NO",
+           VESTIGE_TIMING_PAT_HITS[pat_b], VESTIGE_TIMING_PAT_STEPS[pat_b], ia, ib, rot_c == rot_a ? "same" : "DIFFERENT", seed % 7u, seed % 5u);
+    Check(kept && pat_a == 9 && pat_b == 6, "a K3 change applies at the next pass start, not mid-pass");
+    const PassStats sb = CheckPasses(lb, Q, 6, true);
+    Check(sb.ok() && sb.played == sb.passes, "after the change every pass is the new base (or one variation of it)");
+    Check(ia == (int)(seed % 7u) && ib == (int)(seed % 5u) && rot_c == rot_a,
+          "rotation = the loop's drawn index modulo the hit count: kept across K3 changes, K3 back = the same rotation"); }
+
+  // Variation rate and kinds over many passes (mid level: E(7,12)).
+  { v.err_level_[0] = 0.5f;
+    const TrigLog lv = RunPasses(s, 300, 200.f);
+    const PassStats sv = CheckPasses(lv, Q, WantBase(0.5f), true);
+    PrintStats("level 0.5 (E(7,12))", sv);
+    const double p = VESTIGE_TIMING_VAR_PROB, rate = (double)sv.eligible_var / sv.eligible, sd = sqrt(p * (1 - p) / sv.eligible);
+    const double e3 = sv.var / 3.0, sd3 = sqrt(sv.var * (1.0 / 3) * (2.0 / 3));
+    printf("      variation rate on eligible passes (not right after a variation): %d / %d = %.3f (constant %.3f +- %.3f); overall %.3f\n",
+           sv.eligible_var, sv.eligible, rate, p, 3 * sd, (double)sv.var / sv.passes);
+    Check(sv.ok() && sv.played == sv.passes, "level 0.5: every pass = the base or exactly one variation (added / dropped / rotated), never two running");
+    Check(fabs(rate - p) < 3 * sd, "variation rate ~ VESTIGE_TIMING_VAR_PROB (on passes that may roll)");
+    Check(fabs(sv.add - e3) < 3 * sd3 && fabs(sv.drop - e3) < 3 * sd3 && fabs(sv.rot - e3) < 3 * sd3,
+          "the three variation kinds are ~uniform"); }
+  // A rotation-symmetric base (E(3,6)): its rotations are all the same mask, so
+  // its variations are only added / dropped hits.
+  { v.err_level_[0] = 4.f / 9.f;
+    const TrigLog ly = RunPasses(s, 60, 60.f);
+    const PassStats sy = CheckPasses(ly, Q, 4, true);
+    PrintStats("level 4/9 (E(3,6), symmetric)", sy);
+    Check(sy.ok() && sy.var > 0 && sy.rot == 0, "symmetric base: variations are real changes (no rotation that sounds the same)"); }
+  // Low level: the sparse base on every pass (no probability any more).
+  { v.err_level_[0] = 0.05f;
+    const TrigLog ll = RunPasses(s, 20);
+    const PassStats sl = CheckPasses(ll, Q, 0, true);
+    Check(sl.ok() && sl.played == sl.passes, "level 0.05: E(2,8) on every pass");
+    v.err_level_[0] = 0.f; }
+
+  // The loop's first pass: with the level already up, the pattern starts with
+  // the loop (joined mid-pass: only the hits still ahead).
+  for (long burst : {36000L, 25400L}) {                      // T 500: on its one / T 1 s: 1/2 round-down, joins late
+    Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({burst == 36000L ? 500 : 1000}); RunFor(0.6f);
+    v.err_level_[0] = 1.f;
+    seen_acts = v.act_count_;
+    const uint32_t p0 = v.timing_patterns_, t0 = v.timing_trigs_;
+    CapRec q{}; noise_from = n; noise_to = n + burst; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    const int qs = q.s; const size_t L = q.Q;
+    const int pat = v.cur_pat_[qs]; const uint32_t mask = v.cur_mask_[qs];
+    blk = 1; std::vector<long> at; uint32_t tc = v.timing_trigs_; const int32_t pp = v.pass_[qs];
+    while (v.pass_[qs] == pp) { RunFor(1.f / sr); if (v.timing_trigs_ != tc) { tc = v.timing_trigs_; at.push_back((long)v.last_trig_at_); } }
+    Realign();
+    const uint32_t planned = v.timing_patterns_ - p0;          // incl. the first wrap's
+    int want = 0, off = 0; size_t k = 0;
+    for (int i = 1; i < 8; i++) if (mask & (1u << i)) {
+      const long pos = (long)((double)L * i / 8 + 0.5);
+      if (pos <= (long)q.phase) continue;
+      want++;
+      const long exp_at = q.act + (pos - (long)q.phase);
+      if (k < at.size() && labs(at[k] - exp_at) > 1) off++; k++;
     }
+    printf("      first pass (joined at phase %u of %zu): pattern %d planned at loop start, %u restarts in it (expected %d, %zu seen per sample, %d off), %u plans until the first wrap\n",
+           q.phase, L, pat, (unsigned)(tc - t0), want, at.size(), off, planned);
+    Check(pat == 9 && (int)(tc - t0) == want && off == 0 && planned == 2 && (burst == 36000L ? q.phase == 0 : q.phase > 0),
+          burst == 36000L ? "the pattern starts with the loop: a loop entering on its one plays the whole pattern in its first pass"
+                          : "a loop joining late (mid-pass) plays only the hits still ahead in its first pass, each once");
     v.err_level_[0] = 0.f; }
 
   // No click at any restart, on a sine loop (restarts land mid-cycle).
@@ -2504,14 +2611,14 @@ static void TestTimingError() {
   sustain_input = false; play_input = false; RunFor(1.0f);
   { const int q = r.s;
     maxd = 0.f; RunFor(2.0f); const float st = maxd;
-    size_t nr = 0;
+    size_t nr = 0; int nv = 0;
     for (float lv : {1.f, 0.5f}) {
       v.err_level_[0] = lv; maxd = 0.f;
       const TrigLog lc = RunPasses(q, 12);
-      for (const PassRec& pr : lc.passes) nr += pr.hits_at.size();
+      for (const PassRec& pr : lc.passes) { nr += pr.hits_at.size(); if (pr.var) nv++; }
     }
     const float sj = maxd;
-    printf("      sine loop max step: steady %.5f | 24 passes, %zu restarts + returns: %.5f (bound %.5f)\n", st, nr, sj, 1.5f * st);
+    printf("      sine loop max step: steady %.5f | 24 passes (%d variations), %zu restarts + returns: %.5f (bound %.5f)\n", st, nv, nr, sj, 1.5f * st);
     Check(nr >= 40 && sj <= 1.5f * st, "pattern restarts and returns: no step above 1.5x steady (5 ms restarts)");
     v.err_level_[0] = 0.f; }
 
@@ -2524,7 +2631,7 @@ static void TestTimingError() {
   { const int q = r.s; const long L = (long)r.Q;
     v.err_level_[0] = 1.f;
     const TrigLog lr = RunPasses(q, 10);
-    int f = 0, pb = 0; const int hb = CheckPasses(lr, (size_t)L, 1.f, true, &f, &pb);
+    const PassStats sr_ = CheckPasses(lr, (size_t)L, 9, true);
     int ok = 0, tot = 0;
     for (const PassRec& pr : lr.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 30; k++) {
       const long next = (k + 1 < pr.hits_el.size()) ? pr.hits_el[k + 1] : L;
@@ -2534,9 +2641,9 @@ static void TestTimingError() {
       float c = 0.f; const int lagv = BestLagRef(pr.hits_at[k] + 480, ref, 50, &c);
       tot++; if (lagv == 0 && c > 0.99f) ok++;
     }
-    printf("      reverse, level 1: %d patterns in %zu passes, off-step %d; %d / %d restarts play the loop's END backward (lag 0)\n",
-           f, lr.passes.size(), hb, ok, tot);
-    Check(v.rev_play_ && f == (int)lr.passes.size() && hb == 0 && pb == 0 && tot >= 10 && ok == tot,
+    printf("      reverse, level 1: %d patterns in %d passes, off-step %d; %d / %d restarts play the loop's END backward (lag 0)\n",
+           sr_.played, sr_.passes, sr_.bad_hits, ok, tot);
+    Check(v.rev_play_ && sr_.ok() && sr_.played == sr_.passes && tot >= 10 && ok == tot,
           "reverse: every restart jumps back to the loop's end");
     v.err_level_[0] = 0.f; cs.knob[1] = 0.85f; }
   hist_on = false; in_hist.clear(); wet_hist.clear();
@@ -2549,7 +2656,7 @@ static void TestTimingError() {
   { const int q = r.s; const long L = (long)r.Q;
     const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
     cs.knob[0] = kmid; RunFor(1.5f);
-    v.err_level_[0] = 0.5f;                                   // mid patterns: steps long enough to measure
+    v.err_level_[0] = 0.5f;                                   // mid pattern: steps long enough to measure
     const TrigLog lk = RunPasses(q, 10);
     int ok = 0, tot = 0;
     for (const PassRec& pr : lk.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 20; k++) {
@@ -2575,88 +2682,113 @@ static void TestTimingError() {
     v.err_level_[0] = 1.f;
     const TrigLog ls = RunPasses(q, 8);
     const long Lt = (long)GridQuantize::Boundary(v.div_[q], v.period_);
-    int f = 0, pb = 0; const int hb = CheckPasses(ls, v.PlayLen(q), 1.f, false, &f, &pb);   // hit COUNT per pass
+    const PassStats ss = CheckPasses(ls, v.PlayLen(q), 9, false);   // hit COUNT per pass
     int len_bad = 0; for (size_t p = 1; p < ls.passes.size(); p++) if (labs(ls.passes[p].start - ls.passes[p - 1].start - Lt) > 1) len_bad++;
     // Hit times in output samples ~ i/n of the pass (rate != 1: el / rate).
     int tbad = 0;
     for (const PassRec& pr : ls.passes) { if (pr.pat < 0) continue; const int nst = VESTIGE_TIMING_PAT_STEPS[pr.pat]; size_t k = 0;
       for (int i = 1; i < nst; i++) if (pr.mask & (1u << i)) { if (k < pr.hits_el.size() && labs(pr.hits_el[k] - (long)((double)Lt * i / nst)) > 2) tbad++; k++; } }
-    printf("      stretch at rate %.4f: pass %ld, %d patterns in %zu passes, hit counts off %d, hit times off %d, lengths off %d\n",
-           v.rho_d_[q], Lt, f, ls.passes.size(), hb, tbad, len_bad);
-    Check(v.rho_d_[q] != 1.0 && f == (int)ls.passes.size() && hb == 0 && tbad == 0 && len_bad == 0,
+    printf("      stretch at rate %.4f: pass %ld, %d patterns in %d passes, hit counts off %d, hit times off %d, lengths off %d\n",
+           v.rho_d_[q], Lt, ss.played, ss.passes, ss.bad_hits, tbad, len_bad);
+    Check(v.rho_d_[q] != 1.0 && ss.ok() && ss.played == ss.passes && tbad == 0 && len_bad == 0,
           "stretch at rate != 1: patterns on i/n of the pass, the pass stays d x T_now");
     v.err_level_[0] = 0.f; }
 
   // Hold: patterns continue. Freeze: never.
   { Hold(); v.err_level_[0] = 1.f;
     const int q = FirstLive(); const TrigLog lh = RunPasses(q, 4);
-    int f = 0, pb = 0; CheckPasses(lh, v.PlayLen(q), 1.f, false, &f, &pb);
-    Check(v.held_ && f >= 3, "held loop: patterns play too");
+    const PassStats sh = CheckPasses(lh, v.PlayLen(q), 9, false);
+    Check(v.held_ && sh.played >= 3 && sh.ok(), "held loop: patterns play too");
     v.err_level_[0] = 0.f; Unhold(); }
   { Reset(); cs.sw[0] = 2; cs.knob[4] = 0.0f; RunFor(1.0f);
     seen_acts = v.act_count_;
+    v.err_level_[0] = 1.f;
+    const uint32_t t0 = v.timing_trigs_, p0 = v.timing_patterns_;
     noise_from = n; noise_to = n + 9600; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
-    v.err_level_[0] = 1.f; const uint32_t t0 = v.timing_trigs_, p0 = v.timing_patterns_; RunFor(3.0f);
+    RunFor(3.0f);
     Check(Vestige::PoolOf(q.s) == Vestige::kPoolFreeze && v.timing_trigs_ == t0 && v.timing_patterns_ == p0,
-          "freeze: the timing error never touches it");
+          "freeze: the timing error never touches it (also not at its start)");
     v.err_level_[0] = 0.f; cs.sw[0] = 0; RunFor(1.0f); }
 
-  // Short-loop guard: steps under VESTIGE_TIMING_MIN_STEP_MS are excluded.
-  { const double min_step = VESTIGE_TIMING_MIN_STEP_MS * 0.001 * sr;
-    // 200 ms loop: 12-step patterns (16.7 ms) excluded, 8-step (25 ms) allowed.
-    Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({200}); RunFor(0.6f);
-    seen_acts = v.act_count_;
-    noise_from = n; noise_to = n + 14400; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
-    v.err_level_[0] = 5.f / 9.f;                            // window {E(3,6), E(7,12), E(5,8)}
-    const TrigLog lw = RunPasses(q.s, 80, 100.f);
-    int seen[VESTIGE_TIMING_PATTERNS] = {0}; for (const PassRec& pr : lw.passes) if (pr.pat >= 0) seen[pr.pat]++;
-    printf("      200 ms loop, window E(3,6)/E(7,12)/E(5,8): picked E(3,6) %d, E(7,12) %d, E(5,8) %d (12 steps = %.1f ms < %.0f ms)\n",
-           seen[4], seen[5], seen[6], (double)q.Q / 12 / 48.0, VESTIGE_TIMING_MIN_STEP_MS);
-    Check(q.Q / 12.0 < min_step && q.Q / 8.0 >= min_step && seen[5] == 0 && seen[4] > 0 && seen[6] > 0,
-          "short-loop guard: patterns whose step is under the minimum are never picked");
-    // 100 ms loop at level 1: E(5,6)/E(7,8) steps 16.7 / 12.5 ms -> no error at all.
+  // Short-loop guard: a base whose step is under VESTIGE_TIMING_MIN_STEP_MS
+  // falls back to the densest pattern below it that fits (nothing below: the
+  // sparsest above); nothing fits: no pattern.
+  { struct G { int tap_ms; long burst; };
+    for (const G& g : {G{200, 14400}, G{150, 10800}}) {
+      Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({g.tap_ms}); RunFor(0.6f);
+      seen_acts = v.act_count_;
+      noise_from = n; noise_to = n + g.burst; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+      RunFor(0.3f);
+      std::string line; bool ok = true; int nfb = 0;
+      for (float lv : {0.05f, 1.f / 9.f, 5.f / 9.f, 6.f / 9.f, 1.f}) {
+        v.err_level_[0] = lv;
+        const int want = WantFit(lv, (double)q.Q);
+        const uint32_t fb0 = v.timing_fallbacks_;
+        const TrigLog lt = RunPasses(q.s, 8);
+        const PassStats sg = CheckPasses(lt, q.Q, want, true);
+        if (!sg.ok() || sg.played != sg.passes || want < 0) ok = false;
+        if (want != WantBase(lv)) { nfb++; if (v.timing_fallbacks_ - fb0 < (uint32_t)sg.passes) ok = false; }
+        char b[64]; snprintf(b, sizeof b, "E(%d,%d)->E(%d,%d) ", VESTIGE_TIMING_PAT_HITS[WantBase(lv)], VESTIGE_TIMING_PAT_STEPS[WantBase(lv)],
+                             want >= 0 ? VESTIGE_TIMING_PAT_HITS[want] : 0, want >= 0 ? VESTIGE_TIMING_PAT_STEPS[want] : 0);
+        line += b;
+      }
+      printf("      %.0f ms loop (%zu): %s\n", q.Q / 48.0, q.Q, line.c_str());
+      char msg[128]; snprintf(msg, sizeof msg, "short-loop guard, %.0f ms loop: too-fine bases fall back to the densest fitting pattern (%d levels)", q.Q / 48.0, nfb);
+      Check(ok && nfb >= 2, msg);
+      v.err_level_[0] = 0.f;
+    }
+    // 100 ms loop: every pattern's step < 20 ms -> no pattern, no restart.
     Reset(); cs.knob[4] = 0.0f; Taps({100}); RunFor(0.6f);
     seen_acts = v.act_count_;
-    noise_from = n; noise_to = n + 9600; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    CapRec q{}; noise_from = n; noise_to = n + 9600; WaitActivation(3.f, &q); noise_from = noise_to = -1;
     v.err_level_[0] = 1.f;
     const uint32_t sk0 = v.timing_skipped_, t0 = v.timing_trigs_;
     const TrigLog lt = RunPasses(q.s, 40);
-    printf("      100 ms loop at level 1: %zu passes, %u skipped by the guard, %u restarts\n", lt.passes.size(), v.timing_skipped_ - sk0, v.timing_trigs_ - t0);
-    Check(v.timing_skipped_ - sk0 >= 39 && v.timing_trigs_ == t0, "short-loop guard: no candidate left -> that pass has no error");
+    printf("      %zu-sample loop at level 1: %zu passes, %u with nothing that fits, %u restarts\n", q.Q, lt.passes.size(), v.timing_skipped_ - sk0, v.timing_trigs_ - t0);
+    Check(WantFit(1.f, (double)q.Q) < 0 && v.timing_skipped_ - sk0 >= 39 && v.timing_trigs_ == t0, "short-loop guard: nothing fits -> no pattern");
     v.err_level_[0] = 0.f; }
 
-  // 3 voices, each rolling on its own; budget and the PHYSICAL pool.
+  // 3 voices, each with its own rotation and its own variation rolls; budget
+  // and the PHYSICAL pool.
   Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.knob[0] = 0.5f; Taps({400}); RunFor(0.5f);
   seen_acts = v.act_count_;
-  const long bursts[3] = {9000, 12500, 14000};              // -> 200 / 267 / 300 ms: all three take dense patterns
+  const long bursts[3] = {9000, 12500, 14000};              // -> 200 / 267 / 300 ms: all take E(7,8) at level 1
   for (int i = 0; i < 3; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.2f); }
   noise_from = noise_to = -1;
   RunFor(1.0f);
   { int slots[3]; int ns = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS && ns < 3; q++) if (v.active_[q] && !v.dying_[q]) slots[ns++] = q;
     for (int i = 0; i < ns; i++) printf("      voice %d: loop %zu (%.0f ms)\n", slots[i], v.PlayLen(slots[i]), v.PlayLen(slots[i]) / 48.0);
-    v.err_level_[0] = 0.6f;
+    v.err_level_[0] = 1.f;
     blk = 1;
     int32_t pp[3]; for (int i = 0; i < ns; i++) pp[i] = v.pass_[slots[i]];
-    std::vector<std::vector<int>> pats(3);
+    std::vector<std::vector<int>> vars(3); uint32_t bases[3] = {0, 0, 0}; bool base_moved = false;
     for (long j = 0; j < 48000L * 10; j++) {
       RunFor(1.f / sr);
-      for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) { pp[i] = v.pass_[slots[i]]; pats[i].push_back(v.cur_pat_[slots[i]]); }
+      for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) {
+        pp[i] = v.pass_[slots[i]]; vars[i].push_back(v.cur_var_[slots[i]]);
+        if (vars[i].size() > 1 && v.base_mask_[slots[i]] != bases[i]) base_moved = true;
+        bases[i] = v.base_mask_[slots[i]];
+      }
     }
     Realign();
-    int differ = 0; const size_t m = std::min(pats[0].size(), std::min(pats[1].size(), pats[2].size()));
-    for (size_t k = 0; k < m; k++) if (pats[0][k] != pats[1][k] || pats[1][k] != pats[2][k]) differ++;
-    // Step rounding on a loop whose length n does not divide (12800 / 12, / 6).
-    { int q12 = -1; for (int i = 0; i < ns; i++) if (v.PlayLen(slots[i]) % 12 != 0 || v.PlayLen(slots[i]) % 6 != 0) q12 = slots[i];
+    const bool rot_differ = ns == 3 && (bases[0] != bases[1] || bases[1] != bases[2]);
+    int vdiff = 0, nvar[3] = {0, 0, 0}; const size_t m = std::min(vars[0].size(), std::min(vars[1].size(), vars[2].size()));
+    for (size_t k = 0; k < m; k++) if ((vars[0][k] != 0) != (vars[1][k] != 0) || (vars[1][k] != 0) != (vars[2][k] != 0)) vdiff++;
+    for (int i = 0; i < ns; i++) for (int x : vars[i]) if (x) nvar[i]++;
+    printf("      3 voices, level 1, 10 s: bases %s / %s / %s; variations %d / %d / %d; variation passes differ in %d of %zu pass indices\n",
+           MaskStr(bases[0], 8).c_str(), MaskStr(bases[1], 8).c_str(), MaskStr(bases[2], 8).c_str(), nvar[0], nvar[1], nvar[2], vdiff, m);
+    Check(rot_differ && !base_moved, "3 voices: each keeps its own rotation of the same groove (they differ)");
+    Check(nvar[0] > 0 && nvar[1] > 0 && nvar[2] > 0 && vdiff > 0, "3 voices roll their variations independently");
+    // Step rounding on a loop whose length n does not divide (12800 / 12).
+    { int q12 = -1; for (int i = 0; i < ns; i++) if (v.PlayLen(slots[i]) % 12 != 0) q12 = slots[i];
       if (q12 < 0) q12 = slots[1];
       v.err_level_[0] = 0.5f;
       const TrigLog lq = RunPasses(q12, 40, 60.f);
-      int f = 0, pb = 0; const int hb = CheckPasses(lq, v.PlayLen(q12), 0.5f, true, &f, &pb);
-      printf("      loop %zu (not a multiple of 12): %d patterns, restarts off round(L*i/n): %d\n", v.PlayLen(q12), f, hb);
-      Check(v.PlayLen(q12) % 12 != 0 && f >= 10 && hb == 0 && pb == 0, "restarts land at round(pass x i / n) exactly, also when n does not divide the pass");
-      v.err_level_[0] = 0.6f; }
-    printf("      3 voices, level 0.6, 10 s: passes %zu / %zu / %zu, pattern sequences differ in %d of %zu passes\n",
-           pats[0].size(), pats[1].size(), pats[2].size(), differ, m);
-    Check(ns == 3 && differ >= (int)m / 2, "3 voices roll and pick independently");
+      const PassStats sq = CheckPasses(lq, v.PlayLen(q12), WantFit(0.5f, (double)v.PlayLen(q12)), true);
+      printf("      loop %zu (not a multiple of 12): %d patterns E(%d,%d), restarts off round(L*i/n): %d\n", v.PlayLen(q12), sq.played,
+             VESTIGE_TIMING_PAT_HITS[lq.passes[0].pat], VESTIGE_TIMING_PAT_STEPS[lq.passes[0].pat], sq.bad_hits);
+      Check(v.PlayLen(q12) % 12 != 0 && sq.played >= 10 && sq.ok() && VESTIGE_TIMING_PAT_STEPS[lq.passes[0].pat] == 12,
+            "restarts land at round(pass x i / n) exactly, also when n does not divide the pass"); }
     const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
     cs.knob[0] = kmid; RunFor(1.5f);
     v.err_level_[0] = 1.f;

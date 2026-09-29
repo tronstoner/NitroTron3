@@ -936,7 +936,7 @@ class Vestige : public Module {
       // The advance may have been the wrap that applied a new C length: this
       // sample's grains must be sized for (and bound to) the NEW loop.
       L = PlayLen(s);
-      // TIMING error (stage 3): pass-start roll + in-pass retrigger. Loop side
+      // TIMING error (stage 3): pass-start plan + in-pass retrigger. Loop side
       // only; nothing at all happens while the timing level is 0.
       if (s < VESTIGE_VOICE_SLABS && !e.frozen) TimingStep(s, rev, L);
     }
@@ -1326,18 +1326,19 @@ class Vestige : public Module {
     return glen;
   }
 
-  // ---- Stage 3: the TIMING error — a Euclidean pattern inside a pass --------
-  // At each pass start (the voice's wrap) roll once with P = level^CURVE. If it
-  // fires, the pass plays a Euclidean pattern (VESTIGE_TIMING_PAT_*, density
-  // window around the level, random rotation keeping a hit on step 0): at each
-  // hit step the READ head jumps back to the loop's start (reverse: its end)
-  // and plays on from there. The TIMELINE head (fwd_) is never
-  // touched: the pass ends at its normal length, the next pass starts on the
-  // loop's own "one", LED1 / K1 / follow-T all see the same grid. Both jumps —
-  // the retrigger and the return at the pass end — use the 5 ms stream restart.
-  // Per sample: one pass compare, plus one head compare while a retrigger is
-  // pending. The roll (rare) uses its own RNG, so level 0 never draws from the
-  // shared VestigeRand sequence.
+  // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass -
+  // With a timing level > 0 every pass plays the BASE pattern for the level
+  // (TimingBaseIndex, short-loop fallback in TimingFit) in the loop's own fixed
+  // rotation (rot_seed_, drawn once when the loop starts playing); a rare pass
+  // plays a one-pass variation (VESTIGE_TIMING_VAR_PROB). At each hit step the
+  // READ head jumps back to the loop's start (reverse: its end) and plays on
+  // from there. The TIMELINE head (fwd_) is never touched: the pass ends at its
+  // normal length, the next pass starts on the loop's own "one", LED1 / K1 /
+  // follow-T all see the same grid. Both jumps — the retrigger and the return
+  // at the pass end — use the 5 ms stream restart.
+  // Per sample: one pass compare, plus one head compare while a hit is
+  // pending. The draws (rotation at loop start, variation roll per pass) use
+  // their own RNG, so level 0 never draws from the shared VestigeRand sequence.
   float ReadHead(int s) const {
     if (s >= VESTIGE_VOICE_SLABS || trig_off_[s] == 0.f) return fwd_[s];
     const float L = (float)PlayLen(s);
@@ -1346,10 +1347,12 @@ class Vestige : public Module {
     if (h < 0.f) h += L;
     return h;
   }
-  float TimingRand() {                       // xorshift32, audio thread only
+  uint32_t TimingRandU() {                   // xorshift32, audio thread only
     timing_rng_ ^= timing_rng_ << 13; timing_rng_ ^= timing_rng_ >> 17; timing_rng_ ^= timing_rng_ << 5;
-    return (float)timing_rng_ / 4294967295.f;
+    return timing_rng_;
   }
+  float TimingRand() { return (float)TimingRandU() / 4294967295.f; }
+  int TimingPick(int n) { int i = (int)(TimingRand() * (float)n); return i >= n ? n - 1 : i; }
   // Bjorklund's spreading of k hits over n steps (the standard recursive
   // form), rotated to start on a hit. Init only.
   static uint32_t Bjorklund(int k, int n) {
@@ -1381,44 +1384,82 @@ class Vestige : public Module {
     for (int p = 0; p < VESTIGE_TIMING_PATTERNS; p++)
       timing_mask_[p] = Bjorklund(VESTIGE_TIMING_PAT_HITS[p], VESTIGE_TIMING_PAT_STEPS[p]);
   }
-  // Pass start with a timing level > 0: roll, pick a pattern + rotation, lay
-  // out its hit positions in material units (the pass's own length).
-  void TimingPlanPass(int s, bool rev, size_t L, double rho) {
-    trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1;
-    const float level = err_level_[kErrTiming];
-    if (!(level > 0.f)) return;                               // level 0: nothing drawn
-    if (!(TimingRand() < powf(level, VESTIGE_TIMING_PROB_CURVE))) return;
-    // Density window: patterns within +-1 of round(L * (N-1)), minus those
-    // whose step would be shorter than the minimum (output time).
-    const float pos = level * (float)(VESTIGE_TIMING_PATTERNS - 1);
-    const int   c   = (int)(pos + 0.5f);
-    const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);   // output samples
+  // The level -> base pattern mapping (the one place): list position round(L*(N-1)).
+  static int TimingBaseIndex(float level) {
+    int i = (int)(level * (float)(VESTIGE_TIMING_PATTERNS - 1) + 0.5f);
+    return i < 0 ? 0 : (i >= VESTIGE_TIMING_PATTERNS ? VESTIGE_TIMING_PATTERNS - 1 : i);
+  }
+  // Short-loop guard: the base itself if its step fits, else the densest pattern
+  // below it that does; nothing below fits (a low level on a short loop): the
+  // sparsest one above it that does; -1 = none fits at all. (pass_out: output
+  // samples per pass.)
+  int TimingFit(int base, double pass_out) const {
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
-    int cand[3]; int nc = 0;
-    for (int i = c - 1; i <= c + 1; i++) {
-      if (i < 0 || i >= VESTIGE_TIMING_PATTERNS) continue;
-      if (pass_out / (double)VESTIGE_TIMING_PAT_STEPS[i] < min_step) continue;
-      cand[nc++] = i;
-    }
-    if (nc == 0) { timing_skipped_++; return; }               // too fine for this loop
-    int pi = (int)(TimingRand() * (float)nc); if (pi >= nc) pi = nc - 1;
-    const int pat = cand[pi];
+    for (int i = base; i >= 0; i--)
+      if (pass_out / (double)VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+    for (int i = base + 1; i < VESTIGE_TIMING_PATTERNS; i++)
+      if (pass_out / (double)VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
+    return -1;
+  }
+  static uint32_t TimingRotate(uint32_t m, int n, int h0) {
+    uint32_t r = 0;
+    for (int i = 0; i < n; i++) if (m & (1u << ((i + h0) % n))) r |= (1u << i);
+    return r;
+  }
+  // Pass start (or loop start, el0 = the elapsed pass it joins at) with a
+  // timing level > 0: the base pattern in the loop's rotation, or — rarely,
+  // never twice running — a one-pass variation; lay out its hit positions in
+  // material units (the pass's own length). Hits at or before el0 are skipped.
+  void TimingPlanPass(int s, bool rev, size_t L, double rho, float el0) {
+    trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
+    const float level = err_level_[kErrTiming];
+    if (!(level > 0.f)) { var_last_[s] = false; return; }     // level 0: nothing drawn
+    const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);   // output samples
+    const int want = TimingBaseIndex(level);
+    const int pat  = TimingFit(want, pass_out);
+    if (pat < 0) { timing_skipped_++; var_last_[s] = false; return; }   // nothing fits this loop
+    if (pat != want) timing_fallbacks_++;
     const int n = VESTIGE_TIMING_PAT_STEPS[pat];
     const uint32_t m = timing_mask_[pat];
-    // Rotation: start on one of its hits, uniformly.
     int hits[VESTIGE_TIMING_MAX_STEPS]; int nh = 0;
     for (int i = 0; i < n; i++) if (m & (1u << i)) hits[nh++] = i;
-    int ri = (int)(TimingRand() * (float)nh); if (ri >= nh) ri = nh - 1;
-    const int h0 = hits[ri];
-    uint32_t rm = 0;
-    for (int i = 0; i < n; i++) if (m & (1u << ((i + h0) % n))) rm |= (1u << i);
+    if (nh == 0) { var_last_[s] = false; return; }            // (an edited table with k = 0)
+    const int h0 = hits[rot_seed_[s] % (uint32_t)nh];          // the loop's fixed rotation
+    const uint32_t base = TimingRotate(m, n, h0);
+    uint32_t rm = base; int rot = h0; int var = kVarNone;
+    // Variation: never on the pass right after one (that pass is the base).
+    if (!var_last_[s] && TimingRand() < VESTIGE_TIMING_VAR_PROB) {
+      uint32_t cand[3][VESTIGE_TIMING_MAX_STEPS]; int crot[VESTIGE_TIMING_MAX_STEPS]; int nc[3] = {0, 0, 0};
+      for (int i = 1; i < n; i++) {
+        if (!(base & (1u << i))) cand[0][nc[0]++] = base | (1u << i);    // add a hit
+        else                     cand[1][nc[1]++] = base & ~(1u << i);   // drop a hit
+      }
+      for (int j = 0; j < nh; j++) {                                     // another rotation
+        const uint32_t r = TimingRotate(m, n, hits[j]);
+        bool dup = (r == base);
+        for (int k = 0; k < nc[2] && !dup; k++) dup = (cand[2][k] == r);
+        if (!dup) { crot[nc[2]] = hits[j]; cand[2][nc[2]++] = r; }
+      }
+      int types[3]; int nt = 0;                                  // types this pattern can do
+      for (int t = 0; t < 3; t++) if (nc[t] > 0) types[nt++] = t;
+      if (nt > 0) {
+        const int t = types[TimingPick(nt)];
+        const int k = TimingPick(nc[t]);
+        rm = cand[t][k]; var = kVarAdd + t;
+        if (t == 2) rot = crot[k];
+        timing_vars_++;
+      }
+    }
+    var_last_[s] = (var != kVarNone);
     // Hit positions (step 0 = the pass start: no extra restart there).
     for (int i = 1; i < n; i++)
       if (rm & (1u << i)) trig_pos_[s][trig_cnt_[s]++] = (float)(size_t)((double)L * (double)i / (double)n + 0.5);
+    while (trig_next_[s] < trig_cnt_[s] && trig_pos_[s][trig_next_[s]] <= el0) trig_next_[s]++;
     trig_rev_[s] = rev;
-    cur_pat_[s] = pat; cur_mask_[s] = rm; cur_rot_[s] = h0; timing_patterns_++;
+    cur_pat_[s] = pat; cur_mask_[s] = rm; cur_rot_[s] = rot; cur_var_[s] = var;
+    base_mask_[s] = base; base_rot_[s] = h0; timing_patterns_++;
   }
-  // Per sample, per loop voice (after the head advance): pass-start roll, then
+  // Per sample, per loop voice (after the head advance): pass-start plan, then
   // the next pending hit. Cost: one compare while nothing is pending; one more
   // float compare while a pattern plays.
   void TimingStep(int s, bool rev, size_t L) {
@@ -1429,7 +1470,7 @@ class Vestige : public Module {
         RestartStreams(s);
         timing_returns_++;
       }
-      TimingPlanPass(s, rev, L, rho_d_[s]);
+      TimingPlanPass(s, rev, L, rho_d_[s], 0.f);
       return;
     }
     if (trig_next_[s] >= trig_cnt_[s]) return;
@@ -2050,9 +2091,15 @@ class Vestige : public Module {
     if (s < VESTIGE_VOICE_SLABS) {
       play_len_[s] = L; cur_view_[s] = -1; rc_building_[s] = rc_ready_[s] = false; rc_want_[s] = L;
       trig_off_[s] = 0.f; trig_cnt_[s] = trig_next_[s] = 0; cur_pat_[s] = -1; trig_pass_[s] = pass_[s];   // (pass_ set just above)
+      rot_seed_[s] = TimingRandU();                         // this loop's rotation, for its whole life
+      var_last_[s] = false; cur_var_[s] = kVarNone;
     }
     rho_t_[s] = TapeTarget(s);
     rho_d_[s] = rho_t_[s];                                  // enters playing at T_now, no glide
+    // TIMING: the pattern starts with the loop (this first pass may be joined
+    // mid-way: elapsed p, the hits already behind it are skipped).
+    if (s < VESTIGE_VOICE_SLABS && !eng_[PoolOf(s)].frozen)
+      TimingPlanPass(s, rev, L, rho_d_[s], (float)p);
     rho_s_[s] = (float)rho_d_[s];
     fwd_d_[s] = (double)fwd_[s];
     active_[s] = true; dying_[s] = false; stolen_[s] = false;
@@ -2911,8 +2958,15 @@ class Vestige : public Module {
   uint32_t timing_mask_[VESTIGE_TIMING_PATTERNS] = {0};  // Bjorklund masks (bit i = step i), built at init
   int      cur_pat_[VESTIGE_VOICE_SLABS]      = {0};     // this pass's pattern (-1 = none) (diag)
   int      cur_rot_[VESTIGE_VOICE_SLABS]      = {0};     // its rotation (the hit it starts on) (diag)
-  uint32_t cur_mask_[VESTIGE_VOICE_SLABS]     = {0};     // the rotated mask (diag)
+  uint32_t cur_mask_[VESTIGE_VOICE_SLABS]     = {0};     // this pass's mask, variation applied (diag)
+  enum TimingVar { kVarNone = 0, kVarAdd = 1, kVarDrop = 2, kVarRot = 3 };
+  int      cur_var_[VESTIGE_VOICE_SLABS]      = {0};     // this pass's variation (kVar*) (diag)
+  uint32_t base_mask_[VESTIGE_VOICE_SLABS]    = {0};     // the base pattern in the loop's rotation (diag)
+  int      base_rot_[VESTIGE_VOICE_SLABS]     = {0};     // the loop's rotation for the base pattern (diag)
+  uint32_t rot_seed_[VESTIGE_VOICE_SLABS]     = {0};     // drawn at loop start; rotation = seed % hits
+  bool     var_last_[VESTIGE_VOICE_SLABS]     = {false}; // the previous pass was a variation
   uint32_t timing_patterns_ = 0, timing_skipped_ = 0;    // diag
+  uint32_t timing_vars_ = 0, timing_fallbacks_ = 0;      // diag
   int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
   uint32_t timing_rng_ = 0x9E3779B9u;                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag
