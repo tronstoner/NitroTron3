@@ -1927,8 +1927,31 @@ class Vestige : public Module {
     int k = (int)(LineTarget(s, level) + 0.5f); if (k < 1) k = 1; if (k > P) k = P;
     const int rot = TimingPick(P);
     const float fill = VESTIGE_TIMING_LINE_FILL_A + VESTIGE_TIMING_LINE_FILL_B * level;
-    for (int i = 0; i < k; i++) LineAdd(s, l, 2 * (((i * P) / k + rot) % P), 0.f);   // evenly spread (Euclidean)
-    for (int h = 0; h < ln_nh_[s][l]; h++) LineGrow(s, l, h, fill);
+    // Evenly spread (Euclidean) on distinct even cells: always free, always a
+    // pause apart, so no search. Computed directly, in O(k) — the old search
+    // per hit per cell (LineAdd / LineGrow) was a CPU spike at every new loop.
+    // Same choices from the same random numbers as that search: per hit its
+    // type draw and the fill-0 grow draw, then the grows in insertion order.
+    LineHit* hit = ln_hit_[s][l];
+    for (int i = 0; i < k; i++) {
+      LineHit& x = hit[i];
+      x.start = (int8_t)(2 * (((i * P) / k + rot) % P)); x.len = 1; x.age = 0;
+      int8_t sub; x.type = (int8_t)LineDrawType(l, &sub); x.sub = sub;
+      (void)TimingRand();                                   // (the fill-0 grow's draw)
+    }
+    ln_nh_[s][l] = k;
+    // A hit grows right up to one pause before its successor (the starts are a
+    // cyclic rotation of an increasing run): the last one before the wrap stops
+    // at the line end, or one cell earlier when the first hit sits on cell 0.
+    for (int i = 0; i < k; i++) {
+      LineHit& x = hit[i];
+      int limit = C;                                        // exclusive end
+      if (k > 1) {
+        const int nx = hit[(i + 1) % k].start;
+        limit = (nx > x.start) ? nx - 1 : (nx == 0 ? C - 1 : C);
+      }
+      while (x.len < VESTIGE_TIMING_SPAN_MAX && TimingRand() < fill && x.start + x.len + 1 <= limit) x.len++;
+    }
   }
   static int LineOps(float level) { return 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * level + 0.5f); }
   // `ops` changes to layer l's line (see vestige_constants.h).
@@ -1983,12 +2006,22 @@ class Vestige : public Module {
   // Once per audio block: one pending change per layer per loop voice. A pass
   // start only renders; the changes for the NEXT pass are spread over the
   // blocks after it (at once they were a CPU burst of up to 5 blocks — clicks).
+  // A pending SEED (ln_ops_ == -1: a new loop, or K3 up from 0) is built here
+  // too, at most one layer per block, so that is no spike either; that line
+  // then plays from the next pass on.
   void TimingLayerTick() {
+    bool seeded = false;
     for (int s = 0; s < VESTIGE_VOICE_SLABS; s++)
       for (int l = 0; l < kErrTypes; l++) {
-        if (ln_ops_[s][l] <= 0) continue;
-        ln_ops_[s][l]--;
         const float lv = err_level_[l];
+        if (ln_ops_[s][l] < 0) {
+          if (seeded) continue;
+          ln_ops_[s][l] = 0;
+          if (lv > 0.f && ln_cells_[s] > 0 && LayerOn(l)) { LineSeed(s, l, lv); seeded = true; }
+          continue;
+        }
+        if (ln_ops_[s][l] == 0) continue;
+        ln_ops_[s][l]--;
         if (lv > 0.f && ln_nh_[s][l] > 0 && LayerOn(l)) LineMutate(s, l, lv, 1);
       }
   }
@@ -2033,8 +2066,8 @@ class Vestige : public Module {
     for (int l = 0; l < kErrTypes; l++) {
       const float lv = err_level_[l];
       if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; continue; }
-      if (ln_nh_[s][l] == 0) LineSeed(s, l, lv);
-      else if (ln_ops_[s][l] > 0) LineMutate(s, l, lv, ln_ops_[s][l]);   // leftovers (a pass shorter than the spread)
+      if (ln_nh_[s][l] == 0) { ln_ops_[s][l] = -1; continue; }   // empty: seed in the block tick (no hits to age)
+      if (ln_ops_[s][l] > 0) LineMutate(s, l, lv, ln_ops_[s][l]);   // leftovers (a pass shorter than the spread)
       ln_ops_[s][l] = LineOps(lv);                          // this pass's changes, one per block (TimingLayerTick)
       for (int h = 0; h < ln_nh_[s][l]; h++) {               // a hit in this pass plays once more
         LineHit& x = ln_hit_[s][l][h];
