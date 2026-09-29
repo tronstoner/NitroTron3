@@ -3264,48 +3264,69 @@ static void TestFadeVoiceCap() {
   Check(v.VoiceCap() == 2, "SW1 UP: the cap is 2 (one live + one fading)");
   cs.knob[4] = K5Fade(0.05f); noise_from = noise_to = -1;
 }
-// K5 CCW half: every loop voice decays to -60 dB over N of its passes, then
-// is freed; FS2 hold pauses the decay; K5 back at noon stops it where it is.
-static float K5Decay(float n) {                 // raw knob for N passes
-  const float u = 1.f - logf(n) / logf(VESTIGE_DECAY_N_MAX);
+// K5 CCW half = number of repeats N: the first at full level, repeat k at
+// (1 - k/N)^VESTIGE_REPEAT_CURVE, the last one ramps out on its pass end and
+// the loop is freed; FS2 hold pauses the count; noon keeps the level.
+static float K5Repeats(int nrep) {              // raw knob for N repeats
+  const float u = 1.f - logf((float)nrep) / logf(VESTIGE_REPEAT_N_MAX);
   const float r = 0.5f - VESTIGE_K5_DEADZONE - u * (0.5f - VESTIGE_K5_DEADZONE);
   return r * (KNOB_MAX - KNOB_MIN) + KNOB_MIN;
 }
-static void TestK5Decay() {
-  printf("-- K5 CCW: decay over N repeats\n");
-  Reset(); cs.knob[4] = 0.5f; cs.sw[0] = 0; Taps({500}); RunFor(0.6f);
-  seen_acts = v.act_count_;
-  CapRec r{}; noise_from = n; noise_to = n + 24000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
-  const int s = r.s; const long Q = (long)r.Q;
-  RunFor(1.f);
-  auto pass_rms = [&]() { double e = 0; peak = 0.f; hist_on = true; wet_hist.clear(); hist_n0 = n; RunFor((float)Q / sr);
-                          for (float w : wet_hist) e += w * w; hist_on = false; return (float)sqrt(e / (double)wet_hist.size()); };
-  const float r0 = pass_rms();
-  cs.knob[4] = K5Decay(4.f); RunFor(0.02f);
-  const float nn = v.decay_n_;
-  const float r1 = pass_rms(), r2 = pass_rms();
-  const float db = 20.f * log10f(r2 / r1);
-  // hold pauses
-  Hold(); RunFor(0.05f); const float h1 = pass_rms(), h2 = pass_rms();
-  Unhold(); RunFor(0.05f);
-  RunFor(4.f * (float)Q / sr + 0.1f);
+static void TestK5Repeats() {
+  printf("-- K5 CCW: number of repeats\n");
+  int s = -1; long Q = 0;
+  auto setup = [&]() {
+    Reset(); cs.knob[4] = 0.5f; cs.sw[0] = 0; Taps({500}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    CapRec r{}; noise_from = n; noise_to = n + 24000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+    s = r.s; Q = (long)r.Q; RunFor(1.f); blk = 1;
+  };
+  auto to_pass = [&]() { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(1.f / sr); };
+  // The rest of the current pass, up to the next wrap: RMS of its middle (past
+  // the 10 ms level ramp), and the peak of its last 2 ms.
+  auto pass_rms = [&](float* tail) {
+    hist_on = true; wet_hist.clear(); hist_n0 = n;
+    { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(1.f / sr); }
+    hist_on = false; if (!wet_hist.empty()) wet_hist.pop_back();   // (the wrap sample belongs to the next pass)
+    double e = 0; long c = 0; for (size_t i = 960; i + 960 < wet_hist.size(); i++) { e += wet_hist[i] * wet_hist[i]; c++; }
+    if (tail) { float m = 0.f; for (size_t i = wet_hist.size() - 96; i < wet_hist.size(); i++) m = std::max(m, fabsf(wet_hist[i])); *tail = m; }
+    return (float)sqrt(e / (double)(c ? c : 1));
+  };
+  setup();
+  to_pass(); const float r0 = pass_rms(nullptr);
+  cs.knob[4] = K5Repeats(4); RunFor(0.011f);               // the count begins in this pass (repeat 1)
+  const int nn = v.rep_n_;
+  float lv[4], tail = 0.f;
+  for (int k = 0; k < 4; k++) lv[k] = pass_rms(k == 3 ? &tail : nullptr);
+  RunFor(0.02f);
   const bool freed = !v.active_[s];
-  printf("      N %.2f: pass-to-pass %.1f dB (want %.1f); held %.1f dB; clean %.4f; freed after the decay %d\n",
-         nn, db, -60.f / 4.f, 20.f * log10f(h2 / h1), r0, (int)freed);
-  Check(fabsf(nn - 4.f) < 0.05f, "K5 CCW maps to N passes (log taper; N = 4 here)");
-  Check(fabsf(db + 15.f) < 2.f, "decay: each pass ~60/N dB quieter");
-  Check(fabsf(20.f * log10f(h2 / h1)) < 0.5f, "FS2 hold pauses the decay");
-  Check(freed, "a loop decayed to -60 dB is freed");
-  // noon stops the decay where it is
-  Reset(); cs.knob[4] = 0.5f; cs.sw[0] = 0; Taps({500}); RunFor(0.6f);
-  seen_acts = v.act_count_;
-  noise_from = n; noise_to = n + 24000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
-  RunFor(1.f);
-  cs.knob[4] = K5Decay(8.f); pass_rms();
-  cs.knob[4] = 0.5f; RunFor(0.02f);
-  const float a1 = pass_rms(), a2 = pass_rms();
-  Check(v.decay_n_ == 0.f && fabsf(20.f * log10f(a2 / a1)) < 0.5f && a1 > 0.f, "K5 back at noon: the decay stops (level kept)");
-  Reset();
+  float db[4]; for (int k = 0; k < 4; k++) db[k] = 20.f * log10f(lv[k] / r0);
+  printf("      N %d: repeat levels %.1f / %.1f / %.1f / %.1f dB (want 0 / -5.0 / -12.0 / -24.1); last 2 ms peak %.4f; freed %d\n",
+         nn, db[0], db[1], db[2], db[3], tail, (int)freed);
+  Check(nn == 4, "K5 CCW maps to a whole number of repeats (N = 4 here)");
+  bool lv_ok = true; const float want[4] = {0.f, -5.f, -12.04f, -24.08f};
+  for (int k = 0; k < 4; k++) if (fabsf(db[k] - want[k]) > 0.7f) lv_ok = false;
+  Check(lv_ok, "repeat 1 at full level, then (1 - k/N)^curve");
+  Check(tail < 0.02f * r0 * 4.f && freed, "the last repeat ramps out on its pass end; the loop is freed");
+  // N = 1: plays once.
+  setup(); to_pass(); cs.knob[4] = K5Repeats(1); RunFor(0.011f);
+  const float one = pass_rms(nullptr); RunFor(0.02f);
+  Check(v.rep_n_ == 1 && fabsf(20.f * log10f(one / r0)) < 0.7f && !v.active_[s], "N = 1: the loop plays once, at full level, then stops");
+  // Hold pauses the count.
+  // (The hold gesture is a 900 ms press, so hold goes on before the count.)
+  setup(); Hold(); to_pass(); cs.knob[4] = K5Repeats(4); RunFor(0.011f); pass_rms(nullptr);
+  const float h1 = pass_rms(nullptr), h2 = pass_rms(nullptr), h3 = pass_rms(nullptr);
+  const bool held_ok = v.held_ && v.active_[s] && fabsf(20.f * log10f(h1 / r0)) < 0.7f && fabsf(20.f * log10f(h3 / r0)) < 0.7f;
+  Unhold(); pass_rms(nullptr); const float u1 = pass_rms(nullptr);   // counting again
+  printf("      held: %.1f / %.1f / %.1f dB, then released: %.1f dB\n", 20.f * log10f(h1 / r0), 20.f * log10f(h2 / r0),
+         20.f * log10f(h3 / r0), 20.f * log10f(u1 / r0));
+  Check(held_ok && u1 < h3 * 0.9f, "FS2 hold pauses the count (full level held); released, it counts on");
+  // Noon keeps the level.
+  setup(); to_pass(); cs.knob[4] = K5Repeats(4); RunFor(0.011f); pass_rms(nullptr);
+  cs.knob[4] = 0.5f; RunFor(0.011f); const float a1 = pass_rms(nullptr);
+  const float a2 = pass_rms(nullptr); const float a3 = pass_rms(nullptr);
+  Check(v.rep_n_ == 0 && v.active_[s] && fabsf(20.f * log10f(a3 / a2)) < 0.5f && a1 > 0.f, "K5 back at noon: endless, the level kept");
+  blk = 48; Realign(); Reset();
 }
 static void TestTimingSlices() {
   printf("-- stage 3: the TIMING error, mode 1: SLICE REARRANGEMENT (%d slices)\n", VESTIGE_TIMING_SLICES);
@@ -3689,7 +3710,7 @@ int main() {
   else printf("-- slice / pass-memory mode: behaviour tests skipped (discovery phase)\n");
   TestK4Degrade();
   TestFadeVoiceCap();
-  TestK5Decay();
+  TestK5Repeats();
   TestFollowRecut();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);

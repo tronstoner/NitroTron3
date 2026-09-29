@@ -728,16 +728,20 @@ static constexpr float  VESTIGE_AGE_FADE_DEPTH     = 0.4f;
 static constexpr float  VESTIGE_FADE_ATTACK_MAX_S  = 6.0f;  // K5 CW: swell-in finishes in this
 static constexpr float  VESTIGE_FADE_RELEASE_MAX_S = 6.0f;  // K5 CW: fade-out finishes in this (symmetric)
 static constexpr float  VESTIGE_FADE_MIN_S         = 0.003f; // K5 noon / CCW: declick, not a 1-sample step (voice-steal click)
-// K5 is bipolar: CCW half = decay over N repeats · noon = endless · CW half =
+// K5 is bipolar: CCW half = number of repeats · noon = endless · CW half =
 // the fade above (0 -> max over the half). Dead zone around noon (remapped
 // knob units), like K4's.
 static constexpr float  VESTIGE_K5_DEADZONE        = 0.06f;
-// DECAY (K5 CCW half): every loop voice falls smoothly (exponentially, like
-// tape-echo feedback) from its first pass, to -60 dB after N of its passes, and
-// is then freed. N = DECAY_N_MAX just past the dead zone, down to 1 at full
-// CCW (one fading pass: a blip), log taper between. Counted in passes, so it
-// stays tempo-synced. FS2 hold pauses it; K5 back to noon stops it where it is.
-static constexpr float  VESTIGE_DECAY_N_MAX        = 64.f;
+// REPEATS (K5 CCW half): N = REPEAT_N_MAX just past the dead zone down to 1
+// at full CCW (whole numbers, log taper). The first repeat plays at full
+// level, repeat k (0-based) at (1 - k/N)^CURVE (2: N = 4 -> 0 / -5 / -12 /
+// -24 dB), each level reached by a RAMP at the pass start; the last repeat
+// ramps out to end exactly on its pass end, then the loop is freed. N = 1:
+// the loop plays once. Turning K5 CCW on a playing loop counts from then;
+// FS2 hold pauses the count; back at noon the loop keeps its level.
+static constexpr float  VESTIGE_REPEAT_N_MAX       = 16.f;
+static constexpr float  VESTIGE_REPEAT_CURVE       = 2.f;    // 1 = linear in amplitude
+static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
 // volume knob and the SW2 dry gate are gone. VESTIGE_LOOP_BOOST_MAX is kept for

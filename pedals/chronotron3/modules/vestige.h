@@ -117,7 +117,7 @@ class Vestige : public Module {
     }
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
-    for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) { dec_g_[q] = 1.f; dec_k_[q] = 1.f; }   // K5 decay: none yet
+    for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) { dec_g_[q] = dec_t_[q] = rep_base_[q] = 1.f; }   // K5 repeats: full level
     release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
     gate_rel_coef_   = 1.f - expf(-1.f / (VESTIGE_GATE_RELEASE_MS * 0.001f * sr_)); // gate meter fall (mode 1)
     onset_refr_len_  = (int)((float)VESTIGE_ONSET_REFRACTORY_MS * 0.001f * sr_);
@@ -262,14 +262,15 @@ class Vestige : public Module {
     // ---- K5, bipolar: CCW decay · noon endless · CW fade ---------------------
     // Within VESTIGE_K5_DEADZONE of noon: endless repeats, shortest crossfade.
     // CW half: the fade in/out between captures, 0 -> max over the half. CCW
-    // half: every loop DECAYS over N passes (-60 dB at N, then it is freed),
-    // N = VESTIGE_DECAY_N_MAX just past the dead zone down to 1 at full CCW;
+    // half: the NUMBER OF REPEATS N (VESTIGE_REPEAT_N_MAX just past the dead
+    // zone down to 1 at full CCW, whole numbers, log taper; see UpdateRepeats);
     // captures crossfade as at noon. Fades are phase ramps that FINISH in their
     // time (no one-pole tail): attack = convex swell, release = concave.
     const float c5 = k5 - 0.5f, a5 = fabsf(c5);
     const float u5 = (a5 <= VESTIGE_K5_DEADZONE) ? 0.f : (a5 - VESTIGE_K5_DEADZONE) / (0.5f - VESTIGE_K5_DEADZONE);
     const float fade_u = (c5 > 0.f) ? u5 : 0.f;
-    decay_n_ = (c5 < 0.f && u5 > 0.f) ? powf(VESTIGE_DECAY_N_MAX, 1.f - u5) : 0.f;   // 0 = endless
+    rep_n_ = (c5 < 0.f && u5 > 0.f) ? (int)(powf(VESTIGE_REPEAT_N_MAX, 1.f - u5) + 0.5f) : 0;   // 0 = endless
+    if (rep_n_ < 0) rep_n_ = 0;
     float atk_s = fade_u * VESTIGE_FADE_ATTACK_MAX_S;
     float rel_s = fade_u * VESTIGE_FADE_RELEASE_MAX_S;
     // Floor at a short declick so K5 hard-CCW is "instant" but not a 1-sample
@@ -457,7 +458,7 @@ class Vestige : public Module {
     // leaving MIDDLE retires the older loops oldest-first over K5, and the
     // age-ramp gains follow the live set.
     if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); UpdateTapeTargets(); }
-    UpdateDecay();
+    UpdateRepeats();
     const uint32_t dt0 = diag_clock_ ? diag_clock_() : 0;
     if (VESTIGE_TIMING_MODE == 3) TimingLayerTick();
     if (diag_clock_) { const uint32_t d = diag_clock_() - dt0; if (d > diag_tick_us_) diag_tick_us_ = d; }
@@ -724,7 +725,11 @@ class Vestige : public Module {
           pv *= 1.f - d;
         }
         //  3. K5 loop fade.
-        if (s < VESTIGE_VOICE_SLABS) { dec_g_[s] *= dec_k_[s]; pv *= dec_g_[s]; }   // K5 CCW: the decay
+        if (s < VESTIGE_VOICE_SLABS) {                        // K5 CCW: the per-repeat level
+          float& g = dec_g_[s]; const float t = dec_t_[s], st = dec_step_[s];
+          if (g < t) { g += st; if (g > t) g = t; } else if (g > t) { g -= st; if (g < t) g = t; }
+          pv *= g;
+        }
         y += pv * fade_gain_[s];
         // Free a retired (dying) voiced slot once its fade-out has completed.
         if (dying_[s] &&
@@ -2875,7 +2880,9 @@ class Vestige : public Module {
     rho_s_[s] = (float)rho_d_[s];
     fwd_d_[s] = (double)fwd_[s];
     active_[s] = true; dying_[s] = false; stolen_[s] = false;
-    if (s < VESTIGE_VOICE_SLABS) { dec_g_[s] = 1.f; dec_k_[s] = 1.f; }   // a new loop starts undecayed
+    if (s < VESTIGE_VOICE_SLABS) {                          // a new loop: full level, its count from 0
+      dec_g_[s] = dec_t_[s] = rep_base_[s] = 1.f; dec_step_[s] = 0.f; rep_k_[s] = 0; rep_pass_[s] = pass_[s];
+    }
     StartFadeIn(s);                     // swells in over K5; first grain instant
     ResumeFromMute();                   // record END unpauses the retained loops (stage-0 behaviour)
     while (CountLive() > target_voices_) {
@@ -3295,18 +3302,36 @@ class Vestige : public Module {
   // drives the loop fade envelope, not this age-fade). Active pool only: the
   // other pool's gains are frozen with it (gain_ is baked into each grain at
   // trigger, and a parked pool triggers none).
-  // K5 CCW decay, once per block: each loop voice's per-sample level factor
-  // (-60 dB over decay_n_ passes of its own output length); paused while held
-  // or when K5 is not in the CCW half (the level then stays where it is). A
-  // loop that has decayed to -60 dB is stolen (6 ms, inaudible) and freed.
-  void UpdateDecay() {
+  // K5 CCW = number of repeats, once per block. Per loop voice: rep_k_ counts
+  // its passes since the count began (activation, or K5 leaving noon); repeat
+  // k (0 = the first) plays at base x (1 - k/N)^VESTIGE_REPEAT_CURVE, reached
+  // by a VESTIGE_REPEAT_RAMP_MS ramp at the pass start; in the last repeat the
+  // level ramps to 0 so it lands exactly on the pass end, and the next wrap
+  // frees the voice. Noon / CW (N = 0): no count, the level stays where it is
+  // (base follows it). FS2 hold pauses the count and the final ramp.
+  void UpdateRepeats() {
+    const int N = rep_n_;
+    const float ramp = VESTIGE_REPEAT_RAMP_MS * 0.001f * sr_;
     for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) {
-      if (!active_[s]) { dec_k_[s] = 1.f; continue; }
-      if (decay_n_ <= 0.f || held_ || dying_[s] || eng_[PoolOf(s)].frozen) { dec_k_[s] = 1.f; continue; }
-      const double rho = rho_d_[s] > 0.0 ? rho_d_[s] : 1.0;
-      const float  Lout = (float)((double)PlayLen(s) / rho);
-      dec_k_[s] = (Lout > 1.f) ? expf(-6.9077553f / (decay_n_ * Lout)) : 1.f;   // ln(1000) = 60 dB
-      if (dec_g_[s] < 1e-3f) StealVoice(s);
+      if (!active_[s]) continue;
+      if (pass_[s] != rep_pass_[s]) { rep_pass_[s] = pass_[s]; if (N > 0 && !held_) rep_k_[s]++; }
+      if (N <= 0 || eng_[PoolOf(s)].frozen) {                // endless: keep the level, no count
+        rep_k_[s] = 0; rep_base_[s] = dec_g_[s]; dec_t_[s] = dec_g_[s]; continue;
+      }
+      if (dying_[s]) continue;
+      const int k = rep_k_[s];
+      if (k >= N) { StealVoice(s); continue; }              // after the last repeat (level already 0)
+      float x = 1.f - (float)k / (float)N; if (x < 0.f) x = 0.f;
+      float tgt = rep_base_[s] * powf(x, VESTIGE_REPEAT_CURVE);
+      float step = 1.f / ramp;
+      if (k >= N - 1 && !held_) {                           // the last repeat: out by the pass end
+        const bool   rev = eng_[PoolOf(s)].rev && GuardReady(s);
+        const double rho = rho_d_[s] > 0.0 ? rho_d_[s] : 1.0;
+        const float  L   = (float)PlayLen(s);
+        const float  rem = (float)((double)(rev ? fwd_[s] : L - fwd_[s]) / rho);   // output samples left
+        if (rem <= ramp + 48.f) { tgt = 0.f; step = dec_g_[s] / (rem > 1.f ? rem : 1.f); }
+      }
+      dec_t_[s] = tgt; dec_step_[s] = step;
     }
   }
   void UpdateVoicedGains() {
@@ -3558,9 +3583,13 @@ class Vestige : public Module {
   bool       dying_[VESTIGE_SLOTS]  = {false}; // voice slot fading out → free when silent
   bool       stolen_[VESTIGE_SLOTS] = {false}; // dying voice being fast-released (voice-steal)
   float      steal_inc_ = 1.f;                        // fast-release phase step for stolen voices
-  volatile float decay_n_ = 0.f;                      // K5 CCW: passes to -60 dB (0 = endless)
-  float      dec_g_[VESTIGE_VOICE_SLABS] = {};         // per loop voice decay level (1 set in Init / activation)
-  float      dec_k_[VESTIGE_VOICE_SLABS] = {};         // its per-sample factor
+  volatile int rep_n_ = 0;                            // K5 CCW: number of repeats (0 = endless)
+  float      dec_g_[VESTIGE_VOICE_SLABS] = {};         // per loop voice repeat level (1 set in Init / activation)
+  float      dec_t_[VESTIGE_VOICE_SLABS] = {};         // its target
+  float      dec_step_[VESTIGE_VOICE_SLABS] = {};      // its ramp step per sample
+  float      rep_base_[VESTIGE_VOICE_SLABS] = {};      // the level the count started from
+  int        rep_k_[VESTIGE_VOICE_SLABS] = {};         // repeats played since the count began
+  int32_t    rep_pass_[VESTIGE_VOICE_SLABS] = {};      // last pass seen
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
   bool       first_grain_[VESTIGE_SLOTS] = {false};  // next grain skips its fade-in
