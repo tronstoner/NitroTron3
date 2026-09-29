@@ -187,25 +187,18 @@ class Vestige : public Module {
     // they have no effect in stage 0 (docs/ChronoTron3/vestige-onward-rework-plan.md).
     const float k1  = RemapKnob(cs.Knob(0)); // playback speed crossfade (half · clean · double)
     const float k2  = RemapKnob(cs.Knob(1)); // T (master period) + direction (bipolar)
-    const float k3  = RemapKnob(cs.Knob(2)); // error level of the type SW2 selects (stage 2.5 editor)
+    const float k3  = RemapKnob(cs.Knob(2)); // error amount: all three layers at once
     const float k4  = RemapKnob(cs.Knob(3)); // capture sensitivity (gate threshold)
     diag_k4_ = k4;                            // DIAG heartbeat only
     const float k5  = RemapKnob(cs.Knob(4)); // loop fade in/out
     const int   sw1 = cs.Switch(0);          // 0=UP 1-voice · 1=MID 6-voice · 2=DOWN freeze
-    const int   sw2 = cs.Switch(1);          // error type K3 edits: UP timing · MID condition · DOWN playback
+    // SW2: unused (was the stage 2.5 error-type editor).
     const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
-    // ---- Stage 2.5: error editor (temporary development UI, plan §6) --------
-    // SW2 picks the type, K3 edits that type's stored level with JUMP pickup:
-    // switching SW2 changes nothing until K3 moves past VESTIGE_ERR_K3_EPS, then
-    // the level follows the knob. The raw knob is compared (ADC-scale jitter).
-    {
-      const float k3_raw = cs.Knob(2);
-      const int sel = (sw2 == 0) ? kErrTiming : (sw2 == 1) ? kErrCondition : kErrPlayback;
-      if (sel != err_sel_) { err_sel_ = sel; err_k3_ref_ = k3_raw; err_editing_ = false; }
-      if (!err_editing_ && fabsf(k3_raw - err_k3_ref_) > VESTIGE_ERR_K3_EPS) err_editing_ = true;
-      if (err_editing_) err_level_[sel] = k3;
-    }
+    // ---- Errors: K3 sets all three layers' levels together ------------------
+    // (Was the stage 2.5 editor: SW2 picked a type, K3 edited its level with
+    // jump pickup. The builder runs all three together.)
+    err_level_[kErrTiming] = err_level_[kErrCondition] = err_level_[kErrPlayback] = k3;
 
     // ---- How playing loops follow a T change: VESTIGE_FOLLOW_MODE (stretch) ----
     // Was temporarily on SW2 (A tape / B stretch / C re-cut); all three are kept.
@@ -3707,9 +3700,6 @@ class Vestige : public Module {
   int      last_trig_slot_ = -1; uint32_t last_trig_at_ = 0;
   uint32_t pool_full_ = 0;                               // grains lost to a full physical pool (diag)
   volatile float err_level_[kErrTypes] = {0.f, 0.f, 0.f};   // 0 = off; start with no errors
-  int   err_sel_     = -1;       // type SW2 selected last (-1 = none yet)
-  float err_k3_ref_  = 0.f;      // raw K3 where that type was selected
-  bool  err_editing_ = false;    // K3 has moved past the dead zone since then
   volatile int follow_mode_ = kFollowTape;
   int follow_mode_cfg_ = VESTIGE_FOLLOW_MODE;   // the configured mode (host tests set it directly)
   double   rho_t_[VESTIGE_SLOTS];            // tape-rate target per slot (ISR, per block)

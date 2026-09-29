@@ -408,15 +408,10 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 //   2 = re-cut (cut / pad the end, non-destructive)
 static constexpr int      VESTIGE_FOLLOW_MODE    = 1;
 
-// ---- Stage 2.5: the error editor (TEMPORARY development UI, plan §6) --------
-// SW2 selects which error type K3 edits: UP timing · MIDDLE condition · DOWN
-// playback. K3 edits that type's stored level (0..1) — it is NOT an absolute
-// knob. JUMP pickup: the level snaps to the knob as soon as the knob moves more
-// than VESTIGE_ERR_K3_EPS from where it was when this type was selected; moving
-// SW2 alone changes nothing. All three levels stay live at once. They live in RAM
-// and start at 0 (no errors): values found by ear go into constants later, and
-// the editor is replaced by curated presets in stage 7.
-static constexpr float    VESTIGE_ERR_K3_EPS     = 0.02f;  // raw knob travel (= VESTIGE_K2_MOVE_EPS)
+// ---- Errors on K3 -----------------------------------------------------------
+// K3 sets the level (0..1) of all three error layers together (timing mode 3:
+// TIMING / CONDITION / PLAYBACK). CCW = no errors. SW2 is unused (it was the
+// stage 2.5 error-type editor with jump pickup).
 
 // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass ---
 // Level L = err_level_[kErrTiming]. L == 0: off. For any L > 0 a loop voice
@@ -571,7 +566,7 @@ static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (e
 
 // ---- Timing mode 3: LAYERS ---------------------------------------------------
 // Three error LAYERS play at once, on top of each other, each its own rhythm
-// line — like drum parts. SW2 picks the layer K3 edits (the stage 2.5 editor):
+// line — like drum parts. K3 sets all three levels together:
 //   UP     TIMING     STUTTER, REPEAT, DOUBLE, RATCHET, RETRIG
 //   MIDDLE CONDITION  REST, DECIMATE
 //   DOWN   PLAYBACK   REVERSE

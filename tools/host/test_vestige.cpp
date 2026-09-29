@@ -307,12 +307,12 @@ static void TestStage0() {
 // ---------------------------------------------------------------------------
 // Start each buffer scenario from a known state: effect on, not held, both
 // sides empty, UP, sensible knobs.
-// No error levels, editor pickup re-anchored where K3 sits. K3 is also the
-// stage-2.5 error editor: a test that moves K3 for another reason (e.g. the
-// stage-0 "K3 inert in freeze" check) would otherwise leave a timing level on.
+// No error levels: K3 (the error amount, all three layers) back to CCW. A test
+// that moves K3 for another reason (e.g. the stage-0 "K3 inert in freeze"
+// check) would otherwise leave the errors on.
 static void NoErrors() {
   for (int i = 0; i < 3; i++) v.err_level_[i] = 0.f;
-  v.err_editing_ = false; v.err_k3_ref_ = cs.knob[2];
+  cs.knob[2] = 0.f;
 }
 static void Reset() {
   NoErrors();
@@ -3476,33 +3476,18 @@ int main() {
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
   Check(bad == 0, "no non-finite / >10 samples");
-  // Stage 2.5 error editor: SW2 picks the type, K3 edits its stored level with
-  // jump pickup; moving SW2 alone changes nothing; all three levels persist.
-  { printf("-- stage 2.5: error editor\n");
+  // Errors: K3 sets all three layers' levels together; SW2 does nothing.
+  { printf("-- errors: K3\n");
     { Vestige fresh; Check(fresh.err_level_[0] == 0.f && fresh.err_level_[1] == 0.f && fresh.err_level_[2] == 0.f,
-                           "error levels start at 0 (no errors until edited)"); }
-    // Earlier sections turned K3, which the editor (correctly) picked up: start clean.
-    v.err_level_[0] = v.err_level_[1] = v.err_level_[2] = 0.f; v.err_sel_ = -1; v.err_editing_ = false;
-    cs.sw[1] = 0; cs.knob[2] = 0.5f; RunFor(0.1f);                 // select timing, K3 at rest
-    Check(v.err_level_[0] == 0.f, "selecting a type does not change its level");
-    cs.knob[2] = 0.5f + 0.01f; RunFor(0.1f);                       // ADC-scale jitter
-    Check(v.err_level_[0] == 0.f, "K3 jitter inside the dead zone changes nothing");
-    cs.knob[2] = 0.8f; RunFor(0.1f);
-    const float t = v.err_level_[0];
-    Check(fabsf(t - RemapKnob(0.8f)) < 1e-6f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f,
-          "K3 moved: timing jumps to the knob, the others untouched");
-    cs.sw[1] = 1; RunFor(0.1f);                                    // condition, K3 still at 0.8
-    Check(v.err_level_[1] == 0.f && v.err_level_[0] == t, "switching SW2 alone changes nothing");
-    cs.knob[2] = 0.3f; RunFor(0.1f);
-    Check(fabsf(v.err_level_[1] - RemapKnob(0.3f)) < 1e-6f && v.err_level_[0] == t,
-          "condition edited; timing keeps its value");
-    cs.sw[1] = 2; RunFor(0.1f); cs.knob[2] = 0.6f; RunFor(0.1f);
-    Check(fabsf(v.err_level_[2] - RemapKnob(0.6f)) < 1e-6f && fabsf(v.err_level_[1] - RemapKnob(0.3f)) < 1e-6f &&
-          v.err_level_[0] == t, "playback edited; all three levels live at once");
-    cs.sw[1] = 0; RunFor(0.1f);
-    Check(v.err_level_[0] == t, "back on timing: its level was kept");
-    // leave the editor neutral for anything after this
-    v.err_level_[0] = v.err_level_[1] = v.err_level_[2] = 0.f; cs.knob[2] = 0.5f; RunFor(0.1f); }
+                           "error levels start at 0 (no errors until K3 moves)"); }
+    cs.sw[1] = 0; cs.knob[2] = 0.8f; RunFor(0.1f);
+    const float t = RemapKnob(0.8f);
+    Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "K3 sets all three levels");
+    cs.sw[1] = 2; RunFor(0.1f);
+    Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "SW2 changes nothing");
+    cs.knob[2] = 0.f; RunFor(0.1f);
+    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f, "K3 CCW: all off");
+    cs.sw[1] = 0; }
   // LED2 = effect state: off dark, on solid, recording rapid flicker, held slow blink.
   { printf("-- LED2\n");
     auto Sample = [](float secs, int& ons, int& toggles) {   // LED2 over secs, per 10 ms tick
