@@ -3100,6 +3100,137 @@ static void StepWindows(const SlLog& lg, int s, size_t L, bool rev, int* ok, int
   }
 }
 
+// ---------------------------------------------------------------------------
+// Stage 3, timing mode 3: the three stacked rhythm layers (K3 = all three).
+// A noise loop is captured; one clean pass is kept as the reference; then with
+// K3 up every pass's rendered map (per step: which step's material, direction,
+// ratchet, silence) is checked against the output sample by sample.
+struct LayerStats { int G = 0, cells = 0; long steps = 0, good = 0, silent = 0, silent_ok = 0, bad_lines = 0;
+                    bool changed = false; long first_pass_events = -1; };
+static LayerStats LayerRun(float k3, int tapms, int passes) {
+  LayerStats st;
+  Reset(); cs.sw[0] = 0; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({tapms}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  CapRec r{}; noise_from = n; noise_to = n + tapms * 48;
+  if (!WaitActivation(tapms / 1000.f + 6.f, &r)) { noise_from = noise_to = -1; return st; }
+  noise_from = noise_to = -1;
+  const int s = r.s; const long Q = (long)r.Q;
+  RunFor(2.5f); blk = 1;
+  auto to_pass = [&]() { const int32_t pp = v.pass_[s]; const long lim = n + 20L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(1.f / sr); };
+  to_pass(); hist_on = true; audit_on = true; audit_bad = 0;
+  wet_hist.clear(); hist_n0 = n; RunFor((float)(Q - 2) / sr);
+  const std::vector<float> ref(wet_hist);
+  auto refm = [&](long k) { k = ((k % Q) + Q) % Q; return (k >= 1 && k - 1 < (long)ref.size()) ? ref[k - 1] : 0.f; };
+  cs.knob[2] = k3;
+  std::vector<std::string> first(3);
+  for (int p = 0; p < passes; p++) {
+    to_pass();
+    if (p == 0) st.first_pass_events = v.trig_cnt_[s];      // K3 just came up: seeds pending, pass clean
+    wet_hist.clear(); hist_n0 = n;
+    RunFor((float)(Q - 2) / sr);
+    const int G = v.sl_n_[s];
+    st.G = G; st.cells = v.ln_cells_[s];
+    // Line rules: hits 1..SPAN_MAX, inside the line, at least one pause apart (cyclic).
+    for (int l = 0; l < 3; l++) {
+      std::string line(v.ln_cells_[s], '-'); bool ok = true;
+      for (int h = 0; h < v.ln_nh_[s][l]; h++) {
+        const auto& x = v.ln_hit_[s][l][h];
+        if (x.len < 1 || x.len > VESTIGE_TIMING_SPAN_MAX || x.start < 0 || x.start + x.len > v.ln_cells_[s]) ok = false;
+        for (int c = x.start - 1; c <= x.start + x.len; c++) {
+          const int cc = (c + v.ln_cells_[s]) % v.ln_cells_[s];
+          if (c >= x.start && c < x.start + x.len) { if (line[cc] != '-') ok = false; line[cc] = 'x'; }
+        }
+      }
+      for (int h = 0; h < v.ln_nh_[s][l]; h++) {             // pause cells around each hit are empty
+        const auto& x = v.ln_hit_[s][l][h];
+        const int lo = (x.start - 1 + v.ln_cells_[s]) % v.ln_cells_[s], hi = (x.start + x.len) % v.ln_cells_[s];
+        if (v.ln_nh_[s][l] > 1 && (line[lo] == 'x' || line[hi] == 'x')) ok = false;
+      }
+      if (!ok) st.bad_lines++;
+      std::string typed(line);                                 // positions + types: what evolves
+      for (int h = 0; h < v.ln_nh_[s][l]; h++) { const auto& x = v.ln_hit_[s][l][h]; typed[x.start] = (char)('a' + x.type); }
+      if (p == 1) first[l] = typed; else if (p > 1 && typed != first[l]) st.changed = true;
+    }
+    if (G == 0) continue;
+    auto bnd = [&](int i) { return (i >= G) ? Q : (long)((double)Q * i / G + 0.5); };
+    for (int i = 0; i < G; i++) {
+      const int rt = v.tl_rat_[s][i], src = v.tl_src_[s][i], dr = v.tl_dir_[s][i], cn = v.tl_cnd_[s][i];
+      for (int j = 0; j < rt; j++) {
+        const long b0 = bnd(i), b1 = bnd(i + 1);
+        const long a = (j == 0) ? b0 : (long)(b0 + (double)(b1 - b0) * j / rt + 0.5);
+        const long e = (j + 1 < rt) ? (long)(b0 + (double)(b1 - b0) * (j + 1) / rt + 0.5) : b1;
+        const long t0 = a + 300, t1 = e - 20;                  // past the 5 ms restart / fade
+        if (t1 - t0 < 200 || t1 > (long)wet_hist.size()) continue;
+        if (cn == 1) { double en = 0; for (long t = t0; t < t1; t++) en += wet_hist[t-1] * wet_hist[t-1];
+                       st.silent++; if (en / (t1 - t0) < 1e-8) st.silent_ok++; continue; }
+        if (cn >= 2) continue;                                 // decimated: not the material itself
+        double best = -2;
+        for (int lag = -2; lag <= 2; lag++) { double sxy = 0, sxx = 0, syy = 0;
+          for (long t = t0; t < t1; t++) {
+            const long k = (dr > 0) ? bnd(src) + (t - a) : bnd(src + 1) - 1 - (t - a);
+            const float x = wet_hist[t - 1], y = refm(k + lag);
+            sxy += x * y; sxx += x * x; syy += y * y; }
+          best = std::max(best, sxy / sqrt(sxx * syy + 1e-20)); }
+        st.steps++; if (best > 0.95) st.good++;
+      }
+    }
+  }
+  audit_on = false; hist_on = false; blk = 48; cs.knob[2] = 0.f; Realign();
+  return st;
+}
+static void TestTimingLayers() {
+  printf("-- stage 3: the TIMING error, mode 3: three stacked rhythm layers\n");
+  // Steps: ~VESTIGE_TIMING_STEP_MS up to the knee, slower past it; always an
+  // exact division of the loop (2^k or 3 x 2^k).
+  struct Len { int ms, G; } lens[] = {{500, 4}, {2000, 16}, {4000, 24}, {6000, 32}, {8000, 32}};
+  bool g_ok = true; std::string gs;
+  for (const Len& x : lens) {
+    const LayerStats st = LayerRun(0.65f, x.ms, 4);
+    char b[48]; snprintf(b, sizeof b, "%d ms: G %d (line %d)  ", x.ms, st.G, st.cells); gs += b;
+    if (st.G != x.G || st.cells < VESTIGE_TIMING_LINE_STEPS || st.cells % st.G) g_ok = false;
+  }
+  printf("      %s\n", gs.c_str());
+  Check(g_ok, "steps per pass: 500 ms 4 / 2 s 16 (125 ms) / 4 s 24 / 6 s 32 / 8 s 32 (250 ms); line >= 32 steps, whole passes");
+  // Render: every step plays exactly its map; rests are silent; no bad reads.
+  for (float k3 : {0.65f, 1.f}) {
+    const LayerStats st = LayerRun(k3, 2000, 12);
+    printf("      K3 %.2f, 2 s: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld, bad lines %ld\n",
+           k3, st.good, st.steps, st.silent_ok, st.silent, audit_bad, st.bad_lines);
+    char m[160]; snprintf(m, sizeof m, "K3 %.2f: every step = its source step (direction, ratchet) at c > 0.95; rests silent; no read outside the guard", k3);
+    Check(st.steps > 60 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0, m);
+    snprintf(m, sizeof m, "K3 %.2f: hit lines keep their rules (1..%d steps, a pause apart) and evolve (places / types)", k3, VESTIGE_TIMING_SPAN_MAX);
+    Check(st.bad_lines == 0 && st.changed, m);
+    if (k3 < 1.f) Check(st.first_pass_events == 0, "K3 up from 0: the first pass plays clean (the lines are built during it)");
+  }
+  { const LayerStats st = LayerRun(1.f, 8000, 3);
+    Check(st.steps > 30 && st.good == st.steps && st.silent_ok == st.silent && audit_bad == 0,
+          "8 s loop, K3 max: every step matches its map, rests silent, no bad reads"); }
+  // K3 CCW: nothing at all.
+  { cs.knob[2] = 0.f; RunFor(0.1f);
+    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f, "K3 CCW: no error levels"); }
+}
+// K4 = degradation colour: clean (engine idle) around noon, BBD CCW, tape CW;
+// engaging / leaving / flipping never steps the wet more than the engaged sound.
+static void TestK4Degrade() {
+  printf("-- K4: degradation colour\n");
+  Reset(); cs.sw[0] = 0; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  CapRec r{}; sustain_hz = 110.f; sustain_input = true; play_input = true; WaitActivation(3.f, &r); sustain_input = false; play_input = false;
+  RunFor(2.f); blk = 1;
+  auto seg = [&](float k, float secs) { cs.knob[3] = k; maxd = 0.f; RunFor(secs); return maxd; };
+  const float clean = seg(0.5f, 1.5f); const bool idle_noon = v.degrade_.Idle();
+  cs.knob[3] = 0.5f + VESTIGE_K4_DEADZONE * 0.5f; RunFor(0.3f); const bool idle_near = v.degrade_.Idle();
+  const float in_tape = seg(0.85f, 1.0f), tape = seg(0.85f, 1.5f), out_tape = seg(0.5f, 1.0f);
+  const float in_bbd = seg(0.15f, 1.0f), bbd = seg(0.15f, 1.5f), flip = seg(0.85f, 1.5f), back = seg(0.5f, 1.5f);
+  const bool idle_end = v.degrade_.Idle();
+  printf("      max sample step: clean %.4f | ->tape %.4f tape %.4f ->noon %.4f | ->BBD %.4f BBD %.4f ->tape %.4f ->noon %.4f\n",
+         clean, in_tape, tape, out_tape, in_bbd, bbd, flip, back);
+  Check(idle_noon && idle_near && idle_end, "K4 at noon (and inside its dead zone): colour engine idle");
+  const float lim = 1.5f * std::max(std::max(tape, bbd), clean);
+  Check(in_tape <= lim && out_tape <= lim && in_bbd <= lim && flip <= lim && back <= lim,
+        "K4 into / out of / across the colour: no step above 1.5x the engaged sound's own");
+  blk = 48; cs.knob[3] = 0.5f; Realign();
+}
 static void TestTimingSlices() {
   printf("-- stage 3: the TIMING error, mode 1: SLICE REARRANGEMENT (%d slices)\n", VESTIGE_TIMING_SLICES);
   // Level 0: nothing drawn.
@@ -3477,8 +3608,10 @@ int main() {
   // builder dropped (e7afd92). Behaviour tests come back once the slice idea is
   // settled; the safety checks elsewhere still run over everything.
   if (VESTIGE_TIMING_MODE == 0) TestTimingError();
+  else if (VESTIGE_TIMING_MODE == 3) TestTimingLayers();
   else if (VESTIGE_TIMING_FIXED_ARRANGEMENT) TestTimingSlices();
-  else printf("-- slice mode: behaviour tests skipped (discovery phase)\n");
+  else printf("-- slice / pass-memory mode: behaviour tests skipped (discovery phase)\n");
+  TestK4Degrade();
   TestFollowRecut();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
