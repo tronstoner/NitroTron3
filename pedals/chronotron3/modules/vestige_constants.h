@@ -567,9 +567,9 @@ static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (e
 // ---- Timing mode 3: LAYERS ---------------------------------------------------
 // Three error LAYERS play at once, on top of each other, each its own rhythm
 // line — like drum parts. K3 sets all three levels together:
-//   UP     TIMING     STUTTER, REPEAT, DOUBLE, RATCHET, RETRIG
-//   MIDDLE CONDITION  REST, DECIMATE
-//   DOWN   PLAYBACK   REVERSE
+//   TIMING     STUTTER, REPEAT, DOUBLE, RATCHET, RETRIG
+//   CONDITION  REST, DECIMATE
+//   PLAYBACK   REVERSE
 // A layer at level 0 is off. STEPS: the pass is cut into G equal steps, G =
 // a power of two or 3 x one (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64), the
 // one whose step is closest to VESTIGE_TIMING_STEP_MS — so a step feels the
