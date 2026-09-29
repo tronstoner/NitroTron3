@@ -21,7 +21,10 @@ static constexpr size_t VESTIGE_VOICE_CAP        = VESTIGE_LOOP_MAX_SAMPLES + VE
 // ---------------------------------------------------------------------------
 // Topology (SW1: UP = 1 voice · MIDDLE = 6 voices · DOWN = freeze)
 // ---------------------------------------------------------------------------
-static constexpr int    VESTIGE_MAX_VOICES   = 4;   // voiced pool ceiling (SW1 MIDDLE). TEST: was 6.
+static constexpr int    VESTIGE_MAX_VOICES   = 3;   // voiced pool ceiling (SW1 MIDDLE). Was 6, then 4.
+// 2026-09-29: at 4 voices with K1 toward the upper octave, the pedal showed
+// digital distortion and glitches (suspected CPU overload). 3 voices also fits the
+// grain cap in every state, including a voice fading out during a replacement.
 // Grain budget: one playback stream = 2 overlapping grains, and while K1 sits
 // between noon and an end each voice plays TWO streams (clean + shifted) to
 // crossfade them, i.e. 4 grains per voice. At 6 voices that is 24 against
