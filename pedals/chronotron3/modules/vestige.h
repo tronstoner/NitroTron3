@@ -439,6 +439,7 @@ class Vestige : public Module {
     // leaving MIDDLE retires the older loops oldest-first over K5, and the
     // age-ramp gains follow the live set.
     if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); UpdateTapeTargets(); }
+    if (VESTIGE_TIMING_MODE == 3) TimingLayerTick();
     for (size_t i = 0; i < size; i++) {
       const float x = in[i];
 
@@ -1828,11 +1829,7 @@ class Vestige : public Module {
   // list of hits on a line of ln_cells_ cells (G steps x the passes per line).
   struct LineHit { int8_t start, len, type, sub, age; };
   static constexpr int kLineMaxHits = VESTIGE_TIMING_LINE_MAX_CELLS / 2;
-  static uint64_t LineMask(int start, int len) {
-    uint64_t m = 0;
-    for (int i = start; i < start + len; i++) m |= (1ull << i);
-    return m;
-  }
+  static uint64_t LineMask(int start, int len) { return ((1ull << len) - 1ull) << start; }   // len <= 4
   // Cells a new hit may not touch: every other hit plus one pause cell on each
   // side (cyclic: the line loops). skip = a hit to leave out (-1 none).
   uint64_t LineBlocked(int s, int l, int skip) const {
@@ -1842,15 +1839,20 @@ class Vestige : public Module {
       if (h == skip) continue;
       const LineHit& x = ln_hit_[s][l][h];
       b |= LineMask(x.start, x.len);
-      b |= 1ull << ((x.start - 1 + C) % C);
-      b |= 1ull << ((x.start + x.len) % C);
+      const int lo = x.start > 0 ? x.start - 1 : C - 1, hi = x.start + x.len < C ? x.start + x.len : 0;   // cyclic neighbours
+      b |= (1ull << lo) | (1ull << hi);
     }
     return b;
   }
-  bool LineFits(int s, int l, int start, int len, int skip) const {
+  // Fits against a precomputed LineBlocked() mask (the placement searches
+  // compute it once, not once per candidate cell: that was the CPU burst).
+  bool LineFitsIn(int s, int start, int len, uint64_t blocked) const {
     const int C = ln_cells_[s];
     if (start < 0 || len < 1 || start + len > C || len > VESTIGE_TIMING_SPAN_MAX) return false;
-    return (LineMask(start, len) & LineBlocked(s, l, skip)) == 0;
+    return (LineMask(start, len) & blocked) == 0;
+  }
+  bool LineFits(int s, int l, int start, int len, int skip) const {
+    return LineFitsIn(s, start, len, LineBlocked(s, l, skip));
   }
   // A type for a new hit on layer l (weights; RATCHET only from its level).
   int LineDrawType(int l, int8_t* sub) {
@@ -1881,7 +1883,8 @@ class Vestige : public Module {
   // Grow hit h cell by cell with chance fill (up to VESTIGE_TIMING_SPAN_MAX).
   void LineGrow(int s, int l, int h, float fill) {
     LineHit& x = ln_hit_[s][l][h];
-    while (x.len < VESTIGE_TIMING_SPAN_MAX && TimingRand() < fill && LineFits(s, l, x.start, x.len + 1, h)) x.len++;
+    const uint64_t blocked = LineBlocked(s, l, h);          // the other hits do not move while it grows
+    while (x.len < VESTIGE_TIMING_SPAN_MAX && TimingRand() < fill && LineFitsIn(s, x.start, x.len + 1, blocked)) x.len++;
   }
   bool LineAdd(int s, int l, int start, float fill) {
     if (ln_nh_[s][l] >= kLineMaxHits || !LineFits(s, l, start, 1, -1)) return false;
@@ -1896,7 +1899,8 @@ class Vestige : public Module {
   int LineFreeCell(int s, int l, bool pulse) {
     const int C = ln_cells_[s];
     int c[VESTIGE_TIMING_LINE_MAX_CELLS]; int nc = 0;
-    for (int i = 0; i < C; i += (pulse ? 2 : 1)) if (LineFits(s, l, i, 1, -1)) c[nc++] = i;
+    const uint64_t blocked = LineBlocked(s, l, -1);
+    for (int i = 0; i < C; i += (pulse ? 2 : 1)) if (!(blocked & (1ull << i))) c[nc++] = i;
     if (nc == 0) return -1;
     return c[TimingPick(nc)];
   }
@@ -1919,12 +1923,13 @@ class Vestige : public Module {
     for (int i = 0; i < k; i++) LineAdd(s, l, 2 * (((i * P) / k + rot) % P), 0.f);   // evenly spread (Euclidean)
     for (int h = 0; h < ln_nh_[s][l]; h++) LineGrow(s, l, h, fill);
   }
-  void LineMutate(int s, int l, float level) {
+  static int LineOps(float level) { return 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * level + 0.5f); }
+  // `ops` changes to layer l's line (see vestige_constants.h).
+  void LineMutate(int s, int l, float level, int ops) {
     const int C = ln_cells_[s];
     const float fill = VESTIGE_TIMING_LINE_FILL_A + VESTIGE_TIMING_LINE_FILL_B * level;
     float rnd = (level - VESTIGE_TIMING_LINE_RAND_FROM) / (1.f - VESTIGE_TIMING_LINE_RAND_FROM);
     if (rnd < 0.f) rnd = 0.f;
-    const int ops = 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * level + 0.5f);
     for (int o = 0; o < ops; o++) {
       int& nh = ln_nh_[s][l];
       const int tgt = LineDrawTarget(s, level);
@@ -1967,7 +1972,19 @@ class Vestige : public Module {
     return VESTIGE_TIMING_W_STUTTER + VESTIGE_TIMING_W_REPEAT + VESTIGE_TIMING_W_DOUBLE +
            VESTIGE_TIMING_W_RATCHET + VESTIGE_TIMING_W_RETRIG > 0.f;
   }
-  void LineClear(int s) { for (int l = 0; l < kErrTypes; l++) ln_nh_[s][l] = 0; ln_cells_[s] = 0; }
+  void LineClear(int s) { for (int l = 0; l < kErrTypes; l++) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; } ln_cells_[s] = 0; }
+  // Once per audio block: one pending change per layer per loop voice. A pass
+  // start only renders; the changes for the NEXT pass are spread over the
+  // blocks after it (at once they were a CPU burst of up to 5 blocks — clicks).
+  void TimingLayerTick() {
+    for (int s = 0; s < VESTIGE_VOICE_SLABS; s++)
+      for (int l = 0; l < kErrTypes; l++) {
+        if (ln_ops_[s][l] <= 0) continue;
+        ln_ops_[s][l]--;
+        const float lv = err_level_[l];
+        if (lv > 0.f && ln_nh_[s][l] > 0 && LayerOn(l)) LineMutate(s, l, lv, 1);
+      }
+  }
   // Pass start (or loop start, el0 = the elapsed pass it joins at): evolve
   // each live layer, then render this pass's segment of the three lines into
   // per-step (source step, direction, ratchet, condition) and from those the
@@ -2002,8 +2019,10 @@ class Vestige : public Module {
     // Evolve + age.
     for (int l = 0; l < kErrTypes; l++) {
       const float lv = err_level_[l];
-      if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; continue; }
-      if (ln_nh_[s][l] == 0) LineSeed(s, l, lv); else LineMutate(s, l, lv);
+      if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; continue; }
+      if (ln_nh_[s][l] == 0) LineSeed(s, l, lv);
+      else if (ln_ops_[s][l] > 0) LineMutate(s, l, lv, ln_ops_[s][l]);   // leftovers (a pass shorter than the spread)
+      ln_ops_[s][l] = LineOps(lv);                          // this pass's changes, one per block (TimingLayerTick)
       for (int h = 0; h < ln_nh_[s][l]; h++) {               // a hit in this pass plays once more
         LineHit& x = ln_hit_[s][l][h];
         if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= VESTIGE_TIMING_LINE_LIFE) LineRetype(l, x);
@@ -3701,6 +3720,7 @@ class Vestige : public Module {
   int      ln_nh_[VESTIGE_VOICE_SLABS][kErrTypes] = {};
   int      ln_cells_[VESTIGE_VOICE_SLABS]    = {0};      // the line length the hits were placed on
   int      ln_pass_[VESTIGE_VOICE_SLABS]     = {0};      // which pass of the line plays
+  int      ln_ops_[VESTIGE_VOICE_SLABS][kErrTypes] = {};   // changes still pending for the next pass
   int8_t   tl_src_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},   // this pass's render (diag)
            tl_dir_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},
            tl_rat_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},
