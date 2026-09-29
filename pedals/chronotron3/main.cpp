@@ -257,12 +257,11 @@ int main() {
         // (all cumulative).
         const unsigned cpu = (unsigned)(g_cpu.GetMaxCpuLoad() * 1000.f + 0.5f);
         g_cpu.Reset();
-        DiagLine("VS HB t=%u k4=%s open=%u close=%u T=%u drops=%u usb=%u", (unsigned)now,
-            F3(vestige.DiagK4()), L(vestige.DiagOpen()), L(vestige.DiagOpen() * VESTIGE_AUTO_HYST),
-            (unsigned)vestige.DiagT(), (unsigned)vestige.DiagDrops(), (unsigned)g_diag_usb_drops);
-        DiagLine("VS CPU t=%u cpu=%u k3=%s cap=%u pool=%u jumps=%u plans=%u", (unsigned)now, cpu,
-            F3(vestige.DiagK3()), (unsigned)vestige.DiagCapDrops(), (unsigned)vestige.DiagPoolFull(),
-            (unsigned)vestige.DiagJumps(), (unsigned)vestige.DiagPlans());
+        // (One line: a second DiagLine right after is dropped — USB still busy.)
+        DiagLine("VS HB t=%u k4=%s T=%u drops=%u usb=%u cpu=%u k3=%s cap=%u pool=%u jumps=%u plans=%u",
+            (unsigned)now, F3(vestige.DiagK4()), (unsigned)vestige.DiagT(), (unsigned)vestige.DiagDrops(),
+            (unsigned)g_diag_usb_drops, cpu, F3(vestige.DiagK3()), (unsigned)vestige.DiagCapDrops(),
+            (unsigned)vestige.DiagPoolFull(), (unsigned)vestige.DiagJumps(), (unsigned)vestige.DiagPlans());
       } else {
         Vestige::GateDiag r;
         if (vestige.DiagPop(r)) {
