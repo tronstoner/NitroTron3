@@ -2050,15 +2050,20 @@ class Vestige : public Module {
     if (!any) { LineClear(s); return; }
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
-    // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to
-    // VESTIGE_TIMING_STEP_MS in output time.
-    const double want = (double)VESTIGE_TIMING_STEP_MS * 0.001 * (double)sr_;
+    // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to the
+    // wanted step in output time: VESTIGE_TIMING_STEP_MS up to a loop of
+    // VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^STEP_EXP
+    // (long, ambient loops glitch slower: 8 s = 250 ms at 0.5).
+    const double knee = (double)VESTIGE_TIMING_STEP_KNEE_MS * 0.001 * (double)sr_;
+    const double want = (double)VESTIGE_TIMING_STEP_MS * 0.001 * (double)sr_
+                      * (pass_out > knee ? pow(pass_out / knee, (double)VESTIGE_TIMING_STEP_EXP) : 1.0);
     int G = 1; double best = 1e30;
     for (int base = 1; base <= 3; base += 2)
       for (int g = base; g <= VESTIGE_TIMING_LAYER_MAX_STEPS; g *= 2) {
         const double r = pass_out / (double)g / want;
         const double d = r > 1.0 ? r : 1.0 / r;
-        if (d < best) { best = d; G = g; }
+        const bool tie = fabs(d - best) <= best * 1e-6;       // (a tie keeps the finer grid)
+        if ((d < best && !tie) || (tie && g > G)) { best = d; G = g; }
       }
     const int LP = (G >= VESTIGE_TIMING_LINE_STEPS) ? 1 : (VESTIGE_TIMING_LINE_STEPS + G - 1) / G;   // passes per line
     const int C = G * LP;

@@ -577,10 +577,11 @@ static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (e
 //   PLAYBACK   REVERSE
 // A layer at level 0 is off. STEPS: the pass is cut into G equal steps, G =
 // a power of two or 3 x one (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64), the
-// one whose step is closest to VESTIGE_TIMING_STEP_MS — so a step feels the
-// same at every loop length (2 s loop: 16 steps of 125 ms; 4 s: 32; 6 s = 3
-// bars: 48) while it always divides the loop exactly (tempo-synced, the grid
-// restarts on every pass's one). LINE: each layer's line is G x ceil(32 / G)
+// one whose step is closest to the wanted step: VESTIGE_TIMING_STEP_MS up to
+// VESTIGE_TIMING_STEP_KNEE_MS, slower past it (below) — so the glitch keeps its
+// character from short loops up (2 s loop: 16 steps of 125 ms), long ambient
+// loops glitch slower, and a step always divides the loop exactly (tempo-
+// synced, the grid restarts on every pass's one). LINE: each layer's line is G x ceil(32 / G)
 // cells — about two bars of 16ths: a 2 s loop gets a 2-pass line, a 6 s loop
 // a 1-pass (3-bar) line. Cells are HITS (1 .. VESTIGE_TIMING_SPAN_MAX cells,
 // always at least one pause cell between two hits) and pauses. The line plays
@@ -601,6 +602,12 @@ static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (e
 //   hits per 16 steps (target) = HITS_A + HITS_B * L
 //   FILL                       = FILL_A + FILL_B * L
 static constexpr float  VESTIGE_TIMING_STEP_MS      = 125.f;    // 250 = half time, 62.5 = double time
+// Longer loops glitch slower: past the knee the wanted step grows as
+// (loop / knee)^EXP — 4 s: 167 ms (24 steps), 6 s: 188 ms (32), 8 s: 250 ms
+// (32, half time). EXP 0 = the same step at every length, 1 = long loops keep
+// the knee loop's step COUNT.
+static constexpr float  VESTIGE_TIMING_STEP_KNEE_MS = 2000.f;
+static constexpr float  VESTIGE_TIMING_STEP_EXP     = 0.5f;
 static constexpr int    VESTIGE_TIMING_LINE_STEPS   = 32;       // a line is at least this many steps
 static constexpr float  VESTIGE_TIMING_LINE_HITS_A  = 0.5f;
 static constexpr float  VESTIGE_TIMING_LINE_HITS_B  = 7.5f;     // L = 1: 8 hits per 16 steps = the full pulse
