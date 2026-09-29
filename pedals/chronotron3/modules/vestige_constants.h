@@ -531,13 +531,14 @@ static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taki
 //   RATCHET  each step of the span squeezed in 4 times
 //   RETRIG   back to the one in Euclidean groups: E(2,n) = 4+4, E(3,8) = 3+3+2
 //            (from its 2nd hit to the end of the pass; not 1..4)
+//   REVERSE  the span plays backward (once the loop's guard copy is ready)
 //   CLEAN    the span plays as recorded — the no-glitch choice in the set
 // Steps before step 1 are the loop's last steps (a STUTTER / REPEAT at the
 // start of the pass replays the end of the loop).
 // A new figure only goes on free steps.
 static constexpr int    VESTIGE_TIMING_SPAN_MAX = 4;
 // Weights (relative chance of each figure being picked) — EDITABLE:
-static constexpr int    VESTIGE_TIMING_FIGS = 7;
+static constexpr int    VESTIGE_TIMING_FIGS = 8;
 static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // REST
   1.f,   // STUTTER
@@ -545,6 +546,7 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // DOUBLE
   1.f,   // RATCHET
   1.f,   // RETRIG
+  1.f,   // REVERSE
   1.f,   // CLEAN
 };
 // Where figures land: steps in the back half of the pass weigh this much vs 1

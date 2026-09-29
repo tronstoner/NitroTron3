@@ -947,7 +947,7 @@ class Vestige : public Module {
       // TIMING error (stage 3): pass-start plan + in-pass retrigger. Loop side
       // only; nothing at all happens while the timing level is 0.
       if (s < VESTIGE_VOICE_SLABS && !e.frozen) TimingStep(s, rev, L);
-      else if (s < VESTIGE_VOICE_SLABS) mute_dt_[s] = 0.f;     // no timing: a rest never hangs
+      else if (s < VESTIGE_VOICE_SLABS) { mute_dt_[s] = 0.f; lrev_[s] = false; }   // no timing: nothing hangs
     }
     const bool orig = OrigPath(s, rho_d) && cur_view_[s] < 0;   // no T change has touched this loop
     // Grain read rate: tape reads at the head rate (pitch follows), stretch at
@@ -957,6 +957,8 @@ class Vestige : public Module {
     // The READ head: the timeline head, minus the TIMING retrigger offset (the
     // timeline itself never moves). == fwd_ unless a retrigger is in progress.
     const float head = is_frip ? frip_head_ : ReadHead(s);
+    // Grain direction: the loop's, flipped inside a TIMING reverse span.
+    const bool grev = (s < VESTIGE_VOICE_SLABS && lrev_[s]) ? !rev : rev;
     // Seam-crossing (non-frozen) grains need the head-continuation guard behind
     // L; clamp to what this row actually has. Loop rows always have the full
     // VESTIGE_GUARD_SAMPLES (unchanged). Frozen grains never cross the seam, so
@@ -1028,7 +1030,7 @@ class Vestige : public Module {
             float atk = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
             const bool rs = (s < VESTIGE_VOICE_SLABS) && restart_[s][0];
             if (rs) atk = RestartAttack(glen_c);
-            EmitStreamGrain(s, glen_c, head, gr, rev, coef, atk, 0, true, rs);
+            EmitStreamGrain(s, glen_c, head, gr, grev, coef, atk, 0, true, rs);
             first_grain_[s] = false;
             if (rs) restart_[s][0] = false;
           }
@@ -1072,7 +1074,7 @@ class Vestige : public Module {
         else if (mb_timer_sp_[s][bi] <= 0) {
           if (g_sp_ > VESTIGE_K1_GATE_EPS) {
             const bool rs = (s < VESTIGE_VOICE_SLABS) && restart_[s][1];
-            EmitStreamGrain(s, gsp, hsp, Rsp, rev,
+            EmitStreamGrain(s, gsp, hsp, Rsp, grev,
                             (nb == 1) ? nullptr : mb_bank_coef_[row][bi],
                             rs ? RestartAttack(gsp) : (ver_idle_[s][1] ? 0.f : 1.f), 1, !orig, rs);
             if (rs) restart_[s][1] = false;
@@ -1353,6 +1355,13 @@ class Vestige : public Module {
   // pattern span), so the K1 half-speed version stays continuous there too.
   float ReadHead(int s, int32_t* rpass = nullptr) const {
     if (rpass) *rpass = pass_[s];
+    if (s < VESTIGE_VOICE_SLABS && lrev_[s]) {              // TIMING reverse span: the mirror
+      const float Lm = (float)PlayLen(s);
+      float h = lrev_m_[s] - fwd_[s];
+      if (h >= Lm) h -= Lm;
+      if (h < 0.f) h += Lm;
+      return h;
+    }
     if (s >= VESTIGE_VOICE_SLABS || trig_off_[s] == 0.f) return fwd_[s];
     const float L = (float)PlayLen(s);
     float h = trig_rev_[s] ? fwd_[s] + trig_off_[s] : fwd_[s] - trig_off_[s];
@@ -1568,7 +1577,7 @@ class Vestige : public Module {
   // ---- Timing mode 2: PASS MEMORY ------------------------------------------
   struct TimingFig { int8_t type, step, len, age; };   // a figure on a remembered pass (len = span in
                                                         //  steps; RETRIG: its hits. age = turns played)
-  enum TimingFigType { kFigRest = 0, kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig, kFigClean };
+  enum TimingFigType { kFigRest = 0, kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig, kFigReverse, kFigClean };
   // RETRIG with `hits`: the step it starts changing (its pattern's 2nd hit), -1 = does not fit n.
   static int TimingRetrigStep(int hits, int n) {
     if (n < 2 * hits) return -1;                            // E(2,4+) and E(3,6+) only
@@ -1599,8 +1608,8 @@ class Vestige : public Module {
   }
   // Does figure (t, k, len) fit: inside the pass, on free steps, within `room`,
   // and (the ratchets) its sub-steps long enough for this loop.
-  bool TimingFigFits(int t, int k, int len, int n, uint32_t used, int room, bool ok2, bool ok4) const {
-    if ((t == kFigDouble && !ok2) || (t == kFigRatchet && !ok4)) return false;
+  bool TimingFigFits(int t, int k, int len, int n, uint32_t used, int room, bool ok2, bool ok4, bool okr) const {
+    if ((t == kFigDouble && !ok2) || (t == kFigRatchet && !ok4) || (t == kFigReverse && !okr)) return false;
     if (t == kFigRetrig) { if (k != TimingRetrigStep(len, n)) return false; }
     else if (k + len > n) return false;
     const uint32_t c = TimingFigCover(TimingFig{(int8_t)t, (int8_t)k, (int8_t)len, 0}, n);
@@ -1611,15 +1620,16 @@ class Vestige : public Module {
   // VESTIGE_TIMING_FIG_WEIGHT among the types that fit somewhere, then its
   // length uniformly among the lengths that fit, then its first step by step
   // weight (back half x VESTIGE_TIMING_MEM_BACK_WEIGHT). ok2 / ok4: a step
-  // split in 2 / 4 is long enough for this loop (double / ratchet).
-  bool TimingMemAdd(int s, int room, bool ok2, bool ok4) {
+  // split in 2 / 4 is long enough for this loop (double / ratchet); okr: the
+  // guard is ready, so a grain may read backward across the seam (reverse).
+  bool TimingMemAdd(int s, int room, bool ok2, bool ok4, bool okr) {
     const int m = pm_cur_[s];
     const int n = pm_n_[s][m];
     if (room < 1 || pm_nf_[s][m] >= VESTIGE_TIMING_MEM_FIGS) return false;
     const uint32_t used = TimingMemCover(s);
     int lens[VESTIGE_TIMING_SPAN_MAX + 2];
     auto any = [&](int t, int len) {
-      for (int k = 0; k < n; k++) if (TimingFigFits(t, k, len, n, used, room, ok2, ok4)) return true;
+      for (int k = 0; k < n; k++) if (TimingFigFits(t, k, len, n, used, room, ok2, ok4, okr)) return true;
       return false;
     };
     bool tok[VESTIGE_TIMING_FIGS]; float tot = 0.f;
@@ -1644,11 +1654,11 @@ class Vestige : public Module {
     for (int i = 0; i < nl; i++) if (any(t, lens[i])) fl[nf++] = lens[i];
     const int len = fl[TimingPick(nf)];
     float tw = 0.f;
-    for (int k = 0; k < n; k++) if (TimingFigFits(t, k, len, n, used, room, ok2, ok4)) tw += TimingStepWeight(k, n);
+    for (int k = 0; k < n; k++) if (TimingFigFits(t, k, len, n, used, room, ok2, ok4, okr)) tw += TimingStepWeight(k, n);
     float q = TimingRand() * tw;
     int k = -1;
     for (int i = 0; i < n; i++) {
-      if (!TimingFigFits(t, i, len, n, used, room, ok2, ok4)) continue;
+      if (!TimingFigFits(t, i, len, n, used, room, ok2, ok4, okr)) continue;
       k = i;
       if (q < TimingStepWeight(i, n)) break;
       q -= TimingStepWeight(i, n);
@@ -1688,6 +1698,7 @@ class Vestige : public Module {
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
     const bool ok4 = pass_out / (double)n / 4.0 >= min_step;   // a step split in 4 (ratchet) fits
     const bool ok2 = pass_out / (double)n / 2.0 >= min_step;   // split in 2 (double) fits
+    const bool okr = GuardReady(s);                             // reverse reads need the guard
     // 1. Age: a figure that has played its VESTIGE_TIMING_MEM_LIFE passes goes.
     for (int i = 0; i < pm_nf_[s][pm_cur_[s]];) {
       if (++pm_fig_[s][pm_cur_[s]][i].age >= VESTIGE_TIMING_MEM_LIFE) pm_fig_[s][pm_cur_[s]][i] = pm_fig_[s][pm_cur_[s]][--pm_nf_[s][pm_cur_[s]]];
@@ -1704,14 +1715,15 @@ class Vestige : public Module {
       // The target counts FIGURES, whatever their span (a span only needs free steps).
       const int c = pm_nf_[s][pm_cur_[s]];
       if (c > tgt)      TimingMemRemove(s);
-      else if (c < tgt && TimingMemAdd(s, n, ok2, ok4)) {}
+      else if (c < tgt && TimingMemAdd(s, n, ok2, ok4, okr)) {}
       else if (TimingMemRemove(s))                             // swap (an earlier figure) — also
-        TimingMemAdd(s, n, ok2, ok4);                          //  when the pass is too full to add
+        TimingMemAdd(s, n, ok2, ok4, okr);                          //  when the pass is too full to add
       timing_edits_++;
     }
     // Render: which slice each step plays, muted or not, ratchet division.
     int8_t play[VESTIGE_TIMING_SLICE_MAX], mute[VESTIGE_TIMING_SLICE_MAX], rat[VESTIGE_TIMING_SLICE_MAX];
-    for (int i = 0; i < n; i++) { play[i] = (int8_t)i; mute[i] = 0; rat[i] = 1; }
+    int8_t rvk[VESTIGE_TIMING_SLICE_MAX], rve[VESTIGE_TIMING_SLICE_MAX];   // REVERSE span [rvk, rve) per step (-1 none)
+    for (int i = 0; i < n; i++) { play[i] = (int8_t)i; mute[i] = 0; rat[i] = 1; rvk[i] = rve[i] = -1; }
     for (int f = 0; f < pm_nf_[s][pm_cur_[s]]; f++) {
       const TimingFig& g = pm_fig_[s][pm_cur_[s]][f];
       const int k = g.step, e = (k + g.len < n) ? k + g.len : n;
@@ -1722,6 +1734,7 @@ class Vestige : public Module {
         case kFigRepeat:  for (int i = k; i < e; i++) play[i] = (int8_t)((k - 1 + n) % n); break;       // the step before, len times
         case kFigDouble:  for (int i = k; i < e; i++) rat[i] = 2; break;
         case kFigRatchet: for (int i = k; i < e; i++) rat[i] = 4; break;
+        case kFigReverse: for (int i = k; i < e; i++) { rvk[i] = (int8_t)k; rve[i] = (int8_t)e; } break;
         case kFigRetrig: {
           const uint32_t m = Bjorklund(g.len, n);
           int last = 0;
@@ -1732,29 +1745,42 @@ class Vestige : public Module {
     }
     for (int i = 0; i < n; i++) sl_order_[s][i] = mute[i] ? (int8_t)-1 : play[i];
     auto bnd = [&](int i) { return (float)(size_t)((double)L * (double)i / (double)n + 0.5); };
+    // REVERSE: the read mirrors the timeline over the span, h = M - fwd_ (see
+    // ReadHead): forward M = b0 + b1 - 1 (read from the span's end down to its
+    // start); a reversed loop M = 2L - 1 - b0 - b1 (read up through it).
+    auto mirror = [&](int k, int e) {
+      const float b0 = bnd(k), b1 = (e < n) ? bnd(e) : (float)L;
+      return rev ? 2.f * (float)L - 1.f - b0 - b1 : b0 + b1 - 1.f;
+    };
     // Step 1 at the pass start itself: its mute and its slice apply right here
     // (the read was just put back on the timeline by TimingStep).
     if (!(el0 > 0.f)) {
       mute_dt_[s] = (float)mute[0];
-      const float off0 = 0.f - bnd(play[0]);
-      if (off0 != trig_off_[s]) { trig_off_[s] = off0; RestartStreams(s); timing_trigs_++; }
+      if (rvk[0] >= 0) { lrev_[s] = true; lrev_m_[s] = mirror(rvk[0], rve[0]); RestartStreams(s); timing_trigs_++; }
+      else {
+        const float off0 = 0.f - bnd(play[0]);
+        if (off0 != trig_off_[s]) { trig_off_[s] = off0; RestartStreams(s); timing_trigs_++; }
+      }
     }
     for (int i = 0; i < n; i++) {
       const float b0 = bnd(i), b1 = (i + 1 < n) ? bnd(i + 1) : (float)L;
       const float sj = bnd(play[i]);
       for (int j = 0; j < rat[i]; j++) {
         const float at = (j == 0) ? b0 : (float)(size_t)(b0 + (b1 - b0) * (float)j / (float)rat[i] + 0.5f);
-        bool jump = false; int8_t mc = -1;
+        bool jump = false; int8_t mc = -1, rv = -1;
         if (j > 0) jump = true;
         else if (i > 0) {
-          jump = (play[i] != play[i - 1] + 1) || rat[i - 1] > 1;
+          if (rvk[i] >= 0 && rvk[i] != rvk[i - 1]) rv = 1;           // a reverse span starts
+          else if (rvk[i] < 0 && rvk[i - 1] >= 0) rv = 0;            // one ends: back to reading forward
+          else if (rvk[i] < 0) jump = (play[i] != play[i - 1] + 1) || rat[i - 1] > 1;
           if (mute[i] != mute[i - 1]) mc = mute[i];
         }
-        if (!jump && mc < 0) continue;
+        if (!jump && mc < 0 && rv < 0) continue;
         if (at <= el0) continue;                               // behind the join point
         if (trig_cnt_[s] >= kTimingEvents) break;
         const int e = trig_cnt_[s]++;
-        trig_pos_[s][e] = at; sl_off_[s][e] = at - sj; pm_jump_ev_[s][e] = jump; pm_mute_ev_[s][e] = mc;
+        trig_pos_[s][e] = at; sl_off_[s][e] = (rv == 1) ? mirror(rvk[i], rve[i]) : at - sj;
+        pm_jump_ev_[s][e] = jump; pm_mute_ev_[s][e] = mc; pm_rev_ev_[s][e] = rv;
       }
     }
     sl_n_[s] = n; cur_pat_[s] = 0; timing_patterns_++;
@@ -1769,8 +1795,8 @@ class Vestige : public Module {
       trig_pass_[s] = pass_[s];
       const int k = (VESTIGE_TIMING_MODE != 0) ? 0 : TimingSpanK(pass_[s], rev);
       if (k == 0) {                                         // a new pattern instance, on the one
-        if (trig_off_[s] != 0.f) {                          // leaving a pattern instance:
-          trig_off_[s] = 0.f;                               // back on the timeline, at the one
+        if (trig_off_[s] != 0.f || lrev_[s]) {              // leaving a pattern instance:
+          trig_off_[s] = 0.f; lrev_[s] = false;             // back on the timeline, at the one
           RestartStreams(s);
           timing_returns_++;
         }
@@ -1809,6 +1835,14 @@ class Vestige : public Module {
       trig_next_[s]++;
       if (VESTIGE_TIMING_MODE == 2) {                       // pass memory: mute change and/or jump
         if (pm_mute_ev_[s][ev] >= 0) mute_dt_[s] = (float)pm_mute_ev_[s][ev];
+        const int8_t rv = pm_rev_ev_[s][ev];
+        if (rv >= 0) {                                      // reverse span on (mirror) / off (offset)
+          lrev_[s] = (rv == 1);
+          if (rv == 1) lrev_m_[s] = off; else trig_off_[s] = off;
+          RestartStreams(s);
+          timing_trigs_++; last_trig_slot_ = s; last_trig_at_ = rec_clock_now_;
+          return;
+        }
         if (!pm_jump_ev_[s][ev]) return;
       }
       if (off != trig_off_[s]) {                            // (already there: a hit on a pass start
@@ -1942,7 +1976,8 @@ class Vestige : public Module {
     // then plays from its tail backward, and a live direction flip through K2 noon
     // is positionally continuous (forward grains also start at the head).
     const PoolEngine& e = eng_[PoolOf(s)];   // this slot's own pool addressing
-    const bool rev = e.rev && !frozen && GuardReady(s);   // see ServiceMBFreeze
+    bool rev = e.rev && !frozen && GuardReady(s);         // see ServiceMBFreeze
+    if (!frozen && s < VESTIGE_VOICE_SLABS && lrev_[s]) rev = !rev;   // TIMING reverse span
     if (rev) pos -= (float)glen;
     size_t posi;
     if (frozen) {
@@ -2429,7 +2464,7 @@ class Vestige : public Module {
       rot_seed_[s] = TimingRandU();                         // this loop's rotation, for its whole life
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
-      mute_d_[s] = mute_dt_[s] = 0.f;                          //  the first pass plays memory 0
+      mute_d_[s] = mute_dt_[s] = 0.f; lrev_[s] = false;        //  the first pass plays memory 0
       var_last_[s] = false; cur_var_[s] = kVarNone;
     }
     rho_t_[s] = TapeTarget(s);
@@ -3330,6 +3365,9 @@ class Vestige : public Module {
   int      pm_n_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_MEM_PASSES]  = {};   // the step count they were placed on
   int      pm_cur_[VESTIGE_VOICE_SLABS]      = {0};      // the memory this pass plays
   int8_t   pm_mute_ev_[VESTIGE_VOICE_SLABS][kTimingEvents] = {};   // per event: -1 jump only, 0 unmute, 1 mute
+  int8_t   pm_rev_ev_[VESTIGE_VOICE_SLABS][kTimingEvents]  = {};   // per event: -1 none, 1 reverse on (sl_off_ = M), 0 off
+  bool     lrev_[VESTIGE_VOICE_SLABS]        = {false};  // a TIMING reverse span is playing: read = lrev_m_ - fwd_
+  float    lrev_m_[VESTIGE_VOICE_SLABS]      = {0.f};
   bool     pm_jump_ev_[VESTIGE_VOICE_SLABS][kTimingEvents] = {};   // per event: the read jumps
   float    mute_d_[VESTIGE_VOICE_SLABS]      = {0.f};    // rest/break depth (0 = open, 1 = silent)
   float    mute_dt_[VESTIGE_VOICE_SLABS]     = {0.f};    // its target
