@@ -439,7 +439,9 @@ class Vestige : public Module {
     // leaving MIDDLE retires the older loops oldest-first over K5, and the
     // age-ramp gains follow the live set.
     if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); UpdateTapeTargets(); }
+    const uint32_t dt0 = diag_clock_ ? diag_clock_() : 0;
     if (VESTIGE_TIMING_MODE == 3) TimingLayerTick();
+    if (diag_clock_) { const uint32_t d = diag_clock_() - dt0; if (d > diag_tick_us_) diag_tick_us_ = d; }
     for (size_t i = 0; i < size; i++) {
       const float x = in[i];
 
@@ -756,6 +758,11 @@ class Vestige : public Module {
       wet[i] = y;
     }
     sample_clock_ = clk0 + (uint32_t)size;
+    if (diag_clock_) {                                    // DIAG: block time + grain peak
+      const uint32_t d = diag_clock_() - dt0; if (d > diag_proc_us_) diag_proc_us_ = d;
+      int a = 0; for (int g = 0; g < VESTIGE_GRAINS; g++) if (grains_[g].IsActive()) a++;
+      if (a > diag_gmax_) diag_gmax_ = a;
+    }
   }
 
  private:
@@ -1990,6 +1997,12 @@ class Vestige : public Module {
   // per-step (source step, direction, ratchet, condition) and from those the
   // pass's events.
   void TimingPlanLayers(int s, bool rev, size_t L, double rho, float el0) {
+    if (!diag_clock_) { TimingPlanLayersImpl(s, rev, L, rho, el0); return; }
+    const uint32_t t0 = diag_clock_();
+    TimingPlanLayersImpl(s, rev, L, rho, el0);
+    const uint32_t d = diag_clock_() - t0; if (d > diag_plan_us_) diag_plan_us_ = d;
+  }
+  void TimingPlanLayersImpl(int s, bool rev, size_t L, double rho, float el0) {
     trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
     trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
     sl_n_[s] = 0; TimingCond(s, 0);
@@ -3416,6 +3429,9 @@ class Vestige : public Module {
   bool   ver_idle_[VESTIGE_SLOTS][2] = {};           // version emitted nothing last time (restart = instant attack)
   // K1 speed crossfade. Control -> ISR: side (-1 half / 0 / +1 double), amount.
   volatile int   k1_side_ = 0;
+  uint32_t (*diag_clock_)() = nullptr;                    // DIAG only (SetDiagClock)
+  volatile uint32_t diag_plan_us_ = 0, diag_tick_us_ = 0, diag_proc_us_ = 0;
+  volatile int      diag_gmax_ = 0;
   volatile float k1_x_    = 0.f;
   // ISR-owned: smoothed amount, the speed version's side / rate, the gain pair.
   float  sp_x_    = 0.f;
@@ -3617,6 +3633,16 @@ class Vestige : public Module {
     return true;
   }
   uint32_t DiagDrops() const { return diag_drops_; }
+  // DIAG timing (a microsecond clock from the shell; nullptr = off). The
+  // Take* readers return the peak since the last read and reset it.
+  void     SetDiagClock(uint32_t (*f)()) { diag_clock_ = f; }
+  uint32_t TakePlanUs() { const uint32_t v = diag_plan_us_; diag_plan_us_ = 0; return v; }
+  uint32_t TakeTickUs() { const uint32_t v = diag_tick_us_; diag_tick_us_ = 0; return v; }
+  uint32_t TakeProcUs() { const uint32_t v = diag_proc_us_; diag_proc_us_ = 0; return v; }
+  int      TakeGrainMax() { const int v = diag_gmax_; diag_gmax_ = 0; return v; }
+  int      DiagLive() const { int c = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) if (active_[q] && !dying_[q]) c++; return c; }
+  int      DiagK1() const { return k1_side_; }
+  float    DiagSpX() const { return sp_x_; }
   uint32_t DiagCapDrops() const { return grain_cap_drops_; }
   uint32_t DiagPoolFull() const { return pool_full_; }
   uint32_t DiagJumps()    const { return timing_trigs_; }

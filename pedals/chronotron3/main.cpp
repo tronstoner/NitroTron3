@@ -59,7 +59,7 @@ using clevelandmusicco::Hothouse;
 // is busy or nobody is reading, the line is dropped and counted — never waited.
 [[maybe_unused]] static uint32_t g_diag_usb_drops = 0;
 [[maybe_unused]] static void DiagLine(const char* fmt, ...) {
-  static char buf[128];
+  static char buf[192];
   va_list va; va_start(va, fmt);
   int len = vsnprintf(buf, sizeof(buf) - 2, fmt, va);
   va_end(va);
@@ -142,6 +142,7 @@ int main() {
   hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
   const float sr = hw.AudioSampleRate();
   if (CT3_DIAG) g_cpu.Init(sr, CT3_BLOCK_SIZE);
+  if (CT3_DIAG) vestige.SetDiagClock([]() -> uint32_t { return System::GetUs(); });
 
   cs.Init(hw);
   led1.Init(hw.seed.GetPin(Hothouse::LED_1), false);
@@ -258,10 +259,14 @@ int main() {
         const unsigned cpu = (unsigned)(g_cpu.GetMaxCpuLoad() * 1000.f + 0.5f);
         g_cpu.Reset();
         // (One line: a second DiagLine right after is dropped — USB still busy.)
-        DiagLine("VS HB t=%u k4=%s T=%u drops=%u usb=%u cpu=%u k3=%s cap=%u pool=%u jumps=%u plans=%u",
-            (unsigned)now, F3(vestige.DiagK4()), (unsigned)vestige.DiagT(), (unsigned)vestige.DiagDrops(),
-            (unsigned)g_diag_usb_drops, cpu, F3(vestige.DiagK3()), (unsigned)vestige.DiagCapDrops(),
-            (unsigned)vestige.DiagPoolFull(), (unsigned)vestige.DiagJumps(), (unsigned)vestige.DiagPlans());
+        // plan / tick / proc = longest pass plan / block change step / whole
+        // vestige block since the last heartbeat (us; the block budget is
+        // 1000); live loops, peak grains, K1 side (-1 / 0 / 1) and mix.
+        DiagLine("VS HB t=%u T=%u usb=%u cpu=%u k3=%s cap=%u jumps=%u plan=%u tick=%u proc=%u live=%d gmax=%d k1=%d/%s",
+            (unsigned)now, (unsigned)vestige.DiagT(), (unsigned)g_diag_usb_drops, cpu, F3(vestige.DiagK3()),
+            (unsigned)vestige.DiagCapDrops(), (unsigned)vestige.DiagJumps(), (unsigned)vestige.TakePlanUs(),
+            (unsigned)vestige.TakeTickUs(), (unsigned)vestige.TakeProcUs(), vestige.DiagLive(),
+            vestige.TakeGrainMax(), vestige.DiagK1(), F3(vestige.DiagSpX()));
       } else {
         Vestige::GateDiag r;
         if (vestige.DiagPop(r)) {
