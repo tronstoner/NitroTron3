@@ -3598,6 +3598,11 @@ class Vestige : public Module {
     return true;
   }
   uint32_t DiagDrops() const { return diag_drops_; }
+  uint32_t DiagCapDrops() const { return grain_cap_drops_; }
+  uint32_t DiagPoolFull() const { return pool_full_; }
+  uint32_t DiagJumps()    const { return timing_trigs_; }
+  uint32_t DiagPlans()    const { return timing_patterns_; }
+  float    DiagK3()       const { return err_level_[kErrTiming]; }
   float    DiagK4()    const { return diag_k4_; }
   float    DiagOpen()  const { return auto_thresh_; }
   size_t   DiagT()     const { return period_; }

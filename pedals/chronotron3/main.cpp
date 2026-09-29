@@ -91,8 +91,11 @@ static float dry_bypass = 0.f;     // smoothed bypass dry-lift (0 = K6 mix, 1 = 
 // ---------------------------------------------------------------------------
 // Audio callback — dispatch to the active module, then K6 dry/wet mix
 // ---------------------------------------------------------------------------
+// DIAG builds: audio-callback CPU load (peak per heartbeat).
+static CpuLoadMeter g_cpu;
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                    size_t size) {
+  if (CT3_DIAG) g_cpu.OnBlockStart();
   // FPU flush-to-zero in the audio IRQ context: denormals on the M7 hit a slow
   // software path that scales with the number of decaying filters (per-grain
   // biquads etc.) — flushing them removes that penalty. Setting it in main()
@@ -106,6 +109,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // K6/SW2) have already produced the final signal — pass it straight through.
   if (modules[g_active]->OwnsOutput()) {
     for (size_t i = 0; i < size; i++) out[0][i] = out[1][i] = wet_buf[i];
+    if (CT3_DIAG) g_cpu.OnBlockEnd();
     return;
   }
 
@@ -120,6 +124,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     dg += (1.f - dg) * dry_bypass;                 // ramp dry -> unity in bypass
     out[0][i] = out[1][i] = in[0][i] * dg + wet_buf[i] * wg;
   }
+  if (CT3_DIAG) g_cpu.OnBlockEnd();
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +141,7 @@ int main() {
   hw.SetAudioBlockSize(CT3_BLOCK_SIZE);
   hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
   const float sr = hw.AudioSampleRate();
+  if (CT3_DIAG) g_cpu.Init(sr, CT3_BLOCK_SIZE);
 
   cs.Init(hw);
   led1.Init(hw.seed.GetPin(Hothouse::LED_1), false);
@@ -245,9 +251,18 @@ int main() {
         vs_banner = true; vs_hb = now;
       } else if (now - vs_hb >= 2000) {
         vs_hb = now;
+        // cpu = peak audio-callback load since the last heartbeat (x1000, 1000 =
+        // the whole block); cap / pool = grains refused at the grain cap / with
+        // the pool full; jumps = timing read jumps; plans = timing pass plans
+        // (all cumulative).
+        const unsigned cpu = (unsigned)(g_cpu.GetMaxCpuLoad() * 1000.f + 0.5f);
+        g_cpu.Reset();
         DiagLine("VS HB t=%u k4=%s open=%u close=%u T=%u drops=%u usb=%u", (unsigned)now,
             F3(vestige.DiagK4()), L(vestige.DiagOpen()), L(vestige.DiagOpen() * VESTIGE_AUTO_HYST),
             (unsigned)vestige.DiagT(), (unsigned)vestige.DiagDrops(), (unsigned)g_diag_usb_drops);
+        DiagLine("VS CPU t=%u cpu=%u k3=%s cap=%u pool=%u jumps=%u plans=%u", (unsigned)now, cpu,
+            F3(vestige.DiagK3()), (unsigned)vestige.DiagCapDrops(), (unsigned)vestige.DiagPoolFull(),
+            (unsigned)vestige.DiagJumps(), (unsigned)vestige.DiagPlans());
       } else {
         Vestige::GateDiag r;
         if (vestige.DiagPop(r)) {
