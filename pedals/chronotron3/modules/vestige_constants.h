@@ -464,9 +464,9 @@ static constexpr float  VESTIGE_TIMING_MIN_STEP_MS = 20.f;
 
 // ---- Timing error MODE ------------------------------------------------------
 // 0 = RETRIGGER (the Euclidean patterns above, as heard in ae31f88); 1 = SLICE
-// REARRANGEMENT (below). Mode 0's code stays intact (step 2, beat repeat, will
-// reuse its Euclidean hits).
-static constexpr int    VESTIGE_TIMING_MODE = 1;
+// REARRANGEMENT (below, as heard in e7afd92); 2 = PASS MEMORY (below that).
+// Modes 0 and 1 stay intact, one constant away.
+static constexpr int    VESTIGE_TIMING_MODE = 2;
 // SLICES: the pass is cut into N equal slices (boundaries round(L*i/N) in
 // material; in stretch at i/N of the pass in output time). Each loop has an
 // ARRANGEMENT: which slice plays at each step; step 0 is always slice 0 (the
@@ -496,6 +496,46 @@ static constexpr bool   VESTIGE_TIMING_FIXED_ARRANGEMENT = false;
 static constexpr int    VESTIGE_TIMING_SLICE_MAX = 16;          // table size bound
 static constexpr int    VESTIGE_TIMING_SLICE_TIERS = 4;         // N, N/2, N/4, N/8 tables
 static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIMING_SLICE_MAX, "2..16 slices");
+
+// ---- Timing mode 2: PASS MEMORY ---------------------------------------------
+// The pass is cut into VESTIGE_TIMING_SLICES steps (same short-loop guard as
+// mode 1). Each loop voice remembers ONE pass: a small set of FIGURES placed on
+// its steps. Every new pass plays the remembered pass again — except that, with
+// chance EDIT, the memory gets one edit first: a figure added when the pass
+// glitches fewer steps than the TARGET, one removed when more, one swapped
+// (removed + a new one added) when it matches. The target is drawn per edit:
+// floor(D) + (1 with chance frac(D)). Step 1 (the downbeat) is never touched.
+//   D    = TARGET_A + TARGET_B * L   glitched steps per pass (L = K3 level > 0)
+//   EDIT = min(1, EDIT_A + EDIT_B * L)
+static constexpr float  VESTIGE_TIMING_MEM_TARGET_A = 0.4f;
+static constexpr float  VESTIGE_TIMING_MEM_TARGET_B = 5.4f;
+static constexpr float  VESTIGE_TIMING_MEM_EDIT_A   = 0.4f;
+static constexpr float  VESTIGE_TIMING_MEM_EDIT_B   = 0.75f;
+// FIGURES (a figure's size = the steps it changes; figures never overlap):
+//   REST     one step silent                              (size 1)
+//   BREAK    silent from a step to the end of the pass    (size n - k)
+//   STUTTER  a step plays the step before it again        (size 1)
+//   REPEAT   from a step to the end, the step before it repeats (size n - k) —
+//            beat repeat; on step 2 the downbeat repeats for the whole pass
+//   RATCHET  a step split into 4 (or 2) fast repeats      (size 1)
+//   RETRIG   back to the one in Euclidean groups: E(2,n) = 4+4, E(3,8) = 3+3+2
+// A new figure only goes where its size fits the room left to the target.
+// Weights (relative chance of each figure being picked) — EDITABLE:
+static constexpr int    VESTIGE_TIMING_FIGS = 6;
+static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
+  1.f,   // REST
+  1.f,   // BREAK
+  1.f,   // STUTTER
+  1.f,   // REPEAT
+  1.f,   // RATCHET
+  1.f,   // RETRIG
+};
+// Where figures land: steps in the back half of the pass weigh this much vs 1
+// for the front half (a fill leads into the one).
+static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
+static constexpr int    VESTIGE_TIMING_MEM_FIGS   = 8;           // figures a pass can hold
+static constexpr int    VESTIGE_TIMING_MAX_EVENTS = 48;          // jumps + mute changes per pass
+static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest / break fade (each way)
 
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC
