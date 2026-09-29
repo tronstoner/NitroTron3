@@ -192,7 +192,7 @@ class Vestige : public Module {
     diag_k4_ = k4;                            // DIAG heartbeat only
     const float k5  = RemapKnob(cs.Knob(4)); // loop fade in/out
     const int   sw1 = cs.Switch(0);          // 0=UP 1-voice · 1=MID 6-voice · 2=DOWN freeze
-    // SW2: unused (was the stage 2.5 error-type editor).
+    const int   sw2 = cs.Switch(1);          // how loops follow a T change: UP tape · MID stretch · DOWN re-cut
     const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
     // ---- Errors: K3 sets all three layers' levels together ------------------
@@ -200,9 +200,12 @@ class Vestige : public Module {
     // jump pickup. The builder runs all three together.)
     err_level_[kErrTiming] = err_level_[kErrCondition] = err_level_[kErrPlayback] = k3;
 
-    // ---- How playing loops follow a T change: VESTIGE_FOLLOW_MODE (stretch) ----
-    // Was temporarily on SW2 (A tape / B stretch / C re-cut); all three are kept.
-    follow_mode_ = follow_mode_cfg_;
+    // ---- SW2 = how playing loops follow a T change ---------------------------
+    // UP tape (speed + pitch follow T) · MIDDLE stretch (speed follows, pitch
+    // stays) · DOWN re-cut (cut / pad the end). follow_mode_cfg_ >= 0 overrides
+    // the switch (host tests).
+    follow_mode_ = (follow_mode_cfg_ >= 0) ? follow_mode_cfg_
+                 : (sw2 == 0) ? kFollowTape : (sw2 == 1) ? kFollowStretch : kFollowRecut;
 
 
     // ---- K1 = playback speed crossfade (rework stage 6, plan §4.2) -------------
@@ -3793,7 +3796,7 @@ class Vestige : public Module {
   uint32_t pool_full_ = 0;                               // grains lost to a full physical pool (diag)
   volatile float err_level_[kErrTypes] = {0.f, 0.f, 0.f};   // 0 = off; start with no errors
   volatile int follow_mode_ = kFollowTape;
-  int follow_mode_cfg_ = VESTIGE_FOLLOW_MODE;   // the configured mode (host tests set it directly)
+  int follow_mode_cfg_ = -1;                    // -1 = SW2 selects; >= 0 forces a mode (host tests)
   double   rho_t_[VESTIGE_SLOTS];            // tape-rate target per slot (ISR, per block)
   double   rho_d_[VESTIGE_SLOTS];            // glide state (double: see SmoothTape)
   float    rho_s_[VESTIGE_SLOTS];            // float copy for grain rates / diagnostics

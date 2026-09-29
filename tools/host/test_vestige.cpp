@@ -3484,7 +3484,7 @@ int main() {
     const float t = RemapKnob(0.8f);
     Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "K3 sets all three levels");
     cs.sw[1] = 2; RunFor(0.1f);
-    Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "SW2 changes nothing");
+    Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "SW2 does not change the error levels");
     cs.knob[2] = 0.f; RunFor(0.1f);
     Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f, "K3 CCW: all off");
     cs.sw[1] = 0; }
@@ -3506,10 +3506,12 @@ int main() {
     Hold(); Sample(2.0f, ons, tg);
     Check(v.held_ && tg >= 2 && tg <= 6, "LED2 blinks slowly while held");
     Unhold(); RunFor(0.3f); }
-  { const int before = v.follow_mode_; cs.sw[1] = 2; RunFor(0.1f); cs.sw[1] = 0; RunFor(0.1f);
-    Check(v.follow_mode_ == before && v.follow_mode_ == v.follow_mode_cfg_, "SW2 no longer selects the follow mode"); }
-  { Vestige fresh; Check(fresh.follow_mode_cfg_ == VESTIGE_FOLLOW_MODE && VESTIGE_FOLLOW_MODE == Vestige::kFollowStretch,
-                         "default follow mode is stretch"); }
+  { const int cfg = v.follow_mode_cfg_; v.follow_mode_cfg_ = -1;
+    int m[3]; for (int p = 0; p < 3; p++) { cs.sw[1] = p; RunFor(0.1f); m[p] = v.follow_mode_; }
+    Check(m[0] == Vestige::kFollowTape && m[1] == Vestige::kFollowStretch && m[2] == Vestige::kFollowRecut,
+          "SW2 selects the follow mode: UP tape, MIDDLE stretch, DOWN re-cut");
+    cs.sw[1] = 0; v.follow_mode_cfg_ = cfg; RunFor(0.1f); }
+  { Vestige fresh; Check(fresh.follow_mode_cfg_ == -1, "by default SW2 selects the follow mode"); }
   printf(fails ? "FAILURES: %d\n" : "ALL OK\n", fails);
   return fails ? 1 : 0;
 }
