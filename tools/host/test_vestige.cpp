@@ -149,6 +149,7 @@ static void RunFor(float secs) {
 // Back to shell-rate blocks after a per-sample section: step single samples
 // until n is on a 480-sample tick boundary again (Tick fires on n % 480 == 0).
 static void Realign() { blk = 1; while (n % 480 != 0) RunFor(1.f / sr); blk = 48; }
+static void NoErrors();
 static void Tap()  { fs2_down_ticks = 10; RunFor(0.2f); }   // 100 ms press
 static void Hold() { fs2_down_ticks = 90; RunFor(1.0f); }   // 900 ms press
 
@@ -285,6 +286,7 @@ static void TestStage0() {
   Check(maxL <= VESTIGE_FREEZE_SAMPLES && maxL > 0, "freeze: captures <= 400 ms, in the freeze pool");
   Check(v.mb_nbands_ == 3 && v.k3_frozen_ && !v.rev_play_ && v.k3_focus_ == 1.f, "freeze: 3 bands, frozen, forward, K2 inert");
   float kf = v.k3_focus_; cs.knob[2] = 1.0f; cs.knob[1] = 1.0f; RunFor(0.05f);
+  NoErrors();                                     // that K3 move is not a timing edit
   Check(v.k3_focus_ == kf && v.max_loop_len_ == VESTIGE_FREEZE_SAMPLES, "freeze: K2/K3 inert");
   play_input = false; RunFor(1.0f);
   Check(peak > 0.005f, "freeze: sustains after input stops");
@@ -304,7 +306,15 @@ static void TestStage0() {
 // ---------------------------------------------------------------------------
 // Start each buffer scenario from a known state: effect on, not held, both
 // sides empty, UP, sensible knobs.
+// No error levels, editor pickup re-anchored where K3 sits. K3 is also the
+// stage-2.5 error editor: a test that moves K3 for another reason (e.g. the
+// stage-0 "K3 inert in freeze" check) would otherwise leave a timing level on.
+static void NoErrors() {
+  for (int i = 0; i < 3; i++) v.err_level_[i] = 0.f;
+  v.err_editing_ = false; v.err_k3_ref_ = cs.knob[2];
+}
 static void Reset() {
+  NoErrors();
   play_input = false;
   cs.knob[1] = 0.85f; cs.knob[3] = 0.1f; cs.knob[4] = 0.05f;
   cs.sw[0] = 0; RunFor(0.1f);
@@ -2329,6 +2339,255 @@ static void TestFollowRecut() {
   Unhold();
 }
 
+// ---------------------------------------------------------------------------
+// Stage 3: the TIMING error — a retrigger inside a pass.
+struct TrigLog { std::vector<long> wraps; std::vector<long> trig_at; std::vector<long> trig_el; std::vector<int> trig_idx; std::vector<int> trig_pass; };
+// Run per sample for `passes` wraps of slot s; log every wrap and retrigger.
+static TrigLog RunPasses(int s, int passes, float max_secs = 60.f) {
+  TrigLog lg; blk = 1;
+  int32_t pp = v.pass_[s]; uint32_t tc = v.timing_trigs_; long pass_start = -1;
+  const long end = n + (long)(max_secs * sr);
+  while (n < end && (int)lg.wraps.size() < passes + 1) {
+    RunFor(1.f / sr);
+    if (v.pass_[s] != pp) { pp = v.pass_[s]; lg.wraps.push_back(n - 1); pass_start = n - 1; }
+    if (v.timing_trigs_ != tc) {
+      tc = v.timing_trigs_;
+      if (v.last_trig_slot_ == s) {
+        lg.trig_at.push_back(n - 1); lg.trig_idx.push_back(v.last_trig_idx_);
+        lg.trig_el.push_back(pass_start >= 0 ? (n - 1) - pass_start : -1);
+        lg.trig_pass.push_back((int)lg.wraps.size());
+      }
+    }
+  }
+  Realign();
+  return lg;
+}
+static bool AllowedIdx(int idx, float level) {
+  int groups = 1 + (int)(level * (float)(VESTIGE_TIMING_GROUPS - 1) + 1e-4f);
+  if (groups > VESTIGE_TIMING_GROUPS) groups = VESTIGE_TIMING_GROUPS;
+  return idx >= 0 && idx < VESTIGE_TIMING_GROUP_END[groups - 1];
+}
+
+static void TestTimingError() {
+  printf("-- stage 3: the TIMING error (retrigger inside a pass)\n");
+  // Level 0: nothing is drawn, nothing moves.
+  Reset(); cs.sw[0] = 0; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  CapRec r{}; noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  const int s = r.s; const size_t Q = r.Q;
+  RunFor(0.8f);
+  TrigLog lg0;
+  { const uint32_t rng0 = v.timing_rng_, t0 = v.timing_trigs_;
+    lg0 = RunPasses(s, 6);
+    const TrigLog& lg = lg0;
+    Check(v.timing_rng_ == rng0 && v.timing_trigs_ == t0 && v.trig_off_[s] == 0.f,
+          "timing level 0: no roll drawn, no retrigger, the read head is the timeline head"); }
+
+  // Level 1: exactly one retrigger per pass, at an allowed point; the grid holds.
+  v.err_level_[0] = 1.f;
+  const TrigLog lg = RunPasses(s, 24);
+  int per_pass_bad = 0, point_bad = 0, len_bad = 0; bool grid_ok = true;
+  std::vector<int> per(lg.wraps.size() + 1, 0);
+  for (size_t i = 0; i < lg.trig_pass.size(); i++) per[lg.trig_pass[i]]++;
+  for (size_t p = 1; p < lg.wraps.size(); p++) if (per[p] != 1) per_pass_bad++;
+  for (size_t i = 0; i < lg.trig_el.size(); i++) {
+    const int k = lg.trig_idx[i];
+    const long want = (long)((double)Q * VESTIGE_TIMING_NUM[k] / VESTIGE_TIMING_DEN[k] + 0.5);
+    if (!AllowedIdx(k, 1.f) || lg.trig_el[i] != want) point_bad++;
+  }
+  for (size_t p = 1; p < lg.wraps.size(); p++) {
+    if (lg.wraps[p] - lg.wraps[p - 1] != (long)Q) len_bad++;
+    if ((lg.wraps[p] - lg0.wraps[0]) % (long)Q != 0) grid_ok = false;  // same grid as with no errors
+  }
+  int seen[VESTIGE_TIMING_POINTS_N] = {0}; for (int k : lg.trig_idx) seen[k]++;
+  int distinct = 0; for (int k = 0; k < VESTIGE_TIMING_POINTS_N; k++) if (seen[k]) distinct++;
+  printf("      level 1, %zu passes: %zu retriggers, passes without exactly one %d, off-point %d, %d distinct points; pass length off %d, grid %s\n",
+         lg.wraps.size() - 1, lg.trig_el.size(), per_pass_bad, point_bad, distinct, len_bad, grid_ok ? "on A + k*Q" : "MOVED");
+  Check(per_pass_bad == 0 && point_bad == 0, "level 1: exactly one retrigger per pass, at round(Q x f) for an allowed f");
+  Check(len_bad == 0 && grid_ok, "retriggers never move the grid: every pass is Q long, every wrap on the no-error grid");
+  Check(distinct >= 6, "level 1: picks across the whole list (>= 6 of the 11 points in 24 passes)");
+
+  // After the retrigger point the output IS the loop start (past the 5 ms
+  // crossfade); after the pass end, the loop start again.
+  { int ok = 0, tot = 0; float worst_c = 1.f;
+    for (size_t i = 0; i < lg.trig_at.size() && i < 12; i++) {
+      const long t0 = lg.trig_at[i];
+      const long room = (long)Q - lg.trig_el[i];                       // rest of the pass
+      const int N = (int)((room - 600 < 2400) ? room - 600 : 2400);
+      if (N < 600) continue;
+      std::vector<float> ref(N); for (int j = 0; j < N; j++) ref[j] = v.slab_[s][480 + j];
+      float c = 0.f; const int lagv = BestLagRef(t0 + 480, ref, 50, &c);
+      tot++; if (lagv == 0 && c > 0.99f) ok++; if (c < worst_c) worst_c = c;
+    }
+    printf("      after the retrigger: %d / %d windows match the loop start at lag 0 (worst c = %.4f)\n", ok, tot, worst_c);
+    Check(tot >= 6 && ok == tot, "after the retrigger point the output is the loop's start (lag 0, c > 0.99)"); }
+  { int ok = 0, tot = 0;
+    for (size_t p = 1; p + 1 < lg.wraps.size() && tot < 8; p++) {
+      if (per[p] == 0) continue;                                      // a retriggered pass ended here
+      std::vector<float> ref(2400); for (int j = 0; j < 2400; j++) ref[j] = v.slab_[s][480 + j];
+      float c = 0.f; const int lagv = BestLagRef(lg.wraps[p] + 480, ref, 50, &c);
+      tot++; if (lagv == 0 && c > 0.99f) ok++;
+    }
+    Check(tot >= 4 && ok == tot, "after a retriggered pass ends, the next pass starts on the loop's one (lag 0)"); }
+  v.err_level_[0] = 0.f;
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // No click at either jump, on a sine loop (a jump lands mid-cycle).
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  sustain_hz = 220.f; sustain_input = true; play_input = true; WaitActivation(2.f, &r);
+  sustain_input = false; play_input = false; RunFor(1.0f);
+  { const int q = r.s;
+    maxd = 0.f; RunFor(2.0f); const float st = maxd;
+    v.err_level_[0] = 1.f; maxd = 0.f;
+    const TrigLog lc = RunPasses(q, 16);
+    const float sj = maxd;
+    printf("      sine loop max step: steady %.5f | 16 passes, %zu retriggers + returns: %.5f (bound %.5f)\n", st, lc.trig_at.size(), sj, 1.5f * st);
+    Check(lc.trig_at.size() >= 15 && sj <= 1.5f * st, "retrigger and return: no step above 1.5x steady (5 ms restarts)");
+    v.err_level_[0] = 0.f; }
+
+  // Reverse: the retrigger jumps back to the loop's END.
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  RunFor(0.8f);
+  { const int q = r.s; const long L = (long)r.Q;
+    v.err_level_[0] = 1.f;
+    const TrigLog lr = RunPasses(q, 10);
+    int ok = 0, tot = 0, per_bad = 0; std::vector<int> pr(lr.wraps.size() + 1, 0);
+    for (int p : lr.trig_pass) pr[p]++;
+    for (size_t p = 1; p < lr.wraps.size(); p++) if (pr[p] != 1) per_bad++;
+    for (size_t i = 0; i < lr.trig_at.size(); i++) {
+      const long room = L - lr.trig_el[i]; const int N = (int)((room - 600 < 2400) ? room - 600 : 2400);
+      if (N < 600) continue;
+      std::vector<float> ref(N); for (int j = 0; j < N; j++) ref[j] = v.slab_[q][L - 1 - 480 - j];
+      float c = 0.f; const int lagv = BestLagRef(lr.trig_at[i] + 480, ref, 50, &c);
+      tot++; if (lagv == 0 && c > 0.99f) ok++;
+    }
+    printf("      reverse, level 1: %zu retriggers in %zu passes; %d / %d windows play the loop's END backward (lag 0)\n",
+           lr.trig_at.size(), lr.wraps.size() - 1, ok, tot);
+    Check(v.rev_play_ && per_bad == 0 && tot >= 4 && ok == tot, "reverse: one retrigger per pass, jumping back to the loop's end");
+    v.err_level_[0] = 0.f; cs.knob[1] = 0.85f; }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // K1 midpoint: both streams retrigger together (the speed head is derived
+  // from the clean READ head).
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  { const int q = r.s; const long L = (long)r.Q;
+    const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
+    cs.knob[0] = kmid; RunFor(1.5f);
+    v.err_level_[0] = 1.f;
+    const TrigLog lk = RunPasses(q, 8);
+    int ok = 0, tot = 0;
+    for (size_t i = 0; i < lk.trig_at.size(); i++) {
+      const long room = L - lk.trig_el[i]; const int N = (int)((room - 600 < 2400) ? room - 600 : 2400);
+      if (N < 600) continue;
+      std::vector<float> rc(N), rs(N);
+      for (int j = 0; j < N; j++) { rc[j] = v.slab_[q][480 + j]; rs[j] = v.slab_[q][(2 * (480 + j)) % L]; }
+      float gc = 0, gs = 0, res = 0; Split(lk.trig_at[i] + 480, rc, rs, &gc, &gs, &res);
+      tot++; if (fabsf(gc - v.g_c_) < 0.05f && fabsf(gs - v.g_sp_) < 0.05f && res < 0.05f) ok++;
+    }
+    printf("      K1 midpoint, level 1: %d / %d retriggered windows = clean from the start + double speed from the start (gains %.3f / %.3f)\n",
+           ok, tot, v.g_c_, v.g_sp_);
+    Check(tot >= 4 && ok == tot, "K1 midpoint: clean and speed versions retrigger together");
+    v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // Stretch at a rate != 1: the pass keeps d x T_now, one retrigger per pass.
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  { const int q = r.s;
+    Taps({700}); RunFor(1.0f);
+    v.err_level_[0] = 1.f;
+    const TrigLog ls = RunPasses(q, 8);
+    const long Lt = (long)GridQuantize::Boundary(v.div_[q], v.period_);
+    int per_bad = 0, len_bad = 0; std::vector<int> ps(ls.wraps.size() + 1, 0);
+    for (int p : ls.trig_pass) ps[p]++;
+    for (size_t p = 1; p < ls.wraps.size(); p++) { if (ps[p] != 1) per_bad++; if (labs(ls.wraps[p] - ls.wraps[p - 1] - Lt) > 1) len_bad++; }
+    printf("      stretch at rate %.4f: pass %ld, %zu retriggers in %zu passes, passes off length %d\n",
+           v.rho_d_[q], Lt, ls.trig_at.size(), ls.wraps.size() - 1, len_bad);
+    Check(v.rho_d_[q] != 1.0 && per_bad == 0 && len_bad == 0, "stretch at rate != 1: one retrigger per pass, the pass stays d x T_now");
+    v.err_level_[0] = 0.f; }
+
+  // Hold: a held loop retriggers too. Freeze: never.
+  { Hold(); v.err_level_[0] = 1.f;
+    const int q = FirstLive(); const TrigLog lh = RunPasses(q, 4);
+    Check(v.held_ && lh.trig_at.size() >= 3, "held loop: retriggers too");
+    v.err_level_[0] = 0.f; Unhold(); }
+  { Reset(); cs.sw[0] = 2; cs.knob[4] = 0.0f; RunFor(1.0f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 9600; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    v.err_level_[0] = 1.f; const uint32_t t0 = v.timing_trigs_; RunFor(3.0f);
+    Check(Vestige::PoolOf(q.s) == Vestige::kPoolFreeze && v.timing_trigs_ == t0, "freeze: the timing error never touches it");
+    v.err_level_[0] = 0.f; cs.sw[0] = 0; RunFor(1.0f); }
+
+  // 3 voices, each rolling on its own; budget at the K1 midpoint.
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
+  seen_acts = v.act_count_;
+  const long bursts[3] = {14000, 21000, 30500};
+  for (int i = 0; i < 3; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
+  noise_from = noise_to = -1;
+  RunFor(1.0f);
+  { int slots[3]; int ns = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS && ns < 3; q++) if (v.active_[q] && !v.dying_[q]) slots[ns++] = q;
+    v.err_level_[0] = 0.6f;
+    // Per-sample log of every voice's passes and retriggers.
+    blk = 1;
+    int32_t pp[3]; for (int i = 0; i < ns; i++) pp[i] = v.pass_[slots[i]];
+    std::vector<std::vector<int>> hits(3); std::vector<int> cur(3, 0); uint32_t tc = v.timing_trigs_;
+    for (long j = 0; j < 48000L * 12; j++) {
+      RunFor(1.f / sr);
+      if (v.timing_trigs_ != tc) { tc = v.timing_trigs_; for (int i = 0; i < ns; i++) if (slots[i] == v.last_trig_slot_) cur[i]++; }
+      for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) { pp[i] = v.pass_[slots[i]]; hits[i].push_back(cur[i]); cur[i] = 0; }
+    }
+    Realign();
+    // Independence: over the passes all three voices had, their fired/not
+    // patterns are not identical; every pass fired at most once.
+    int multi = 0; for (int i = 0; i < ns; i++) for (int h : hits[i]) if (h > 1) multi++;
+    int differ = 0; const size_t m = std::min(hits[0].size(), std::min(hits[1].size(), hits[2].size()));
+    for (size_t k = 1; k < m; k++) if (hits[0][k] != hits[1][k] || hits[1][k] != hits[2][k]) differ++;
+    int fired[3] = {0, 0, 0}; for (int i = 0; i < ns; i++) for (int h : hits[i]) fired[i] += h;
+    printf("      3 voices, level 0.6, 12 s: passes %zu / %zu / %zu, fired %d / %d / %d, passes where the voices differ %d of %zu, multi-fire %d\n",
+           hits[0].size(), hits[1].size(), hits[2].size(), fired[0], fired[1], fired[2], differ, m - 1, multi);
+    Check(ns == 3 && multi == 0 && differ >= 3 && fired[0] > 0 && fired[1] > 0 && fired[2] > 0,
+          "3 voices roll independently (each at most once per pass)");
+    const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
+    cs.knob[0] = kmid; RunFor(1.5f);
+    v.err_level_[0] = 1.f;
+    max_grains = 0; max_counted = 0; const uint32_t d0 = v.grain_cap_drops_;
+    RunFor(6.0f);
+    printf("      3 voices, K1 midpoint, level 1: max counted by the cap %d (budget %d), physical max %d (incl. fading), refused %u\n",
+           max_counted, 3 * 2 * 2, max_grains, v.grain_cap_drops_ - d0);
+    Check(max_counted <= 12 && v.grain_cap_drops_ - d0 == 0, "3 voices + K1 midpoint + retriggers: counted grains within 12, none refused");
+    v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f); }
+
+  // Low level: only 1/2, at about the level's rate. Mid level: its groups only.
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({100}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 9600; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  { const int q = r.s;
+    struct Lv { float level; int passes; };
+    for (const Lv& lv : {Lv{0.1f, 400}, Lv{0.3f, 300}}) {
+      v.err_level_[0] = lv.level;
+      const TrigLog ll = RunPasses(q, lv.passes);
+      int bad = 0; for (int k : ll.trig_idx) if (!AllowedIdx(k, lv.level)) bad++;
+      const double rate = (double)ll.trig_at.size() / (double)(ll.wraps.size() - 1);
+      const double sd = sqrt(lv.level * (1 - lv.level) / (double)(ll.wraps.size() - 1));
+      printf("      level %.1f: %zu retriggers in %zu passes (rate %.3f, expect %.1f +- %.3f), outside its allowed points: %d\n",
+             lv.level, ll.trig_at.size(), ll.wraps.size() - 1, rate, lv.level, 3 * sd, bad);
+      char msg[160]; snprintf(msg, sizeof msg, "level %.1f: fires at ~the level's rate and only at %s", lv.level,
+                              lv.level < 0.25f ? "1/2" : "1/2, 1/4, 3/4");
+      Check(bad == 0 && fabs(rate - lv.level) < 3 * sd, msg);
+    }
+    v.err_level_[0] = 0.f; }
+  Unhold();
+}
+
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.sw[2] = 0;
@@ -2353,6 +2612,7 @@ int main() {
   TestFollowStretch();
   TestOnsetRearm();
   TestGateMeter();
+  TestTimingError();
   TestFollowRecut();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);

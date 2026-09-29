@@ -935,13 +935,18 @@ class Vestige : public Module {
       // The advance may have been the wrap that applied a new C length: this
       // sample's grains must be sized for (and bound to) the NEW loop.
       L = PlayLen(s);
+      // TIMING error (stage 3): pass-start roll + in-pass retrigger. Loop side
+      // only; nothing at all happens while the timing level is 0.
+      if (s < VESTIGE_VOICE_SLABS && !e.frozen) TimingStep(s, rev, L);
     }
     const bool orig = OrigPath(s, rho_d) && cur_view_[s] < 0;   // no T change has touched this loop
     // Grain read rate: tape reads at the head rate (pitch follows), stretch at
     // 1 (pitch stays; only the head moves at rho). K1 multiplies either.
     const bool  stretch = (follow_mode_ == kFollowStretch);
     const float gr      = stretch ? 1.f : rho;
-    const float head = is_frip ? frip_head_ : fwd_[s];
+    // The READ head: the timeline head, minus the TIMING retrigger offset (the
+    // timeline itself never moves). == fwd_ unless a retrigger is in progress.
+    const float head = is_frip ? frip_head_ : ReadHead(s);
     // Seam-crossing (non-frozen) grains need the head-continuation guard behind
     // L; clamp to what this row actually has. Loop rows always have the full
     // VESTIGE_GUARD_SAMPLES (unchanged). Frozen grains never cross the seam, so
@@ -1320,6 +1325,69 @@ class Vestige : public Module {
     return glen;
   }
 
+  // ---- Stage 3: the TIMING error — a retrigger inside a pass ---------------
+  // At each pass start (the voice's wrap) roll once with P = level^CURVE. If it
+  // fires, pick a point f of the pass from VESTIGE_TIMING_POINTS, the level
+  // deciding how deep into that simplicity-ordered list it may pick. At f the
+  // READ head jumps back to the loop's start (reverse: its end) and plays on
+  // from there for the rest of the pass. The TIMELINE head (fwd_) is never
+  // touched: the pass ends at its normal length, the next pass starts on the
+  // loop's own "one", LED1 / K1 / follow-T all see the same grid. Both jumps —
+  // the retrigger and the return at the pass end — use the 5 ms stream restart.
+  // Per sample: one pass compare, plus one head compare while a retrigger is
+  // pending. The roll (rare) uses its own RNG, so level 0 never draws from the
+  // shared VestigeRand sequence.
+  float ReadHead(int s) const {
+    if (s >= VESTIGE_VOICE_SLABS || trig_off_[s] == 0.f) return fwd_[s];
+    const float L = (float)PlayLen(s);
+    float h = trig_rev_[s] ? fwd_[s] + trig_off_[s] : fwd_[s] - trig_off_[s];
+    if (h >= L) h -= L;
+    if (h < 0.f) h += L;
+    return h;
+  }
+  float TimingRand() {                       // xorshift32, audio thread only
+    timing_rng_ ^= timing_rng_ << 13; timing_rng_ ^= timing_rng_ >> 17; timing_rng_ ^= timing_rng_ << 5;
+    return (float)timing_rng_ / 4294967295.f;
+  }
+  void TimingStep(int s, bool rev, size_t L) {
+    if (pass_[s] != trig_pass_[s]) {                        // a new pass began (this sample)
+      trig_pass_[s] = pass_[s];
+      if (trig_off_[s] != 0.f) {                            // leaving a retriggered pass:
+        trig_off_[s] = 0.f;                                 // back on the timeline, at the one
+        RestartStreams(s);
+        timing_returns_++;
+      }
+      trig_pending_[s] = false;
+      const float level = err_level_[kErrTiming];
+      if (level > 0.f) {
+        const float p = powf(level, VESTIGE_TIMING_PROB_CURVE);
+        if (TimingRand() < p) {
+          // How deep into the list: level (0,1] -> 1..all groups.
+          int groups = 1 + (int)(level * (float)(VESTIGE_TIMING_GROUPS - 1) + 1e-4f);
+          if (groups > VESTIGE_TIMING_GROUPS) groups = VESTIGE_TIMING_GROUPS;
+          const int n = VESTIGE_TIMING_GROUP_END[groups - 1];
+          int i = (int)(TimingRand() * (float)n); if (i >= n) i = n - 1;
+          trig_at_[s]    = (float)(size_t)((double)L * VESTIGE_TIMING_NUM[i] / VESTIGE_TIMING_DEN[i] + 0.5);
+          trig_idx_[s]   = i;
+          trig_pending_[s] = true;
+          trig_rev_[s]   = rev;
+        }
+      }
+      return;
+    }
+    if (!trig_pending_[s]) return;
+    // Elapsed pass (material units): forward = the head (a pass starts at 0),
+    // reverse = (L - 1) - head (a reverse pass starts at L - 1). With that, the
+    // read head lands exactly on 0 (forward) / L - 1 (reverse) at the jump.
+    const float el = trig_rev_[s] ? (float)L - 1.f - fwd_[s] : fwd_[s];
+    if (el >= trig_at_[s]) {
+      trig_pending_[s] = false;
+      trig_off_[s] = trig_at_[s];                           // read head -> the loop's start (rev: end)
+      RestartStreams(s);
+      timing_trigs_++; last_trig_idx_ = trig_idx_[s]; last_trig_slot_ = s; last_trig_at_ = rec_clock_now_;
+    }
+  }
+
   // ---- K1 speed crossfade helpers -------------------------------------------
   float SpeedRatio() const { return sp_rate_; }
   // Speed-version head, DERIVED from the clean head (never integrated), so every
@@ -1329,7 +1397,7 @@ class Vestige : public Module {
   // every two loop periods, exactly as the plan's power-of-two argument says.
   float SpeedHead(int s, float r) const {
     const float L = (float)PlayLen(s);
-    const float c = fwd_[s];
+    const float c = ReadHead(s);           // derived from the clean READ head: retriggers together
     if (r < 1.f) return (c + ((pass_[s] & 1) ? L : 0.f)) * 0.5f;
     float h = c * 2.f;
     if (h >= L) h -= L;
@@ -1923,6 +1991,7 @@ class Vestige : public Module {
     // C re-cut starts from the stored loop; a changed T applies at the first wrap.
     if (s < VESTIGE_VOICE_SLABS) {
       play_len_[s] = L; cur_view_[s] = -1; rc_building_[s] = rc_ready_[s] = false; rc_want_[s] = L;
+      trig_off_[s] = 0.f; trig_pending_[s] = false; trig_pass_[s] = pass_[s];   // (pass_ set just above)
     }
     rho_t_[s] = TapeTarget(s);
     rho_d_[s] = rho_t_[s];                                  // enters playing at T_now, no glide
@@ -2775,6 +2844,16 @@ class Vestige : public Module {
   // Stage 2.5 error editor state (control thread writes, audio thread reads the
   // levels; each is one word, a torn read is at worst one tick old).
   enum ErrType { kErrTiming = 0, kErrCondition = 1, kErrPlayback = 2, kErrTypes = 3 };
+  // Stage 3 TIMING retrigger (ISR-owned, per loop voice slot).
+  float    trig_off_[VESTIGE_VOICE_SLABS]     = {0.f};   // read offset in effect (0 = on the timeline)
+  float    trig_at_[VESTIGE_VOICE_SLABS]      = {0.f};   // elapsed-pass point to retrigger at
+  bool     trig_pending_[VESTIGE_VOICE_SLABS] = {false};
+  bool     trig_rev_[VESTIGE_VOICE_SLABS]     = {false};
+  int      trig_idx_[VESTIGE_VOICE_SLABS]     = {0};     // index into VESTIGE_TIMING_* (diag)
+  int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
+  uint32_t timing_rng_ = 0x9E3779B9u;                    // own RNG: level 0 never touches VestigeRand
+  uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag
+  int      last_trig_idx_ = -1, last_trig_slot_ = -1; uint32_t last_trig_at_ = 0;
   volatile float err_level_[kErrTypes] = {0.f, 0.f, 0.f};   // 0 = off; start with no errors
   int   err_sel_     = -1;       // type SW2 selected last (-1 = none yet)
   float err_k3_ref_  = 0.f;      // raw K3 where that type was selected

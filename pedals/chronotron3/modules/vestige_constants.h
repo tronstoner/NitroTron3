@@ -418,6 +418,20 @@ static constexpr int      VESTIGE_FOLLOW_MODE    = 1;
 // the editor is replaced by curated presets in stage 7.
 static constexpr float    VESTIGE_ERR_K3_EPS     = 0.02f;  // raw knob travel (= VESTIGE_K2_MOVE_EPS)
 
+// ---- Stage 3: the TIMING error — a retrigger inside a pass -----------------
+// Level = err_level_[kErrTiming]. At each pass start of a loop voice: fire with
+// P = level^CURVE (start linear). If it fires, the playback jumps back to the
+// loop's start at a point of the pass drawn uniformly from the first N groups of
+// the list below (ordered by simplicity); the level sets N: level < 1/4 only
+// 1/2, then +{1/4,3/4}, +{1/3,2/3}, +{1/8..7/8}, full = all 5 groups. The pass
+// still ends at its normal length; the loop's grid never moves.
+static constexpr float  VESTIGE_TIMING_PROB_CURVE = 1.0f;
+static constexpr int    VESTIGE_TIMING_GROUPS     = 5;
+static constexpr int    VESTIGE_TIMING_POINTS_N   = 11;
+static constexpr double VESTIGE_TIMING_NUM[VESTIGE_TIMING_POINTS_N] = {1, 1, 3, 1, 2, 1, 3, 5, 7, 1, 5};
+static constexpr double VESTIGE_TIMING_DEN[VESTIGE_TIMING_POINTS_N] = {2, 4, 4, 3, 3, 8, 8, 8, 8, 6, 6};
+static constexpr int    VESTIGE_TIMING_GROUP_END[VESTIGE_TIMING_GROUPS] = {1, 3, 5, 9, 11};   // points in groups 1..k
+
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC
 // jitter would otherwise reach every following loop as pitch warble (at mid
