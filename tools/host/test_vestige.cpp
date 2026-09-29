@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <new>
 #include <vector>
+#include <string>
 #include <algorithm>
 #include "daisy.h"
 #include "hothouse.h"
@@ -2340,37 +2341,88 @@ static void TestFollowRecut() {
 }
 
 // ---------------------------------------------------------------------------
-// Stage 3: the TIMING error — a retrigger inside a pass.
-struct TrigLog { std::vector<long> wraps; std::vector<long> trig_at; std::vector<long> trig_el; std::vector<int> trig_idx; std::vector<int> trig_pass; };
-// Run per sample for `passes` wraps of slot s; log every wrap and retrigger.
+// Stage 3: the TIMING error — a Euclidean pattern inside a pass.
+struct PassRec { long start; int pat; int rot; uint32_t mask; std::vector<long> hits_el; std::vector<long> hits_at; };
+struct TrigLog { std::vector<PassRec> passes; };
+// Run per sample for `passes` wraps of slot s; per pass: its pattern and every
+// restart (elapsed samples from the pass start, absolute sample).
 static TrigLog RunPasses(int s, int passes, float max_secs = 60.f) {
   TrigLog lg; blk = 1;
-  int32_t pp = v.pass_[s]; uint32_t tc = v.timing_trigs_; long pass_start = -1;
+  int32_t pp = v.pass_[s]; uint32_t tc = v.timing_trigs_;
   const long end = n + (long)(max_secs * sr);
-  while (n < end && (int)lg.wraps.size() < passes + 1) {
+  while (n < end && (int)lg.passes.size() < passes + 1) {
     RunFor(1.f / sr);
-    if (v.pass_[s] != pp) { pp = v.pass_[s]; lg.wraps.push_back(n - 1); pass_start = n - 1; }
+    if (v.pass_[s] != pp) {
+      pp = v.pass_[s];
+      PassRec r; r.start = n - 1; r.pat = v.cur_pat_[s]; r.rot = v.cur_rot_[s]; r.mask = v.cur_mask_[s];
+      lg.passes.push_back(r);
+    }
     if (v.timing_trigs_ != tc) {
       tc = v.timing_trigs_;
-      if (v.last_trig_slot_ == s) {
-        lg.trig_at.push_back(n - 1); lg.trig_idx.push_back(v.last_trig_idx_);
-        lg.trig_el.push_back(pass_start >= 0 ? (n - 1) - pass_start : -1);
-        lg.trig_pass.push_back((int)lg.wraps.size());
+      if (v.last_trig_slot_ == s && !lg.passes.empty()) {
+        lg.passes.back().hits_el.push_back((n - 1) - lg.passes.back().start);
+        lg.passes.back().hits_at.push_back(n - 1);
       }
     }
   }
   Realign();
+  if (!lg.passes.empty()) lg.passes.pop_back();              // the last one is incomplete
   return lg;
 }
-static bool AllowedIdx(int idx, float level) {
-  int groups = 1 + (int)(level * (float)(VESTIGE_TIMING_GROUPS - 1) + 1e-4f);
-  if (groups > VESTIGE_TIMING_GROUPS) groups = VESTIGE_TIMING_GROUPS;
-  return idx >= 0 && idx < VESTIGE_TIMING_GROUP_END[groups - 1];
+static std::string MaskStr(uint32_t m, int n) { std::string r; for (int i = 0; i < n; i++) r += (m & (1u << i)) ? 'x' : '.'; return r; }
+static uint32_t RotMask(uint32_t m, int n, int h) { uint32_t r = 0; for (int i = 0; i < n; i++) if (m & (1u << ((i + h) % n))) r |= 1u << i; return r; }
+// The window of patterns a level may pick from (before the short-loop guard).
+static bool InWindow(int pat, float level) {
+  const int c = (int)(level * (float)(VESTIGE_TIMING_PATTERNS - 1) + 0.5f);
+  return pat >= c - 1 && pat <= c + 1 && pat >= 0 && pat < VESTIGE_TIMING_PATTERNS;
+}
+// Pass records are correct for slot s with play length L: a pattern from the
+// window, a rotation starting on a hit, and restarts exactly at
+// round(L * i / n) for its hit steps i != 0 (output = material at rate 1).
+static int CheckPasses(const TrigLog& lg, size_t L, float level, bool rate1, int* fired, int* pattern_bad) {
+  int bad = 0; *fired = 0; *pattern_bad = 0;
+  for (const PassRec& r : lg.passes) {
+    if (r.pat < 0) { if (!r.hits_el.empty()) bad++; continue; }
+    (*fired)++;
+    if (!InWindow(r.pat, level)) (*pattern_bad)++;
+    const int nst = VESTIGE_TIMING_PAT_STEPS[r.pat];
+    if (!(r.mask & 1u) || r.mask != RotMask(v.timing_mask_[r.pat], nst, r.rot)) (*pattern_bad)++;
+    std::vector<long> want;
+    for (int i = 1; i < nst; i++) if (r.mask & (1u << i)) want.push_back((long)((double)L * i / nst + 0.5));
+    if (want.size() != r.hits_el.size()) { bad++; continue; }
+    if (rate1) for (size_t k = 0; k < want.size(); k++) if (r.hits_el[k] != want[k]) bad++;
+  }
+  return bad;
 }
 
 static void TestTimingError() {
-  printf("-- stage 3: the TIMING error (retrigger inside a pass)\n");
-  // Level 0: nothing is drawn, nothing moves.
+  printf("-- stage 3: the TIMING error (Euclidean patterns inside a pass)\n");
+  // The generated patterns are the table's rhythms. Bjorklund's output is a
+  // ROTATION of the written form for some (the written forms follow different
+  // conventions); an event draws its rotation uniformly from the hit-starting
+  // ones, so what can be played is exactly the table's set.
+  { const char* written[VESTIGE_TIMING_PATTERNS] = {"x...x...", "x..x..x..x..", "x..x..x.", "x..x.x..x.x.", "x.x.x.",
+                                                     "x.xx.x.xx.x.", "x.xx.xx.", "x.xx.x", "x.xxxx", "x.xxxxxx"};
+    bool ok = true, rot_ok = true;
+    for (int p = 0; p < VESTIGE_TIMING_PATTERNS; p++) {
+      const int k = VESTIGE_TIMING_PAT_HITS[p], nst = VESTIGE_TIMING_PAT_STEPS[p];
+      const uint32_t m = v.timing_mask_[p];
+      int hits = 0; for (int i = 0; i < nst; i++) if (m & (1u << i)) hits++;
+      bool found = false, all_start = true;
+      for (int h = 0; h < nst; h++) if (m & (1u << h)) {
+        const uint32_t r = RotMask(m, nst, h);
+        if (!(r & 1u)) all_start = false;
+        if (MaskStr(r, nst) == written[p]) found = true;
+      }
+      printf("      E(%d,%2d) generated %-13s written %-13s %s\n", k, nst, MaskStr(m, nst).c_str(), written[p],
+             MaskStr(m, nst) == written[p] ? "same" : (found ? "same rhythm, other rotation" : "DIFFERENT"));
+      if (hits != k || !found || !(m & 1u) || m >> nst) ok = false;
+      if (!all_start) rot_ok = false;
+    }
+    Check(ok, "every generated pattern is the table's rhythm: k hits in n steps, the written rotation among its hit-start rotations");
+    Check(rot_ok, "every rotation an event can pick starts with a hit"); }
+
+  // Level 0: nothing drawn.
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -2380,74 +2432,90 @@ static void TestTimingError() {
   TrigLog lg0;
   { const uint32_t rng0 = v.timing_rng_, t0 = v.timing_trigs_;
     lg0 = RunPasses(s, 6);
-    const TrigLog& lg = lg0;
     Check(v.timing_rng_ == rng0 && v.timing_trigs_ == t0 && v.trig_off_[s] == 0.f,
-          "timing level 0: no roll drawn, no retrigger, the read head is the timeline head"); }
+          "timing level 0: no roll drawn, no restart, the read head is the timeline head"); }
 
-  // Level 1: exactly one retrigger per pass, at an allowed point; the grid holds.
+  // Level 1: every pass plays exactly one pattern from the dense end, restarts
+  // on its hit steps; the grid holds.
   v.err_level_[0] = 1.f;
-  const TrigLog lg = RunPasses(s, 24);
-  int per_pass_bad = 0, point_bad = 0, len_bad = 0; bool grid_ok = true;
-  std::vector<int> per(lg.wraps.size() + 1, 0);
-  for (size_t i = 0; i < lg.trig_pass.size(); i++) per[lg.trig_pass[i]]++;
-  for (size_t p = 1; p < lg.wraps.size(); p++) if (per[p] != 1) per_pass_bad++;
-  for (size_t i = 0; i < lg.trig_el.size(); i++) {
-    const int k = lg.trig_idx[i];
-    const long want = (long)((double)Q * VESTIGE_TIMING_NUM[k] / VESTIGE_TIMING_DEN[k] + 0.5);
-    if (!AllowedIdx(k, 1.f) || lg.trig_el[i] != want) point_bad++;
+  const TrigLog lg = RunPasses(s, 30);
+  int fired = 0, patbad = 0; const int hitbad = CheckPasses(lg, Q, 1.f, true, &fired, &patbad);
+  int len_bad = 0; bool grid_ok = true; int npat[VESTIGE_TIMING_PATTERNS] = {0}; size_t restarts = 0;
+  for (size_t p = 0; p < lg.passes.size(); p++) {
+    if (p > 0 && lg.passes[p].start - lg.passes[p - 1].start != (long)Q) len_bad++;
+    if ((lg.passes[p].start - lg0.passes[0].start) % (long)Q != 0) grid_ok = false;
+    if (lg.passes[p].pat >= 0) npat[lg.passes[p].pat]++;
+    restarts += lg.passes[p].hits_el.size();
   }
-  for (size_t p = 1; p < lg.wraps.size(); p++) {
-    if (lg.wraps[p] - lg.wraps[p - 1] != (long)Q) len_bad++;
-    if ((lg.wraps[p] - lg0.wraps[0]) % (long)Q != 0) grid_ok = false;  // same grid as with no errors
-  }
-  int seen[VESTIGE_TIMING_POINTS_N] = {0}; for (int k : lg.trig_idx) seen[k]++;
-  int distinct = 0; for (int k = 0; k < VESTIGE_TIMING_POINTS_N; k++) if (seen[k]) distinct++;
-  printf("      level 1, %zu passes: %zu retriggers, passes without exactly one %d, off-point %d, %d distinct points; pass length off %d, grid %s\n",
-         lg.wraps.size() - 1, lg.trig_el.size(), per_pass_bad, point_bad, distinct, len_bad, grid_ok ? "on A + k*Q" : "MOVED");
-  Check(per_pass_bad == 0 && point_bad == 0, "level 1: exactly one retrigger per pass, at round(Q x f) for an allowed f");
-  Check(len_bad == 0 && grid_ok, "retriggers never move the grid: every pass is Q long, every wrap on the no-error grid");
-  Check(distinct >= 6, "level 1: picks across the whole list (>= 6 of the 11 points in 24 passes)");
+  printf("      level 1, %zu passes: %d with a pattern (E(5,6) %d, E(7,8) %d), %zu restarts; off-window/rotation %d, off-step %d, length off %d, grid %s\n",
+         lg.passes.size(), fired, npat[8], npat[9], restarts, patbad, hitbad, len_bad, grid_ok ? "unchanged" : "MOVED");
+  Check(fired == (int)lg.passes.size() && patbad == 0 && hitbad == 0,
+        "level 1: every pass plays one pattern from the dense end, restarting exactly at round(pass x i / n) on its hits");
+  Check(npat[8] > 0 && npat[9] > 0, "level 1: both dense-end patterns get picked");
+  Check(len_bad == 0 && grid_ok, "patterns never move the grid: every pass is Q long, every wrap on the no-error grid");
 
-  // After the retrigger point the output IS the loop start (past the 5 ms
-  // crossfade); after the pass end, the loop start again.
-  { int ok = 0, tot = 0; float worst_c = 1.f;
-    for (size_t i = 0; i < lg.trig_at.size() && i < 12; i++) {
-      const long t0 = lg.trig_at[i];
-      const long room = (long)Q - lg.trig_el[i];                       // rest of the pass
-      const int N = (int)((room - 600 < 2400) ? room - 600 : 2400);
-      if (N < 600) continue;
-      std::vector<float> ref(N); for (int j = 0; j < N; j++) ref[j] = v.slab_[s][480 + j];
-      float c = 0.f; const int lagv = BestLagRef(t0 + 480, ref, 50, &c);
-      tot++; if (lagv == 0 && c > 0.99f) ok++; if (c < worst_c) worst_c = c;
+  // After each restart the output is the loop's start (past the 5 ms fade);
+  // after a pattern pass, the next pass starts on the one.
+  { int ok = 0, tot = 0; float worst = 1.f;
+    for (const PassRec& pr : lg.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 40; k++) {
+      const long next = (k + 1 < pr.hits_el.size()) ? pr.hits_el[k + 1] : (long)Q;
+      const int N = (int)(next - pr.hits_el[k] - 600); if (N < 600) continue;
+      const int NN = N < 2400 ? N : 2400;
+      std::vector<float> ref(NN); for (int j = 0; j < NN; j++) ref[j] = v.slab_[s][480 + j];
+      float c = 0.f; const int lagv = BestLagRef(pr.hits_at[k] + 480, ref, 50, &c);
+      tot++; if (lagv == 0 && c > 0.99f) ok++; if (c < worst) worst = c;
     }
-    printf("      after the retrigger: %d / %d windows match the loop start at lag 0 (worst c = %.4f)\n", ok, tot, worst_c);
-    Check(tot >= 6 && ok == tot, "after the retrigger point the output is the loop's start (lag 0, c > 0.99)"); }
+    printf("      after each restart: %d / %d windows = the loop's start at lag 0 (worst c = %.4f)\n", ok, tot, worst);
+    Check(tot >= 20 && ok == tot, "after every restart the output is the loop's start (lag 0, c > 0.99)"); }
   { int ok = 0, tot = 0;
-    for (size_t p = 1; p + 1 < lg.wraps.size() && tot < 8; p++) {
-      if (per[p] == 0) continue;                                      // a retriggered pass ended here
-      std::vector<float> ref(2400); for (int j = 0; j < 2400; j++) ref[j] = v.slab_[s][480 + j];
-      float c = 0.f; const int lagv = BestLagRef(lg.wraps[p] + 480, ref, 50, &c);
+    for (size_t p = 1; p < lg.passes.size() && tot < 10; p++) {
+      if (lg.passes[p - 1].pat < 0) continue;
+      const long first = lg.passes[p].hits_el.empty() ? (long)Q : lg.passes[p].hits_el[0];
+      const int N = (int)((first - 600 < 2400) ? first - 600 : 2400); if (N < 600) continue;
+      std::vector<float> ref(N); for (int j = 0; j < N; j++) ref[j] = v.slab_[s][480 + j];
+      float c = 0.f; const int lagv = BestLagRef(lg.passes[p].start + 480, ref, 50, &c);
       tot++; if (lagv == 0 && c > 0.99f) ok++;
     }
-    Check(tot >= 4 && ok == tot, "after a retriggered pass ends, the next pass starts on the loop's one (lag 0)"); }
+    Check(tot >= 5 && ok == tot, "after a pattern pass the next pass starts on the loop's one (lag 0)"); }
   v.err_level_[0] = 0.f;
   hist_on = false; in_hist.clear(); wet_hist.clear();
 
-  // No click at either jump, on a sine loop (a jump lands mid-cycle).
+  // Low / mid level: only its window (sparse end / middle).
+  { struct Lv { float level; int passes; };
+    for (const Lv& lv : {Lv{0.05f, 300}, Lv{0.5f, 120}}) {
+      v.err_level_[0] = lv.level;
+      const TrigLog ll = RunPasses(s, lv.passes, 200.f);
+      int f = 0, pb = 0; const int hb = CheckPasses(ll, Q, lv.level, true, &f, &pb);
+      int seen[VESTIGE_TIMING_PATTERNS] = {0}; for (const PassRec& pr : ll.passes) if (pr.pat >= 0) seen[pr.pat]++;
+      std::string used; for (int i = 0; i < VESTIGE_TIMING_PATTERNS; i++) if (seen[i]) { char b[16]; snprintf(b, sizeof b, "%d:%d ", i, seen[i]); used += b; }
+      const double rate = (double)f / (double)ll.passes.size(), sd = sqrt(lv.level * (1 - lv.level) / (double)ll.passes.size());
+      printf("      level %.2f: %d patterns in %zu passes (rate %.3f, expect %.2f +- %.3f), picked [pattern:count] %s, off-window %d, off-step %d\n",
+             lv.level, f, ll.passes.size(), rate, lv.level, 3 * sd, used.c_str(), pb, hb);
+      char msg[160]; snprintf(msg, sizeof msg, "level %.2f: fires at ~the level's rate and only picks its window (%s)", lv.level,
+                              lv.level < 0.1f ? "sparse end: E(2,8), E(4,12)" : "middle");
+      Check(pb == 0 && hb == 0 && fabs(rate - lv.level) < 3 * sd + 1e-9, msg);
+    }
+    v.err_level_[0] = 0.f; }
+
+  // No click at any restart, on a sine loop (restarts land mid-cycle).
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
   seen_acts = v.act_count_;
   sustain_hz = 220.f; sustain_input = true; play_input = true; WaitActivation(2.f, &r);
   sustain_input = false; play_input = false; RunFor(1.0f);
   { const int q = r.s;
     maxd = 0.f; RunFor(2.0f); const float st = maxd;
-    v.err_level_[0] = 1.f; maxd = 0.f;
-    const TrigLog lc = RunPasses(q, 16);
+    size_t nr = 0;
+    for (float lv : {1.f, 0.5f}) {
+      v.err_level_[0] = lv; maxd = 0.f;
+      const TrigLog lc = RunPasses(q, 12);
+      for (const PassRec& pr : lc.passes) nr += pr.hits_at.size();
+    }
     const float sj = maxd;
-    printf("      sine loop max step: steady %.5f | 16 passes, %zu retriggers + returns: %.5f (bound %.5f)\n", st, lc.trig_at.size(), sj, 1.5f * st);
-    Check(lc.trig_at.size() >= 15 && sj <= 1.5f * st, "retrigger and return: no step above 1.5x steady (5 ms restarts)");
+    printf("      sine loop max step: steady %.5f | 24 passes, %zu restarts + returns: %.5f (bound %.5f)\n", st, nr, sj, 1.5f * st);
+    Check(nr >= 40 && sj <= 1.5f * st, "pattern restarts and returns: no step above 1.5x steady (5 ms restarts)");
     v.err_level_[0] = 0.f; }
 
-  // Reverse: the retrigger jumps back to the loop's END.
+  // Reverse: every restart jumps to the loop's END.
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -2456,24 +2524,24 @@ static void TestTimingError() {
   { const int q = r.s; const long L = (long)r.Q;
     v.err_level_[0] = 1.f;
     const TrigLog lr = RunPasses(q, 10);
-    int ok = 0, tot = 0, per_bad = 0; std::vector<int> pr(lr.wraps.size() + 1, 0);
-    for (int p : lr.trig_pass) pr[p]++;
-    for (size_t p = 1; p < lr.wraps.size(); p++) if (pr[p] != 1) per_bad++;
-    for (size_t i = 0; i < lr.trig_at.size(); i++) {
-      const long room = L - lr.trig_el[i]; const int N = (int)((room - 600 < 2400) ? room - 600 : 2400);
-      if (N < 600) continue;
-      std::vector<float> ref(N); for (int j = 0; j < N; j++) ref[j] = v.slab_[q][L - 1 - 480 - j];
-      float c = 0.f; const int lagv = BestLagRef(lr.trig_at[i] + 480, ref, 50, &c);
+    int f = 0, pb = 0; const int hb = CheckPasses(lr, (size_t)L, 1.f, true, &f, &pb);
+    int ok = 0, tot = 0;
+    for (const PassRec& pr : lr.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 30; k++) {
+      const long next = (k + 1 < pr.hits_el.size()) ? pr.hits_el[k + 1] : L;
+      const int N = (int)(next - pr.hits_el[k] - 600); if (N < 600) continue;
+      const int NN = N < 2400 ? N : 2400;
+      std::vector<float> ref(NN); for (int j = 0; j < NN; j++) ref[j] = v.slab_[q][L - 1 - 480 - j];
+      float c = 0.f; const int lagv = BestLagRef(pr.hits_at[k] + 480, ref, 50, &c);
       tot++; if (lagv == 0 && c > 0.99f) ok++;
     }
-    printf("      reverse, level 1: %zu retriggers in %zu passes; %d / %d windows play the loop's END backward (lag 0)\n",
-           lr.trig_at.size(), lr.wraps.size() - 1, ok, tot);
-    Check(v.rev_play_ && per_bad == 0 && tot >= 4 && ok == tot, "reverse: one retrigger per pass, jumping back to the loop's end");
+    printf("      reverse, level 1: %d patterns in %zu passes, off-step %d; %d / %d restarts play the loop's END backward (lag 0)\n",
+           f, lr.passes.size(), hb, ok, tot);
+    Check(v.rev_play_ && f == (int)lr.passes.size() && hb == 0 && pb == 0 && tot >= 10 && ok == tot,
+          "reverse: every restart jumps back to the loop's end");
     v.err_level_[0] = 0.f; cs.knob[1] = 0.85f; }
   hist_on = false; in_hist.clear(); wet_hist.clear();
 
-  // K1 midpoint: both streams retrigger together (the speed head is derived
-  // from the clean READ head).
+  // K1 midpoint: both streams restart together.
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -2481,24 +2549,24 @@ static void TestTimingError() {
   { const int q = r.s; const long L = (long)r.Q;
     const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
     cs.knob[0] = kmid; RunFor(1.5f);
-    v.err_level_[0] = 1.f;
-    const TrigLog lk = RunPasses(q, 8);
+    v.err_level_[0] = 0.5f;                                   // mid patterns: steps long enough to measure
+    const TrigLog lk = RunPasses(q, 10);
     int ok = 0, tot = 0;
-    for (size_t i = 0; i < lk.trig_at.size(); i++) {
-      const long room = L - lk.trig_el[i]; const int N = (int)((room - 600 < 2400) ? room - 600 : 2400);
-      if (N < 600) continue;
-      std::vector<float> rc(N), rs(N);
-      for (int j = 0; j < N; j++) { rc[j] = v.slab_[q][480 + j]; rs[j] = v.slab_[q][(2 * (480 + j)) % L]; }
-      float gc = 0, gs = 0, res = 0; Split(lk.trig_at[i] + 480, rc, rs, &gc, &gs, &res);
+    for (const PassRec& pr : lk.passes) for (size_t k = 0; k < pr.hits_at.size() && tot < 20; k++) {
+      const long next = (k + 1 < pr.hits_el.size()) ? pr.hits_el[k + 1] : L;
+      const int N = (int)(next - pr.hits_el[k] - 600); if (N < 600) continue;
+      const int NN = N < 2400 ? N : 2400;
+      std::vector<float> rc(NN), rs(NN);
+      for (int j = 0; j < NN; j++) { rc[j] = v.slab_[q][480 + j]; rs[j] = v.slab_[q][(2 * (480 + j)) % L]; }
+      float gc = 0, gs = 0, res = 0; Split(pr.hits_at[k] + 480, rc, rs, &gc, &gs, &res);
       tot++; if (fabsf(gc - v.g_c_) < 0.05f && fabsf(gs - v.g_sp_) < 0.05f && res < 0.05f) ok++;
     }
-    printf("      K1 midpoint, level 1: %d / %d retriggered windows = clean from the start + double speed from the start (gains %.3f / %.3f)\n",
-           ok, tot, v.g_c_, v.g_sp_);
-    Check(tot >= 4 && ok == tot, "K1 midpoint: clean and speed versions retrigger together");
+    printf("      K1 midpoint, level 0.5: %d / %d restarts = clean from the start + double speed from the start\n", ok, tot);
+    Check(tot >= 6 && ok == tot, "K1 midpoint: clean and speed versions restart together");
     v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; }
   hist_on = false; in_hist.clear(); wet_hist.clear();
 
-  // Stretch at a rate != 1: the pass keeps d x T_now, one retrigger per pass.
+  // Stretch at a rate != 1: patterns laid out on the pass, length unchanged.
   Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
   seen_acts = v.act_count_;
   noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
@@ -2507,84 +2575,98 @@ static void TestTimingError() {
     v.err_level_[0] = 1.f;
     const TrigLog ls = RunPasses(q, 8);
     const long Lt = (long)GridQuantize::Boundary(v.div_[q], v.period_);
-    int per_bad = 0, len_bad = 0; std::vector<int> ps(ls.wraps.size() + 1, 0);
-    for (int p : ls.trig_pass) ps[p]++;
-    for (size_t p = 1; p < ls.wraps.size(); p++) { if (ps[p] != 1) per_bad++; if (labs(ls.wraps[p] - ls.wraps[p - 1] - Lt) > 1) len_bad++; }
-    printf("      stretch at rate %.4f: pass %ld, %zu retriggers in %zu passes, passes off length %d\n",
-           v.rho_d_[q], Lt, ls.trig_at.size(), ls.wraps.size() - 1, len_bad);
-    Check(v.rho_d_[q] != 1.0 && per_bad == 0 && len_bad == 0, "stretch at rate != 1: one retrigger per pass, the pass stays d x T_now");
+    int f = 0, pb = 0; const int hb = CheckPasses(ls, v.PlayLen(q), 1.f, false, &f, &pb);   // hit COUNT per pass
+    int len_bad = 0; for (size_t p = 1; p < ls.passes.size(); p++) if (labs(ls.passes[p].start - ls.passes[p - 1].start - Lt) > 1) len_bad++;
+    // Hit times in output samples ~ i/n of the pass (rate != 1: el / rate).
+    int tbad = 0;
+    for (const PassRec& pr : ls.passes) { if (pr.pat < 0) continue; const int nst = VESTIGE_TIMING_PAT_STEPS[pr.pat]; size_t k = 0;
+      for (int i = 1; i < nst; i++) if (pr.mask & (1u << i)) { if (k < pr.hits_el.size() && labs(pr.hits_el[k] - (long)((double)Lt * i / nst)) > 2) tbad++; k++; } }
+    printf("      stretch at rate %.4f: pass %ld, %d patterns in %zu passes, hit counts off %d, hit times off %d, lengths off %d\n",
+           v.rho_d_[q], Lt, f, ls.passes.size(), hb, tbad, len_bad);
+    Check(v.rho_d_[q] != 1.0 && f == (int)ls.passes.size() && hb == 0 && tbad == 0 && len_bad == 0,
+          "stretch at rate != 1: patterns on i/n of the pass, the pass stays d x T_now");
     v.err_level_[0] = 0.f; }
 
-  // Hold: a held loop retriggers too. Freeze: never.
+  // Hold: patterns continue. Freeze: never.
   { Hold(); v.err_level_[0] = 1.f;
     const int q = FirstLive(); const TrigLog lh = RunPasses(q, 4);
-    Check(v.held_ && lh.trig_at.size() >= 3, "held loop: retriggers too");
+    int f = 0, pb = 0; CheckPasses(lh, v.PlayLen(q), 1.f, false, &f, &pb);
+    Check(v.held_ && f >= 3, "held loop: patterns play too");
     v.err_level_[0] = 0.f; Unhold(); }
   { Reset(); cs.sw[0] = 2; cs.knob[4] = 0.0f; RunFor(1.0f);
     seen_acts = v.act_count_;
     noise_from = n; noise_to = n + 9600; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
-    v.err_level_[0] = 1.f; const uint32_t t0 = v.timing_trigs_; RunFor(3.0f);
-    Check(Vestige::PoolOf(q.s) == Vestige::kPoolFreeze && v.timing_trigs_ == t0, "freeze: the timing error never touches it");
+    v.err_level_[0] = 1.f; const uint32_t t0 = v.timing_trigs_, p0 = v.timing_patterns_; RunFor(3.0f);
+    Check(Vestige::PoolOf(q.s) == Vestige::kPoolFreeze && v.timing_trigs_ == t0 && v.timing_patterns_ == p0,
+          "freeze: the timing error never touches it");
     v.err_level_[0] = 0.f; cs.sw[0] = 0; RunFor(1.0f); }
 
-  // 3 voices, each rolling on its own; budget at the K1 midpoint.
-  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
+  // Short-loop guard: steps under VESTIGE_TIMING_MIN_STEP_MS are excluded.
+  { const double min_step = VESTIGE_TIMING_MIN_STEP_MS * 0.001 * sr;
+    // 200 ms loop: 12-step patterns (16.7 ms) excluded, 8-step (25 ms) allowed.
+    Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({200}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 14400; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    v.err_level_[0] = 5.f / 9.f;                            // window {E(3,6), E(7,12), E(5,8)}
+    const TrigLog lw = RunPasses(q.s, 80, 100.f);
+    int seen[VESTIGE_TIMING_PATTERNS] = {0}; for (const PassRec& pr : lw.passes) if (pr.pat >= 0) seen[pr.pat]++;
+    printf("      200 ms loop, window E(3,6)/E(7,12)/E(5,8): picked E(3,6) %d, E(7,12) %d, E(5,8) %d (12 steps = %.1f ms < %.0f ms)\n",
+           seen[4], seen[5], seen[6], (double)q.Q / 12 / 48.0, VESTIGE_TIMING_MIN_STEP_MS);
+    Check(q.Q / 12.0 < min_step && q.Q / 8.0 >= min_step && seen[5] == 0 && seen[4] > 0 && seen[6] > 0,
+          "short-loop guard: patterns whose step is under the minimum are never picked");
+    // 100 ms loop at level 1: E(5,6)/E(7,8) steps 16.7 / 12.5 ms -> no error at all.
+    Reset(); cs.knob[4] = 0.0f; Taps({100}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 9600; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    v.err_level_[0] = 1.f;
+    const uint32_t sk0 = v.timing_skipped_, t0 = v.timing_trigs_;
+    const TrigLog lt = RunPasses(q.s, 40);
+    printf("      100 ms loop at level 1: %zu passes, %u skipped by the guard, %u restarts\n", lt.passes.size(), v.timing_skipped_ - sk0, v.timing_trigs_ - t0);
+    Check(v.timing_skipped_ - sk0 >= 39 && v.timing_trigs_ == t0, "short-loop guard: no candidate left -> that pass has no error");
+    v.err_level_[0] = 0.f; }
+
+  // 3 voices, each rolling on its own; budget and the PHYSICAL pool.
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.knob[0] = 0.5f; Taps({400}); RunFor(0.5f);
   seen_acts = v.act_count_;
-  const long bursts[3] = {14000, 21000, 30500};
-  for (int i = 0; i < 3; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
+  const long bursts[3] = {9000, 12500, 14000};              // -> 200 / 267 / 300 ms: all three take dense patterns
+  for (int i = 0; i < 3; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.2f); }
   noise_from = noise_to = -1;
   RunFor(1.0f);
   { int slots[3]; int ns = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS && ns < 3; q++) if (v.active_[q] && !v.dying_[q]) slots[ns++] = q;
+    for (int i = 0; i < ns; i++) printf("      voice %d: loop %zu (%.0f ms)\n", slots[i], v.PlayLen(slots[i]), v.PlayLen(slots[i]) / 48.0);
     v.err_level_[0] = 0.6f;
-    // Per-sample log of every voice's passes and retriggers.
     blk = 1;
     int32_t pp[3]; for (int i = 0; i < ns; i++) pp[i] = v.pass_[slots[i]];
-    std::vector<std::vector<int>> hits(3); std::vector<int> cur(3, 0); uint32_t tc = v.timing_trigs_;
-    for (long j = 0; j < 48000L * 12; j++) {
+    std::vector<std::vector<int>> pats(3);
+    for (long j = 0; j < 48000L * 10; j++) {
       RunFor(1.f / sr);
-      if (v.timing_trigs_ != tc) { tc = v.timing_trigs_; for (int i = 0; i < ns; i++) if (slots[i] == v.last_trig_slot_) cur[i]++; }
-      for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) { pp[i] = v.pass_[slots[i]]; hits[i].push_back(cur[i]); cur[i] = 0; }
+      for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) { pp[i] = v.pass_[slots[i]]; pats[i].push_back(v.cur_pat_[slots[i]]); }
     }
     Realign();
-    // Independence: over the passes all three voices had, their fired/not
-    // patterns are not identical; every pass fired at most once.
-    int multi = 0; for (int i = 0; i < ns; i++) for (int h : hits[i]) if (h > 1) multi++;
-    int differ = 0; const size_t m = std::min(hits[0].size(), std::min(hits[1].size(), hits[2].size()));
-    for (size_t k = 1; k < m; k++) if (hits[0][k] != hits[1][k] || hits[1][k] != hits[2][k]) differ++;
-    int fired[3] = {0, 0, 0}; for (int i = 0; i < ns; i++) for (int h : hits[i]) fired[i] += h;
-    printf("      3 voices, level 0.6, 12 s: passes %zu / %zu / %zu, fired %d / %d / %d, passes where the voices differ %d of %zu, multi-fire %d\n",
-           hits[0].size(), hits[1].size(), hits[2].size(), fired[0], fired[1], fired[2], differ, m - 1, multi);
-    Check(ns == 3 && multi == 0 && differ >= 3 && fired[0] > 0 && fired[1] > 0 && fired[2] > 0,
-          "3 voices roll independently (each at most once per pass)");
+    int differ = 0; const size_t m = std::min(pats[0].size(), std::min(pats[1].size(), pats[2].size()));
+    for (size_t k = 0; k < m; k++) if (pats[0][k] != pats[1][k] || pats[1][k] != pats[2][k]) differ++;
+    // Step rounding on a loop whose length n does not divide (12800 / 12, / 6).
+    { int q12 = -1; for (int i = 0; i < ns; i++) if (v.PlayLen(slots[i]) % 12 != 0 || v.PlayLen(slots[i]) % 6 != 0) q12 = slots[i];
+      if (q12 < 0) q12 = slots[1];
+      v.err_level_[0] = 0.5f;
+      const TrigLog lq = RunPasses(q12, 40, 60.f);
+      int f = 0, pb = 0; const int hb = CheckPasses(lq, v.PlayLen(q12), 0.5f, true, &f, &pb);
+      printf("      loop %zu (not a multiple of 12): %d patterns, restarts off round(L*i/n): %d\n", v.PlayLen(q12), f, hb);
+      Check(v.PlayLen(q12) % 12 != 0 && f >= 10 && hb == 0 && pb == 0, "restarts land at round(pass x i / n) exactly, also when n does not divide the pass");
+      v.err_level_[0] = 0.6f; }
+    printf("      3 voices, level 0.6, 10 s: passes %zu / %zu / %zu, pattern sequences differ in %d of %zu passes\n",
+           pats[0].size(), pats[1].size(), pats[2].size(), differ, m);
+    Check(ns == 3 && differ >= (int)m / 2, "3 voices roll and pick independently");
     const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
     cs.knob[0] = kmid; RunFor(1.5f);
     v.err_level_[0] = 1.f;
-    max_grains = 0; max_counted = 0; const uint32_t d0 = v.grain_cap_drops_;
-    RunFor(6.0f);
-    printf("      3 voices, K1 midpoint, level 1: max counted by the cap %d (budget %d), physical max %d (incl. fading), refused %u\n",
-           max_counted, 3 * 2 * 2, max_grains, v.grain_cap_drops_ - d0);
-    Check(max_counted <= 12 && v.grain_cap_drops_ - d0 == 0, "3 voices + K1 midpoint + retriggers: counted grains within 12, none refused");
+    max_grains = 0; max_counted = 0; const uint32_t d0 = v.grain_cap_drops_, pf0 = v.pool_full_, t0 = v.timing_trigs_;
+    blk = 1; RunFor(10.0f); Realign();
+    printf("      3 voices (200-300 ms loops), K1 midpoint, level 1, 10 s: %u restarts; counted max %d (budget 12), PHYSICAL max %d of %d, cap refusals %u, pool exhausted %u\n",
+           v.timing_trigs_ - t0, max_counted, max_grains, VESTIGE_GRAINS, v.grain_cap_drops_ - d0, v.pool_full_ - pf0);
+    Check(max_counted <= 12 && v.grain_cap_drops_ - d0 == 0, "dense patterns, 3 voices + K1 midpoint: counted grains within 12, none refused");
+    Check(v.pool_full_ - pf0 == 0 && max_grains < VESTIGE_GRAINS, "dense patterns: the physical grain pool never runs out");
     v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f); }
-
-  // Low level: only 1/2, at about the level's rate. Mid level: its groups only.
-  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({100}); RunFor(0.6f);
-  seen_acts = v.act_count_;
-  noise_from = n; noise_to = n + 9600; WaitActivation(3.f, &r); noise_from = noise_to = -1;
-  { const int q = r.s;
-    struct Lv { float level; int passes; };
-    for (const Lv& lv : {Lv{0.1f, 400}, Lv{0.3f, 300}}) {
-      v.err_level_[0] = lv.level;
-      const TrigLog ll = RunPasses(q, lv.passes);
-      int bad = 0; for (int k : ll.trig_idx) if (!AllowedIdx(k, lv.level)) bad++;
-      const double rate = (double)ll.trig_at.size() / (double)(ll.wraps.size() - 1);
-      const double sd = sqrt(lv.level * (1 - lv.level) / (double)(ll.wraps.size() - 1));
-      printf("      level %.1f: %zu retriggers in %zu passes (rate %.3f, expect %.1f +- %.3f), outside its allowed points: %d\n",
-             lv.level, ll.trig_at.size(), ll.wraps.size() - 1, rate, lv.level, 3 * sd, bad);
-      char msg[160]; snprintf(msg, sizeof msg, "level %.1f: fires at ~the level's rate and only at %s", lv.level,
-                              lv.level < 0.25f ? "1/2" : "1/2, 1/4, 3/4");
-      Check(bad == 0 && fabs(rate - lv.level) < 3 * sd, msg);
-    }
-    v.err_level_[0] = 0.f; }
   Unhold();
 }
 
