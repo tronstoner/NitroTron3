@@ -1568,7 +1568,7 @@ class Vestige : public Module {
   // ---- Timing mode 2: PASS MEMORY ------------------------------------------
   struct TimingFig { int8_t type, step, param, age; };   // a figure on the remembered pass (age = passes played before this one)
   enum TimingFigType { kFigRest = 0, kFigBreak, kFigStutter, kFigRepeat, kFigRatchet, kFigRetrig, kFigClean };
-  // The steps a figure changes on an n-step pass (bit i = step i; never step 0).
+  // The steps a figure changes on an n-step pass (bit i = step i).
   // Single-step figures change their step; BREAK / REPEAT / RETRIG change from
   // their step to the end of the pass (RETRIG's step = its pattern's 2nd hit).
   static uint32_t TimingFigCover(const TimingFig& f, int n) {
@@ -1604,7 +1604,9 @@ class Vestige : public Module {
         TimingFig f{(int8_t)t, (int8_t)k, (int8_t)param, 0};
         const uint32_t c = TimingFigCover(f, n);
         if ((c & used) || TimingBits(c) > room) return;
-        const float w = (2 * k >= n) ? VESTIGE_TIMING_MEM_BACK_WEIGHT : 1.f;
+        const float w = (k == 0) ? VESTIGE_TIMING_MEM_ONE_WEIGHT
+                      : (2 * k >= n) ? VESTIGE_TIMING_MEM_BACK_WEIGHT : 1.f;
+        if (!(w > 0.f)) return;
         cand[t][nc[t]] = f; cw[t][nc[t]] = w; nc[t]++; tw[t] += w;
       };
       if (t == kFigRetrig) {
@@ -1615,7 +1617,8 @@ class Vestige : public Module {
           if (k < n) put(k, hits);
         }
       } else {
-        for (int k = 1; k < n; k++) put(k, t == kFigRatchet ? ratchet_div : 0);
+        const bool one_ok = (t == kFigRest || t == kFigStutter || t == kFigRatchet || t == kFigClean);
+        for (int k = one_ok ? 0 : 1; k < n; k++) put(k, t == kFigRatchet ? ratchet_div : 0);
       }
     }
     float tot = 0.f;
@@ -1691,7 +1694,7 @@ class Vestige : public Module {
       switch (g.type) {
         case kFigRest:    mute[k] = 1; break;
         case kFigBreak:   for (int i = k; i < n; i++) mute[i] = 1; break;
-        case kFigStutter: play[k] = (int8_t)(k - 1); break;
+        case kFigStutter: play[k] = (int8_t)((k + n - 1) % n); break;   // (on step 1: the loop's last step)
         case kFigRepeat:  for (int i = k; i < n; i++) play[i] = (int8_t)(k - 1); break;
         case kFigRatchet: rat[k] = g.param; break;
         case kFigRetrig: {
@@ -1704,6 +1707,13 @@ class Vestige : public Module {
     }
     for (int i = 0; i < n; i++) sl_order_[s][i] = mute[i] ? (int8_t)-1 : play[i];
     auto bnd = [&](int i) { return (float)(size_t)((double)L * (double)i / (double)n + 0.5); };
+    // Step 1 at the pass start itself: its mute and its slice apply right here
+    // (the read was just put back on the timeline by TimingStep).
+    if (!(el0 > 0.f)) {
+      mute_dt_[s] = (float)mute[0];
+      const float off0 = 0.f - bnd(play[0]);
+      if (off0 != trig_off_[s]) { trig_off_[s] = off0; RestartStreams(s); timing_trigs_++; }
+    }
     for (int i = 0; i < n; i++) {
       const float b0 = bnd(i), b1 = (i + 1 < n) ? bnd(i + 1) : (float)L;
       const float sj = bnd(play[i]);
