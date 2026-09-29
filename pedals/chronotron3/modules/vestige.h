@@ -319,12 +319,18 @@ class Vestige : public Module {
       max_loop_len_ = period_;
     }
 
-    // ---- Degradation colour — ARCHIVED -------------------------------------
-    // K4 was the BBD/Tape colour (MnemDegrade), then the max-length test; it is
-    // now capture sensitivity, so the colour engine is held clean (depth 0),
-    // exactly as the max-length test build already held it. The engine and its
-    // Process path stay intact. Revive: map a knob k to degrade_.SetDepth(k*2-1).
-    degrade_.SetDepth(0.f);
+    // ---- K4 = degradation colour (MnemDegrade, bipolar) --------------------
+    // CCW half = BBD, noon (deadzone) = clean — the engine is skipped, no CPU —,
+    // CW half = tape. (K4 was capture sensitivity; that is now the constant
+    // VESTIGE_AUTO_THRESH.)
+    // A clean zone of +-VESTIGE_K4_DEADZONE around noon (the engine's own is
+    // only +-0.015 of travel, and a physical noon reads ~0.52 after RemapKnob);
+    // the colour travel starts past it.
+    {
+      const float c = k4 - 0.5f, a = fabsf(c);
+      const float d = (a <= VESTIGE_K4_DEADZONE) ? 0.f : (a - VESTIGE_K4_DEADZONE) / (0.5f - VESTIGE_K4_DEADZONE);
+      degrade_.SetDepth(c < 0.f ? -d : d);
+    }
     // Idle-hiss guard: with no loop captured the engine's injected noise would
     // add a hiss bed to the output, so duck it to 0 until there is content.
     bool degrade_has_content = false;
@@ -332,8 +338,8 @@ class Vestige : public Module {
     degrade_.SetNoiseGate(degrade_has_content ? 1.f : 0.f);
     pitch_rate_ = 1.f;                    // no transposition (tape varispeed retired earlier)
 
-    // ---- K4 = capture sensitivity (was K2; same mapping) -------------------
-    auto_thresh_ = Mapf(k4, VESTIGE_AUTO_THRESH_MIN, VESTIGE_AUTO_THRESH_MAX);
+    // ---- Capture sensitivity: a constant (was K4) ---------------------------
+    auto_thresh_ = (thresh_cfg_ > 0.f) ? thresh_cfg_ : VESTIGE_AUTO_THRESH;
 
     // ---- FS2: tap = capture + playback on/off · hold = buffer hold ---------
     // Hold fires once, while the switch is still down, and toggles hold in
@@ -727,18 +733,9 @@ class Vestige : public Module {
       // retired the idle path bypasses it — see ARCHIVED note below.)
       warble_ring_.Write(y);
       if (degrade_.Idle()) {
-        // Idle = the only state since the degrade engine was retired (depth
-        // pinned at 0, no knob): the tap would be a pure warble_base_ delay
-        // (143 samples) on the whole wet path, putting every loop and the
-        // freeze ~3 ms behind the dry and off their grid. So the wet goes
-        // straight through. The ring is still written, so the non-idle path
-        // below has its history.
-        // ARCHIVED — reviving degrade: restore the idle-path tap read
-        //   y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
-        //                             - warble_base_ - warble_int_);
-        // here, so engaging/disengaging K4 does not step the wet delay (the
-        // reason the fixed-base tap used to stay on both paths) — and budget
-        // the 3 ms against the stage-2 grid (compensate, or accept it).
+        // K4 at noon: the colour engine is skipped (no CPU) and the wet goes
+        // straight through, on the grid. The ring is still written, so the
+        // path below has its history the moment K4 leaves noon.
         warble_int_ += (0.f - warble_int_) * VESTIGE_ROUTING_SMOOTH;   // ease wobble to 0
       } else {
         float w_cents = degrade_.TapePitchCents();            // wow/flutter/snag/drift
@@ -747,9 +744,15 @@ class Vestige : public Module {
         const float w_max = warble_base_ - 2.f;
         if (warble_int_ >  w_max) warble_int_ =  w_max;
         else if (warble_int_ < -w_max) warble_int_ = -w_max;
-        y = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
+        const float yd = warble_ring_.ReadFrac((float)warble_ring_.GetWritePos()
                                   - warble_base_ - warble_int_);
-        y = degrade_.ColourProcess(y);   // tape speed first, then head/electronics
+        // The warble tap sits ~3 ms (warble_base_) behind the direct wet: the
+        // engine's own engage fade (Mix, 0 -> 1 leaving noon, back to 0 before
+        // Idle) crossfades direct -> delayed + coloured, so neither edge steps
+        // the delay. Engaged, the wet is ~3 ms late; at noon it is on the grid.
+        const float yc = degrade_.ColourProcess(yd);   // tape speed first, then head/electronics
+        const float m  = degrade_.Mix();
+        y = y * (1.f - m) + yc * m;
       }
 
       // WET only: the shell mixes it against the dry on K6 (equal-power).
@@ -3609,7 +3612,8 @@ class Vestige : public Module {
   bool     hold_latched_ = false;
   int      flash_        = 0;
   uint32_t silence_since_= 0;
-  float    auto_thresh_  = VESTIGE_AUTO_THRESH_MIN;
+  float    auto_thresh_  = VESTIGE_AUTO_THRESH;
+  float    thresh_cfg_   = -1.f;                 // > 0 overrides VESTIGE_AUTO_THRESH (host tests)
   float    env_          = 0.f;
   float    env_gate_     = 0.f;          // the gate's meter (VESTIGE_GATE_ENV_MODE)
   float    gate_rel_coef_ = 0.f;         // its fall coefficient (mode 1), set in Init

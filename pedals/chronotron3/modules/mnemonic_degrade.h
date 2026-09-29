@@ -436,6 +436,7 @@ class MnemDegrade {
   // and ColourProcess() entirely — they do audible nothing but still cost 3 sinf
   // + control-rate powf per sample, which is wasted CPU when K4 is clean.
   bool Idle() const { return active_chain_ == 0 && target_chain_ == 0 && mix_ < 1e-3f; }
+  float Mix() const { return mix_; }           // chain engage crossfade, 0 (clean) .. 1
 
   // Per-sample, called BEFORE the main read: advances the modulation and returns
   // the tape pitch offset in cents (0 unless the tape chain is active).

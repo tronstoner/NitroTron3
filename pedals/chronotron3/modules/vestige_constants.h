@@ -322,8 +322,16 @@ static_assert(VESTIGE_GATE_ENV_MODE == 0 || VESTIGE_GATE_ENV_MODE == 1,
 // still rings faintly (above this level), does not start a capture.
 static constexpr bool  VESTIGE_REARM_EVERY_END = true;
 static constexpr float VESTIGE_REARM_DEEP      = 0.3f;   // x close level
-static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f; // K4 CCW: sensitive
-static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;  // K4 CW:  insensitive
+// Capture open threshold: a constant — the builder's K4 setting (8:00-8:30,
+// bass and guitar alike) from when K4 was the sensitivity knob. K4 is the
+// degradation colour again.
+static constexpr float    VESTIGE_AUTO_THRESH     = 0.011f;
+// K4 = degradation colour: CCW half BBD, CW half tape, clean within this much
+// of noon (remapped knob units; the colour depth starts from 0 past it).
+static constexpr float    VESTIGE_K4_DEADZONE     = 0.06f;
+// The retired K4 sensitivity map (host tests use it to set thresholds).
+static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f;
+static constexpr float    VESTIGE_AUTO_THRESH_MAX = 0.10f;
 static constexpr float    VESTIGE_AUTO_HYST       = 0.55f;  // close threshold = open * hyst
 static constexpr uint32_t VESTIGE_AUTO_RELEASE_MS = 80;     // silence held this long ends a phrase
 // Onset detector — lifts the re-arm block after a ceiling stop when a NEW attack

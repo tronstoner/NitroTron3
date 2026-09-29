@@ -310,6 +310,13 @@ static void TestStage0() {
 // No error levels: K3 (the error amount, all three layers) back to CCW. A test
 // that moves K3 for another reason (e.g. the stage-0 "K3 inert in freeze"
 // check) would otherwise leave the errors on.
+// K4 is the degradation colour; capture sensitivity is a constant. Tests that
+// used K4 as the sensitivity set the threshold the old K4 map gave, and keep K4
+// at noon (colour clean).
+static void SetK4Thresh(float k4) {
+  v.thresh_cfg_ = Mapf(RemapKnob(k4), VESTIGE_AUTO_THRESH_MIN, VESTIGE_AUTO_THRESH_MAX);
+  cs.knob[3] = 0.5f;
+}
 static void NoErrors() {
   for (int i = 0; i < 3; i++) v.err_level_[i] = 0.f;
   cs.knob[2] = 0.f;
@@ -317,7 +324,7 @@ static void NoErrors() {
 static void Reset() {
   NoErrors();
   play_input = false;
-  cs.knob[1] = 0.85f; cs.knob[3] = 0.1f; cs.knob[4] = 0.05f;
+  cs.knob[1] = 0.85f; SetK4Thresh(0.1f); cs.knob[4] = 0.05f;
   cs.sw[0] = 0; RunFor(0.1f);
   Unhold();
   if (v.engaged_) Tap();
@@ -714,7 +721,7 @@ static bool OneCapture(long burst, CapRec* r, const char* name, bool expect_rev 
 static void TestQuantisedCapture() {
   printf("-- stage 2: quantised capture (sample-accurate)\n");
   Reset();
-  cs.sw[0] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f;   // UP, sensitive gate, K5 CCW (3 ms fades)
+  cs.sw[0] = 0; SetK4Thresh(0.1f); cs.knob[4] = 0.0f;   // UP, sensitive gate, K5 CCW (3 ms fades)
   Taps({1000}); RunFor(1.0f);
   const size_t T = v.period_;
   Check(T == 48000, "setup: T = 1000 ms (48000)");
@@ -985,7 +992,7 @@ static void Split(long at, const std::vector<float>& a, const std::vector<float>
 static void TestSpeedXfade() {
   printf("-- stage 6: K1 playback speed crossfade\n");
   Reset();
-  cs.sw[0] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  cs.sw[0] = 0; SetK4Thresh(0.1f); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
   Taps({500}); RunFor(0.6f);
   const size_t Q = 24000;
   Check(v.period_ == Q, "setup: T = 500 ms");
@@ -1224,7 +1231,7 @@ static std::vector<float> ExpectTape(int s, double rho, int N) {
 static void TestFollowTape() {
   printf("-- follow T, A: tape (SW2 UP)\n");
   Reset();
-  cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  cs.sw[0] = 0; v.follow_mode_cfg_ = 0; SetK4Thresh(0.1f); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
   Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -1587,7 +1594,7 @@ static void TestFollowStretch() {
   const size_t gst = (size_t)((float)VESTIGE_STRETCH_GRAIN_MS * 0.001f * sr) & ~(size_t)1;
   // Sine loop: pitch must stay, time must follow.
   Reset();
-  cs.sw[0] = 0; v.follow_mode_cfg_ = 1; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  cs.sw[0] = 0; v.follow_mode_cfg_ = 1; SetK4Thresh(0.1f); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
   Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -1853,7 +1860,7 @@ static void TestOnsetRearm() {
   for (const Sc& c : scs) {
     // 1. Ringing note hits the T ceiling; a re-pluck while it still rings above
     //    the close level starts a new capture at the onset sample.
-    Reset(); cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.knob[3] = c.k4; cs.knob[4] = 0.0f;
+    Reset(); cs.sw[0] = 0; v.follow_mode_cfg_ = 0; SetK4Thresh(c.k4); cs.knob[4] = 0.0f;
     Taps({300}); RunFor(0.8f);
     StartHist();
     seen_acts = v.act_count_;
@@ -1880,7 +1887,7 @@ static void TestOnsetRearm() {
 
     // 2. A decaying note alone never re-triggers: one long-ringing note, ceiling
     //    stop, nothing else played.
-    Reset(); cs.knob[3] = c.k4; cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
+    Reset(); SetK4Thresh(c.k4); cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
     seen_acts = v.act_count_;
     nt = NoteTrain{}; nt.from = n + 480; nt.gap = 48000 * 20; nt.count = 1; nt.hz = c.hz; nt.amp = c.amp; nt.atk_s = c.atk; nt.tau_s = 1.5f;
     note_on = true;
@@ -1904,7 +1911,7 @@ static void TestOnsetRearm() {
                        {196.f, 0.01f, 0.004f, 0.0f}, {61.7f, 0.05f, 0.002f, 0.0f} };
     int worst = 0, best = 99;
     for (const Pk& p : pks) {
-      Reset(); cs.knob[3] = p.k4; cs.knob[4] = 0.0f; RunFor(0.5f);
+      Reset(); SetK4Thresh(p.k4); cs.knob[4] = 0.0f; RunFor(0.5f);
       for (int i = 0; i < 6; i++) {
         nt = NoteTrain{}; nt.from = n + 480; nt.gap = 48000 * 20; nt.count = 1; nt.hz = p.hz; nt.amp = p.amp; nt.atk_s = p.atk;
         nt.tau_s = (i & 1) ? 1.5f : 0.3f;                   // short and sustained plucks
@@ -1922,7 +1929,7 @@ static void TestOnsetRearm() {
 
   // 4. Onsets never end or split a capture: attacks inside one continuous phrase.
   {
-    Reset(); cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; Taps({2000}); RunFor(1.0f);
+    Reset(); SetK4Thresh(0.1f); cs.knob[4] = 0.0f; Taps({2000}); RunFor(1.0f);
     seen_acts = v.act_count_;
     nt = NoteTrain{}; nt.from = n + 480; nt.gap = 14400; nt.count = 5; nt.hz = 110.f; nt.amp = 0.3f; nt.tau_s = 0.12f;
     note_on = true;
@@ -1946,7 +1953,7 @@ static void TestGateMeter() {
   printf("-- gate meter (VESTIGE_GATE_ENV_MODE %d)\n", VESTIGE_GATE_ENV_MODE);
   const float hzs[] = {30.9f, 41.2f, 110.f};
   for (float hz : hzs) {
-    Reset(); cs.sw[0] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
+    Reset(); cs.sw[0] = 0; SetK4Thresh(0.1f); cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
     seen_acts = v.act_count_;
     nt = NoteTrain{}; nt.from = n + 480; nt.gap = 48000 * 20; nt.count = 1; nt.hz = hz;
     nt.amp = 0.3f; nt.atk_s = 0.002f; nt.tau_s = 1.5f;
@@ -1969,7 +1976,7 @@ static void TestGateMeter() {
     int worst = 0;
     const float amps[] = {0.3f, 0.1f}; const float k4s[] = {0.0f, 0.1f, 0.3f};
     for (float amp : amps) for (float k4 : k4s) {
-      Reset(); cs.sw[0] = 0; cs.knob[3] = k4; cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
+      Reset(); cs.sw[0] = 0; SetK4Thresh(k4); cs.knob[4] = 0.0f; Taps({300}); RunFor(0.8f);
       seen_acts = v.act_count_;
       int starts = 0; bool was = v.recording_;
       bt_amp = amp; bt_from = n + 480; bt_on = true; note_on = true;
@@ -1988,7 +1995,7 @@ static void TestGateMeter() {
     int worst_caps = 0; uint32_t worst_onsets = 0, worst_os = 0;
     const float amps[] = {0.2f, 0.3f};
     for (float amp : amps) {
-      Reset(); cs.sw[0] = 0; cs.knob[3] = 0.45f; cs.knob[4] = 0.0f; Taps({230}); RunFor(0.8f);
+      Reset(); cs.sw[0] = 0; SetK4Thresh(0.45f); cs.knob[4] = 0.0f; Taps({230}); RunFor(0.8f);
       seen_acts = v.act_count_;
       const uint32_t oc0 = v.onset_count_, os0 = v.onset_starts_;
       int starts = 0; bool was = v.recording_;
@@ -2010,7 +2017,7 @@ static void TestGateMeter() {
   int min_gap = -1;
   printf("      two 60 ms stabs -> captures, by pause:");
   for (int g : gaps_ms) {
-    Reset(); cs.sw[0] = 1; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; Taps({2000}); RunFor(1.0f);
+    Reset(); cs.sw[0] = 1; SetK4Thresh(0.1f); cs.knob[4] = 0.0f; Taps({2000}); RunFor(1.0f);
     seen_acts = v.act_count_;
     const uint32_t ac0 = v.act_count_;
     const long a0 = n + 480, a1 = a0 + 2880;
@@ -2083,7 +2090,7 @@ static std::vector<Change> WatchChanges(int s, float secs) {
 static void TestFollowRecut() {
   printf("-- follow T, C: re-cut (SW2 DOWN)\n");
   Reset();
-  cs.sw[0] = 0; v.follow_mode_cfg_ = 2; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  cs.sw[0] = 0; v.follow_mode_cfg_ = 2; SetK4Thresh(0.1f); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
   Taps({500}); RunFor(0.6f);
   hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
   seen_acts = v.act_count_;
@@ -3446,7 +3453,7 @@ int main() {
   v.Init(sr);
   cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.sw[2] = 0;
   cs.knob[1] = 0.85f;   // K2 CW: forward, long-ish
-  cs.knob[3] = 0.1f;    // K4 sensitive
+  SetK4Thresh(0.1f);    // K4 sensitive
   cs.knob[4] = 0.05f;   // K5 short fades (0.3 s)
   v.Activate();
 
