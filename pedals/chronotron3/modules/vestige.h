@@ -1072,9 +1072,10 @@ class Vestige : public Module {
   // on the head AND the grain read rate (pitch and time together), composed
   // with K1. The head integrates rho, so the loop's position in loop-fraction
   // space is continuous through any change and it stays on its own grid.
-  // rho is folded by octaves into [TAPE_RATE_MIN, TAPE_RATE_MAX]: past that the
-  // pass length is target x 2^k — still a power-of-two multiple of the grid —
-  // instead of unbounded rates that no grain or guard could cover.
+  // rho is NOT folded: the pass is exactly the target at any rate the T range
+  // can ask for (up to 80x either way). Safe because the coverage clamp keeps
+  // glen * R inside min(L, guard) and the guard fill outruns any reader
+  // (VESTIGE_GUARD_FILL_PER_SAMPLE).
   //
   // B = stretch uses the same HEAD rate (so the same continuity, glide, grid
   // and LED), but its grains read at the K1 rate only: pitch stays, time
@@ -1087,9 +1088,9 @@ class Vestige : public Module {
     const size_t Lt = GridQuantize::Boundary(div_[s], period_);
     if (Lt == 0 || Lt == M) return 1.0;                     // unchanged T: exactly 1
     double r = (double)M / (double)Lt;
-    if (fm == kFollowTape) {
-      while (r > (double)VESTIGE_TAPE_RATE_MAX) r *= 0.5;
-      while (r < (double)VESTIGE_TAPE_RATE_MIN) r *= 2.0;
+    if (fm == kFollowTape) {                                 // no folding: exactly M / Lt
+      if (r > (double)VESTIGE_TAPE_RATE_MAX) r = (double)VESTIGE_TAPE_RATE_MAX;   // degenerate-value guard only
+      if (r < (double)VESTIGE_TAPE_RATE_MIN) r = (double)VESTIGE_TAPE_RATE_MIN;
     }
     return r;
   }

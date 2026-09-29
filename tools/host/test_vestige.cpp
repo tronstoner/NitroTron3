@@ -1399,8 +1399,8 @@ static void TestFollowTape() {
     Check(v.grain_cap_drops_ - dg0 == 0, "tape glide at a full pool (re-tap): no grain refused — a stream never holds 3"); }
   cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f);
 
-  // Guard coverage at arbitrary rates, per sample: tape up to x4 with K1 x2,
-  // down to x0.25 with K1 half, both directions, short loops.
+  // Guard coverage at arbitrary rates, per sample: tape across the WHOLE T range
+  // (up to 80x either way) with K1 on top, both directions, short and long loops.
   printf("      guard-read audit, tape rates:\n");
   struct Aud { const char* name; float k1; float k2; int tap0; long burst; int tap1; };
   const Aud au[] = {
@@ -1408,7 +1408,11 @@ static void TestFollowTape() {
     {"x4 . K1x2 rev",                        1.0f, 0.20f, 400, 1500, 100},
     {"x0.25 . K1half fwd (100ms->400ms)",    0.0f, 0.85f, 100, 9000, 400},
     {"x0.25 . K1half rev",                   0.0f, 0.20f, 100, 9000, 400},
-    {"x2.5 folded (4 s -> 100 ms) fwd",      0.5f, 0.85f, 4000, 250000, 100},
+    {"x40 (4 s -> 100 ms) fwd",              0.5f, 0.85f, 4000, 250000, 100},
+    {"x80 . K1x2 fwd (8 s -> 100 ms)",       1.0f, 0.85f, 8000, 300000, 100},
+    {"x80 . K1x2 rev",                       1.0f, 0.20f, 8000, 300000, 100},
+    {"x1/80 . K1half fwd (100 ms -> 8 s)",   0.0f, 0.85f, 100, 3000, 8000},
+    {"x1/80 . K1half rev",                   0.0f, 0.20f, 100, 3000, 8000},
   };
   const long bad0 = audit_bad; audit_max_over = 0;
   for (const Aud& a : au) {
@@ -1426,17 +1430,46 @@ static void TestFollowTape() {
     printf("        %-38s Q %6zu -> target %6zu  rate %.4f  reads %ld, bad %ld\n", a.name, q.Q,
            GridQuantize::Boundary(v.div_[q.s], v.period_), v.rho_s_[q.s], audit_reads - r1, audit_bad - b1);
   }
-  Check(audit_bad == bad0, "tape rates (x0.25..x4, with K1): no grain read an unwritten guard cell");
+  Check(audit_bad == bad0, "tape rates (x1/80..x80, with K1): no grain read an unwritten guard cell");
   Check(audit_max_over <= 1, "tape rates: no read past L + min(L, guard)");
-  // Folding: 4 s loop re-tapped to 100 ms = 40x -> folded to 2.5x, pass 16 x target.
-  { const int q = FirstLive();
+  // No folding: an 8 s loop re-tapped to 100 ms runs at exactly material/target
+  // and its pass is exactly the target (the old fold gave target x 2^k).
+  { Reset(); cs.knob[4] = 0.0f; cs.knob[1] = 0.85f; cs.knob[0] = 0.5f; RunFor(1.5f);
+    Taps({8000}); RunFor(0.3f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 300000;
+    CapRec q0{}; WaitActivation(9.f, &q0);
+    noise_from = noise_to = -1;
+    PressFS1(5); RunFor(0.1f); PressFS1(5); RunFor(1.0f);
+    const int q = FirstLive();
     const long P = (q >= 0) ? PassLength(q, 3.f) : -1;
     const size_t Lt = (q >= 0) ? GridQuantize::Boundary(v.div_[q], v.period_) : 0;
-    printf("      folding: material %zu, target %zu, rate %.4f, pass %ld = %.2f x target\n",
-           q >= 0 ? v.loop_len_[q] : 0, Lt, q >= 0 ? v.rho_s_[q] : 0.f, P, Lt ? (double)P / Lt : 0.0);
-    Check(q >= 0 && v.rho_s_[q] <= VESTIGE_TAPE_RATE_MAX && Lt > 0 && P % (long)Lt <= 1 &&
-          ((P / (long)Lt) & ((P / (long)Lt) - 1)) == 0,
-          "extreme re-tap: rate folded into range, pass = target x 2^k (still on the grid)"); }
+    const double want = (q >= 0 && Lt) ? (double)v.loop_len_[q] / (double)Lt : 0.0;
+    printf("      no folding: material %zu, target %zu, rate %.4f (want %.4f), pass %ld = %.3f x target\n",
+           q >= 0 ? v.loop_len_[q] : 0, Lt, q >= 0 ? v.rho_s_[q] : 0.f, want, P, Lt ? (double)P / Lt : 0.0);
+    Check(q >= 0 && Lt > 0 && want > 60.0 && fabs(v.rho_s_[q] - want) < 1e-3 * want && labs(P - (long)Lt) <= 1,
+          "extreme re-tap (8 s -> 100 ms): rate = material / target exactly, pass = target (no folding)"); }
+
+  // Fresh capture at an extreme rate: T re-tapped DURING the recording, so the
+  // loop plays at ~80x from its very first sample while the head copy behind the
+  // loop end is still being written — the case the old 4x cap protected.
+  { const long bad1 = audit_bad;
+    const int dirs[2] = {0, 1};
+    for (int dir : dirs) {
+      Reset(); cs.knob[4] = 0.0f; cs.knob[1] = dir ? 0.20f : 0.85f; cs.knob[0] = 1.0f; RunFor(1.5f);
+      Taps({8000}); RunFor(0.3f);
+      seen_acts = v.act_count_;
+      noise_from = n; noise_to = n + 60000;                 // ~1.25 s phrase against T = 8 s
+      RunFor(0.3f); PressFS1(5); RunFor(0.1f); PressFS1(5);  // re-tap to 100 ms mid-capture
+      blk = 1; audit_on = true;
+      CapRec q1{}; WaitActivation(4.f, &q1);
+      noise_from = noise_to = -1;
+      RunFor(1.0f);
+      audit_on = false; Realign();
+      printf("      fresh capture at ~x80 . K1x2 %s: rate at activation %.2f, bad reads %ld\n",
+             dir ? "rev" : "fwd", v.rho_s_[q1.s], audit_bad - bad1);
+    }
+    Check(audit_bad == bad1, "fresh capture played at ~80x from its first sample: no unwritten guard cell read"); }
 
   // The capture is quantised against the T at ITS start; it follows T_now once playing.
   Reset(); cs.knob[4] = 0.0f; Taps({500}); RunFor(0.6f);

@@ -350,7 +350,12 @@ static constexpr bool     VESTIGE_ONSET_ON_GATE       = true;
 // guard one loop after playback starts). 8 = a full 21504-cell guard in ~56 ms,
 // which decides how soon a fresh short loop may start in REVERSE. Cost: 8
 // SDRAM copies per sample, only while a guard is being written.
-static constexpr uint32_t VESTIGE_GUARD_FILL_PER_SAMPLE = 8;
+// Background copy of the loop head behind the loop end, cells per sample. It
+// must outrun the fastest reader, or a grain could read an unwritten cell right
+// after a capture: tape reaches 80x (T range) x 2 (K1) = 160 cells/sample. At 256
+// the whole guard (21504 cells) is written in ~84 samples, a CPU burst of ~2 ms
+// once per capture. (Was 8, which is why tape used to be capped at 4x.)
+static constexpr uint32_t VESTIGE_GUARD_FILL_PER_SAMPLE = 256;
 // Stage 2: a loop whose end is decided AFTER its first grid boundary (every
 // round-down, and any round-up within the 80 ms release of its boundary) can
 // no longer start on its "one". true = it joins immediately, IN PHASE with its
@@ -383,11 +388,16 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // travel 0.001 of knob is ~1% of T, ~17 cents). A still knob = exactly the old T.
 static constexpr float    VESTIGE_K2_FOLLOW_DB   = 0.004f;
 static constexpr uint32_t VESTIGE_TAPE_SMOOTH_MS = 40;     // rate glide: a tap (jump) / K2 staircase -> smooth
-// Tape rate range, folded by octaves (pass length = target x 2^k, still on the
-// grid) so the grain coverage clamp and the guard fill (8 cells/sample vs a
-// reader at up to TAPE_RATE_MAX x K1's 2) always hold.
-static constexpr float    VESTIGE_TAPE_RATE_MAX  = 4.f;
-static constexpr float    VESTIGE_TAPE_RATE_MIN  = 0.25f;
+// Tape rate: NOT folded, NOT capped in normal use. The rate is exactly
+// material / target, so a loop always takes exactly Boundary(d, T_now), and the
+// whole T range is reachable: T spans 100 ms..8 s, so up to 80x faster or
+// slower (x2 more with K1), into sub- and super-audio range. The first version
+// folded the rate by octaves into 1/4..4 — which made the pitch jump back an
+// octave while K2 turned and never left +-2 octaves ("resets the pitch").
+// These limits sit beyond anything the T range can ask for and only guard
+// against a degenerate value.
+static constexpr float    VESTIGE_TAPE_RATE_MAX  = 128.f;
+static constexpr float    VESTIGE_TAPE_RATE_MIN  = 1.f / 128.f;
 // B (stretch): the head moves at material / target, grains read at the K1 rate
 // only, so pitch stays. While the rate is not 1 the grains are this long
 // (instead of the ~400 ms clean-loop grains, which would smear time); 2 per
