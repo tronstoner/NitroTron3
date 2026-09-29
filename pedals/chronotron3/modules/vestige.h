@@ -1957,7 +1957,18 @@ class Vestige : public Module {
   bool GuardReady(int s) const { return gfill_k_[s] >= gready_[s]; }
   void IsrFillGuards() {
     if (gfill_idle_) return;                        // no job anywhere: cost = one branch
+    // Adaptive copy speed (see VESTIGE_GUARD_FILL_*): 8 per sample, more only
+    // while the loop being copied is read fast. A flat fast copy was a CPU burst
+    // at every new loop and overran the pedal (click on loop replace).
     int budget = (int)VESTIGE_GUARD_FILL_PER_SAMPLE;
+    for (int q = 0; q < VESTIGE_SLOTS; q++) {
+      if (gfill_k_[q] >= gfill_end_[q] || !active_[q]) continue;   // only a slot that is being READ
+      const double r = ((double)rho_s_[q] > rho_t_[q]) ? (double)rho_s_[q] : rho_t_[q];
+      const int need = (int)(2.5 * r) + 1;          // x2 for K1 double speed, x1.25 margin
+      if (need > budget) budget = need;
+    }
+    if (budget > (int)VESTIGE_GUARD_FILL_MAX) budget = (int)VESTIGE_GUARD_FILL_MAX;
+    if (budget > fill_budget_max_) fill_budget_max_ = budget;   // diagnostics / host test
     bool any = false;
     for (int s = 0; s < VESTIGE_SLOTS && budget > 0; s++) {
       if (gfill_k_[s] >= gfill_end_[s]) continue;
@@ -2686,6 +2697,7 @@ class Vestige : public Module {
   int      last_act_slot_ = -1;
   uint32_t last_act_at_   = 0;
   uint32_t cap_decide_at_[VESTIGE_SLOTS] = {};   // diagnostics: sample the capture's end was decided
+  int      fill_budget_max_ = 0;                 // diagnostics: largest guard-copy speed used
 
   // ---- DIAG (CT3_DIAG builds only): capture-gate event log ------------------
   // The audio thread pushes fixed-size records into a single-producer /

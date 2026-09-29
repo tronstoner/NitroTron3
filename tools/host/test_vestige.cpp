@@ -1471,6 +1471,23 @@ static void TestFollowTape() {
     }
     Check(audit_bad == bad1, "fresh capture played at ~80x from its first sample: no unwritten guard cell read"); }
 
+  // The copy speed only rises for a loop that is read fast. Normal playing must
+  // copy at exactly the base rate: a flat fast copy was a CPU burst at every new
+  // loop and clicked on the pedal (1280dad).
+  { Reset(); cs.knob[4] = 0.0f; cs.knob[1] = 0.85f; cs.knob[0] = 0.5f; RunFor(1.0f);
+    Taps({1000}); RunFor(0.3f);
+    v.fill_budget_max_ = 0;
+    for (int i = 0; i < 4; i++) {
+      seen_acts = v.act_count_;
+      noise_from = n; noise_to = n + 9000 + 7000 * i;
+      CapRec qn{}; WaitActivation(3.f, &qn);
+      noise_from = noise_to = -1; RunFor(0.6f);
+    }
+    printf("      normal captures at rate 1: largest guard-copy speed %d cells/sample (base %u)\n",
+           v.fill_budget_max_, VESTIGE_GUARD_FILL_PER_SAMPLE);
+    Check(v.fill_budget_max_ == (int)VESTIGE_GUARD_FILL_PER_SAMPLE,
+          "normal playing copies the guard at the base speed (no CPU burst at a new loop)"); }
+
   // The capture is quantised against the T at ITS start; it follows T_now once playing.
   Reset(); cs.knob[4] = 0.0f; Taps({500}); RunFor(0.6f);
   seen_acts = v.act_count_;

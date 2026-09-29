@@ -350,12 +350,21 @@ static constexpr bool     VESTIGE_ONSET_ON_GATE       = true;
 // guard one loop after playback starts). 8 = a full 21504-cell guard in ~56 ms,
 // which decides how soon a fresh short loop may start in REVERSE. Cost: 8
 // SDRAM copies per sample, only while a guard is being written.
-// Background copy of the loop head behind the loop end, cells per sample. It
-// must outrun the fastest reader, or a grain could read an unwritten cell right
-// after a capture: tape reaches 80x (T range) x 2 (K1) = 160 cells/sample. At 256
-// the whole guard (21504 cells) is written in ~84 samples, a CPU burst of ~2 ms
-// once per capture. (Was 8, which is why tape used to be capped at 4x.)
-static constexpr uint32_t VESTIGE_GUARD_FILL_PER_SAMPLE = 8;     // TEST BUILD: back to 8 to A/B the loop-replace click (256 in 1280dad)
+// Background copy of the loop head behind the loop end, cells per sample.
+// It must never be overtaken by that loop's reader, or a grain reads an
+// unwritten cell right after a capture. The speed is ADAPTIVE:
+//   - normally 8 per sample (VESTIGE_GUARD_FILL_PER_SAMPLE) — a loop read at
+//     normal speed can never catch it;
+//   - faster only while the loop being copied is itself read fast (tape or
+//     stretch at a high rate, x2 for the K1 double-speed version), sized to that
+//     reader, up to VESTIGE_GUARD_FILL_MAX.
+// Why not simply fast: 1280dad copied at a flat 256 per sample. That is a burst
+// of up to ~21000 copies exactly when a new loop is decided, and on the pedal it
+// overran the audio callback — an occasional click when one loop replaced
+// another. The host cannot see it (same arithmetic); the A/B on hardware
+// (bcc18e0, back at 8) made it disappear.
+static constexpr uint32_t VESTIGE_GUARD_FILL_PER_SAMPLE = 8;
+static constexpr uint32_t VESTIGE_GUARD_FILL_MAX        = 256;  // 80x tape x 2 (K1) = 160 cells/sample + margin
 // Stage 2: a loop whose end is decided AFTER its first grid boundary (every
 // round-down, and any round-up within the 80 ms release of its boundary) can
 // no longer start on its "one". true = it joins immediately, IN PHASE with its
