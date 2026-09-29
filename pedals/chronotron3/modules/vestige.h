@@ -1612,10 +1612,10 @@ class Vestige : public Module {
   // length uniformly among the lengths that fit, then its first step by step
   // weight (back half x VESTIGE_TIMING_MEM_BACK_WEIGHT). ok2 / ok4: a step
   // split in 2 / 4 is long enough for this loop (double / ratchet).
-  void TimingMemAdd(int s, int room, bool ok2, bool ok4) {
+  bool TimingMemAdd(int s, int room, bool ok2, bool ok4) {
     const int m = pm_cur_[s];
     const int n = pm_n_[s][m];
-    if (room < 1 || pm_nf_[s][m] >= VESTIGE_TIMING_MEM_FIGS) return;
+    if (room < 1 || pm_nf_[s][m] >= VESTIGE_TIMING_MEM_FIGS) return false;
     const uint32_t used = TimingMemCover(s);
     int lens[VESTIGE_TIMING_SPAN_MAX + 2];
     auto any = [&](int t, int len) {
@@ -1630,7 +1630,7 @@ class Vestige : public Module {
       for (int i = 0; i < nl && !tok[t]; i++) tok[t] = any(t, lens[i]);
       if (tok[t]) tot += VESTIGE_TIMING_FIG_WEIGHT[t];
     }
-    if (!(tot > 0.f)) return;
+    if (!(tot > 0.f)) return false;
     float r = TimingRand() * tot;
     int t = -1;
     for (int i = 0; i < VESTIGE_TIMING_FIGS; i++) {
@@ -1654,6 +1654,7 @@ class Vestige : public Module {
       q -= TimingStepWeight(i, n);
     }
     pm_fig_[s][m][pm_nf_[s][m]++] = TimingFig{(int8_t)t, (int8_t)k, (int8_t)len, 0};
+    return true;
   }
   void TimingMemClear(int s) {
     for (int m = 0; m < VESTIGE_TIMING_MEM_PASSES; m++) { pm_nf_[s][m] = 0; pm_n_[s][m] = 0; }
@@ -1700,11 +1701,12 @@ class Vestige : public Module {
       int tgt = (int)D;
       if (TimingRand() < D - (float)tgt) tgt++;
       if (tgt > n) tgt = n;
-      const int c = TimingBits(TimingMemCover(s));
+      // The target counts FIGURES, whatever their span (a span only needs free steps).
+      const int c = pm_nf_[s][pm_cur_[s]];
       if (c > tgt)      TimingMemRemove(s);
-      else if (c < tgt) TimingMemAdd(s, tgt - c, ok2, ok4);
-      else if (TimingMemRemove(s))                             // swap (an earlier figure)
-        TimingMemAdd(s, tgt - TimingBits(TimingMemCover(s)), ok2, ok4);
+      else if (c < tgt && TimingMemAdd(s, n, ok2, ok4)) {}
+      else if (TimingMemRemove(s))                             // swap (an earlier figure) — also
+        TimingMemAdd(s, n, ok2, ok4);                          //  when the pass is too full to add
       timing_edits_++;
     }
     // Render: which slice each step plays, muted or not, ratchet division.

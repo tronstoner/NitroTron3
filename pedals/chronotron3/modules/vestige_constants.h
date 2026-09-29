@@ -506,18 +506,19 @@ static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIM
 //   1. every figure that has played VESTIGE_TIMING_MEM_LIFE passes is removed
 //      (its steps go back to the edits below: clean or another figure);
 //   2. EDITS figures are edited — always at least one, every pass: a figure
-//      added when the pass holds fewer steps than the TARGET, one removed when
+//      added when the pass holds fewer FIGURES than the TARGET (a figure counts
+//      once, whatever its span; it only needs free steps), one removed when
 //      more, one swapped (removed + a new one added) when it matches. Removals
 //      only take figures placed on an earlier pass, so at EDITS = n every
 //      step is re-rolled every pass. The target is drawn per edit: floor(D) +
 //      (1 with chance frac(D)), at most n.
 // The downbeat is NOT protected: step 1 takes any figure, like every step
-//   D     = TARGET_A + TARGET_B * L                      steps held (L = K3 level > 0)
+//   D     = TARGET_A + TARGET_B * L                      figures held (L = K3 level > 0)
 //   EDITS = max(1, round(EDITS_B * L * n))               per pass
 // At L = 1: every step holds a figure (CLEAN among them) and every one of
 // them is re-rolled every pass.
 static constexpr float  VESTIGE_TIMING_MEM_TARGET_A = 0.4f;
-static constexpr float  VESTIGE_TIMING_MEM_TARGET_B = 7.6f;     // D(1) = 8 = every step of 8
+static constexpr float  VESTIGE_TIMING_MEM_TARGET_B = 5.6f;     // D(1) = 6 figures: the pass is full
 static constexpr float  VESTIGE_TIMING_MEM_EDITS_B  = 1.0f;     // 1 = one edit per step at L = 1
 static constexpr int    VESTIGE_TIMING_MEM_LIFE     = 3;        // turns a figure plays, at most
 static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taking turns (1 = one pass)
@@ -533,7 +534,7 @@ static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taki
 //   CLEAN    the span plays as recorded — the no-glitch choice in the set
 // Steps before step 1 are the loop's last steps (a STUTTER / REPEAT at the
 // start of the pass replays the end of the loop).
-// A new figure only goes where its span fits the room left to the target.
+// A new figure only goes on free steps.
 static constexpr int    VESTIGE_TIMING_SPAN_MAX = 4;
 // Weights (relative chance of each figure being picked) — EDITABLE:
 static constexpr int    VESTIGE_TIMING_FIGS = 7;
