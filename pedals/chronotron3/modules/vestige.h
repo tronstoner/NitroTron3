@@ -1347,9 +1347,10 @@ class Vestige : public Module {
     if (s >= VESTIGE_VOICE_SLABS || trig_off_[s] == 0.f) return fwd_[s];
     const float L = (float)PlayLen(s);
     float h = trig_rev_[s] ? fwd_[s] + trig_off_[s] : fwd_[s] - trig_off_[s];
-    // (A span of 1 keeps the pass counter as it was: a pattern never carries
-    // the read across a wrap there, so this only changes spans > 1.)
-    const bool carry = (rpass != nullptr) && VESTIGE_TIMING_PATTERN_PASSES > 1;
+    // (A retrigger span of 1 keeps the pass counter as it was: a pattern never
+    // carries the read across a wrap there, so this only changes spans > 1 —
+    // and the slice mode, whose read can run over the seam inside a pass.)
+    const bool carry = (rpass != nullptr) && (VESTIGE_TIMING_PATTERN_PASSES > 1 || VESTIGE_TIMING_MODE == 1);
     if (h >= L) { h -= L; if (carry) (*rpass)++; }
     if (h < 0.f) { h += L; if (carry) (*rpass)--; }
     return h;
@@ -1479,20 +1480,92 @@ class Vestige : public Module {
     cur_pat_[s] = pat; cur_mask_[s] = rm; cur_rot_[s] = rot; cur_var_[s] = var;
     base_mask_[s] = base; base_rot_[s] = h0; timing_patterns_++;
   }
+  // ---- Timing mode 1: SLICE REARRANGEMENT ------------------------------------
+  // Slice count for this pass: VESTIGE_TIMING_SLICES halved until a slice
+  // (output time) is >= the minimum; 0 = none fits. *tier = its table.
+  int TimingSliceN(double pass_out, int* tier) const {
+    const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+    int nsl = VESTIGE_TIMING_SLICES, t = 0;
+    while (nsl >= 2 && t < VESTIGE_TIMING_SLICE_TIERS) {
+      if (pass_out / (double)nsl >= min_step) { *tier = t; return nsl; }
+      nsl /= 2; t++;
+    }
+    return 0;
+  }
+  // Loop start: this loop's arrangement material, drawn once for every slice
+  // count the guard may pick — a priority order of the steps 1..N-1 and a
+  // replacement slice per step (any slice but the step's own).
+  void TimingDrawSlices(int s) {
+    int nsl = VESTIGE_TIMING_SLICES;
+    for (int t = 0; t < VESTIGE_TIMING_SLICE_TIERS && nsl >= 2; t++, nsl /= 2) {
+      for (int i = 0; i < nsl - 1; i++) sl_prio_[s][t][i] = (int8_t)(i + 1);
+      for (int i = nsl - 2; i > 0; i--) {                     // Fisher-Yates
+        const int j = TimingPick(i + 1);
+        const int8_t x = sl_prio_[s][t][i]; sl_prio_[s][t][i] = sl_prio_[s][t][j]; sl_prio_[s][t][j] = x;
+      }
+      for (int i = 1; i < nsl; i++) {
+        int r = TimingPick(nsl - 1); if (r >= i) r++;
+        sl_repl_[s][t][i] = (int8_t)r;
+      }
+    }
+  }
+  // Pass start (or loop start, el0 = the elapsed pass it joins at) with a
+  // level > 0: the arrangement for the level (+ rarely a one-pass variation),
+  // then its JUMPS: every step whose slice is not the natural continuation of
+  // what the read plays there, with the read offset that puts the read on its
+  // slice's start (elapsed units: offset = step start - slice start). Steps
+  // before el0 count as played on the timeline.
+  void TimingPlanSlices(int s, bool rev, size_t L, double rho, float el0) {
+    trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
+    trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
+    sl_n_[s] = 0; sl_var_step_[s] = -1;
+    const float level = err_level_[kErrTiming];
+    if (!(level > 0.f)) { var_last_[s] = false; return; }     // level 0: nothing drawn
+    int tier = 0;
+    const int nsl = TimingSliceN((double)L / (rho > 0.0 ? rho : 1.0), &tier);
+    if (nsl == 0) { timing_skipped_++; var_last_[s] = false; return; }   // no slice fits this loop
+    if (nsl != VESTIGE_TIMING_SLICES) timing_fallbacks_++;
+    int8_t* ord = sl_order_[s];
+    for (int i = 0; i < nsl; i++) ord[i] = (int8_t)i;
+    int cnt = (int)(level * (float)(nsl - 1) + 0.5f); if (cnt > nsl - 1) cnt = nsl - 1;
+    for (int k = 0; k < cnt; k++) { const int st = sl_prio_[s][tier][k]; ord[st] = sl_repl_[s][tier][st]; }
+    for (int i = 0; i < nsl; i++) sl_arr_[s][i] = ord[i];
+    // Variation: one step 1..N-1, another slice, this pass only.
+    if (!var_last_[s] && TimingRand() < VESTIGE_TIMING_VAR_PROB) {
+      const int st = 1 + TimingPick(nsl - 1);
+      int r = TimingPick(nsl - 1); if (r >= ord[st]) r++;
+      ord[st] = (int8_t)r; sl_var_step_[s] = st; cur_var_[s] = kVarRot; timing_vars_++;
+    }
+    var_last_[s] = (sl_var_step_[s] >= 0);
+    // Jumps. prev = the slice the read plays in the step before (the timeline's
+    // own before el0).
+    int i0 = 0;
+    for (int i = 1; i < nsl; i++) if ((double)(size_t)((double)L * (double)i / (double)nsl + 0.5) <= (double)el0) i0 = i;
+    for (int i = 1; i < nsl; i++) {
+      if (i <= i0) continue;                                     // already behind the join point
+      const int prev = (i - 1 <= i0) ? (i - 1) : ord[i - 1];
+      if (ord[i] == (prev + 1) % nsl) continue;                  // natural continuation: runs on
+      const float b = (float)(size_t)((double)L * (double)i / (double)nsl + 0.5);
+      const float sj = (float)(size_t)((double)L * (double)ord[i] / (double)nsl + 0.5);
+      trig_pos_[s][trig_cnt_[s]] = b; sl_off_[s][trig_cnt_[s]] = b - sj; trig_cnt_[s]++;
+    }
+    sl_n_[s] = nsl; cur_pat_[s] = 0; timing_patterns_++;
+  }
   // Per sample, per loop voice (after the head advance): instance-start plan,
   // then the next pending hit. Cost: one compare while nothing is pending; one
   // more float compare while a pattern plays.
   void TimingStep(int s, bool rev, size_t L) {
     if (pass_[s] != trig_pass_[s]) {                        // a new pass began (this sample)
       trig_pass_[s] = pass_[s];
-      const int k = TimingSpanK(pass_[s], rev);
+      const int k = (VESTIGE_TIMING_MODE == 1) ? 0 : TimingSpanK(pass_[s], rev);
       if (k == 0) {                                         // a new pattern instance, on the one
         if (trig_off_[s] != 0.f) {                          // leaving a pattern instance:
           trig_off_[s] = 0.f;                               // back on the timeline, at the one
           RestartStreams(s);
           timing_returns_++;
         }
-        TimingPlanPass(s, rev, L, rho_d_[s], 0.f);
+        if (VESTIGE_TIMING_MODE == 1) TimingPlanSlices(s, rev, L, rho_d_[s], 0.f);
+        else                          TimingPlanPass(s, rev, L, rho_d_[s], 0.f);
         return;
       }
       // A pass wrap INSIDE the span: the read simply runs on (no restart) —
@@ -1514,11 +1587,14 @@ class Vestige : public Module {
     // - head (a reverse pass starts at L - 1). With that, the read head lands
     // exactly on 0 (forward) / L - 1 (reverse) at each hit.
     const float el = trig_rev_[s] ? (float)L - 1.f - fwd_[s] : fwd_[s];
-    const float kL = (float)(trig_rev_[s] ? trig_start_[s] - pass_[s] : pass_[s] - trig_start_[s]) * (float)L;
+    const float kL = (VESTIGE_TIMING_MODE == 1) ? 0.f
+                   : (float)(trig_rev_[s] ? trig_start_[s] - pass_[s] : pass_[s] - trig_start_[s]) * (float)L;
     const float at = trig_pos_[s][trig_next_[s]];
     if (kL + el >= at) {
+      // Retrigger: read head -> the loop's start (rev: end). Slices: -> the
+      // step's slice start (rev: on the reversed loop).
+      const float off = (VESTIGE_TIMING_MODE == 1) ? sl_off_[s][trig_next_[s]] : at - kL;
       trig_next_[s]++;
-      const float off = at - kL;                            // read head -> the loop's start (rev: end)
       if (off != trig_off_[s]) {                            // (already there: a hit on a pass start
         trig_off_[s] = off;                                 //  with the read on the timeline — no jump)
         RestartStreams(s);
@@ -2135,14 +2211,17 @@ class Vestige : public Module {
       play_len_[s] = L; cur_view_[s] = -1; rc_building_[s] = rc_ready_[s] = false; rc_want_[s] = L;
       trig_off_[s] = 0.f; trig_cnt_[s] = trig_next_[s] = 0; cur_pat_[s] = -1; trig_pass_[s] = pass_[s];   // (pass_ set just above)
       rot_seed_[s] = TimingRandU();                         // this loop's rotation, for its whole life
+      if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       var_last_[s] = false; cur_var_[s] = kVarNone;
     }
     rho_t_[s] = TapeTarget(s);
     rho_d_[s] = rho_t_[s];                                  // enters playing at T_now, no glide
     // TIMING: the pattern starts with the loop (this first pass may be joined
     // mid-way: elapsed p, the hits already behind it are skipped).
-    if (s < VESTIGE_VOICE_SLABS && !eng_[PoolOf(s)].frozen)
-      TimingPlanPass(s, rev, L, rho_d_[s], (float)TimingSpanK(pass_[s], rev) * (float)L + (float)p);
+    if (s < VESTIGE_VOICE_SLABS && !eng_[PoolOf(s)].frozen) {
+      if (VESTIGE_TIMING_MODE == 1) TimingPlanSlices(s, rev, L, rho_d_[s], (float)p);
+      else TimingPlanPass(s, rev, L, rho_d_[s], (float)TimingSpanK(pass_[s], rev) * (float)L + (float)p);
+    }
     rho_s_[s] = (float)rho_d_[s];
     fwd_d_[s] = (double)fwd_[s];
     active_[s] = true; dying_[s] = false; stolen_[s] = false;
@@ -3013,6 +3092,14 @@ class Vestige : public Module {
   size_t   trig_L_[VESTIGE_VOICE_SLABS]       = {0};     // the play length the instance was laid out for
   int32_t  trig_start_[VESTIGE_VOICE_SLABS]   = {0};     // pass_ of the instance's first pass
   uint32_t timing_inplace_ = 0, timing_aborts_ = 0;      // diag: hits with no jump / instances dropped
+  // Timing mode 1 (slices), per loop voice slot.
+  int8_t   sl_prio_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_SLICE_TIERS][VESTIGE_TIMING_SLICE_MAX] = {};  // step priority (drawn at loop start)
+  int8_t   sl_repl_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_SLICE_TIERS][VESTIGE_TIMING_SLICE_MAX] = {};  // replacement slice per step
+  int8_t   sl_order_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_SLICE_MAX] = {};   // this pass's slice per step (diag)
+  int8_t   sl_arr_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_SLICE_MAX]   = {};   // the arrangement before variation (diag)
+  float    sl_off_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_MAX_STEPS]   = {};   // read offset per jump
+  int      sl_n_[VESTIGE_VOICE_SLABS]        = {0};      // this pass's slice count (0 = none) (diag)
+  int      sl_var_step_[VESTIGE_VOICE_SLABS] = {0};      // the varied step (-1 = none) (diag)
   int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
   uint32_t timing_rng_ = 0x9E3779B9u;                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag

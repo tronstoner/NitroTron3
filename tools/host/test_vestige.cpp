@@ -2974,6 +2974,447 @@ static void TestTimingError() {
   Unhold();
 }
 
+// ---------------------------------------------------------------------------
+// Timing mode 1: SLICE REARRANGEMENT.
+struct SlRec { long start; int n; int ord[VESTIGE_TIMING_SLICE_MAX]; int arr[VESTIGE_TIMING_SLICE_MAX]; int vstep; bool ret = false; int planned = 0;
+               std::vector<long> jumps_el; std::vector<long> jumps_at; };
+struct SlLog { std::vector<SlRec> p; long rh_bad = 0, half_jumps = 0; };
+static SlLog RunSl(int s, int passes, float max_secs = 60.f, bool track_half = false) {
+  SlLog lg; blk = 1;
+  int32_t pp = v.pass_[s]; uint32_t tc = v.timing_trigs_, rc = v.timing_returns_;
+  float hprev = v.SpeedHead(s, 0.5f);
+  const long end = n + (long)(max_secs * sr);
+  while (n < end && (int)lg.p.size() < passes + 1) {
+    RunFor(1.f / sr);
+    const bool trig = v.timing_trigs_ != tc, ret = v.timing_returns_ != rc;
+    if (v.pass_[s] != pp) {
+      pp = v.pass_[s];
+      if (!lg.p.empty()) lg.p.back().ret = ret;
+      SlRec r; r.start = n - 1; r.n = v.sl_n_[s]; r.vstep = v.sl_var_step_[s]; r.planned = v.trig_cnt_[s];
+      for (int i = 0; i < VESTIGE_TIMING_SLICE_MAX; i++) { r.ord[i] = v.sl_order_[s][i]; r.arr[i] = v.sl_arr_[s][i]; }
+      lg.p.push_back(r);
+    } else if (trig && v.last_trig_slot_ == s && !lg.p.empty()) {
+      lg.p.back().jumps_el.push_back((n - 1) - lg.p.back().start); lg.p.back().jumps_at.push_back(n - 1);
+    }
+    tc = v.timing_trigs_; rc = v.timing_returns_;
+    const float L = (float)v.PlayLen(s), h = v.ReadHead(s);
+    if (!(h >= 0.f && h < L)) lg.rh_bad++;
+    if (track_half) {
+      const float h2 = v.SpeedHead(s, 0.5f);
+      float d = h2 - hprev; if (d > 0.5f * L) d -= L; if (d < -0.5f * L) d += L;
+      if (!trig && !ret && fabsf(d - 0.5f) > 1e-3f) lg.half_jumps++;
+      hprev = h2;
+    }
+  }
+  Realign();
+  if (!lg.p.empty()) lg.p.pop_back();
+  return lg;
+}
+static long SlB(size_t L, int nsl, int i) { return (long)((double)L * i / nsl + 0.5); }
+// The test's model of the slice count for a pass (output samples per pass).
+static int WantN(double pass_out, int* tier) {
+  const double min_step = VESTIGE_TIMING_MIN_STEP_MS * 0.001 * sr;
+  int nsl = VESTIGE_TIMING_SLICES, t = 0;
+  while (nsl >= 2) { if (pass_out / nsl >= min_step) { *tier = t; return nsl; } nsl /= 2; t++; }
+  return 0;
+}
+// The model's arrangement of loop s for level / tier: the first round(L*(N-1))
+// steps of its drawn priority take their drawn replacement.
+static void WantArr(int s, float level, int nsl, int tier, int* arr) {
+  for (int i = 0; i < nsl; i++) arr[i] = i;
+  int cnt = (int)(level * (float)(nsl - 1) + 0.5f); if (cnt > nsl - 1) cnt = nsl - 1;
+  for (int k = 0; k < cnt; k++) { const int st = v.sl_prio_[s][tier][k]; arr[st] = v.sl_repl_[s][tier][st]; }
+}
+// Model of one pass's jumps (elapsed material from the pass start) and each
+// step's read start (material position; reverse: on the reversed loop).
+static void WantJumps(const int* ord, int nsl, size_t L, std::vector<long>* jumps, std::vector<long>* rstart) {
+  jumps->clear(); rstart->assign(nsl, 0);
+  for (int i = 1; i < nsl; i++) {
+    if (ord[i] == (ord[i - 1] + 1) % nsl) (*rstart)[i] = ((*rstart)[i - 1] + SlB(L, nsl, i) - SlB(L, nsl, i - 1)) % (long)L;
+    else { jumps->push_back(SlB(L, nsl, i)); (*rstart)[i] = SlB(L, nsl, ord[i]); }
+  }
+}
+struct SlStats { int passes = 0, played = 0, var = 0, eligible = 0, eligible_var = 0, jumps = 0, naturals = 0, swapped = 0;
+                 int bad_n = 0, bad_arr = 0, bad_step0 = 0, bad_var = 0, var_twice = 0, bad_jumps = 0, bad_ret = 0, arr_moved = 0, bad_grid = 0;
+                 bool ok() const { return bad_n + bad_arr + bad_step0 + bad_var + var_twice + bad_jumps + bad_ret + arr_moved + bad_grid == 0; } };
+static SlStats CheckSl(const SlLog& lg, int s, size_t L, float level, int want_n, int tier, bool rate1) {
+  SlStats st; int want_arr[VESTIGE_TIMING_SLICE_MAX];
+  for (size_t p = 0; p < lg.p.size(); p++) {
+    const SlRec& r = lg.p[p]; st.passes++;
+    if (rate1 && p > 0 && r.start - lg.p[p - 1].start != (long)L) st.bad_grid++;
+    if (r.n != want_n) { st.bad_n++; continue; }
+    if (r.n == 0) { if (!r.jumps_el.empty() || r.ret) st.bad_jumps++; continue; }
+    st.played++;
+    WantArr(s, level, r.n, tier, want_arr);
+    int sw = 0; for (int i = 0; i < r.n; i++) { if (r.arr[i] != want_arr[i]) st.bad_arr++; if (r.arr[i] != i) sw++; }
+    if (sw != (int)(level * (float)(r.n - 1) + 0.5f)) st.bad_arr++;
+    st.swapped = sw;
+    if (p > 0 && lg.p[p - 1].n == r.n) for (int i = 0; i < r.n; i++) if (lg.p[p - 1].arr[i] != r.arr[i]) { st.arr_moved++; break; }
+    if (r.ord[0] != 0 || r.arr[0] != 0) st.bad_step0++;
+    int nd = 0, dstep = -1; for (int i = 0; i < r.n; i++) if (r.ord[i] != r.arr[i]) { nd++; dstep = i; }
+    if (nd > 1 || (nd == 1 && dstep != r.vstep) || (nd == 0 && r.vstep >= 0) || dstep == 0) st.bad_var++;
+    if (nd == 1) st.var++;
+    if (p > 0) { if (lg.p[p - 1].vstep < 0) { st.eligible++; if (nd == 1) st.eligible_var++; } else if (nd == 1) st.var_twice++; }
+    std::vector<long> w, rs; WantJumps(r.ord, r.n, L, &w, &rs);
+    st.jumps += (int)w.size(); st.naturals += r.n - 1 - (int)w.size();
+    if (r.ret != (r.ord[r.n - 1] != r.n - 1)) st.bad_ret++;
+    if (r.planned != (int)w.size()) st.bad_jumps++;              // the module's own plan: no jump at a continuation
+    if (w.size() != r.jumps_el.size()) { st.bad_jumps++; continue; }
+    if (rate1) for (size_t k = 0; k < w.size(); k++) if (r.jumps_el[k] != w[k]) st.bad_jumps++;
+  }
+  return st;
+}
+static void PrintSl(const char* what, const SlStats& st) {
+  printf("      %s: %d passes, %d rearranged (%d steps swapped), %d jumps, %d steps ran on; variations %d; bad: slices %d arrangement %d step0 %d variation %d twice %d jumps %d return %d moved %d grid %d\n",
+         what, st.passes, st.played, st.swapped, st.jumps, st.naturals, st.var, st.bad_n, st.bad_arr, st.bad_step0, st.bad_var, st.var_twice,
+         st.bad_jumps, st.bad_ret, st.arr_moved, st.bad_grid);
+}
+static std::string ArrStr(const int* a, int nsl) { std::string r; for (int i = 0; i < nsl; i++) r += (char)('A' + a[i]); return r; }
+// Every step's output = its slice at lag 0 (rate 1; windows past the 5 ms fade,
+// not across the loop's seam). rev: reversed-loop slices.
+static void StepWindows(const SlLog& lg, int s, size_t L, bool rev, int* ok, int* tot, float* worst) {
+  *ok = *tot = 0; *worst = 1.f;
+  for (const SlRec& r : lg.p) {
+    if (r.n == 0) continue;
+    std::vector<long> w, rs; WantJumps(r.ord, r.n, L, &w, &rs);
+    for (int i = 0; i < r.n; i++) {
+      const long len = SlB(L, r.n, i + 1) - SlB(L, r.n, i);
+      const int N = (int)std::min(2400L, len - 600); if (N < 400) continue;
+      if (rs[i] + 480 + N >= (long)L) continue;             // across the seam
+      std::vector<float> ref(N);
+      for (int j = 0; j < N; j++) { const long m = rs[i] + 480 + j; ref[j] = rev ? v.slab_[s][(long)L - 1 - m] : v.slab_[s][m]; }
+      float c = 0.f; const int lagv = BestLagRef(r.start + SlB(L, r.n, i) + 480, ref, 50, &c);
+      (*tot)++; if (lagv == 0 && c > 0.99f) (*ok)++; if (c < *worst) *worst = c;
+    }
+  }
+}
+
+static void TestTimingSlices() {
+  printf("-- stage 3: the TIMING error, mode 1: SLICE REARRANGEMENT (%d slices)\n", VESTIGE_TIMING_SLICES);
+  // Level 0: nothing drawn.
+  Reset(); cs.sw[0] = 0; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  CapRec r{}; noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  const int s = r.s; const size_t Q = r.Q;
+  RunFor(0.8f);
+  long grid0 = 0;
+  { const uint32_t rng0 = v.timing_rng_, t0 = v.timing_trigs_, p0 = v.timing_patterns_;
+    blk = 1; const int32_t pp = v.pass_[s]; while (v.pass_[s] == pp) RunFor(1.f / sr); grid0 = n - 1;
+    RunFor(3.0f); Realign();
+    Check(v.timing_rng_ == rng0 && v.timing_trigs_ == t0 && v.timing_patterns_ == p0 && v.trig_off_[s] == 0.f,
+          "timing level 0: nothing drawn, nothing rearranged, the read head is the timeline head"); }
+  // The drawn material: a priority order of the steps 1..N-1 and a
+  // replacement slice per step, other than its own.
+  { bool ok = true; int nsl = VESTIGE_TIMING_SLICES;
+    for (int t = 0; t < VESTIGE_TIMING_SLICE_TIERS && nsl >= 2; t++, nsl /= 2) {
+      int seen[VESTIGE_TIMING_SLICE_MAX] = {0};
+      for (int i = 0; i < nsl - 1; i++) { const int st = v.sl_prio_[s][t][i]; if (st < 1 || st >= nsl || seen[st]++) ok = false; }
+      for (int i = 1; i < nsl; i++) { const int rp = v.sl_repl_[s][t][i]; if (rp < 0 || rp >= nsl || rp == i) ok = false; }
+    }
+    int pr[8]; for (int i = 0; i < 7; i++) pr[i] = v.sl_prio_[s][0][i];
+    int rp[8]; rp[0] = 0; for (int i = 1; i < 8; i++) rp[i] = v.sl_repl_[s][0][i];
+    printf("      this loop's draw (8 slices): priority %d %d %d %d %d %d %d, replacements %s\n", pr[0], pr[1], pr[2], pr[3], pr[4], pr[5], pr[6], ArrStr(rp, 8).c_str());
+    Check(ok, "loop start: a priority PERMUTATION of steps 1..N-1 and a replacement other than the step's own, for every slice count"); }
+
+  // Levels: exactly round(L*(N-1)) steps rearranged, nested, stable, step 0
+  // anchored; jumps only where the slice is not the continuation.
+  int tier8 = 0; const int n8 = WantN((double)Q, &tier8);
+  { int prev_arr[VESTIGE_TIMING_SLICE_MAX]; bool have = false, nested = true, all_ok = true; std::string line;
+    for (float lv : {1.f / 7.f, 2.f / 7.f, 0.5f, 5.f / 7.f, 1.f}) {
+      v.err_level_[0] = lv;
+      const SlLog ll = RunSl(s, 6);
+      const SlStats sl = CheckSl(ll, s, Q, lv, n8, tier8, true);
+      if (!sl.ok() || sl.played != sl.passes) all_ok = false;
+      const SlRec& b = ll.p.back();
+      if (have) for (int i = 0; i < b.n; i++) if (prev_arr[i] != i && b.arr[i] != prev_arr[i]) nested = false;
+      for (int i = 0; i < b.n; i++) prev_arr[i] = b.arr[i]; have = true;
+      char buf[64]; snprintf(buf, sizeof buf, "L=%.2f %s (%d)  ", lv, ArrStr(b.arr, b.n).c_str(), sl.swapped); line += buf;
+    }
+    printf("      arrangements: %s\n", line.c_str());
+    Check(all_ok, "every level: exactly round(L x 7) steps rearranged per the loop's draw, step 0 = slice A, stable across passes, jumps only where the slice is not the continuation");
+    Check(nested, "nested: a higher level keeps every swap of a lower one"); }
+
+  // Level 1 run: grid, content per step, returns.
+  v.err_level_[0] = 1.f;
+  { const SlLog lg = RunSl(s, 20, 60.f, true);
+    const SlStats st = CheckSl(lg, s, Q, 1.f, n8, tier8, true);
+    bool grid_ok = true; for (const SlRec& pr : lg.p) if ((pr.start - grid0) % (long)Q != 0) grid_ok = false;
+    int ok, tot; float worst; StepWindows(lg, s, Q, false, &ok, &tot, &worst);
+    PrintSl("level 1", st);
+    printf("      level 1: %s; %d / %d steps = their slice at lag 0 (worst c %.4f); grid %s; read out of range %ld; half-speed head jumps outside restarts %ld\n",
+           ArrStr(lg.p[0].arr, n8).c_str(), ok, tot, worst, grid_ok ? "unchanged" : "MOVED", lg.rh_bad, lg.half_jumps);
+    Check(st.ok() && st.played == st.passes, "level 1: all 7 steps rearranged, as drawn; jumps exactly at the slice boundaries that need one");
+    Check(tot >= 60 && ok == tot, "each step's output is its slice (lag 0, c > 0.99)");
+    Check(grid_ok && lg.rh_bad == 0, "pass length and grid unchanged; the read head stays in the loop");
+    Check(lg.half_jumps == 0, "K1 half-speed head continuous except at the jumps (also where a slice runs on over the seam)"); }
+
+  // K3 change mid-pass: applies at the next pass start.
+  { blk = 1; int32_t p0 = v.pass_[s]; while (v.pass_[s] == p0) RunFor(1.f / sr);
+    for (long j = 0; j < (long)Q / 2; j++) RunFor(1.f / sr);
+    int before[VESTIGE_TIMING_SLICE_MAX]; for (int i = 0; i < n8; i++) before[i] = v.sl_arr_[s][i];
+    v.err_level_[0] = 2.f / 7.f; p0 = v.pass_[s]; bool kept = true;
+    while (v.pass_[s] == p0) { RunFor(1.f / sr); if (v.pass_[s] == p0) for (int i = 0; i < n8; i++) if (v.sl_arr_[s][i] != before[i]) kept = false; }
+    int sw = 0; for (int i = 0; i < n8; i++) if (v.sl_arr_[s][i] != i) sw++;
+    Realign();
+    Check(kept && sw == 2, "a K3 change applies at the next pass start (that pass: 2 swaps), not mid-pass"); }
+
+  // Variation rate: per pass, one step, back to the arrangement next pass.
+  { v.err_level_[0] = 0.5f;
+    const SlLog lv = RunSl(s, 300, 200.f);
+    const SlStats sv = CheckSl(lv, s, Q, 0.5f, n8, tier8, true);
+    PrintSl("level 0.5, 300 passes", sv);
+    const double p = VESTIGE_TIMING_VAR_PROB, rate = (double)sv.eligible_var / sv.eligible, sd = sqrt(p * (1 - p) / sv.eligible);
+    printf("      variation rate on eligible passes: %d / %d = %.3f (constant %.3f +- %.3f); overall %.3f\n",
+           sv.eligible_var, sv.eligible, rate, p, 3 * sd, (double)sv.var / sv.passes);
+    Check(sv.ok(), "variations: exactly one step (never step 0) plays another slice for one pass, never two passes running");
+    Check(fabs(rate - p) < 3 * sd, "variation rate ~ VESTIGE_TIMING_VAR_PROB (on passes that may vary)");
+    v.err_level_[0] = 0.f; }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // A loop that joins late with the level already up: the first pass's
+  // arrangement is played from the join on — the steps behind the join count
+  // as the timeline's (so a step right after it that is its own slice runs on).
+  { int ok = 0, tot = 0, differ = 0; std::string line;
+    for (float lv : {1.f, 4.f / 7.f, 2.f / 7.f, 3.f / 7.f, 5.f / 7.f}) {
+      Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.6f);
+      v.err_level_[0] = lv;
+      seen_acts = v.act_count_;
+      const uint32_t t0 = v.timing_trigs_;
+      CapRec q{}; noise_from = n; noise_to = n + 25400; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+      const int qs = q.s; const size_t L = q.Q; const int nsl = v.sl_n_[qs];
+      int ord[VESTIGE_TIMING_SLICE_MAX]; for (int i = 0; i < nsl; i++) ord[i] = v.sl_order_[qs][i];
+      blk = 1; const int32_t p0 = v.pass_[qs]; uint32_t tin = v.timing_trigs_;
+      while (v.pass_[qs] == p0) { tin = v.timing_trigs_; RunFor(1.f / sr); }
+      Realign();
+      int i0 = 0; for (int i = 1; i < nsl; i++) if (SlB(L, nsl, i) <= (long)q.phase) i0 = i;
+      int want = 0, naive = 0;
+      for (int i = i0 + 1; i < nsl; i++) {
+        const int prev = (i - 1 <= i0) ? i - 1 : ord[i - 1];
+        if (ord[i] != (prev + 1) % nsl) want++;
+        if (ord[i] != (ord[i - 1] + 1) % nsl) naive++;
+      }
+      tot++; if (q.phase > 0 && nsl == 8 && (int)(tin - t0) == want) ok++; if (naive != want) differ++;
+      char b[96]; snprintf(b, sizeof b, "L=%.2f phase %u step %d: %u jumps (model %d, arrangement-only %d)  ", lv, q.phase, i0, tin - t0, want, naive); line += b;
+    }
+    printf("      late joins: %s\n", line.c_str());
+    Check(ok == tot && differ >= 1, "a loop joining mid-pass plays its arrangement from the join on (steps behind it = the timeline's)");
+    v.err_level_[0] = 0.f; }
+
+  // A loop whose length the slices do not divide, and a FORCED arrangement
+  // A H A B C D E F (host-only: this loop's drawn tables overwritten): one jump
+  // (step 1 -> H), then H runs on over the loop's seam into A, B, ... — no
+  // restart there, the half-speed head continuous; a return at the pass end.
+  { size_t T = 0; float k2 = 0.f;
+    for (float k = 0.64f; k < 0.74f; k += 0.001f) { const size_t t = Vestige::KnobPeriod(RemapKnob(k)); if (t >= 16000 && t <= 30000 && t % 8 != 0) { T = t; k2 = k; break; } }
+    Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = k2; RunFor(0.5f);
+    hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+    seen_acts = v.act_count_;
+    CapRec q{}; noise_from = n; noise_to = n + (long)T + 12000; WaitActivation(4.f, &q); noise_from = noise_to = -1;
+    RunFor(0.5f);
+    const int qs = q.s; const size_t L = q.Q; int tr = 0; const int nw = WantN((double)L, &tr);
+    v.err_level_[0] = 1.f;
+    const SlLog lo = RunSl(qs, 12, 60.f, true);
+    const SlStats so = CheckSl(lo, qs, L, 1.f, nw, tr, true);
+    int ok, tot; float worst; StepWindows(lo, qs, L, false, &ok, &tot, &worst);
+    PrintSl("loop not divisible by the slices", so);
+    printf("      K2 at %.3f -> T %zu; loop %zu (%% 8 = %zu, %d slices): %d / %d steps = their slice at lag 0 (worst c %.4f)\n", k2, T, L, L % 8, nw, ok, tot, worst);
+    Check(L == T && L % 8 != 0 && so.ok() && so.played == so.passes && ok == tot && tot >= 40,
+          "a loop the slices do not divide: boundaries at round(L x i / N), jumps and continuations as the model");
+    const int forced[8] = {0, 7, 0, 1, 2, 3, 4, 5};
+    for (int i = 0; i < 7; i++) v.sl_prio_[qs][0][i] = (int8_t)(i + 1);
+    for (int i = 1; i < 8; i++) v.sl_repl_[qs][0][i] = (int8_t)forced[i];
+    RunSl(qs, 1);
+    const SlLog lf = RunSl(qs, 16, 60.f, true);
+    const SlStats sf = CheckSl(lf, qs, L, 1.f, 8, 0, true);
+    StepWindows(lf, qs, L, false, &ok, &tot, &worst);
+    int base_one = 0, base_n = 0; for (const SlRec& pr : lf.p) if (pr.vstep < 0) { base_n++; if (pr.jumps_el.size() == 1 && pr.jumps_el[0] == SlB(L, 8, 1) && pr.ret) base_one++; }
+    PrintSl("forced A H A B C D E F", sf);
+    printf("      forced: %d / %d arrangement passes = one jump (step 1) + a return; %d / %d steps = their slice (lag 0); half-speed jumps outside restarts %ld; read out of range %ld\n",
+           base_one, base_n, ok, tot, lf.half_jumps, lf.rh_bad);
+    Check(sf.ok() && base_n >= 10 && base_one == base_n && ok == tot && lf.rh_bad == 0,
+          "a slice that continues over the loop's seam (H -> A) runs on: no restart there");
+    Check(lf.half_jumps == 0, "K1 half-speed head: continuous where the read runs over the seam inside a pass");
+    v.err_level_[0] = 0.f; cs.knob[1] = 0.85f; RunFor(0.5f);
+    hist_on = false; in_hist.clear(); wet_hist.clear(); }
+
+  // No click on a sine loop; also with the K1 half-speed version.
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  sustain_hz = 220.f; sustain_input = true; play_input = true; WaitActivation(2.f, &r);
+  sustain_input = false; play_input = false; RunFor(1.0f);
+  { const int q = r.s;
+    maxd = 0.f; RunFor(2.0f); const float st = maxd;
+    size_t nj = 0;
+    for (float lv : {1.f, 0.5f}) { v.err_level_[0] = lv; const SlLog lc = RunSl(q, 10); for (const SlRec& pr : lc.p) nj += pr.jumps_at.size(); }
+    const float sj = maxd;
+    const float khalf = 0.5f - (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
+    cs.knob[0] = khalf; v.err_level_[0] = 0.f; RunFor(1.5f); maxd = 0.f; RunFor(2.0f); const float sth = maxd;
+    v.err_level_[0] = 1.f; maxd = 0.f; RunSl(q, 8); const float sh = maxd;
+    printf("      sine loop max step: steady %.5f | 20 passes, %zu jumps: %.5f (bound %.5f) | K1 half side: steady %.5f, level 1: %.5f (bound %.5f)\n",
+           st, nj, sj, 1.5f * st, sth, sh, 1.5f * sth);
+    Check(nj >= 40 && sj <= 1.5f * st, "slice jumps and returns: no step above 1.5x steady (5 ms restarts)");
+    Check(sh <= 1.5f * sth, "K1 half-speed version with slices: no step above 1.5x steady");
+    v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; }
+
+  // Reverse: the arrangement on the reversed loop.
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  RunFor(0.8f);
+  { const int q = r.s; v.err_level_[0] = 1.f;
+    const SlLog lr = RunSl(q, 10);
+    const SlStats sr_ = CheckSl(lr, q, r.Q, 1.f, n8, tier8, true);
+    int ok, tot; float worst; StepWindows(lr, q, r.Q, true, &ok, &tot, &worst);
+    PrintSl("reverse, level 1", sr_);
+    printf("      reverse: %s on the reversed loop; %d / %d steps = their reversed slice at lag 0 (worst c %.4f); read out of range %ld\n",
+           ArrStr(lr.p[0].arr, n8).c_str(), ok, tot, worst, lr.rh_bad);
+    Check(v.rev_play_ && sr_.ok() && sr_.played == sr_.passes && tot >= 30 && ok == tot && lr.rh_bad == 0,
+          "reverse: the same arrangement on the reversed loop (its slice A = the loop's last eighth, backward)");
+    v.err_level_[0] = 0.f; cs.knob[1] = 0.85f; }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // K1 midpoint: clean and double speed jump together.
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  { const int q = r.s; const long L = (long)r.Q;
+    const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
+    cs.knob[0] = kmid; RunFor(1.5f);
+    v.err_level_[0] = 1.f;
+    const SlLog lk = RunSl(q, 6);
+    int ok = 0, tot = 0;
+    for (const SlRec& pr : lk.p) { std::vector<long> w, rs; WantJumps(pr.ord, pr.n, (size_t)L, &w, &rs);
+      for (size_t k = 0; k < pr.jumps_at.size() && tot < 20; k++) {
+        int st = 0; for (int i = 1; i < pr.n; i++) if (SlB((size_t)L, pr.n, i) == pr.jumps_el[k]) st = i;
+        const long r0 = rs[st]; const int NN = (int)std::min(2400L, SlB((size_t)L, pr.n, st + 1) - SlB((size_t)L, pr.n, st) - 600);
+        if (NN < 400 || r0 + 480 + NN >= L) continue;
+        std::vector<float> rc(NN), rsp(NN);
+        for (int j = 0; j < NN; j++) { rc[j] = v.slab_[q][r0 + 480 + j]; rsp[j] = v.slab_[q][(2 * (r0 + 480 + j)) % L]; }
+        float gc = 0, gs = 0, res = 0; Split(pr.jumps_at[k] + 480, rc, rsp, &gc, &gs, &res);
+        tot++; if (fabsf(gc - v.g_c_) < 0.05f && fabsf(gs - v.g_sp_) < 0.05f && res < 0.05f) ok++;
+      } }
+    printf("      K1 midpoint, level 1: %d / %d jumps = clean from the slice + double speed from 2x the slice\n", ok, tot);
+    Check(tot >= 6 && ok == tot, "K1 midpoint: clean and speed versions jump together");
+    v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // Stretch at a rate != 1: slice boundaries at i/N of the pass (output time).
+  Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 36000; WaitActivation(3.f, &r); noise_from = noise_to = -1;
+  { const int q = r.s;
+    Taps({700}); RunFor(1.0f);
+    v.err_level_[0] = 1.f;
+    const SlLog ls = RunSl(q, 6);
+    const long Lt = (long)GridQuantize::Boundary(v.div_[q], v.period_);
+    int tr = 0; const int nw = WantN((double)Lt, &tr);
+    const SlStats ss = CheckSl(ls, q, v.PlayLen(q), 1.f, nw, tr, false);
+    int len_bad = 0; for (size_t p = 1; p < ls.p.size(); p++) if (labs(ls.p[p].start - ls.p[p - 1].start - Lt) > 1) len_bad++;
+    int tbad = 0;
+    for (const SlRec& pr : ls.p) { std::vector<long> w, rs; WantJumps(pr.ord, pr.n, v.PlayLen(q), &w, &rs);
+      for (size_t k = 0; k < w.size() && k < pr.jumps_el.size(); k++) if (labs(pr.jumps_el[k] - (long)((double)w[k] / v.rho_d_[q])) > 2) tbad++; }
+    PrintSl("stretch", ss);
+    printf("      stretch at rate %.4f: pass %ld, jump times off %d, lengths off %d\n", v.rho_d_[q], Lt, tbad, len_bad);
+    Check(v.rho_d_[q] != 1.0 && ss.ok() && ss.played == ss.passes && tbad == 0 && len_bad == 0,
+          "stretch at rate != 1: boundaries at i/N of the pass, the pass stays d x T_now");
+    v.err_level_[0] = 0.f; }
+
+  // Hold: continues. Freeze: never.
+  { Hold(); v.err_level_[0] = 1.f;
+    const int q = FirstLive(); const SlLog lh = RunSl(q, 3);
+    int played = 0; for (const SlRec& pr : lh.p) if (pr.n > 0) played++;
+    Check(v.held_ && played >= 2, "held loop: slices play too");
+    v.err_level_[0] = 0.f; Unhold(); }
+  { Reset(); cs.sw[0] = 2; cs.knob[4] = 0.0f; RunFor(1.0f);
+    seen_acts = v.act_count_;
+    v.err_level_[0] = 1.f;
+    const uint32_t t0 = v.timing_trigs_, p0 = v.timing_patterns_;
+    noise_from = n; noise_to = n + 9600; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    RunFor(3.0f);
+    Check(Vestige::PoolOf(q.s) == Vestige::kPoolFreeze && v.timing_trigs_ == t0 && v.timing_patterns_ == p0,
+          "freeze: the timing error never touches it");
+    v.err_level_[0] = 0.f; cs.sw[0] = 0; RunFor(1.0f); }
+
+  // Short-loop guard: 8 -> 4 -> 2 -> none.
+  { struct G { int tap_ms; long burst; };
+    std::string line; bool ok = true; int seen8 = 0, seen4 = 0, seen2 = 0, seen0 = 0;
+    for (const G& g : {G{400, 9300}, G{100, 9000}, G{100, 3300}, G{100, 1300}}) {
+      Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({g.tap_ms}); RunFor(0.6f);
+      seen_acts = v.act_count_;
+      noise_from = n; noise_to = n + g.burst; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+      RunFor(0.3f);
+      v.err_level_[0] = 1.f;
+      int tr = 0; const int want = WantN((double)q.Q, &tr);
+      const uint32_t sk0 = v.timing_skipped_, fb0 = v.timing_fallbacks_, t0 = v.timing_trigs_;
+      const SlLog lt = RunSl(q.s, 8, 20.f);
+      const SlStats sg = CheckSl(lt, q.s, q.Q, 1.f, want, tr, true);
+      if (!sg.ok() || lt.p.size() < 8) ok = false;
+      if (want == 0 && (v.timing_skipped_ - sk0 < 8 || v.timing_trigs_ != t0)) ok = false;
+      if (want > 0 && want < VESTIGE_TIMING_SLICES && v.timing_fallbacks_ - fb0 < 8) ok = false;
+      if (want == 8) seen8++; if (want == 4) seen4++; if (want == 2) seen2++; if (want == 0) seen0++;
+      char b[80]; snprintf(b, sizeof b, "%.1f ms -> %d slices (%.1f ms)  ", q.Q / 48.0, want, want ? q.Q / 48.0 / want : 0.0); line += b;
+      v.err_level_[0] = 0.f;
+    }
+    printf("      guard: %s\n", line.c_str());
+    Check(ok && seen8 && seen4 && seen2 && seen0, "short-loop guard: slices >= 20 ms: 8 -> 4 -> 2 -> none, as the model");
+    // Output time: a 200 ms loop following T to 150 ms (tape) has 18.75 ms
+    // slices at 8 -> 4.
+    Reset(); cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({400}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 9300; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    Taps({300}); RunFor(1.0f);
+    v.err_level_[0] = 1.f;
+    const long Lt = (long)GridQuantize::Boundary(v.div_[q.s], v.period_);
+    int tr = 0; const int want = WantN((double)Lt, &tr), wmat = WantN((double)v.PlayLen(q.s), &tr);
+    WantN((double)Lt, &tr);
+    const SlLog lt = RunSl(q.s, 6);
+    const SlStats sg = CheckSl(lt, q.s, v.PlayLen(q.s), 1.f, want, tr, false);
+    printf("      loop %zu material, %ld output (rate %.4f): %d slices (by material it would be %d)\n", v.PlayLen(q.s), Lt, v.rho_d_[q.s], lt.p.empty() ? -1 : lt.p[0].n, wmat);
+    Check(want == 4 && wmat == 8 && sg.ok() && sg.played == sg.passes, "the guard measures the slice in output time (a loop following a shorter T)");
+    v.err_level_[0] = 0.f; }
+
+  // 3 voices: own arrangements, own variations; budget and the PHYSICAL pool.
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.knob[0] = 0.5f; Taps({400}); RunFor(0.5f);
+  seen_acts = v.act_count_;
+  const long bursts[3] = {9000, 12500, 14000};              // -> 200 / 267 / 300 ms: 8 slices each
+  for (int i = 0; i < 3; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.2f); }
+  noise_from = noise_to = -1;
+  RunFor(1.0f);
+  { int slots[3]; int ns = 0; for (int q = 0; q < VESTIGE_VOICE_SLABS && ns < 3; q++) if (v.active_[q] && !v.dying_[q]) slots[ns++] = q;
+    v.err_level_[0] = 1.f;
+    blk = 1; int32_t pp[3]; for (int i = 0; i < ns; i++) pp[i] = v.pass_[slots[i]];
+    std::vector<std::vector<int>> vars(3); std::string arr[3];
+    for (long j = 0; j < 48000L * 10; j++) {
+      RunFor(1.f / sr);
+      for (int i = 0; i < ns; i++) if (v.pass_[slots[i]] != pp[i]) {
+        pp[i] = v.pass_[slots[i]]; vars[i].push_back(v.sl_var_step_[slots[i]]);
+        int a[VESTIGE_TIMING_SLICE_MAX]; for (int k = 0; k < v.sl_n_[slots[i]]; k++) a[k] = v.sl_arr_[slots[i]][k];
+        arr[i] = ArrStr(a, v.sl_n_[slots[i]]);
+      }
+    }
+    Realign();
+    int vdiff = 0, nvar[3] = {0, 0, 0}; const size_t m = std::min(vars[0].size(), std::min(vars[1].size(), vars[2].size()));
+    for (size_t k = 0; k < m; k++) if ((vars[0][k] >= 0) != (vars[1][k] >= 0) || (vars[1][k] >= 0) != (vars[2][k] >= 0)) vdiff++;
+    for (int i = 0; i < ns; i++) for (int x : vars[i]) if (x >= 0) nvar[i]++;
+    printf("      3 voices, level 1, 10 s: arrangements %s / %s / %s; variations %d / %d / %d; variation passes differ in %d of %zu\n",
+           arr[0].c_str(), arr[1].c_str(), arr[2].c_str(), nvar[0], nvar[1], nvar[2], vdiff, m);
+    Check(ns == 3 && arr[0] != arr[1] && arr[1] != arr[2] && arr[0] != arr[2], "3 voices: each has its own arrangement");
+    Check(nvar[0] > 0 && nvar[1] > 0 && nvar[2] > 0 && vdiff > 0, "3 voices vary independently");
+    const float kmid = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f);
+    cs.knob[0] = kmid; RunFor(1.5f);
+    max_grains = 0; max_counted = 0; const uint32_t d0 = v.grain_cap_drops_, pf0 = v.pool_full_, t0 = v.timing_trigs_;
+    blk = 1; RunFor(10.0f); Realign();
+    printf("      3 voices (200-300 ms loops), K1 midpoint, level 1, 10 s: %u jumps; counted max %d (budget 12), PHYSICAL max %d of %d, cap refusals %u, pool exhausted %u\n",
+           v.timing_trigs_ - t0, max_counted, max_grains, VESTIGE_GRAINS, v.grain_cap_drops_ - d0, v.pool_full_ - pf0);
+    Check(max_counted <= 12 && v.grain_cap_drops_ - d0 == 0, "slices, 3 voices + K1 midpoint: counted grains within 12, none refused");
+    Check(v.pool_full_ - pf0 == 0 && max_grains < VESTIGE_GRAINS, "slices: the physical grain pool never runs out");
+    v.err_level_[0] = 0.f; cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f); }
+  Unhold();
+}
+
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.sw[2] = 0;
@@ -2998,7 +3439,7 @@ int main() {
   TestFollowStretch();
   TestOnsetRearm();
   TestGateMeter();
-  TestTimingError();
+  if (VESTIGE_TIMING_MODE == 0) TestTimingError(); else TestTimingSlices();
   TestFollowRecut();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);

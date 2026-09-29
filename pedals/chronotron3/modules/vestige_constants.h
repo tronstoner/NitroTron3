@@ -462,6 +462,32 @@ static constexpr int    VESTIGE_TIMING_MAX_STEPS  = 16;          // upper bound 
 // never shorten a step. (Keeps each restart's 5 ms crossfade inside its step.)
 static constexpr float  VESTIGE_TIMING_MIN_STEP_MS = 20.f;
 
+// ---- Timing error MODE ------------------------------------------------------
+// 0 = RETRIGGER (the Euclidean patterns above, as heard in ae31f88); 1 = SLICE
+// REARRANGEMENT (below). Mode 0's code stays intact (step 2, beat repeat, will
+// reuse its Euclidean hits).
+static constexpr int    VESTIGE_TIMING_MODE = 1;
+// SLICES: the pass is cut into N equal slices (boundaries round(L*i/N) in
+// material; in stretch at i/N of the pass in output time). Each loop has an
+// ARRANGEMENT: which slice plays at each step; step 0 is always slice 0 (the
+// downbeat is anchored), identity = the untouched loop. When a loop starts
+// playing it draws, once, a priority order of the steps 1..N-1 and for each
+// step a replacement slice (any slice but its own: repeats and drops allowed).
+// The level L rearranges the first round(L*(N-1)) steps in that order, so
+// raising K3 adds swaps and lowering removes them without reshuffling.
+// VARIATION (VESTIGE_TIMING_VAR_PROB, never two passes running): one step
+// 1..N-1 plays another slice for that pass only.
+// Playback: a step whose slice is the natural continuation of what the read is
+// playing runs on; any other jumps the read to its slice's start (5 ms stream
+// restart). Reverse: the same arrangement on the REVERSED loop (its pass
+// starts at the loop's end; reversed slice j = the j-th N-th from the end).
+// Short-loop guard: a slice shorter than VESTIGE_TIMING_MIN_STEP_MS (output
+// time) halves N (8 -> 4 -> 2); 2 don't fit = no rearrangement.
+static constexpr int    VESTIGE_TIMING_SLICES = 8;
+static constexpr int    VESTIGE_TIMING_SLICE_MAX = 16;          // table size bound
+static constexpr int    VESTIGE_TIMING_SLICE_TIERS = 4;         // N, N/2, N/4, N/8 tables
+static_assert(VESTIGE_TIMING_SLICES >= 2 && VESTIGE_TIMING_SLICES <= VESTIGE_TIMING_SLICE_MAX, "2..16 slices");
+
 // ---------------------------------------------------------------------------
 // K2 movement that counts as a T change (remapped knob units). Below it, ADC
 // jitter would otherwise reach every following loop as pitch warble (at mid
