@@ -312,6 +312,31 @@ becomes selectable, the natural home is a curated preset once the error UI is
 finalised (§6, "The endgame"): "which grid" plus "which errors" is what a
 *character* actually is.
 
+### 4.3b Loops follow T (experimental)
+
+Refines rule 3 of §4.3. Originally T was latched at each capture's start and a
+loop never changed afterwards. Now, when T changes — a re-tap on FS1 or a K2
+move — every playing loop follows it:
+
+- **A loop keeps its division.** A loop captured as 1/2 of T stays 1/2 of T; its
+  length becomes that division of the *new* T.
+- **The capture itself is still quantised against the T at its start**, because
+  that is the tempo the player was playing against. It follows the new T only
+  once it is playing.
+- Applies to held loops, both loop modes; not to freeze, which has no grid.
+
+Three ways to make a loop the new length, all to be judged on the pedal:
+
+| mode | speed | pitch | how the length changes |
+|-|-|-|-|
+| **A tape** | follows T | follows T | plays faster or slower, like changing the time on a tape delay |
+| **B stretch** | follows T | stays | advanced at the new rate while grains still read at normal speed; attacks can double or smear when slowing down |
+| **C re-cut** | stays | stays | the end is cut off, or silence is added; the new length takes effect at the next wrap, and cutting is non-destructive, so cut material returns if T grows again |
+
+For testing, **SW2 selects the mode temporarily** (UP A · MIDDLE B · DOWN C) —
+it is otherwise unused until stage 2.5, which takes it back for error type.
+With T unchanged, all three are identical to the latched behaviour.
+
 ### 4.4 Freeze (SW1 DOWN)
 
 Fixed, not blended. Starting values come from mnemonic, which is the freeze the
