@@ -1586,8 +1586,8 @@ class Vestige : public Module {
   // ---- Timing mode 2: PASS MEMORY ------------------------------------------
   struct TimingFig { int8_t type, step, len, age, sub; };   // a figure on a remembered pass (len = span in
                                                         //  steps; RETRIG: its hits. age = turns played.
-                                                        //  sub: REST 1 = silent, N >= 2 = hold N)
-  enum TimingFigType { kFigRest = 0, kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig, kFigReverse, kFigClean };
+                                                        //  sub: REST 1 = silent, CRUSH N = hold N)
+  enum TimingFigType { kFigRest = 0, kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig, kFigReverse, kFigCrush, kFigClean };
   // RETRIG with `hits`: the step it starts changing (its pattern's 2nd hit), -1 = does not fit n.
   static int TimingRetrigStep(int hits, int n) {
     if (n < 2 * hits) return -1;                            // E(2,4+) and E(3,6+) only
@@ -1676,9 +1676,8 @@ class Vestige : public Module {
       q -= TimingStepWeight(i, n);
     }
     int8_t sub = 0;
-    if (t == kFigRest)
-      sub = (TimingRand() < VESTIGE_TIMING_CRUSH_SHARE)
-          ? (int8_t)VESTIGE_TIMING_CRUSH_FACTORS[TimingPick(VESTIGE_TIMING_CRUSH_N)] : (int8_t)1;
+    if (t == kFigRest)  sub = 1;
+    if (t == kFigCrush) sub = (int8_t)VESTIGE_TIMING_CRUSH_FACTORS[TimingPick(VESTIGE_TIMING_CRUSH_N)];
     pm_fig_[s][m][pm_nf_[s][m]++] = TimingFig{(int8_t)t, (int8_t)k, (int8_t)len, 0, sub};
     return true;
   }
@@ -1750,7 +1749,8 @@ class Vestige : public Module {
       const int k = g.step, e = (k + g.len < n) ? k + g.len : n;
       // (Steps before step 1 are the loop's last steps.)
       switch (g.type) {
-        case kFigRest:    for (int i = k; i < e; i++) mute[i] = g.sub; break;   // 1 silent, N hold N
+        case kFigRest:
+        case kFigCrush:   for (int i = k; i < e; i++) mute[i] = g.sub; break;   // 1 silent, N hold N
         case kFigStutter: for (int i = k; i < e; i++) play[i] = (int8_t)((i - g.len + n) % n); break;   // the len steps before, again
         case kFigRepeat:  for (int i = k; i < e; i++) play[i] = (int8_t)((k - 1 + n) % n); break;       // the step before, len times
         case kFigDouble:  for (int i = k; i < e; i++) rat[i] = 2; break;

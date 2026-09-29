@@ -524,8 +524,7 @@ static constexpr int    VESTIGE_TIMING_MEM_LIFE     = 3;        // turns a figur
 static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taking turns (1 = one pass)
 // FIGURES — each spans 1..VESTIGE_TIMING_SPAN_MAX steps (length drawn
 // uniformly among those that fit), inside the pass; figures never overlap:
-//   REST     the span is silent — or, with chance VESTIGE_TIMING_CRUSH_SHARE,
-//            sample-rate reduced instead (see below)
+//   REST     the span is silent
 //   STUTTER  the span plays the same number of steps before it again
 //   REPEAT   the step before the span plays over the whole span (beat repeat)
 //   DOUBLE   each step of the span squeezed in twice (double time)
@@ -533,13 +532,14 @@ static constexpr int    VESTIGE_TIMING_MEM_PASSES   = 3;        // memories taki
 //   RETRIG   back to the one in Euclidean groups: E(2,n) = 4+4, E(3,8) = 3+3+2
 //            (from its 2nd hit to the end of the pass; not 1..4)
 //   REVERSE  the span plays backward (once the loop's guard copy is ready)
+//   CRUSH    the span is sample-rate reduced (see below)
 //   CLEAN    the span plays as recorded — the no-glitch choice in the set
 // Steps before step 1 are the loop's last steps (a STUTTER / REPEAT at the
 // start of the pass replays the end of the loop).
 // A new figure only goes on free steps.
 static constexpr int    VESTIGE_TIMING_SPAN_MAX = 4;
 // Weights (relative chance of each figure being picked) — EDITABLE:
-static constexpr int    VESTIGE_TIMING_FIGS = 8;
+static constexpr int    VESTIGE_TIMING_FIGS = 9;
 static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // REST
   1.f,   // STUTTER
@@ -548,17 +548,17 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // RATCHET
   1.f,   // RETRIG
   1.f,   // REVERSE
+  1.f,   // CRUSH
   1.f,   // CLEAN
 };
 // RATCHET only from this K3 level on (below it: weight 0; ones already placed
 // age out). 0.5 = noon.
 static constexpr float  VESTIGE_TIMING_RATCHET_FROM = 0.5f;
-// Sample-rate reduction (a REST's other half): the loop's output is held for
-// N samples (48 kHz / N, an integer: no rounding), no anti-alias filter. N
-// drawn per figure from the table. Fades in/out over VESTIGE_TIMING_MUTE_MS.
-static constexpr float  VESTIGE_TIMING_CRUSH_SHARE = 0.5f;       // REST: silence : reduction = 50:50
-static constexpr int    VESTIGE_TIMING_CRUSH_N = 5;
-static constexpr int    VESTIGE_TIMING_CRUSH_FACTORS[VESTIGE_TIMING_CRUSH_N] = {4, 6, 8, 12, 16};   // 12, 8, 6, 4, 3 kHz
+// CRUSH: the loop's output is held for N samples (48 kHz / N, an integer: no
+// rounding), no anti-alias filter. N drawn per figure from the table. Fades
+// in/out over VESTIGE_TIMING_MUTE_MS.
+static constexpr int    VESTIGE_TIMING_CRUSH_N = 4;
+static constexpr int    VESTIGE_TIMING_CRUSH_FACTORS[VESTIGE_TIMING_CRUSH_N] = {2, 3, 4, 6};   // 24, 16, 12, 8 kHz
 // Where figures land: steps in the back half of the pass weigh this much vs 1
 // for the front half (a fill leads into the one).
 static constexpr float  VESTIGE_TIMING_MEM_BACK_WEIGHT = 2.f;
