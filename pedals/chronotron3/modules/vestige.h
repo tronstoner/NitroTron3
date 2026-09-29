@@ -16,7 +16,9 @@
 //   K4   = capture sensitivity (auto-capture gate threshold; CCW = sensitive).
 //   K5   = loop fade in/out time (unchanged).
 //   K6   = dry/wet mix (shell-owned, equal-power). vestige no longer owns output.
-//   SW2  = reserved (read, unused) — error type select.
+//   SW2  = TEMPORARY: how playing loops follow a T change (stage 2.5 takes SW2
+//          for the error editor). UP = A tape (speed + pitch follow) · MIDDLE =
+//          B stretch · DOWN = C re-cut. Unimplemented positions stay latched.
 //   FS1  = tap tempo, dedicated: the interval between taps IS T; overrides K2's
 //          magnitude until K2 moves (stage 1).
 //   FS2  = tap: capture + playback on/off · hold: toggle buffer hold (in either
@@ -102,6 +104,8 @@ class Vestige : public Module {
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
+    tape_coef_ = 1.f - expf(-1.f / ((float)VESTIGE_TAPE_SMOOTH_MS * 0.001f * sr_));
+    for (int q = 0; q < VESTIGE_SLOTS; q++) { rho_s_[q] = 1.f; rho_t_[q] = rho_d_[q] = 1.0; fwd_d_[q] = 0.0; div_[q] = -1; beat_k_[q] = 0.0; }
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
       // Each slot views its OWN side's slab row, at that row's real length —
       // the grain reader wraps at this length, so it can never leave the row.
@@ -168,10 +172,13 @@ class Vestige : public Module {
     const float k4  = RemapKnob(cs.Knob(3)); // capture sensitivity (gate threshold)
     const float k5  = RemapKnob(cs.Knob(4)); // loop fade in/out
     const int   sw1 = cs.Switch(0);          // 0=UP 1-voice · 1=MID 6-voice · 2=DOWN freeze
-    const int   sw2 = cs.Switch(1);          // RESERVED — error type select
+    const int   sw2 = cs.Switch(1);          // TEMPORARY: follow mode (A tape / B stretch / C re-cut)
     const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
-    (void)k3; (void)sw2;
+    (void)k3;
+    // ---- SW2 = how playing loops follow a T change (temporary selector) ----
+    // Only A (tape) is implemented yet; B and C behave as before (latched).
+    follow_mode_ = (sw2 == 0) ? kFollowTape : (sw2 == 1) ? kFollowStretch : kFollowRecut;
 
     // ---- K1 = playback speed crossfade (rework stage 6, plan §4.2) -------------
     // A CROSSFADE between versions of the same loop, not an added voice: CCW end
@@ -406,7 +413,7 @@ class Vestige : public Module {
     // Voice management, once per block, audio thread only (see Controls):
     // leaving MIDDLE retires the older loops oldest-first over K5, and the
     // age-ramp gains follow the live set.
-    if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); }
+    if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); UpdateTapeTargets(); }
     for (size_t i = 0; i < size; i++) {
       const float x = in[i];
 
@@ -871,13 +878,16 @@ class Vestige : public Module {
     // A fresh loop whose guard is still being written plays forward until it is
     // ready (forward never outruns the guard job; reverse could read it at once).
     const bool rev = e.rev && GuardReady(s);
+    // Tape rate (SW2 A): 1 unless this loop is following a changed T.
+    const double rho_d = SmoothTape(s);
+    const float  rho   = rho_s_[s];
     if (!is_frip) {
-      fwd_[s] += rev ? -pitch_rate_s_ : pitch_rate_s_;
       // pass_ counts the clean head's wraps: the half-speed version needs its
       // parity (it covers the loop once per TWO clean passes).
-      while (fwd_[s] >= (float)L) { fwd_[s] -= (float)L; pass_[s]++; }
-      while (fwd_[s] < 0.f)       { fwd_[s] += (float)L; pass_[s]--; }
+      AdvanceHead(s, rev, rho_d);
+      AdvanceBeat(s, rho_d);
     }
+    const bool orig = OrigPath(s, rho_d);   // no T change has touched this loop
     const float head = is_frip ? frip_head_ : fwd_[s];
     // Seam-crossing (non-frozen) grains need the head-continuation guard behind
     // L; clamp to what this row actually has. Loop rows always have the full
@@ -900,10 +910,16 @@ class Vestige : public Module {
       size_t scanlen = VESTIGE_MB_SCAN[row][bi]; if (scanlen > maxscan) scanlen = maxscan; if (scanlen < 1) scanlen = 1;
       mb_scan_[s][bi] += 1.f;
       if (mb_scan_[s][bi] >= (float)scanlen) mb_scan_[s][bi] -= (float)scanlen;
+      // Clean-stream grain at the tape rate (== glen when rho == 1).
+      const size_t glen_c = (!e.frozen && !orig) ? CoverGrain(glen, L, gcap, rho) : glen;
       // A version returning from silence emits its restart grain (instant
       // attack) the very sample its gain crosses the gate — i.e. while it is
       // still ~VESTIGE_K1_GATE_EPS — not a hop later at an audible gain.
       if (ver_idle_[s][0] && !e.frozen && g_c_ > VESTIGE_K1_GATE_EPS) mb_timer_[s][bi] = 1;
+      // Tape path: a stream holds at most 2 grains. When the grain length
+      // changes mid-glide, the next grain waits for one to end instead of
+      // being the 3rd (which a full pool would refuse = a dropout).
+      if (!orig && !e.frozen && mb_timer_[s][bi] <= 1 && StreamGrains(s, 0) >= 2) mb_timer_[s][bi] = 2;
       if (--mb_timer_[s][bi] <= 0) {
         // Base = forward head → swept freeze point as focus→1; scan fades in with
         // focus so the clean loop has no scan and the freeze has full scan.
@@ -921,13 +937,22 @@ class Vestige : public Module {
         // nothing (the grain count only doubles INSIDE the crossfade). Its
         // scheduling keeps running, and it restarts with an instant-attack
         // grain under the smoothed crossfade gain.
+        // Tape rate != 1: the clean stream reads at rho, starting exactly on
+        // the (fractional) head, its grain clamped to the coverage span. At
+        // rho == 1 the original path runs untouched (bit-identical).
         if (e.frozen || g_c_ > VESTIGE_K1_GATE_EPS) {
-          EmitBandGrain(s, glen, posf, coef, spray_width, e.frozen);
+          if (e.frozen || orig) {
+            EmitBandGrain(s, glen, posf, coef, spray_width, e.frozen);
+          } else {
+            const float atk = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
+            EmitStreamGrain(s, glen_c, head, rho, rev, coef, atk, 0, true);
+            first_grain_[s] = false;
+          }
           ver_idle_[s][0] = false;
         } else {
           ver_idle_[s][0] = true;
         }
-        int hop = (int)((float)glen / VESTIGE_MB_OVERLAP);
+        int hop = (int)((float)glen_c / VESTIGE_MB_OVERLAP);
         if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
         mb_timer_[s][bi] = hop;
       }
@@ -937,38 +962,137 @@ class Vestige : public Module {
       if (!e.frozen && !is_frip) {
         const float r = SpeedRatio();
         // Coverage clamp (the retired varispeed guard, generalised): a grain
-        // reads glen*r source samples; keep that within the loop AND the
-        // guard, so a read never passes L + min(L, guard) — the extent the
-        // stage-2 guard gate already guarantees.
-        size_t gsp = glen;
-        const size_t span = (L < gcap) ? L : gcap;
-        if (r > 1.f && (float)gsp * r > (float)span) gsp = (size_t)((float)span / r);
-        if (gsp < VESTIGE_GRAIN_MIN_LEN) gsp = VESTIGE_GRAIN_MIN_LEN;
+        // reads glen*R source samples, R = K1 ratio x tape rate; keep that
+        // within the loop AND the guard, so a read never passes L + min(L,
+        // guard) — the extent the stage-2 guard gate already guarantees.
+        size_t gsp = orig ? glen : glen_c;
+        const float Rsp = r * rho;
+        {
+          const size_t span = (L < gcap) ? L : gcap;
+          if (Rsp > 1.f && (float)gsp * Rsp > (float)span) gsp = (size_t)((float)span / Rsp);
+          if (gsp < VESTIGE_GRAIN_MIN_LEN) gsp = VESTIGE_GRAIN_MIN_LEN;
+          // The floor must not undo the clamp (only reachable at tape rates).
+          if (Rsp > 1.f && (float)gsp * Rsp > (float)span) gsp = (size_t)((float)span / Rsp);
+          if (!orig) gsp &= ~(size_t)1;                      // even: see CoverGrain
+        }
         if (ver_idle_[s][1] && g_sp_ > VESTIGE_K1_GATE_EPS) mb_timer_sp_[s][bi] = 1;   // see clean version
         const float hsp = SpeedHead(s, r);
         // Half speed: the head sits on .5 every other sample and a grain starts
         // on an integer, so fire only on integer heads (the even hop then keeps
         // every later grain there too): the version is exactly on its timeline,
         // not half a sample off.
-        const bool on_int = !(r < 1.f) || hsp == (float)(size_t)hsp;
+        const bool on_int = !(r < 1.f) || !orig || hsp == (float)(size_t)hsp;   // tape: grains start on the exact head instead
+        if (!orig && mb_timer_sp_[s][bi] <= 1 && StreamGrains(s, 1) >= 2) mb_timer_sp_[s][bi] = 2;   // see clean stream
         if (--mb_timer_sp_[s][bi] <= 0 && !on_int) mb_timer_sp_[s][bi] = 1;   // retry next sample
         else if (mb_timer_sp_[s][bi] <= 0) {
           if (g_sp_ > VESTIGE_K1_GATE_EPS) {
-            EmitSpeedGrain(s, gsp, hsp, r, rev,
-                           (nb == 1) ? nullptr : mb_bank_coef_[row][bi],
-                           ver_idle_[s][1] ? 0.f : 1.f);
+            EmitStreamGrain(s, gsp, hsp, Rsp, rev,
+                            (nb == 1) ? nullptr : mb_bank_coef_[row][bi],
+                            ver_idle_[s][1] ? 0.f : 1.f, 1, !orig);
             ver_idle_[s][1] = false;
           } else {
             ver_idle_[s][1] = true;
           }
           int hop = (int)((float)gsp / VESTIGE_MB_OVERLAP);
-          if (r < 1.f) hop &= ~1;                  // even hop: every half-speed grain
+          if (r < 1.f && orig) hop &= ~1;          // even hop: every half-speed grain
                                                    // starts on the same .5 phase
           if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
           mb_timer_sp_[s][bi] = hop;
         }
       }
     }
+  }
+
+  // ---- Loops follow T: A = tape (rework "already-playing loops follow T") ----
+  // A loop keeps its DIVISION d (stored at activation); its target length is
+  // Boundary(d, T_now). Tape plays the recorded material at rate
+  //   rho = material length / target length,
+  // on the head AND the grain read rate (pitch and time together), composed
+  // with K1. The head integrates rho, so the loop's position in loop-fraction
+  // space is continuous through any change and it stays on its own grid.
+  // rho is folded by octaves into [TAPE_RATE_MIN, TAPE_RATE_MAX]: past that the
+  // pass length is target x 2^k — still a power-of-two multiple of the grid —
+  // instead of unbounded rates that no grain or guard could cover.
+  double TapeTarget(int s) const {
+    if (follow_mode_ != kFollowTape || div_[s] < 0) return 1.0;
+    const size_t M  = loop_len_[s];
+    const size_t Lt = GridQuantize::Boundary(div_[s], period_);
+    if (Lt == 0 || Lt == M) return 1.0;                     // unchanged T: exactly 1
+    double r = (double)M / (double)Lt;
+    while (r > (double)VESTIGE_TAPE_RATE_MAX) r *= 0.5;
+    while (r < (double)VESTIGE_TAPE_RATE_MIN) r *= 2.0;
+    return r;
+  }
+  // Audio thread, once per block: targets for every loop-side slot.
+  void UpdateTapeTargets() {
+    for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) if (active_[s]) rho_t_[s] = TapeTarget(s);
+  }
+  // Per sample: glide rho toward its target (a tap is a jump, K2 a staircase;
+  // both become a smooth ~VESTIGE_TAPE_SMOOTH_MS glide). Snaps exactly onto the
+  // target, so an unchanged T keeps rho == 1.0f and the original path.
+  // The glide state is DOUBLE: in float the one-pole stalls ~1e-4 short of its
+  // target (the step (t - r) * coef drops below half an ulp), which would leave
+  // the loop a few samples per pass off Boundary(d, T) — drifting off its grid.
+  double SmoothTape(int s) {
+    const double t = rho_t_[s];
+    double& r = rho_d_[s];
+    if (r != t) {
+      r += (t - r) * (double)tape_coef_;
+      if (fabs(t - r) < 1e-9 * t) r = t;
+      rho_s_[s] = (float)r;
+    }
+    return r;
+  }
+  // Advance slot s's clean head by one sample. At a tape rate of exactly 1 this
+  // is the original float step (bit-identical). Otherwise the head integrates in
+  // DOUBLE: a float head near 16000 rounds every non-integer step with a bias
+  // (a few samples per pass), which would drift the loop off Boundary(d, T).
+  void AdvanceHead(int s, bool rev, double rho) {
+    const size_t L = loop_len_[s];
+    if (rho == 1.0 && fwd_d_[s] == (double)fwd_[s]) {
+      fwd_[s] += rev ? -pitch_rate_s_ : pitch_rate_s_;
+      while (fwd_[s] >= (float)L) { fwd_[s] -= (float)L; pass_[s]++; }
+      while (fwd_[s] < 0.f)       { fwd_[s] += (float)L; pass_[s]--; }
+      fwd_d_[s] = (double)fwd_[s];
+      return;
+    }
+    double& h = fwd_d_[s];
+    h += rev ? -(double)pitch_rate_s_ * rho : (double)pitch_rate_s_ * rho;
+    while (h >= (double)L) { h -= (double)L; pass_[s]++; }
+    while (h < 0.0)        { h += (double)L; pass_[s]--; }
+    float f = (float)h;
+    if (f >= (float)L) f = nextafterf((float)L, 0.f);      // float rounding must not reach L
+    fwd_[s] = f;
+  }
+  // The original (integer-start) grain paths apply only while the head is on
+  // an integer at rate 1 — i.e. exactly as before any T change.
+  bool OrigPath(int s, double rho) const { return rho == 1.0 && fwd_[s] == floorf(fwd_[s]); }
+  // Loop time in beats of T (for LED1): one pass = its division of a beat, at
+  // whatever speed it is playing. Its integer crossings are the loop's actual
+  // "one", however T has changed since the capture.
+  void AdvanceBeat(int s, double rho) {
+    if (beat_k_[s] == 0.0) return;
+    beat_[s] += beat_k_[s] * rho;
+    if (beat_[s] >= 1.0) beat_[s] -= 1.0;
+    beat_frac_[s] = (float)beat_[s];
+  }
+  // Grain length so glen * R source samples stay inside min(L, guard).
+  // Active grains of one stream (slot s, version ver).
+  int StreamGrains(int s, int ver) const {
+    int c = 0;
+    for (int g = 0; g < VESTIGE_GRAINS; g++)
+      if (grain_slot_[g] == s && grain_ver_[g] == ver && grains_[g].IsActive()) c++;
+    return c;
+  }
+  // EVEN, so hop = glen / 2 is exact and a stream never holds 3 grains for a
+  // sample (odd lengths let the next-but-one grain start on the last sample of
+  // the first — refusals at a full pool).
+  static size_t CoverGrain(size_t glen, size_t L, size_t gcap, float R) {
+    const size_t span = (L < gcap) ? L : gcap;
+    if (R > 1.f && (float)glen * R > (float)span) glen = (size_t)((float)span / R);
+    glen &= ~(size_t)1;
+    if (glen < 2) glen = 2;
+    return glen;
   }
 
   // ---- K1 speed crossfade helpers -------------------------------------------
@@ -1018,8 +1142,11 @@ class Vestige : public Module {
   // [head, head + r*glen); reverse reads backward from head down to head - r*glen
   // — through the guard (start at head + L) when that would cross 0, so a read
   // never wraps below the row start.
-  void EmitSpeedGrain(int s, size_t glen, float head, float r, bool rev,
-                      const float* coef, float atk_scale) {
+  // Also used for the CLEAN stream when the tape rate is not 1 (ver 0), and
+  // with `exact` the grain starts on the fractional head (NudgeStart) instead
+  // of the integer below it.
+  void EmitStreamGrain(int s, size_t glen, float head, float r, bool rev,
+                       const float* coef, float atk_scale, int ver, bool exact) {
     int nactive = 0;
     for (int k = 0; k < VESTIGE_GRAINS; k++) if (grains_[k].IsActive()) nactive++;
     if (nactive >= VESTIGE_MB_GRAIN_CAP) { grain_cap_drops_++; return; }
@@ -1033,19 +1160,26 @@ class Vestige : public Module {
     const size_t wp = ring_[s].GetWritePos();
     const size_t bl = ring_[s].GetLength();
     size_t start, delay;
+    float  sf;
     if (!rev) {
-      start = (size_t)head;
+      sf    = head;
+      start = (size_t)sf;
       delay = (wp + bl - start) % bl;                       // Trigger: start = wp - delay
     } else {
-      const float sf = (head - r * (float)glen < 0.f) ? head + L : head;
+      sf    = (head - r * (float)glen < 0.f) ? head + L : head;
       start = (size_t)sf;
       delay = (wp + bl + glen - start) % bl;                // Trigger(rev): start = wp - delay + glen
     }
     grain_src_[g]  = &ring_[s];
     grain_slot_[g] = s;
-    grain_ver_[g]  = 1;
+    grain_ver_[g]  = (uint8_t)ver;
     const float ov_comp = 2.f / VESTIGE_MB_OVERLAP;
     grains_[g].Trigger(ring_[s], delay, glen, rev, r, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
+    if (exact) {
+      grains_[g].NudgeStart(sf - (float)start);
+      grains_[g].SetExactTrack();          // tape rates are not binary fractions: no float drift
+      tape_grains_++;
+    }
     if (coef) grains_[g].SetBandFilter(coef[0], coef[1], coef[2], coef[3], coef[4]);
   }
 
@@ -1252,9 +1386,9 @@ class Vestige : public Module {
     const size_t L = loop_len_[s];
     if (L < VESTIGE_GRAIN_MIN_LEN) return;
     const PoolEngine& e = eng_[PoolOf(s)];
-    fwd_[s] += (e.rev && GuardReady(s)) ? -pitch_rate_s_ : pitch_rate_s_;
-    while (fwd_[s] >= (float)L) { fwd_[s] -= (float)L; pass_[s]++; }
-    while (fwd_[s] < 0.f)       { fwd_[s] += (float)L; pass_[s]--; }
+    const double rho = SmoothTape(s);
+    AdvanceHead(s, e.rev && GuardReady(s), rho);
+    AdvanceBeat(s, rho);
     const size_t gcap = e.frozen ? VESTIGE_GUARD_SAMPLES : SlotGuard(s, L);
     const int row = e.nbands - 1;
     for (int bi = 0; bi < e.nbands; bi++) {
@@ -1382,6 +1516,7 @@ class Vestige : public Module {
     cap_ceil_  = loop ? period_ : max_loop_len_;
     age_[s]    = ++age_counter_;        // capture order = voice age
     led_anchor_[pool_] = now;           // the capture start is the "one" (LED1)
+    led_slot_[pool_]   = s;             // ...and once it plays, its own loop time
     // Speculative guard for the ceiling: a capture that runs to T then starts
     // on time even in reverse. Re-based if the end turns out shorter.
     GuardJob(s, cap_ceil_);
@@ -1479,6 +1614,22 @@ class Vestige : public Module {
     pass_[s] = rev ? 1 : (int32_t)((now - cap_start_[s]) / (uint32_t)L) - 1;
     for (int b = 0; b < VESTIGE_MAX_BANDS; b++) mb_timer_sp_[s][b] = 0;
     ver_idle_[s][0] = ver_idle_[s][1] = true;   // whichever version emits first: instant attack
+    // Follow-T bookkeeping. The capture was quantised against the T latched at
+    // its start; from here on it keeps its DIVISION and follows T_now.
+    div_[s] = loop ? GridQuantize::IndexOf(L, cap_T_[s]) : -1;
+    if (div_[s] >= 0) {
+      const double frac = (double)GridQuantize::kDivNum[div_[s]] / (double)GridQuantize::kDivDen[div_[s]];
+      beat_k_[s] = frac / (double)L;                        // beats of T per material sample
+      const double b = (double)(now - cap_start_[s]) / (double)cap_T_[s];
+      beat_[s] = b - floor(b);                              // on the capture's own T grid
+    } else {
+      beat_k_[s] = 0.0; beat_[s] = 0.0;
+    }
+    beat_frac_[s] = (float)beat_[s];
+    rho_t_[s] = TapeTarget(s);
+    rho_d_[s] = rho_t_[s];                                  // enters playing at T_now, no glide
+    rho_s_[s] = (float)rho_d_[s];
+    fwd_d_[s] = (double)fwd_[s];
     active_[s] = true; dying_[s] = false; stolen_[s] = false;
     StartFadeIn(s);                     // swells in over K5; first grain instant
     ResumeFromMute();                   // record END unpauses the retained loops (stage-0 behaviour)
@@ -1590,7 +1741,13 @@ class Vestige : public Module {
         tap_prev_ms_ = f1_down_ms_;
       }
     }
-    period_ = (tap_period_ > 0) ? tap_period_ : KnobPeriod(k2);
+    // Knob T through a small movement deadband: loops now FOLLOW T, so ADC
+    // jitter on K2 must not reach it (1% of T is ~17 cents of tape warble).
+    // T is recomputed only when K2 has moved more than VESTIGE_K2_FOLLOW_DB;
+    // a knob that does not move gives exactly the same T as before.
+    if (!k2f_seeded_) { k2f_ = k2; k2f_seeded_ = true; }
+    if (fabsf(k2 - k2f_) > VESTIGE_K2_FOLLOW_DB) k2f_ = k2;
+    period_ = (tap_period_ > 0) ? tap_period_ : KnobPeriod(k2f_);
   }
 
   // Slot ranges. OWN = every slot backed by that side's slab (incl. the
@@ -2012,10 +2169,18 @@ class Vestige : public Module {
     // capture start (the current "one"), never free-running. Only while the
     // effect is on, so off still reads as off.
     if (engaged_ && period_ > 0) {
-      const uint32_t el    = sample_clock_ - led_anchor_[pool_];
-      const uint32_t ph    = el % (uint32_t)period_;
       const uint32_t width = (uint32_t)((float)VESTIGE_LED1_FLASH_MS * 0.001f * sr_);
-      led1.Set(ph < width ? 1.f : 0.f);
+      const int ls = led_slot_[pool_];
+      if (follow_mode_ == kFollowTape && pool_ == kPoolLoop && !recording_ &&
+          ls >= 0 && active_[ls] && !dying_[ls] && div_[ls] >= 0) {
+        // A following loop's "one" is no longer A + k*T once it has changed
+        // speed: flash on its own loop time instead (integer beats of T).
+        led1.Set(beat_frac_[ls] < (float)width / (float)period_ ? 1.f : 0.f);
+      } else {
+        const uint32_t el = sample_clock_ - led_anchor_[pool_];
+        const uint32_t ph = el % (uint32_t)period_;
+        led1.Set(ph < width ? 1.f : 0.f);
+      }
     } else {
       led1.Set(0.f);
     }
@@ -2037,6 +2202,7 @@ class Vestige : public Module {
   int              next_grain_ = 0;
   uint8_t          grain_ver_[VESTIGE_GRAINS] = {0};  // 0 = clean, 1 = K1 speed version
   uint32_t         grain_cap_drops_ = 0;              // grains refused by VESTIGE_MB_GRAIN_CAP (diag)
+  uint32_t         tape_grains_ = 0;                  // grains emitted on the tape-rate path (diag)
 
   // Multiband granular freeze: per-slot per-band scan pointer + scheduler timer, and
   // the crossover filterbank indexed [band count-1][band]. Per-band grain length /
@@ -2224,6 +2390,22 @@ class Vestige : public Module {
   int      last_act_slot_ = -1;
   uint32_t last_act_at_   = 0;
   uint32_t act_count_     = 0;
+
+  // Loops follow T (SW2 temporary selector). follow_mode_: control -> ISR.
+  enum FollowMode { kFollowTape = 0, kFollowStretch = 1, kFollowRecut = 2 };
+  volatile int follow_mode_ = kFollowTape;
+  double   rho_t_[VESTIGE_SLOTS];            // tape-rate target per slot (ISR, per block)
+  double   rho_d_[VESTIGE_SLOTS];            // glide state (double: see SmoothTape)
+  float    rho_s_[VESTIGE_SLOTS];            // float copy for grain rates / diagnostics
+  double   fwd_d_[VESTIGE_SLOTS];            // double shadow of fwd_ (see AdvanceHead)
+  float    tape_coef_ = 1.f;                 // one-pole coef for rho
+  int      div_[VESTIGE_SLOTS];              // division index at capture (-1 = none / freeze)
+  double   beat_[VESTIGE_SLOTS];             // loop time in beats of T, mod 1 (ISR)
+  double   beat_k_[VESTIGE_SLOTS];           // beats per material sample
+  float    beat_frac_[VESTIGE_SLOTS] = {0.f};// copy for the control thread (atomic 32-bit)
+  int      led_slot_[2] = {-1, -1};          // slot of each side's most recent capture
+  float    k2f_ = 0.f;                       // K2 through the follow deadband
+  bool     k2f_seeded_ = false;
 
   // T, the master period (samples), and its K2 / FS1 arbitration. Control
   // thread only. tap_period_ = 0 means "no tap: the knob sets T".

@@ -311,6 +311,23 @@ static constexpr float  VESTIGE_K1_SMOOTH   = 0.003f;  // one-pole per sample on
 static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than this emits no grains
 
 // ---------------------------------------------------------------------------
+// Playing loops follow T (SW2 temporary selector: UP = A tape, MIDDLE = B
+// stretch, DOWN = C re-cut). Each loop keeps its division d; its target length
+// is Boundary(d, T_now). A (tape): rate = material / target on the head and the
+// grain read rate — pitch and time together, composed with K1.
+// ---------------------------------------------------------------------------
+// K2 movement that counts as a T change (remapped knob units). Below it, ADC
+// jitter would otherwise reach every following loop as pitch warble (at mid
+// travel 0.001 of knob is ~1% of T, ~17 cents). A still knob = exactly the old T.
+static constexpr float    VESTIGE_K2_FOLLOW_DB   = 0.004f;
+static constexpr uint32_t VESTIGE_TAPE_SMOOTH_MS = 40;     // rate glide: a tap (jump) / K2 staircase -> smooth
+// Tape rate range, folded by octaves (pass length = target x 2^k, still on the
+// grid) so the grain coverage clamp and the guard fill (8 cells/sample vs a
+// reader at up to TAPE_RATE_MAX x K1's 2) always hold.
+static constexpr float    VESTIGE_TAPE_RATE_MAX  = 4.f;
+static constexpr float    VESTIGE_TAPE_RATE_MIN  = 0.25f;
+
+// ---------------------------------------------------------------------------
 // K4 = tape varispeed (pitch + speed COUPLED — the whole loop plays faster &
 // higher / slower & lower, like a tape speed knob). Bipolar exp around noon.
 //   CCW → down · noon = unity (dead-zone detent) · CW → up

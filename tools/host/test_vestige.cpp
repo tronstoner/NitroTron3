@@ -551,13 +551,17 @@ static void TestTimeBase() {
   RunFor(0.2f); sustain_input = false; play_input = false; RunFor(3.0f);
   late = LedWorstLate(a2, T, a2, n, &cnt);
   Check(a2 != a1 && cnt >= 2 && late >= 0, "next capture start re-anchors LED1 again");
-  // (d) a tap while a loop exists changes the period but not the anchor.
+  // (d) a tap while a loop exists changes the period but not the anchor —
+  // for a LATCHED loop. SW2 MIDDLE (B stretch) stays latched until its step
+  // lands; the tape-mode LED (the loop follows T) is tested in TestFollowTape.
+  cs.sw[1] = 1;
   Taps({700});
   Check(v.period_ == TapT(700) && (long)v.led_anchor_[Vestige::kPoolLoop] == a2,
         "tap with a loop playing: new T, anchor stays on the capture start");
   from = n; RunFor(3.0f);
   late = LedWorstLate(a2, v.period_, from, n, &cnt);
-  Check(cnt >= 3 && late >= 0, "LED1 flashes the new T from the capture's own start");
+  Check(cnt >= 3 && late >= 0, "LED1 flashes the new T from the capture's own start (latched loop)");
+  cs.sw[1] = 0;
   // (e) off = LED1 dark.
   Tap(); RunFor(1.5f);
   Check(!v.engaged_, "setup: effect off");
@@ -1007,7 +1011,9 @@ static void TestSpeedXfade() {
     Check(checked > 0 && misaligned == 0, "half speed: every grain reads exactly on the half-speed head, whatever the restart sample");
     cs.knob[0] = 0.5f; RunFor(0.6f);
   }
-  cs.knob[1] = 0.2f; RunFor(0.3f);
+  // K2 CCW for reverse also moves T; re-tap T so the loop is back at its own
+  // length (in tape mode it follows T) and let the tape rate settle.
+  cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(1.0f);
   const Pos rv[] = { {"reverse half", 0.0f, 0.5f, (long)(2 * Q)}, {"reverse double", 1.0f, 2.f, (long)(Q / 2)} };
   for (const Pos& p : rv) {
     cs.knob[0] = p.k1; RunFor(1.2f);
@@ -1116,6 +1122,306 @@ static void TestSpeedXfade() {
   Unhold();
 }
 
+// ---------------------------------------------------------------------------
+// Loops follow T — A: tape (SW2 UP).
+static int FirstLive() { for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) if (v.active_[q] && !v.dying_[q]) return q; return -1; }
+// Samples between the next two forward wraps of slot s's clean head (the
+// loop's pass length as actually played), measured per sample.
+static long PassLength(int s, float max_secs) {
+  blk = 1;
+  long w0 = -1, w1 = -1; float prev = v.fwd_[s];
+  const long end = n + (long)(max_secs * sr);
+  while (n < end && w1 < 0) {
+    RunFor(1.f / sr);
+    const float f = v.fwd_[s];
+    if (f < prev) { if (w0 < 0) w0 = n; else w1 = n; }
+    prev = f;
+  }
+  Realign();
+  return (w0 >= 0 && w1 >= 0) ? (w1 - w0) : -1;
+}
+// Period as the GLOBAL correlation maximum in [lo, hi] (one period in range).
+static long PeriodArgmax(long at, int N, long lo, long hi) {
+  long best = -1; double bc = -2;
+  for (long P = lo; P <= hi; P++) {
+    double xy = 0, xx = 0, yy = 0;
+    for (int t = 0; t < N; t += 2) { const double a = WetH(at + t), b = WetH(at + t + P); xy += a * b; xx += a * a; yy += b * b; }
+    const double c = (xx > 0 && yy > 0) ? xy / sqrt(xx * yy) : 0; if (c > bc) { bc = c; best = P; }
+  }
+  return best;
+}
+// Expected clean output over N samples from the module's state, the head
+// stepping by rho per sample (forward). Seam cells modelled as in ExpectVersion.
+static std::vector<float> ExpectTape(int s, double rho, int N) {
+  const double L = (double)v.loop_len_[s];
+  double c = v.fwd_d_[s];                          // double, like the module's head
+  const float* m = v.slab_[s];
+  std::vector<float> out(N);
+  for (int j = 0; j < N; j++) {
+    c += rho; if (c >= L) c -= L;
+    size_t i0 = (size_t)c; const float f = (float)(c - (double)i0);
+    if (i0 < Vestige::SeamXfadeLen((size_t)L)) i0 += (size_t)L;
+    out[j] = m[i0] * (1.f - f) + m[i0 + 1] * f;
+  }
+  return out;
+}
+
+static void TestFollowTape() {
+  printf("-- follow T, A: tape (SW2 UP)\n");
+  Reset();
+  cs.sw[0] = 0; cs.sw[1] = 0; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  CapRec r{};
+  noise_from = n; noise_to = n + 36000;
+  WaitActivation(3.f, &r);
+  noise_from = noise_to = -1;
+  const int s = r.s;
+  RunFor(0.8f);
+  Check(r.Q == 24000 && v.div_[s] == 0 && v.rho_s_[s] == 1.f, "setup: 500 ms loop (division 1), tape rate exactly 1");
+  const uint32_t tg0 = v.tape_grains_;
+  // T unchanged, K2 jitter below the follow deadband: nothing moves.
+  for (int k = 0; k < 200; k++) { cs.knob[1] = 0.85f + ((k & 1) ? 0.003f : -0.003f); RunFor(0.01f); }
+  cs.knob[1] = 0.85f; RunFor(0.1f);
+  Check(v.period_ == 24000 && v.rho_s_[s] == 1.f && v.tape_grains_ == tg0,
+        "K2 jitter (+-0.003) below the deadband: T and the tape rate untouched, original path only");
+
+  // Re-tap: the loop's length follows d x T_now, on its own timeline.
+  struct Tc_ { int tap; size_t Lt; float rho; };
+  const Tc_ tcs[] = { {1000, 48000, 0.5f}, {250, 12000, 2.f}, {700, 33600, 24000.f / 33600.f} };
+  for (const Tc_& t : tcs) {
+    Taps({t.tap}); RunFor(0.6f);
+    const long P = PassLength(s, 3.f);
+    const long at = n;
+    const std::vector<float> ref = ExpectTape(s, v.rho_d_[s], 4800);
+    RunFor(0.1f + (float)(t.Lt + 7000) / sr);       // one full pass + the window, all after the glide
+    float c = 0.f; const int lag = BestLagRef(at, ref, 300, &c);
+    const long Pwet = PeriodArgmax(at, 6000, (long)(t.Lt - 600), (long)(t.Lt + 600));
+    printf("      tap %4d ms: rate %.4f (expect %.4f)  pass %ld  output period %ld (expect %zu)  content lag %d c=%.3f\n",
+           t.tap, v.rho_s_[s], t.rho, P, Pwet, t.Lt, lag, c);
+    char msg[160]; snprintf(msg, sizeof msg, "tap %d ms: loop period follows d x T_now = %zu, tape content on its timeline", t.tap, t.Lt);
+    Check(fabsf(v.rho_s_[s] - t.rho) < 1e-5f && labs(P - (long)t.Lt) <= 1 && labs(Pwet - (long)t.Lt) <= 1 && lag == 0 && c > 0.95f, msg);
+  }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // Phase continuity through a tap: the loop fraction advances by exactly the
+  // (gliding) rate every sample — no jump.
+  {
+    Taps({500}); RunFor(0.6f);
+    blk = 1;
+    double worst = 0; double prevf = v.fwd_d_[s];
+    const double L = (double)v.loop_len_[s];
+    PressFS1(5);
+    long moved = 0;
+    for (int j = 0; j < 48000; j++) {
+      RunFor(1.f / sr);
+      double d = v.fwd_d_[s] - prevf; if (d < -L * 0.5) d += L;
+      const double e = fabs(d - v.rho_d_[s]);     // this sample advanced by its own (gliding) rate
+      if (e > worst) worst = e;
+      if (v.rho_d_[s] != 1.0) moved++;
+      prevf = v.fwd_d_[s];
+    }
+    Realign();
+    // Close the chain: second tap 800 ms after the first.
+    PressFS1(5); RunFor(0.1f); RunFor(1.0f);
+    printf("      phase continuity: worst |step - rate| %.2e samples over 1 s across a re-tap (%ld samples at rate != 1)\n", worst, moved);
+    Check(worst < 1e-6 && moved > 0, "tap: the head moves by its own rate every sample (continuous loop fraction, no jump)");
+  }
+
+  // No click at a rate jump or an SW2 switch, on a sine loop.
+  Reset(); cs.knob[4] = 0.0f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  sustain_hz = 220.f; sustain_input = true; play_input = true;
+  WaitActivation(2.f, &r);
+  sustain_input = false; play_input = false; RunFor(1.0f);
+  const int ss = FirstLive();
+  maxd = 0.f; RunFor(1.0f); const float st1 = maxd;
+  maxd = 0.f; Taps({250}); RunFor(1.0f); const float st_tap_up = maxd;
+  maxd = 0.f; RunFor(1.0f); const float st2 = maxd;
+  maxd = 0.f; Taps({1000}); RunFor(1.0f); const float st_tap_dn = maxd;
+  maxd = 0.f; RunFor(1.0f); const float st05 = maxd;
+  maxd = 0.f; cs.sw[1] = 2; RunFor(1.0f); const float st_sw = maxd;   // -> C (latched until its step): rate glides back to 1
+  Check(v.rho_s_[ss] == 1.f, "SW2 to a latched position: the loop glides back to its own length (rate exactly 1)");
+  cs.sw[1] = 0; RunFor(1.0f);
+  const float big = (st1 > st2 ? st1 : st2);
+  printf("      max step: steady x1 %.5f, x2 %.5f, x0.5 %.5f | tap x1->x2 %.5f, tap x2->x0.5 %.5f, SW2 x0.5->x1 %.5f (bound 1.5 x the faster side)\n",
+         st1, st2, st05, st_tap_up, st_tap_dn, st_sw);
+  Check(st_tap_up <= 1.5f * big && st_tap_dn <= 1.5f * big && st_sw <= 1.5f * (st1 > st05 ? st1 : st05),
+        "tape rate jumps (taps) and an SW2 switch: no step above 1.5x the faster steady rate");
+
+  // LED1 on the loop's actual "one" after T changed (a division-1 loop: its one
+  // is its wrap). Old A + k*T would be off after the rate changed.
+  {
+    Taps({800}); RunFor(1.0f);
+    blk = 1;
+    std::vector<long> wraps; float prev = v.fwd_[ss];
+    const size_t r0 = led1_rises.size();
+    const long from = n;
+    for (int j = 0; j < 48000 * 4; j++) {
+      RunFor(1.f / sr);
+      if (v.fwd_[ss] < prev) wraps.push_back(n - 1);
+      prev = v.fwd_[ss];
+    }
+    Realign();
+    int ok = 0, bad = 0;
+    for (size_t i = r0; i < led1_rises.size(); i++) {
+      const long lr = led1_rises[i];
+      if (lr < from + 480) continue;
+      bool near = false;
+      for (long w : wraps) if (lr >= w && lr - w <= 480) near = true;
+      if (near) ok++; else bad++;
+    }
+    const long olda = (long)v.led_anchor_[Vestige::kPoolLoop];
+    int old_ok = 0;
+    for (size_t i = r0; i < led1_rises.size(); i++) { const long ph = (led1_rises[i] - olda) % (long)v.period_; if (ph <= 480) old_ok++; }
+    printf("      LED1 after re-tap: %d flashes on the loop's wraps, %d elsewhere (%zu wraps); A+k*T would have matched %d\n",
+           ok, bad, wraps.size(), old_ok);
+    Check(ok >= 3 && bad == 0, "LED1 keeps flashing on the loop's actual one after T changed");
+  }
+
+  // K2 as the source of T: jitter below the deadband never reaches a loop, a
+  // slow turn reaches it as a SMOOTH rate change (no zipper from the staircase).
+  {
+    cs.knob[1] = 0.80f; RunFor(0.1f); cs.knob[1] = 0.85f; RunFor(0.1f);   // moves past eps: the tap is cancelled
+    Check(v.tap_period_ == 0, "setup: T from the knob (tap cancelled)");
+    seen_acts = v.act_count_;
+    sustain_hz = 220.f; sustain_input = true; play_input = true;
+    CapRec q{}; WaitActivation(10.f, &q);
+    sustain_input = false; play_input = false; RunFor(0.5f);
+    const size_t T0 = v.period_; const uint32_t tg = v.tape_grains_;
+    for (int k = 0; k < 300; k++) { cs.knob[1] = 0.85f + ((k & 1) ? 0.003f : -0.003f); RunFor(0.01f); }
+    cs.knob[1] = 0.85f; RunFor(0.1f);
+    Check(v.period_ == T0 && v.rho_s_[q.s] == 1.f && v.tape_grains_ == tg,
+          "knob T: K2 jitter (+-0.003) below the deadband: T and the tape rate untouched");
+    // Slow turn 0.85 -> 0.75 over 2 s: T moves in deadband steps; the rate glides.
+    blk = 1;
+    double worst = 0; double prev = v.rho_d_[q.s]; double moved = 0;
+    for (int k = 0; k <= 200; k++) {
+      cs.knob[1] = 0.85f - 0.10f * (float)k / 200.f;
+      for (int j = 0; j < 480; j++) {
+        RunFor(1.f / sr);
+        const double d = fabs(v.rho_d_[q.s] - prev) / v.rho_d_[q.s];
+        if (d > worst) worst = d;
+        moved += fabs(v.rho_d_[q.s] - prev);
+        prev = v.rho_d_[q.s];
+      }
+    }
+    Realign(); RunFor(0.5f);
+    printf("      slow K2 turn: tape rate %.4f -> %.4f, largest per-sample change %.2e (relative)\n",
+           1.0, v.rho_d_[q.s], worst);
+    Check(moved > 0.05 && worst < 1e-3, "slow K2 turn: the loop follows as a smooth glide (no per-tick rate steps)");
+    cs.knob[1] = 0.85f; RunFor(1.0f);
+    Unhold();
+  }
+
+  // Held loops follow too.
+  Hold();
+  Check(v.held_, "setup: held");
+  Taps({500}); RunFor(0.6f);
+  { const int q = FirstLive();
+    const long P = PassLength(q, 3.f);
+    const size_t Lt = GridQuantize::Boundary(v.div_[q], v.period_);
+    double want = (double)v.loop_len_[q] / (double)Lt; long k = 1;
+    while (want > VESTIGE_TAPE_RATE_MAX) { want *= 0.5; k *= 2; }
+    while (want < VESTIGE_TAPE_RATE_MIN) { want *= 2.0; }
+    printf("      held loop: material %zu, target %zu, rate %.4f, pass %ld (expect %ld = target x %ld)\n",
+           v.loop_len_[q], Lt, v.rho_d_[q], P, (long)Lt * k, k);
+    Check(v.held_ && labs(P - (long)Lt * k) <= 1, "held loop follows T (pass = target, folded x 2^k when out of range)"); }
+  Unhold();
+
+  // Division kept (poly, several divisions), budget, coverage.
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
+  seen_acts = v.act_count_;
+  const long bursts[4] = {3000, 14000, 21000, 30500};
+  for (int i = 0; i < 4; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
+  noise_from = noise_to = -1;
+  RunFor(1.0f);
+  Taps({1300}); RunFor(1.0f);
+  bool divs_ok = true; int nv = 0;
+  for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) {
+    if (!v.active_[q] || v.dying_[q]) continue;
+    nv++;
+    const size_t Lt = GridQuantize::Boundary(v.div_[q], v.period_);
+    float want = (float)v.loop_len_[q] / (float)Lt;
+    while (want > VESTIGE_TAPE_RATE_MAX) want *= 0.5f;
+    while (want < VESTIGE_TAPE_RATE_MIN) want *= 2.f;
+    const long P = PassLength(q, 3.f);
+    const long wantP = (long)((float)v.loop_len_[q] / want + 0.5f);
+    printf("      voice %d: division %d (%.4f T), material %zu -> target %zu, rate %.4f, pass %ld\n",
+           q, v.div_[q], GridQuantize::DivisionOf(Lt, v.period_), v.loop_len_[q], Lt, v.rho_s_[q], P);
+    if (fabsf(v.rho_s_[q] - want) > 1e-5f || labs(P - wantP) > 1) divs_ok = false;
+  }
+  Check(nv == VESTIGE_MAX_VOICES && divs_ok, "poly: every voice keeps its division; pass = Boundary(d, T_now)");
+  cs.knob[0] = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f); RunFor(1.5f);
+  max_grains = 0; uint32_t d0 = v.grain_cap_drops_; RunFor(3.0f);
+  printf("      %d voices, tape rates != 1, K1 midpoint: max active grains %d, refused %u (cap %d)\n",
+         nv, max_grains, v.grain_cap_drops_ - d0, VESTIGE_MB_GRAIN_CAP);
+  Check(v.grain_cap_drops_ - d0 == 0 && max_grains <= VESTIGE_MB_GRAIN_CAP,
+        "tape + K1 crossfade, full pool: no grain refused (still 2 grains per stream)");
+  // During the glide itself (a re-tap), measured for the report.
+  { const uint32_t dg0 = v.grain_cap_drops_; max_grains = 0;
+    Taps({900}); RunFor(1.0f);
+    printf("      same pool, re-tap 1300 -> 900 ms (glide): max active %d, refused %u during 1.9 s\n",
+           max_grains, v.grain_cap_drops_ - dg0);
+    Check(v.grain_cap_drops_ - dg0 == 0, "tape glide at a full pool (re-tap): no grain refused — a stream never holds 3"); }
+  cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f);
+
+  // Guard coverage at arbitrary rates, per sample: tape up to x4 with K1 x2,
+  // down to x0.25 with K1 half, both directions, short loops.
+  printf("      guard-read audit, tape rates:\n");
+  struct Aud { const char* name; float k1; float k2; int tap0; long burst; int tap1; };
+  const Aud au[] = {
+    {"x4 . K1x2 fwd (1/8 of 400ms->100ms)", 1.0f, 0.85f, 400, 1500, 100},
+    {"x4 . K1x2 rev",                        1.0f, 0.20f, 400, 1500, 100},
+    {"x0.25 . K1half fwd (100ms->400ms)",    0.0f, 0.85f, 100, 9000, 400},
+    {"x0.25 . K1half rev",                   0.0f, 0.20f, 100, 9000, 400},
+    {"x2.5 folded (4 s -> 100 ms) fwd",      0.5f, 0.85f, 4000, 250000, 100},
+  };
+  const long bad0 = audit_bad; audit_max_over = 0;
+  for (const Aud& a : au) {
+    Reset(); cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
+    Taps({a.tap0}); RunFor(0.3f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + a.burst;
+    CapRec q{}; WaitActivation(8.f, &q);
+    noise_from = noise_to = -1;
+    const long b1 = audit_bad, r1 = audit_reads;
+    blk = 1; audit_on = true;
+    PressFS1(5); RunFor((float)a.tap1 / 1000.f); PressFS1(5); RunFor(0.1f);   // re-tap while it plays
+    RunFor(1.5f);
+    audit_on = false; Realign();
+    printf("        %-38s Q %6zu -> target %6zu  rate %.4f  reads %ld, bad %ld\n", a.name, q.Q,
+           GridQuantize::Boundary(v.div_[q.s], v.period_), v.rho_s_[q.s], audit_reads - r1, audit_bad - b1);
+  }
+  Check(audit_bad == bad0, "tape rates (x0.25..x4, with K1): no grain read an unwritten guard cell");
+  Check(audit_max_over <= 1, "tape rates: no read past L + min(L, guard)");
+  // Folding: 4 s loop re-tapped to 100 ms = 40x -> folded to 2.5x, pass 16 x target.
+  { const int q = FirstLive();
+    const long P = (q >= 0) ? PassLength(q, 3.f) : -1;
+    const size_t Lt = (q >= 0) ? GridQuantize::Boundary(v.div_[q], v.period_) : 0;
+    printf("      folding: material %zu, target %zu, rate %.4f, pass %ld = %.2f x target\n",
+           q >= 0 ? v.loop_len_[q] : 0, Lt, q >= 0 ? v.rho_s_[q] : 0.f, P, Lt ? (double)P / Lt : 0.0);
+    Check(q >= 0 && v.rho_s_[q] <= VESTIGE_TAPE_RATE_MAX && Lt > 0 && P % (long)Lt <= 1 &&
+          ((P / (long)Lt) & ((P / (long)Lt) - 1)) == 0,
+          "extreme re-tap: rate folded into range, pass = target x 2^k (still on the grid)"); }
+
+  // The capture is quantised against the T at ITS start; it follows T_now once playing.
+  Reset(); cs.knob[4] = 0.0f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + 60000;               // long: runs to the 500 ms ceiling
+  RunFor(0.15f);
+  PressFS1(5); RunFor(0.3f); PressFS1(5); RunFor(0.05f);   // re-tap 300 ms DURING the capture
+  { CapRec q{}; WaitActivation(3.f, &q);
+    noise_from = noise_to = -1;
+    printf("      tap during capture: capture T %zu, Q %zu, T now %zu, rate at start %.4f\n", q.T, q.Q, v.period_, v.rho_s_[q.s]);
+    Check(q.T == 24000 && GridQuantize::IndexOf(q.Q, 24000) >= 0 &&
+          fabsf(v.rho_s_[q.s] - (float)q.Q / (float)GridQuantize::Boundary(v.div_[q.s], v.period_)) < 1e-5f,
+          "capture quantised against its own start's T, then plays at T_now from its first sample"); }
+  RunFor(0.5f);
+  Unhold();
+}
+
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; cs.sw[1] = 0; cs.sw[2] = 0;
@@ -1133,6 +1439,7 @@ int main() {
   TestTimeBase();
   TestQuantisedCapture();
   TestSpeedXfade();
+  TestFollowTape();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
   Check(bad == 0, "no non-finite / >10 samples");

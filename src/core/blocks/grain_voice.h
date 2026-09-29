@@ -61,6 +61,8 @@ public:
         }
         start_pos_f_ = start;
         read_pos_f_ = start;
+        start_d_ = static_cast<double>(start);
+        exact_ = false;
         buf_len_f_ = static_cast<float>(bl);
         grain_len_ = length;
         phase_ = 0;
@@ -86,6 +88,29 @@ public:
         if (taper_samples_ > grain_len_ / 2) taper_samples_ = grain_len_ / 2;
         attack_taper_ = static_cast<size_t>(taper_samples_ * attack_scale);
     }
+
+    // Move a just-triggered grain's start (and read position) by d samples,
+    // 0 <= d < 1, so a grain can start on a FRACTIONAL source position (Trigger
+    // takes an integer delay). Call right after Trigger. The same offset applies
+    // to forward and reverse grains: it shifts where the read begins. Unused by
+    // callers that do not call it (their grains are unchanged).
+    void NudgeStart(float d) {
+        start_pos_f_ += d;
+        read_pos_f_  += d;
+        start_d_     += static_cast<double>(d);
+        if (start_pos_f_ >= buf_len_f_) start_pos_f_ -= buf_len_f_;
+        if (read_pos_f_  >= buf_len_f_) read_pos_f_  -= buf_len_f_;
+        if (start_d_ >= static_cast<double>(buf_len_f_)) start_d_ -= static_cast<double>(buf_len_f_);
+    }
+
+    // Opt-in exact tracking (call after Trigger / NudgeStart). The default read
+    // position ACCUMULATES rate_ in float: exact for 1, 0.5, 2 (binary
+    // fractions), but at other rates each add rounds with a bias, and far into
+    // a long buffer that drifts the grain ~1e-3 samples per sample away from
+    // where it should read. With this set, the position is recomputed every
+    // sample as start + phase * rate in double — no accumulation. Off for every
+    // caller that does not ask (their output is unchanged).
+    void SetExactTrack() { exact_ = true; }
 
     // Optional per-grain band filter (2-pole biquad), applied to the read sample
     // BEFORE windowing — so band-limiting a grain == granulating a pre-filtered
@@ -113,6 +138,15 @@ public:
             window = 1.f;
         }
 
+        if (exact_) {
+            double p = start_d_ + static_cast<double>(phase_) * static_cast<double>(rate_);
+            const double bl = static_cast<double>(buf_len_f_);
+            while (p >= bl) p -= bl;
+            while (p < 0.0) p += bl;
+            float pf = static_cast<float>(p);
+            if (pf >= buf_len_f_) pf = 0.f;                   // float rounding onto len
+            read_pos_f_ = pf;
+        }
         // read_pos_f_ is kept in [0, buf_len_f_) below, so use the wrap-free read
         // (ReadFrac's fmodf is redundant here and was a big per-grain cost).
         float sample = buf.ReadFracFast(read_pos_f_);
@@ -150,6 +184,8 @@ public:
 
 private:
     float start_pos_f_ = 0.f;
+    double start_d_ = 0.0;      // exact-track start (SetExactTrack)
+    bool  exact_ = false;
     float read_pos_f_ = 0.f;
     float buf_len_f_ = 1.f;
     float rate_ = 1.f;
