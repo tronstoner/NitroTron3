@@ -30,6 +30,39 @@ inline float GrainHannRise(float t) {
 
 // Single grain voice: reads from a ring buffer with adaptive Tukey window.
 // Supports pitch shift, reverse, and looping (stutter).
+// Optional read-time VIEW of a grain's source (see GrainVoice::SetView): a loop
+// whose playable length differs from what is stored, without rewriting the
+// stored material. Position p reads, in order:
+//   p <  body_end               : body[p]  (x a linear fade-out over
+//                                 [fade_start, body_end) when fade_start < body_end)
+//   p <  loop_len               : 0        (padded silence)
+//   p <  loop_len + guard_len   : guard[p - loop_len]  (seam + head continuation)
+//   else                        : 0
+// The caller keeps the view alive and unchanged while any grain reads it.
+struct GrainView {
+    const float* body = nullptr;
+    size_t body_end   = 0;
+    size_t fade_start = 0;
+    float  fade_k     = 0.f;      // fade gain = (body_end - p) * fade_k
+    size_t loop_len   = 0;
+    const float* guard = nullptr;
+    size_t guard_len  = 0;
+    float At(size_t i) const {
+        if (i < body_end) {
+            const float x = body[i];
+            return (i >= fade_start) ? x * static_cast<float>(body_end - i) * fade_k : x;
+        }
+        if (i < loop_len) return 0.f;
+        const size_t k = i - loop_len;
+        return (k < guard_len) ? guard[k] : 0.f;
+    }
+    float Read(float pos) const {
+        const size_t i0 = static_cast<size_t>(pos);
+        const float  f  = pos - static_cast<float>(i0);
+        return At(i0) * (1.f - f) + At(i0 + 1) * f;
+    }
+};
+
 class GrainVoice {
 public:
     bool IsActive() const { return active_; }
@@ -63,6 +96,8 @@ public:
         read_pos_f_ = start;
         start_d_ = static_cast<double>(start);
         exact_ = false;
+        view_ = nullptr;
+        fo_n_ = 0; fo_k_ = 0;
         buf_len_f_ = static_cast<float>(bl);
         grain_len_ = length;
         phase_ = 0;
@@ -112,6 +147,18 @@ public:
     // caller that does not ask (their output is unchanged).
     void SetExactTrack() { exact_ = true; }
 
+    // Opt-in: read through a GrainView instead of the ring's raw memory (call
+    // after Trigger). Positions are the same; only what they read changes.
+    // Unbound grains (every caller that does not ask) are unchanged.
+    void SetView(const GrainView* v) { view_ = v; }
+
+    // Opt-in: end this grain within n samples, multiplying what is left of it
+    // by a Hann fall (1 -> 0), so a caller can crossfade it against a grain
+    // started now with an n-sample Hann attack (the two curves sum to 1).
+    // No effect unless called.
+    void FadeOut(size_t n) { if (n < 1) n = 1; fo_n_ = n; fo_k_ = 0; }
+    bool FadingOut() const { return fo_n_ > 0; }
+
     // Optional per-grain band filter (2-pole biquad), applied to the read sample
     // BEFORE windowing — so band-limiting a grain == granulating a pre-filtered
     // buffer (host-verified identical; the Hann fade-in masks the filter's start
@@ -149,7 +196,7 @@ public:
         }
         // read_pos_f_ is kept in [0, buf_len_f_) below, so use the wrap-free read
         // (ReadFrac's fmodf is redundant here and was a big per-grain cost).
-        float sample = buf.ReadFracFast(read_pos_f_);
+        float sample = view_ ? view_->Read(read_pos_f_) : buf.ReadFracFast(read_pos_f_);
         if (filt_on_) {   // band-limit before windowing (TDF-II biquad)
             float y = f_b0_ * sample + f_z1_;
             f_z1_ = f_b1_ * sample - f_a1_ * y + f_z2_;
@@ -179,12 +226,19 @@ public:
             }
         }
 
+        if (fo_n_ > 0) {
+            const float fall = 1.f - GrainHannRise(static_cast<float>(fo_k_) / static_cast<float>(fo_n_));
+            if (++fo_k_ >= fo_n_) active_ = false;
+            return sample * window * gain_ * fall;
+        }
         return sample * window * gain_;
     }
 
 private:
     float start_pos_f_ = 0.f;
     double start_d_ = 0.0;      // exact-track start (SetExactTrack)
+    const GrainView* view_ = nullptr;   // read-time view (SetView)
+    size_t fo_n_ = 0, fo_k_ = 0;        // FadeOut length / progress
     bool  exact_ = false;
     float read_pos_f_ = 0.f;
     float buf_len_f_ = 1.f;

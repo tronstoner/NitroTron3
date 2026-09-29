@@ -18,8 +18,9 @@
 //   K6   = dry/wet mix (shell-owned, equal-power). vestige no longer owns output.
 //   SW2  = TEMPORARY: how playing loops follow a T change (stage 2.5 takes SW2
 //          for the error editor). UP = A tape (speed + pitch follow) · MIDDLE =
-//          B stretch (time follows, pitch stays) · DOWN = C re-cut (not yet:
-//          latched).
+//          B stretch (time follows, pitch stays) · DOWN = C re-cut (speed and
+//          pitch stay; the loop is cut or silence-padded at its end, applied at
+//          a wrap, non-destructively).
 //   FS1  = tap tempo, dedicated: the interval between taps IS T; overrides K2's
 //          magnitude until K2 moves (stage 1).
 //   FS2  = tap: capture + playback on/off · hold: toggle buffer hold (in either
@@ -75,6 +76,11 @@
 // ---------------------------------------------------------------------------
 static float DSY_SDRAM_BSS vestige_slab[VESTIGE_LOOP_SIDE_SLOTS][VESTIGE_VOICE_CAP];
 static float DSY_SDRAM_BSS vestige_freeze_slab[VESTIGE_SLOTS - VESTIGE_FREEZE_SLOT0][VESTIGE_FREEZE_CAP];
+// C (re-cut) guards: per loop voice slot, TWO (double-buffered read-time views),
+// each the seam + head continuation behind a re-cut length. Separate from the
+// slab so the recorded material and its capture guard are never rewritten.
+static constexpr size_t VESTIGE_RECUT_GUARD_LEN = VESTIGE_GUARD_SAMPLES + 4;
+static float DSY_SDRAM_BSS vestige_recut_guard[VESTIGE_VOICE_SLABS][2][VESTIGE_RECUT_GUARD_LEN];
 // Post-grain warble modulated-delay line (K4 tape/BBD pitch modulation).
 static float DSY_SDRAM_BSS vestige_warble_slab[VESTIGE_WARBLE_LEN];
 
@@ -108,6 +114,8 @@ class Vestige : public Module {
     onset_refr_len_  = (int)((float)VESTIGE_ONSET_REFRACTORY_MS * 0.001f * sr_);
     tape_coef_ = 1.f - expf(-1.f / ((float)VESTIGE_TAPE_SMOOTH_MS * 0.001f * sr_));
     for (int q = 0; q < VESTIGE_SLOTS; q++) { rho_s_[q] = 1.f; rho_t_[q] = rho_d_[q] = 1.0; fwd_d_[q] = 0.0; div_[q] = -1; beat_k_[q] = 0.0; }
+    for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) { play_len_[q] = 0; cur_view_[q] = -1; rc_building_[q] = rc_ready_[q] = false; rc_want_[q] = 0; }
+    for (int g = 0; g < VESTIGE_GRAINS; g++) grain_view_[g] = -1;
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
       // Each slot views its OWN side's slab row, at that row's real length —
       // the grain reader wraps at this length, so it can never leave the row.
@@ -179,9 +187,9 @@ class Vestige : public Module {
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
     (void)k3;
     // ---- SW2 = how playing loops follow a T change (temporary selector) ----
-    // A (tape) and B (stretch) are implemented; C behaves as before (latched).
+    // A (tape), B (stretch) and C (re-cut) all follow T.
     follow_mode_ = (sw2 == 0) ? kFollowTape : (sw2 == 1) ? kFollowStretch : kFollowRecut;
-    // (A tape and B stretch are implemented; C re-cut is still latched.)
+
 
     // ---- K1 = playback speed crossfade (rework stage 6, plan §4.2) -------------
     // A CROSSFADE between versions of the same loop, not an added voice: CCW end
@@ -547,6 +555,9 @@ class Vestige : public Module {
       if (!fripp_mode_) IsrCapture(x, clk0 + (uint32_t)i);
       // ---- K1 speed crossfade amount (smoothed; version swap at silence) --
       UpdateSpeedXfade();
+      // ---- C re-cut: background build of the spare view's guard ---------
+      rec_clock_now_ = clk0 + (uint32_t)i;
+      IsrRecutBuild();
 
       // ---- Grain scheduler + per-slot sum + fade envelope -----------------
       // Mute/unmute rides the per-slot fade (K5), so the scheduler runs even
@@ -866,7 +877,7 @@ class Vestige : public Module {
   // At s>=0.5 every lever reduces to the prior multiband freeze exactly.
   // -------------------------------------------------------------------------
   void ServiceMBFreeze(int s) {
-    const size_t L = loop_len_[s];
+    size_t L = PlayLen(s);   // == loop_len_ unless C re-cut has changed it
     if (!active_[s] || L < VESTIGE_GRAIN_MIN_LEN) return;
 
     // Forward read head (clean-loop / break-up anchor). Frip advances its own head
@@ -889,8 +900,11 @@ class Vestige : public Module {
       // parity (it covers the loop once per TWO clean passes).
       AdvanceHead(s, rev, rho_d);
       AdvanceBeat(s, rho_d);
+      // The advance may have been the wrap that applied a new C length: this
+      // sample's grains must be sized for (and bound to) the NEW loop.
+      L = PlayLen(s);
     }
-    const bool orig = OrigPath(s, rho_d);   // no T change has touched this loop
+    const bool orig = OrigPath(s, rho_d) && cur_view_[s] < 0;   // no T change has touched this loop
     // Grain read rate: tape reads at the head rate (pitch follows), stretch at
     // 1 (pitch stays; only the head moves at rho). K1 multiplies either.
     const bool  stretch = (follow_mode_ == kFollowStretch);
@@ -959,16 +973,22 @@ class Vestige : public Module {
         // the (fractional) head, its grain clamped to the coverage span. At
         // rho == 1 the original path runs untouched (bit-identical).
         if (e.frozen || g_c_ > VESTIGE_K1_GATE_EPS) {
-          if (e.frozen || orig) {
+          // (A stream restart after a C change always takes the stream path:
+          // it needs the short matching attack.)
+          if (e.frozen || (orig && !(s < VESTIGE_VOICE_SLABS && restart_[s][0]))) {
             EmitBandGrain(s, glen, posf, coef, spray_width, e.frozen);
           } else {
-            const float atk = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
-            EmitStreamGrain(s, glen_c, head, gr, rev, coef, atk, 0, true);
+            float atk = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
+            const bool rs = (s < VESTIGE_VOICE_SLABS) && restart_[s][0];
+            if (rs) atk = RestartAttack(glen_c);
+            EmitStreamGrain(s, glen_c, head, gr, rev, coef, atk, 0, true, rs);
             first_grain_[s] = false;
+            if (rs) restart_[s][0] = false;
           }
           ver_idle_[s][0] = false;
         } else {
           ver_idle_[s][0] = true;
+          if (s < VESTIGE_VOICE_SLABS) restart_[s][0] = false;
         }
         int hop = (int)((float)glen_c / VESTIGE_MB_OVERLAP);
         if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
@@ -1004,12 +1024,15 @@ class Vestige : public Module {
         if (--mb_timer_sp_[s][bi] <= 0 && !on_int) mb_timer_sp_[s][bi] = 1;   // retry next sample
         else if (mb_timer_sp_[s][bi] <= 0) {
           if (g_sp_ > VESTIGE_K1_GATE_EPS) {
+            const bool rs = (s < VESTIGE_VOICE_SLABS) && restart_[s][1];
             EmitStreamGrain(s, gsp, hsp, Rsp, rev,
                             (nb == 1) ? nullptr : mb_bank_coef_[row][bi],
-                            ver_idle_[s][1] ? 0.f : 1.f, 1, !orig);
+                            rs ? RestartAttack(gsp) : (ver_idle_[s][1] ? 0.f : 1.f), 1, !orig, rs);
+            if (rs) restart_[s][1] = false;
             ver_idle_[s][1] = false;
           } else {
             ver_idle_[s][1] = true;
+            if (s < VESTIGE_VOICE_SLABS) restart_[s][1] = false;   // silent version: nothing to restart
           }
           int hop = (int)((float)gsp / VESTIGE_MB_OVERLAP);
           if (r < 1.f && orig) hop &= ~1;          // even hop: every half-speed grain
@@ -1051,7 +1074,132 @@ class Vestige : public Module {
   }
   // Audio thread, once per block: targets for every loop-side slot.
   void UpdateTapeTargets() {
-    for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) if (active_[s]) rho_t_[s] = TapeTarget(s);
+    for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) {
+      if (!active_[s]) continue;
+      rho_t_[s] = TapeTarget(s);
+      RecutPlan(s);
+    }
+  }
+
+  // ---- Loops follow T: C = re-cut (non-destructive, read-time view) --------
+  // Speed and pitch stay at the K1 rate; the loop's LENGTH becomes
+  // Boundary(d, T_now): cut at the end, or padded with silence after the
+  // material (with a read-time fade-out at its end). The recorded material —
+  // and the capture guard behind it — are never written again: a re-cut loop
+  // is read through a GrainView (body / silence / a separate guard holding the
+  // seam crossfade into the head + head continuation), so a later, longer T
+  // brings the cut material back first. The new length takes effect only at a
+  // wrap (OnWrap), once the spare view is fully built; grains keep the view
+  // they started with. Changes that cannot apply at a wrap are counted
+  // (recut_slips_*), not hidden.
+  // Loop voice slots only; every other slot (freeze, archived frip) plays its
+  // stored length.
+  size_t PlayLen(int s) const { return (s < VESTIGE_VOICE_SLABS) ? play_len_[s] : loop_len_[s]; }
+  size_t RecutTarget(int s) const {
+    if (follow_mode_ != kFollowRecut || div_[s] < 0) return loop_len_[s];
+    const size_t Lt = GridQuantize::Boundary(div_[s], period_);
+    return (Lt == 0) ? loop_len_[s] : Lt;
+  }
+  bool ViewBusy(int s, int v) const {
+    const int id = s * 2 + v;
+    for (int g = 0; g < VESTIGE_GRAINS; g++) if (grain_view_[g] == id && grains_[g].IsActive()) return true;
+    return false;
+  }
+  // Per block: make sure a view for the wanted length is being / has been built.
+  void RecutPlan(int s) {
+    const size_t want = RecutTarget(s);
+    rc_want_[s] = want;
+    if (want == play_len_[s] || want == loop_len_[s]) { rc_building_[s] = false; if (want == play_len_[s]) rc_ready_[s] = false; return; }
+    if ((rc_building_[s] || rc_ready_[s]) && rc_le_[s] == want) return;     // on its way
+    const int spare = (cur_view_[s] == 0) ? 1 : 0;
+    if (ViewBusy(s, spare)) { rc_building_[s] = rc_ready_[s] = false; return; }   // old grains still read it
+    // Initialise the spare view for `want`.
+    const size_t M  = loop_len_[s];
+    GrainView& vw = views_[s][spare];
+    vw.body     = slab_[s];
+    vw.loop_len = want;
+    if (want < M) {                                          // cut at the end
+      vw.body_end = want; vw.fade_start = want; vw.fade_k = 0.f;
+    } else {                                                 // pad with silence
+      size_t F = VESTIGE_SEAM_XFADE_MAX; if (F > M / 2) F = M / 2;
+      vw.body_end = M; vw.fade_start = M - F; vw.fade_k = 1.f / (float)(F + 1);
+    }
+    vw.guard     = vestige_recut_guard[s][spare];
+    // Reads reach L + min(L, guard) (coverage clamp) + the sub-sample start
+    // nudge + the interpolation partner: 4 cells of margin.
+    vw.guard_len = ((want < VESTIGE_GUARD_SAMPLES) ? want : VESTIGE_GUARD_SAMPLES) + 4;
+    rc_view_[s] = spare; rc_le_[s] = want; rc_k_[s] = 0;
+    rc_building_[s] = true; rc_ready_[s] = false;
+    rc_idle_ = false;
+  }
+  // Guard cell k of the view being built: the seam crossfade (what would
+  // follow the new end — cut material, or silence — into the head) over the
+  // first xf cells, then the virtual loop's head repeated. Same curve as the
+  // capture seam.
+  float RecutGuardCell(int s, const GrainView& vw, size_t k) const {
+    const size_t Le = vw.loop_len;
+    const float head = vw.At(k % Le);
+    const size_t xf = SeamXfadeLen(Le);
+    if (k >= xf) return head;
+    const size_t M = loop_len_[s];
+    const float cont = (Le < M) ? slab_[s][Le + k] : 0.f;    // cut material (read-only) / silence
+    const float t = (float)(k + 1) / (float)(xf + 1);
+    return cont * cosf(t * 1.5707963f) + head * sinf(t * 1.5707963f);
+  }
+  void IsrRecutBuild() {
+    if (rc_idle_) return;
+    int budget = (int)VESTIGE_RECUT_FILL_PER_SAMPLE;
+    bool any = false;
+    for (int s = 0; s < VESTIGE_VOICE_SLABS && budget > 0; s++) {
+      if (!rc_building_[s]) continue;
+      any = true;
+      const GrainView& vw = views_[s][rc_view_[s]];
+      float* gbuf = vestige_recut_guard[s][rc_view_[s]];
+      while (budget > 0 && rc_k_[s] < vw.guard_len) { gbuf[rc_k_[s]] = RecutGuardCell(s, vw, rc_k_[s]); rc_k_[s]++; budget--; }
+      if (rc_k_[s] >= vw.guard_len) { rc_building_[s] = false; rc_ready_[s] = true; }
+    }
+    if (!any) rc_idle_ = true;
+  }
+  void SetPlayLen(int s, size_t Le) {
+    play_len_[s] = Le;
+    if (div_[s] >= 0) {
+      const double frac = (double)GridQuantize::kDivNum[div_[s]] / (double)GridQuantize::kDivDen[div_[s]];
+      beat_k_[s] = frac / (double)Le;                        // a pass is still its division of a beat
+    }
+  }
+  // At a wrap: apply the wanted length if it is ready. Returns true if the
+  // play length changed. Reasons it cannot are counted.
+  bool OnWrap(int s, bool rev) {
+    if (s >= VESTIGE_VOICE_SLABS) return false;
+    const size_t want = rc_want_[s];
+    if (want == play_len_[s]) return false;
+    // A half-speed K1 version covers the loop once per TWO passes: changing
+    // the length on an odd pass would jump it mid-pass.
+    if (sp_rate_ < 1.f && g_sp_ > VESTIGE_K1_GATE_EPS && (pass_[s] & 1)) { recut_slip_parity_++; return false; }
+    if (want == loop_len_[s]) {                              // back to the stored loop: no view
+      cur_view_[s] = -1;
+    } else {
+      if (!(rc_ready_[s] && rc_le_[s] == want)) { recut_slip_build_++; return false; }
+      cur_view_[s] = rc_view_[s]; rc_ready_[s] = false;
+    }
+    SetPlayLen(s, want); recut_applied_++; last_recut_at_[s] = rec_clock_now_;
+    RestartStreams(s);
+    (void)rev;
+    return true;
+  }
+  // At an applied change the loop's streams restart on the new length: every
+  // grain in flight fades out over the seam length (Hann fall) while the new
+  // streams start THIS sample with a matching Hann attack. Across the wrap the
+  // old and new grains read the same material (the head both views share), so
+  // this is a crossfade of two identical signals. Without it the old, longer
+  // grains hold the stream's 2-grain slots for up to their full length and the
+  // new loop runs on one grain: a level dip to ~-14 dB for ~300 ms (measured).
+  void RestartStreams(int s) {
+    const size_t xf = VESTIGE_SEAM_XFADE_MAX;
+    for (int g = 0; g < VESTIGE_GRAINS; g++)
+      if (grain_slot_[g] == s && grains_[g].IsActive() && !grains_[g].FadingOut()) grains_[g].FadeOut(xf);
+    for (int b = 0; b < VESTIGE_MAX_BANDS; b++) { mb_timer_[s][b] = 0; mb_timer_sp_[s][b] = 0; }
+    restart_[s][0] = restart_[s][1] = true;
   }
   // Per sample: glide rho toward its target (a tap is a jump, K2 a staircase;
   // both become a smooth ~VESTIGE_TAPE_SMOOTH_MS glide). Snaps exactly onto the
@@ -1073,19 +1221,22 @@ class Vestige : public Module {
   // is the original float step (bit-identical). Otherwise the head integrates in
   // DOUBLE: a float head near 16000 rounds every non-integer step with a bias
   // (a few samples per pass), which would drift the loop off Boundary(d, T).
+  // Every wrap is also the only place a C re-cut length can take effect
+  // (OnWrap): forward subtracts the OLD length, then the new one applies;
+  // backward wraps into the NEW length (reverse plays from its new end).
   void AdvanceHead(int s, bool rev, double rho) {
-    const size_t L = loop_len_[s];
+    size_t L = PlayLen(s);
     if (rho == 1.0 && fwd_d_[s] == (double)fwd_[s]) {
       fwd_[s] += rev ? -pitch_rate_s_ : pitch_rate_s_;
-      while (fwd_[s] >= (float)L) { fwd_[s] -= (float)L; pass_[s]++; }
-      while (fwd_[s] < 0.f)       { fwd_[s] += (float)L; pass_[s]--; }
+      while (fwd_[s] >= (float)L) { fwd_[s] -= (float)L; pass_[s]++; if (OnWrap(s, rev)) L = PlayLen(s); }
+      while (fwd_[s] < 0.f)       { pass_[s]--; if (OnWrap(s, rev)) L = PlayLen(s); fwd_[s] += (float)L; }
       fwd_d_[s] = (double)fwd_[s];
       return;
     }
     double& h = fwd_d_[s];
     h += rev ? -(double)pitch_rate_s_ * rho : (double)pitch_rate_s_ * rho;
-    while (h >= (double)L) { h -= (double)L; pass_[s]++; }
-    while (h < 0.0)        { h += (double)L; pass_[s]--; }
+    while (h >= (double)L) { h -= (double)L; pass_[s]++; if (OnWrap(s, rev)) L = PlayLen(s); }
+    while (h < 0.0)        { pass_[s]--; if (OnWrap(s, rev)) L = PlayLen(s); h += (double)L; }
     float f = (float)h;
     if (f >= (float)L) f = nextafterf((float)L, 0.f);      // float rounding must not reach L
     fwd_[s] = f;
@@ -1103,11 +1254,26 @@ class Vestige : public Module {
     beat_frac_[s] = (float)beat_[s];
   }
   // Grain length so glen * R source samples stay inside min(L, guard).
+  // Grains that count toward VESTIGE_MB_GRAIN_CAP: active and NOT fading out.
+  // A fading grain (RestartStreams) ends within the seam length, so a restarted
+  // stream takes its slots at once — the physical count is briefly cap + the
+  // fading ones, for ~5 ms. With nothing fading this is the plain active count.
+  int CapCount() const {
+    int c = 0;
+    for (int k = 0; k < VESTIGE_GRAINS; k++) if (grains_[k].IsActive() && !grains_[k].FadingOut()) c++;
+    return c;
+  }
+  // Attack scale giving a Hann attack of the seam length (the grain's taper is
+  // half its length at alpha 1): complementary to RestartStreams' fade-out.
+  static float RestartAttack(size_t glen) {
+    const float t = (float)VESTIGE_SEAM_XFADE_MAX / (0.5f * (float)glen);
+    return (t < 1.f) ? t : 1.f;
+  }
   // Active grains of one stream (slot s, version ver).
   int StreamGrains(int s, int ver) const {
     int c = 0;
     for (int g = 0; g < VESTIGE_GRAINS; g++)
-      if (grain_slot_[g] == s && grain_ver_[g] == ver && grains_[g].IsActive()) c++;
+      if (grain_slot_[g] == s && grain_ver_[g] == ver && grains_[g].IsActive() && !grains_[g].FadingOut()) c++;
     return c;
   }
   // EVEN, so hop = glen / 2 is exact and a stream never holds 3 grains for a
@@ -1129,7 +1295,7 @@ class Vestige : public Module {
   // mod L. They coincide with the clean head whenever it is at 0 on an even pass:
   // every two loop periods, exactly as the plan's power-of-two argument says.
   float SpeedHead(int s, float r) const {
-    const float L = (float)loop_len_[s];
+    const float L = (float)PlayLen(s);
     const float c = fwd_[s];
     if (r < 1.f) return (c + ((pass_[s] & 1) ? L : 0.f)) * 0.5f;
     float h = c * 2.f;
@@ -1171,18 +1337,21 @@ class Vestige : public Module {
   // Also used for the CLEAN stream when the tape rate is not 1 (ver 0), and
   // with `exact` the grain starts on the fractional head (NudgeStart) instead
   // of the integer below it.
+  // `restart`: the first grain of a stream restarted by a C length change (its
+  // predecessors are fading out; see CapCount).
   void EmitStreamGrain(int s, size_t glen, float head, float r, bool rev,
-                       const float* coef, float atk_scale, int ver, bool exact) {
-    int nactive = 0;
-    for (int k = 0; k < VESTIGE_GRAINS; k++) if (grains_[k].IsActive()) nactive++;
+                       const float* coef, float atk_scale, int ver, bool exact,
+                       bool restart = false) {
+    const int nactive = CapCount();
     if (nactive >= VESTIGE_MB_GRAIN_CAP) { grain_cap_drops_++; return; }
+    (void)restart;
     int g = -1;
     for (int k = 0; k < VESTIGE_GRAINS; k++) {
       int idx = (next_grain_ + k) % VESTIGE_GRAINS;
       if (!grains_[idx].IsActive()) { g = idx; next_grain_ = (idx + 1) % VESTIGE_GRAINS; break; }
     }
     if (g < 0) return;
-    const float  L  = (float)loop_len_[s];
+    const float  L  = (float)PlayLen(s);
     const size_t wp = ring_[s].GetWritePos();
     const size_t bl = ring_[s].GetLength();
     size_t start, delay;
@@ -1201,6 +1370,11 @@ class Vestige : public Module {
     grain_ver_[g]  = (uint8_t)ver;
     const float ov_comp = 2.f / VESTIGE_MB_OVERLAP;
     grains_[g].Trigger(ring_[s], delay, glen, rev, r, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
+    // C re-cut: the grain reads the loop through the view current NOW, and
+    // keeps it for its whole life (a later change swaps only new grains).
+    const int cv = (s < VESTIGE_VOICE_SLABS) ? cur_view_[s] : -1;
+    if (cv >= 0) { grains_[g].SetView(&views_[s][cv]); grain_view_[g] = (int8_t)(s * 2 + cv); }
+    else         grain_view_[g] = -1;
     if (exact) {
       grains_[g].NudgeStart(sf - (float)start);
       grains_[g].SetExactTrack();          // tape rates are not binary fractions: no float drift
@@ -1216,8 +1390,7 @@ class Vestige : public Module {
   void EmitBandGrain(int s, size_t glen, float posf, const float* coef,
                      float spray_width, bool frozen) {
     // hard cap on concurrent grains (CPU guard for multi-voice freeze)
-    int nactive = 0;
-    for (int k = 0; k < VESTIGE_GRAINS; k++) if (grains_[k].IsActive()) nactive++;
+    const int nactive = CapCount();
     if (nactive >= VESTIGE_MB_GRAIN_CAP) { grain_cap_drops_++; return; }
     int g = -1;
     for (int k = 0; k < VESTIGE_GRAINS; k++) {
@@ -1257,6 +1430,7 @@ class Vestige : public Module {
     // audible slow attack on loop start.
     float atk_scale = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
     grain_ver_[g] = 0;
+    grain_view_[g] = -1;
     // Reverse: same [posi, posi+glen] window as forward, read backward — so the
     // wrap-guard coverage is identical. Every grain in a band shares glen, so the
     // overlap-add stays coherent on the backward-walking head.
@@ -1409,12 +1583,13 @@ class Vestige : public Module {
   // stays on its own beat while away — the same way a held loop keeps running
   // silently while FS2 is off — and LED1's anchor for that side stays true.
   void AdvanceParkedHeads(int s) {
-    const size_t L = loop_len_[s];
+    size_t L = PlayLen(s);
     if (L < VESTIGE_GRAIN_MIN_LEN) return;
     const PoolEngine& e = eng_[PoolOf(s)];
     const double rho = SmoothTape(s);
     AdvanceHead(s, e.rev && GuardReady(s), rho);
     AdvanceBeat(s, rho);
+    L = PlayLen(s);                                          // a wrap may have applied a new C length
     const size_t gcap = e.frozen ? VESTIGE_GUARD_SAMPLES : SlotGuard(s, L);
     const int row = e.nbands - 1;
     for (int bi = 0; bi < e.nbands; bi++) {
@@ -1675,6 +1850,10 @@ class Vestige : public Module {
       beat_k_[s] = 0.0; beat_[s] = 0.0;
     }
     beat_frac_[s] = (float)beat_[s];
+    // C re-cut starts from the stored loop; a changed T applies at the first wrap.
+    if (s < VESTIGE_VOICE_SLABS) {
+      play_len_[s] = L; cur_view_[s] = -1; rc_building_[s] = rc_ready_[s] = false; rc_want_[s] = L;
+    }
     rho_t_[s] = TapeTarget(s);
     rho_d_[s] = rho_t_[s];                                  // enters playing at T_now, no glide
     rho_s_[s] = (float)rho_d_[s];
@@ -2220,7 +2399,7 @@ class Vestige : public Module {
     if (engaged_ && period_ > 0) {
       const uint32_t width = (uint32_t)((float)VESTIGE_LED1_FLASH_MS * 0.001f * sr_);
       const int ls = led_slot_[pool_];
-      if ((follow_mode_ == kFollowTape || follow_mode_ == kFollowStretch) && pool_ == kPoolLoop && !recording_ &&
+      if (pool_ == kPoolLoop && !recording_ &&
           ls >= 0 && active_[ls] && !dying_[ls] && div_[ls] >= 0) {
         // A following loop's "one" is no longer A + k*T once it has changed
         // speed: flash on its own loop time instead (integer beats of T).
@@ -2250,6 +2429,7 @@ class Vestige : public Module {
   int              grain_slot_[VESTIGE_GRAINS] = {0};  // which slot emitted grain g
   int              next_grain_ = 0;
   uint8_t          grain_ver_[VESTIGE_GRAINS] = {0};  // 0 = clean, 1 = K1 speed version
+  int8_t           grain_view_[VESTIGE_GRAINS];       // C re-cut view it reads (slot*2+v), -1 = raw row
   uint32_t         grain_cap_drops_ = 0;              // grains refused by VESTIGE_MB_GRAIN_CAP (diag)
   uint32_t         tape_grains_ = 0;                  // grains emitted on the tape-rate path (diag)
 
@@ -2444,6 +2624,24 @@ class Vestige : public Module {
   int      last_act_slot_ = -1;
   uint32_t last_act_at_   = 0;
   uint32_t act_count_     = 0;
+
+  // C re-cut (ISR-owned). play_len_ = the pass length in effect (== loop_len_
+  // unless re-cut); cur_view_ = view new grains bind to (-1 = the raw row).
+  size_t    play_len_[VESTIGE_VOICE_SLABS];
+  int       cur_view_[VESTIGE_VOICE_SLABS];
+  GrainView views_[VESTIGE_VOICE_SLABS][2];
+  size_t    rc_want_[VESTIGE_VOICE_SLABS];      // length wanted now (Boundary(d, T) or the stored length)
+  size_t    rc_le_[VESTIGE_VOICE_SLABS];        // length the spare view is built / being built for
+  int       rc_view_[VESTIGE_VOICE_SLABS];      // which view that is
+  size_t    rc_k_[VESTIGE_VOICE_SLABS];         // build progress (guard cells)
+  bool      rc_building_[VESTIGE_VOICE_SLABS];
+  bool      rc_ready_[VESTIGE_VOICE_SLABS];
+  bool      rc_idle_ = true;
+  uint32_t  rec_clock_now_ = 0;                 // sample number being processed (diag timestamps)
+  uint32_t  last_recut_at_[VESTIGE_VOICE_SLABS] = {0};
+  uint32_t  recut_applied_ = 0, recut_slip_build_ = 0, recut_slip_parity_ = 0;   // diag
+  bool      restart_[VESTIGE_VOICE_SLABS][2] = {};  // stream restarts pending after a C change (clean / speed)
+
 
   // Loops follow T (SW2 temporary selector). follow_mode_: control -> ISR.
   enum FollowMode { kFollowTape = 0, kFollowStretch = 1, kFollowRecut = 2 };

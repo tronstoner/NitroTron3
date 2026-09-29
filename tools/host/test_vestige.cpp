@@ -113,7 +113,13 @@ static bool audit_on = false;
 static long audit_bad = 0, audit_reads = 0;
 static long audit_max_over = 0;        // deepest guard read past L, minus min(L, guard) (<= 1 expected)
 static int  max_grains = 0;
+static int  max_counted = 0;          // max grains counted by the cap (active, not fading out)
 static void Audit();
+// Per-sample C change watcher (blk must be 1): play-length changes of one slot
+// and whether each landed exactly on a wrap of its clean head.
+static int  watch_s = -1; static size_t watch_pl = 0; static float watch_prev = 0.f;
+static long watch_changes = 0, watch_midpass = 0;
+static void WatchStep();
 static void RunFor(float secs) {
   float in[48], wet[48];
   long end = n + (long)(secs * sr);
@@ -123,7 +129,9 @@ static void RunFor(float secs) {
     for (int i = 0; i < blk; i++) in[i] = Input(n + i);
     v.Process(in, wet, blk);
     if (audit_on) Audit();
-    { int a = 0; for (int g = 0; g < VESTIGE_GRAINS; g++) if (v.grains_[g].IsActive()) a++; if (a > max_grains) max_grains = a; }
+    if (watch_s >= 0) WatchStep();
+    { int a = 0, c = 0; for (int g = 0; g < VESTIGE_GRAINS; g++) if (v.grains_[g].IsActive()) { a++; if (!v.grains_[g].FadingOut()) c++; }
+      if (a > max_grains) max_grains = a; if (c > max_counted) max_counted = c; }
     if (hist_on) for (int i = 0; i < blk; i++) { in_hist.push_back(in[i]); wet_hist.push_back(wet[i]); }
     if (v.recording_ && v.rec_idx_ > v.cap_[v.rec_slot_]) rec_overrun++;
     if (v.recording_ && Vestige::PoolOf(v.rec_slot_) == Vestige::kPoolFreeze && v.rec_idx_ > frz_rec_max)
@@ -562,17 +570,14 @@ static void TestTimeBase() {
   RunFor(0.2f); sustain_input = false; play_input = false; RunFor(3.0f);
   late = LedWorstLate(a2, T, a2, n, &cnt);
   Check(a2 != a1 && cnt >= 2 && late >= 0, "next capture start re-anchors LED1 again");
-  // (d) a tap while a loop exists changes the period but not the anchor —
-  // for a LATCHED loop. SW2 DOWN (C re-cut) stays latched until C is decided;
-  // the LED of a following loop (A, B) is tested in TestFollowTape/Stretch.
-  cs.sw[1] = 2;
+  // (d) a tap while a loop exists changes the period but not the anchor. (All
+  // three SW2 modes now make a playing loop follow T, so where LED1 then
+  // flashes — the loop's actual "one" — is checked per mode in
+  // TestFollowTape / TestFollowStretch / TestFollowRecut.)
   Taps({700});
   Check(v.period_ == TapT(700) && (long)v.led_anchor_[Vestige::kPoolLoop] == a2,
         "tap with a loop playing: new T, anchor stays on the capture start");
-  from = n; RunFor(3.0f);
-  late = LedWorstLate(a2, v.period_, from, n, &cnt);
-  Check(cnt >= 3 && late >= 0, "LED1 flashes the new T from the capture's own start (latched loop)");
-  cs.sw[1] = 0;
+  RunFor(1.0f);
   // (e) off = LED1 dark.
   Tap(); RunFor(1.5f);
   Check(!v.engaged_, "setup: effect off");
@@ -827,9 +832,22 @@ static void Audit() {
     if (!gv.IsActive()) continue;
     const int s = v.grain_slot_[g];
     if (s >= VESTIGE_FREEZE_SLOT0 || s == VESTIGE_FRIP_SLOT) continue;
+    // A raw-row grain reads the STORED loop (its capture guard is for the
+    // stored length), even if a C view has since changed the play length.
     const size_t L = v.loop_len_[s];
     if (L == 0) continue;
     const float pos = gv.read_pos_f_;
+    if (v.grain_view_[g] >= 0) {
+      // Read through a C re-cut view: every cell must lie inside the view
+      // (body / silence / its built guard). The raw row is not touched.
+      const GrainView& vw = v.views_[v.grain_view_[g] / 2][v.grain_view_[g] & 1];
+      const size_t idx = (size_t)pos;
+      audit_reads++;
+      if (idx + 1 >= vw.loop_len + vw.guard_len) audit_bad++;
+      const long over = (long)idx - (long)vw.loop_len - (long)((vw.loop_len < VESTIGE_GUARD_SAMPLES) ? vw.loop_len : VESTIGE_GUARD_SAMPLES);
+      if (over > audit_max_over) audit_max_over = over;
+      continue;
+    }
     const size_t idx = (size_t)pos;
     const bool partner = (pos - (float)idx) > 0.f;
     for (int q = 0; q < (partner ? 2 : 1); q++) {
@@ -1814,6 +1832,318 @@ static void TestOnsetRearm() {
   Unhold();
 }
 
+// ---------------------------------------------------------------------------
+// Loops follow T — C: re-cut (SW2 DOWN), non-destructive.
+static uint64_t RowHash(int s, size_t n_) { return Hash(v.slab_[s], n_); }
+// Expected clean output for the next N samples: the head at rate 1 through the
+// CURRENT view (or the raw row), wrapping at the play length; just past a wrap
+// the crossing grains read the seam cells (view guard / capture seam).
+static std::vector<float> ExpectView(int s, int dir, int N) {
+  const long L = (long)v.PlayLen(s);
+  long c = (long)v.fwd_[s];
+  const int cv = v.cur_view_[s];
+  std::vector<float> out(N);
+  for (int j = 0; j < N; j++) {
+    c += dir; if (c >= L) c -= L; if (c < 0) c += L;
+    const size_t xf = Vestige::SeamXfadeLen((size_t)L);
+    if (cv >= 0) {
+      const GrainView& vw = v.views_[s][cv];
+      out[j] = ((size_t)c < xf) ? vw.guard[c] : vw.At((size_t)c);
+    } else {
+      out[j] = ((size_t)c < xf) ? v.slab_[s][L + c] : v.slab_[s][c];
+    }
+  }
+  return out;
+}
+// Run per sample for `secs`; record every play-length change and whether it
+// happened exactly on a wrap of the clean head (forward: head decreased;
+// reverse: head increased).
+struct Change { long at; size_t from, to; bool at_wrap; };
+static void WatchStep() {
+  const int s = watch_s;
+  const float f = v.fwd_[s];
+  const bool wrapped = v.rev_play_ ? (f > watch_prev + 1.5f) : (f < watch_prev - 1.5f);
+  if (v.PlayLen(s) != watch_pl) { watch_changes++; if (!wrapped) watch_midpass++; watch_pl = v.PlayLen(s); }
+  watch_prev = f;
+}
+static void WatchOn(int s) { watch_s = s; watch_pl = v.PlayLen(s); watch_prev = v.fwd_[s]; blk = 1; }
+static void WatchOff() { watch_s = -1; Realign(); }
+static std::vector<Change> WatchChanges(int s, float secs) {
+  std::vector<Change> ch;
+  blk = 1;
+  size_t pl = v.PlayLen(s); float prev = v.fwd_[s];
+  const long end = n + (long)(secs * sr);
+  while (n < end) {
+    RunFor(1.f / sr);
+    const float f = v.fwd_[s];
+    const bool wrapped = v.rev_play_ ? (f > prev + 1.5f) : (f < prev - 1.5f);
+    if (v.PlayLen(s) != pl) { ch.push_back(Change{n - 1, pl, v.PlayLen(s), wrapped}); pl = v.PlayLen(s); }
+    prev = f;
+  }
+  Realign();
+  return ch;
+}
+
+static void TestFollowRecut() {
+  printf("-- follow T, C: re-cut (SW2 DOWN)\n");
+  Reset();
+  cs.sw[0] = 0; cs.sw[1] = 2; cs.knob[3] = 0.1f; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f;
+  Taps({500}); RunFor(0.6f);
+  hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+  seen_acts = v.act_count_;
+  CapRec r{};
+  noise_from = n; noise_to = n + 36000;
+  WaitActivation(3.f, &r);
+  noise_from = noise_to = -1;
+  const int s = r.s;
+  const size_t M = v.loop_len_[s];
+  RunFor(0.8f);                                             // capture guard fully written
+  const size_t rowlen = M + VESTIGE_GUARD_SAMPLES;
+  const uint64_t h0 = RowHash(s, rowlen);
+  Check(M == 24000 && v.cur_view_[s] < 0 && v.PlayLen(s) == M && v.rho_d_[s] == 1.0,
+        "setup: 500 ms loop, C: raw row, play length = stored length, rate 1");
+  const uint32_t slip_b0 = v.recut_slip_build_, slip_p0 = v.recut_slip_parity_;
+
+  struct Rc { int tap; size_t Lt; const char* what; };
+  const Rc rcs[] = { {250, 12000, "cut to 1/2"}, {500, 24000, "back to the recorded length (cut material returns)"},
+                     {1000, 48000, "pad with silence"}, {750, 36000, "shorter pad (the recorded part is whole again)"},
+                     {330, 15840, "cut, off any period"}, {500, 24000, "back again"} };
+  bool all_at_wrap = true, hash_ok = true;
+  for (const Rc& t : rcs) {
+    const long c0 = watch_changes, m0 = watch_midpass;
+    WatchOn(s); Taps({t.tap}); RunFor(2.2f); WatchOff();
+    std::vector<Change> ch;                          // (summary only)
+    for (long k = 0; k < watch_changes - c0; k++) ch.push_back(Change{0, 0, 0, true});
+    if (watch_midpass != m0 && !ch.empty()) ch.back().at_wrap = false;
+    const long P = PassLength(s, 3.f);
+    const long at = n;
+    const std::vector<float> ref = ExpectView(s, +1, 4800);
+    RunFor(0.2f);
+    float c = 0.f; const int lag = BestLagRef(at, ref, 300, &c);
+    for (const Change& k : ch) if (!k.at_wrap) all_at_wrap = false;
+    if (RowHash(s, rowlen) != h0) hash_ok = false;
+    printf("      tap %4d ms: %-50s pass %6ld (expect %zu)  %zu change(s) %s  view %d  content lag %d c=%.4f\n",
+           t.tap, t.what, P, t.Lt, ch.size(), ch.empty() ? "" : (ch.back().at_wrap ? "at a wrap" : "MID-PASS"),
+           v.cur_view_[s], lag, c);
+    char msg[200]; snprintf(msg, sizeof msg, "C, tap %d ms (%s): pass = %zu, content on its timeline", t.tap, t.what, t.Lt);
+    Check(labs(P - (long)t.Lt) <= 0 && lag == 0 && c > 0.999f, msg);
+  }
+  Check(all_at_wrap && watch_midpass == 0 && watch_changes >= 6,
+        "every C length change took effect exactly at a wrap of the loop, never mid-pass");
+  Check(hash_ok, "non-destructive: material + capture guard byte-identical through every cut / pad / return");
+  Check(v.cur_view_[s] < 0 && v.PlayLen(s) == M, "back at the recorded length: the raw row again (no view)");
+
+  // Padding really is silence after the material, faded out at its end.
+  {
+    Taps({1000});
+    WatchChanges(s, 2.2f);
+    // Find the next wrap, then measure the silence region and the body.
+    blk = 1; float prev = v.fwd_[s]; while (!(v.fwd_[s] < prev - 1.5f)) { prev = v.fwd_[s]; RunFor(1.f / sr); } Realign();
+    const long w = n - (long)v.fwd_[s] - 1;                  // sample where the pass began
+    RunFor(1.1f);
+    double eb = 0, es = 0;
+    for (long k = w + 1000; k < w + 22000; k++) eb += (double)WetH(k) * WetH(k);
+    for (long k = w + 24000 + 600; k < w + 48000 - 600; k++) es += (double)WetH(k) * WetH(k);
+    const double rb = sqrt(eb / 21000), rs = sqrt(es / (24000 - 1200));
+    printf("      padded pass: body RMS %.4f, padded-silence RMS %.2e (ratio %.1e)\n", rb, rs, rs / rb);
+    Check(rs < rb * 1e-3, "padding: after the material the loop is silent");
+    Taps({500}); WatchChanges(s, 2.2f);
+  }
+  hist_on = false; in_hist.clear(); wet_hist.clear();
+
+  // No clicks at the new seams, on a sine loop: a cut off any period, a pad
+  // (fade-out at the material end, silence -> head).
+  Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; Taps({500}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  sustain_hz = 220.f; sustain_input = true; play_input = true;
+  WaitActivation(2.f, &r);
+  sustain_input = false; play_input = false; RunFor(1.0f);
+  { const int q = r.s;
+    maxd = 0.f; RunFor(1.0f); const float st = maxd;
+    Taps({330}); WatchChanges(q, 1.0f); maxd = 0.f; RunFor(2.0f); const float s_cut = maxd;
+    Taps({900}); WatchChanges(q, 1.5f); maxd = 0.f; RunFor(3.0f); const float s_pad = maxd;
+    Taps({500}); WatchChanges(q, 2.5f); maxd = 0.f; RunFor(1.0f); const float s_back = maxd;
+    printf("      sine loop max step: steady %.5f | cut at 15840 (mid-cycle) %.5f | padded to 43200 %.5f | back %.5f (bound %.5f)\n",
+           st, s_cut, s_pad, s_back, 1.5f * st);
+    Check(s_cut <= 1.5f * st && s_pad <= 1.5f * st && s_back <= 1.5f * st,
+          "C seams: cut mid-cycle, pad (fade-out + silence -> head), return: no step above 1.5x steady");
+
+    // LED1 on the loop's actual one in C.
+    Taps({330}); WatchChanges(q, 1.0f);
+    blk = 1;
+    std::vector<long> wraps; float prev = v.fwd_[q];
+    const size_t r0 = led1_rises.size(); const long from = n;
+    for (int j = 0; j < 48000 * 3; j++) { RunFor(1.f / sr); if (v.fwd_[q] < prev - 1.5f) wraps.push_back(n - 1); prev = v.fwd_[q]; }
+    Realign();
+    int ok = 0, bad = 0;
+    for (size_t i = r0; i < led1_rises.size(); i++) {
+      const long lr = led1_rises[i]; if (lr < from + 480) continue;
+      bool near = false; for (long wv : wraps) if (lr >= wv && lr - wv <= 480) near = true;
+      if (near) ok++; else bad++;
+    }
+    printf("      LED1 in C after a cut: %d flashes on the loop's wraps, %d elsewhere\n", ok, bad);
+    Check(ok >= 3 && bad == 0, "C: LED1 keeps flashing on the loop's actual one after T changed");
+  }
+
+  // Level through a cut: the old grains fade out as the restarted stream fades
+  // in (identical material across the wrap) — no dip, no bump.
+  for (float k2 : {0.85f, 0.2f}) {
+    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; cs.knob[1] = k2; RunFor(0.3f); Taps({500}); RunFor(0.6f);
+    hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+    seen_acts = v.act_count_;
+    sustain_hz = 220.f; sustain_input = true; play_input = true; CapRec q{}; WaitActivation(3.f, &q);
+    sustain_input = false; play_input = false; RunFor(1.5f);
+    RunFor(8.2f);                                   // a lone interval, not joined to the setup tap
+    double e = 0; for (long k = n - 24000; k < n; k++) e += (double)WetH(k) * WetH(k); const double steady = sqrt(e / 24000);
+    blk = 1; size_t pl = v.PlayLen(q.s); long chg = -1;
+    PressFS1(5);
+    for (long j = 0; j < 250L * 48 + 48000L * 3 && chg < 0; j++) { if (j == 250L * 48) PressFS1(5); RunFor(1.f / sr); if (v.PlayLen(q.s) != pl) chg = n - 1; }
+    RunFor(0.8f); Realign();
+    double lo = 10, hi = 0;
+    for (long f = chg; f + 480 <= chg + 28800; f += 480) { double s2 = 0; for (long k = f; k < f + 480; k++) s2 += (double)WetH(k) * WetH(k);
+      const double r = sqrt(s2 / 480) / steady; if (r < lo) lo = r; if (r > hi) hi = r; }
+    printf("      %s cut %zu -> %zu (sine loop): level over the 600 ms after it %.2f .. %.2f of steady\n",
+           k2 < 0.5f ? "reverse" : "forward", pl, v.PlayLen(q.s), lo, hi);
+    Check(chg >= 0 && lo > 0.85 && hi < 1.25, k2 < 0.5f ? "C reverse: no level dip or bump through a cut" : "C forward: no level dip or bump through a cut");
+    hist_on = false; in_hist.clear(); wet_hist.clear();
+  }
+  cs.knob[1] = 0.85f;
+
+  // Reverse: cut and pad backwards.
+  {
+    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[1] = 0.2f; RunFor(0.3f); Taps({500}); RunFor(0.6f);
+    hist_on = true; hist_n0 = n; in_hist.clear(); wet_hist.clear();
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 36000; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    RunFor(0.8f);
+    bool ok = true, wrap_ok = true;
+    const int taps[3] = {250, 1000, 500}; const size_t lts[3] = {12000, 48000, 24000};
+    for (int i = 0; i < 3; i++) {
+      const long m0 = watch_midpass;
+      WatchOn(q.s); Taps({taps[i]}); RunFor(2.2f); WatchOff();
+      if (watch_midpass != m0) wrap_ok = false;
+      const long at = n;
+      const std::vector<float> ref = ExpectView(q.s, -1, 4800);
+      RunFor(0.2f);
+      float c = 0.f; const int lag = BestLagRef(at, ref, 300, &c);
+      printf("      reverse, tap %4d ms: play length %zu (expect %zu), content lag %d c=%.4f\n", taps[i], v.PlayLen(q.s), lts[i], lag, c);
+      if (v.PlayLen(q.s) != lts[i] || lag != 0 || c < 0.999f) ok = false;
+    }
+    Check(ok && wrap_ok && v.rev_play_, "C reverse: cut / pad / return follow T, applied at a wrap, content on its timeline");
+    hist_on = false; in_hist.clear(); wet_hist.clear();
+    cs.knob[1] = 0.85f; RunFor(0.3f);
+  }
+
+  // K1 half speed audible: a change waits for an EVEN pass (its own wrap), so
+  // the half-speed version never jumps mid-pass. Counted as parity slips.
+  {
+    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.0f; RunFor(1.5f); Taps({500}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 36000; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    RunFor(0.8f);
+    const uint32_t p0 = v.recut_slip_parity_;
+    bool even_ok = true; int changes = 0;
+    for (int t : {250, 700, 500}) {
+      blk = 1; size_t pl = v.PlayLen(q.s);
+      PressFS1(5);
+      for (int j = 0; j < t * 48 + 48000 * 3; j++) {
+        if (j == t * 48) PressFS1(5);
+        RunFor(1.f / sr);
+        if (v.PlayLen(q.s) != pl) { changes++; if (v.pass_[q.s] & 1) even_ok = false; pl = v.PlayLen(q.s); }
+      }
+      Realign();
+    }
+    printf("      K1 half speed: %d changes, all on even passes %d, %u parity slip(s) (a change waited one pass)\n",
+           changes, (int)even_ok, v.recut_slip_parity_ - p0);
+    Check(changes == 3 && even_ok, "K1 half speed audible: C changes apply only where the half-speed version also wraps");
+    cs.knob[0] = 0.5f; RunFor(1.5f);
+  }
+
+  // Poly: every voice follows its own division; budget; held.
+  Reset(); cs.knob[4] = 0.0f; cs.sw[0] = 1; cs.sw[1] = 2; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.5f);
+  seen_acts = v.act_count_;
+  const long bursts[4] = {3000, 14000, 21000, 30500};
+  for (int i = 0; i < 4; i++) { CapRec q{}; noise_from = n; noise_to = n + bursts[i]; WaitActivation(3.f, &q); RunFor(0.3f); }
+  noise_from = noise_to = -1;
+  RunFor(1.0f);
+  Hold();
+  Taps({1300}); RunFor(3.0f);
+  bool divs_ok = true; int nv = 0;
+  for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) {
+    if (!v.active_[q] || v.dying_[q]) continue;
+    nv++;
+    const size_t Lt = GridQuantize::Boundary(v.div_[q], v.period_);
+    const long P = PassLength(q, 3.f);
+    printf("      held voice %d: division %d, stored %zu -> play length %zu (target %zu), pass %ld\n",
+           q, v.div_[q], v.loop_len_[q], v.PlayLen(q), Lt, P);
+    if (v.PlayLen(q) != Lt || labs(P - (long)Lt) > 0) divs_ok = false;
+  }
+  Check(nv == VESTIGE_MAX_VOICES && divs_ok && v.held_, "poly, held: every voice re-cut to Boundary(its d, T_now)");
+  Unhold();
+  cs.knob[0] = 0.5f + (VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f); RunFor(1.5f);
+  max_grains = 0; max_counted = 0; uint32_t d0 = v.grain_cap_drops_;
+  Taps({800}); RunFor(3.0f);
+  printf("      4 voices, C + K1 midpoint through a re-cut: max counted by the cap %d, physical max %d (incl. grains fading out over 5 ms), refused %u\n",
+         max_counted, max_grains, v.grain_cap_drops_ - d0);
+  Check(v.grain_cap_drops_ - d0 == 0 && max_counted <= VESTIGE_MB_GRAIN_CAP, "C, full pool + K1 crossfade, through a re-cut: no grain refused, cap held");
+  cs.knob[0] = 0.5f; cs.sw[0] = 0; RunFor(1.0f);
+
+  // Guard audit: grains reading through views, fwd/rev, K1 x2, short loops.
+  printf("      guard-read audit, C views:\n");
+  struct Aud { const char* name; float k1; float k2; int tap0; long burst; int tap1; };
+  const Aud au[] = {
+    {"cut, K1x2 fwd (400ms->100ms, 1/8)", 1.0f, 0.85f, 400, 1500, 100},
+    {"cut, K1x2 rev",                     1.0f, 0.20f, 400, 1500, 100},
+    {"pad, K1half rev (100ms->400ms)",    0.0f, 0.20f, 100, 9000, 400},
+    {"pad, K1x2 fwd (1 s -> 1.6 s)",      1.0f, 0.85f, 1000, 60000, 1600},
+  };
+  const long bad0 = audit_bad; audit_max_over = 0;
+  for (const Aud& a : au) {
+    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[1] = a.k2; cs.knob[0] = a.k1; RunFor(1.5f);
+    Taps({a.tap0}); RunFor(0.3f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + a.burst;
+    CapRec q{}; WaitActivation(8.f, &q);
+    noise_from = noise_to = -1;
+    const long b1 = audit_bad, r1 = audit_reads;
+    blk = 1; audit_on = true;
+    PressFS1(5); RunFor((float)a.tap1 / 1000.f); PressFS1(5); RunFor(0.1f);
+    RunFor(2.5f);
+    audit_on = false; Realign();
+    printf("        %-36s stored %6zu -> play %6zu  view %d  reads %ld, bad %ld\n", a.name, q.Q, v.PlayLen(q.s), v.cur_view_[q.s],
+           audit_reads - r1, audit_bad - b1);
+  }
+  Check(audit_bad == bad0 && audit_max_over <= 1, "C views: no grain read outside its view / built guard, none past L + min(L, guard)");
+
+  // Slips: a change requested just before a wrap cannot be built in time.
+  {
+    Reset(); cs.sw[1] = 2; cs.knob[4] = 0.0f; cs.knob[0] = 0.5f; Taps({1000}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    noise_from = n; noise_to = n + 60000; CapRec q{}; WaitActivation(3.f, &q); noise_from = noise_to = -1;
+    RunFor(1.0f);
+    // Time the closing tap to land ~20 ms before a wrap (the build needs ~56 ms).
+    const uint32_t sb0 = v.recut_slip_build_;
+    int landed = 0;
+    for (int tries = 0; tries < 3; tries++) {
+      PressFS1(5); RunFor(0.8f);                       // first tap of an 800 ms interval
+      // wait until 20 ms before a wrap, then close the interval (T = 800+)
+      blk = 1; while ((long)v.PlayLen(q.s) - (long)v.fwd_[q.s] > 960 + 5) RunFor(1.f / sr);
+      Realign();
+      PressFS1(5); RunFor(0.1f);
+      const std::vector<Change> ch = WatchChanges(q.s, 3.5f);
+      if (!ch.empty()) landed++;
+      Taps({1000}); WatchChanges(q.s, 3.0f);
+    }
+    printf("      change requested ~20 ms before a wrap (build needs ~56 ms): %d applied, %u build slip(s) — each waited exactly one more pass\n",
+           landed, v.recut_slip_build_ - sb0);
+    Check(landed == 3, "a change that misses its wrap applies at the next one (slips measured, not lost)");
+  }
+  printf("      slips over the whole C section: build %u, parity %u, applied %u\n",
+         v.recut_slip_build_ - slip_b0, v.recut_slip_parity_ - slip_p0, v.recut_applied_);
+  cs.sw[1] = 0; RunFor(0.5f);
+  Unhold();
+}
+
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; cs.sw[1] = 0; cs.sw[2] = 0;
@@ -1834,6 +2164,7 @@ int main() {
   TestFollowTape();
   TestFollowStretch();
   TestOnsetRearm();
+  TestFollowRecut();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
   Check(bad == 0, "no non-finite / >10 samples");

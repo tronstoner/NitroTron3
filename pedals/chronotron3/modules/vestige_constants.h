@@ -349,6 +349,12 @@ static constexpr float    VESTIGE_TAPE_RATE_MIN  = 0.25f;
 // (instead of the ~400 ms clean-loop grains, which would smear time); 2 per
 // stream as always. At rate 1 the clean-loop grains return.
 static constexpr uint32_t VESTIGE_STRETCH_GRAIN_MS = 80;
+// C (re-cut): speed and pitch stay; the loop's length becomes Boundary(d, T_now),
+// cut at the end or silence-padded (read-time fade-out at the material's end).
+// Non-destructive: read through a view; a new length is built into a spare
+// view's guard at this many cells per sample and applied at the next wrap once
+// ready (a full guard in ~56 ms).
+static constexpr uint32_t VESTIGE_RECUT_FILL_PER_SAMPLE = 8;
 
 // ---------------------------------------------------------------------------
 // K4 = tape varispeed (pitch + speed COUPLED — the whole loop plays faster &
