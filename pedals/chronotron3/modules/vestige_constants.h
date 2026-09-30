@@ -734,14 +734,17 @@ static constexpr float  VESTIGE_FADE_MIN_S         = 0.003f; // K5 noon / CCW: d
 static constexpr float  VESTIGE_K5_DEADZONE        = 0.06f;
 // REPEATS (K5 CCW half): N = REPEAT_N_MAX just past the dead zone down to 1
 // at full CCW (whole numbers, log taper). The first repeat plays at full
-// level, repeat k (0-based) at 1 - (k/N)^CURVE (2: N = 4 -> 0 / -0.6 / -2.5 /
-// -7.2 dB: little fall-off early, the drop towards the end). A level never changes inside a repeat: each step is a RAMP that
-// ends exactly on the pass end (the last one ramps to 0), so every repeat
-// starts at its own level; then the loop is freed. N = 1:
-// the loop plays once. Turning K5 CCW on a playing loop counts from then;
-// FS2 hold pauses the count; back at noon the loop keeps its level.
+// level, repeat k (0-based) at FLOOR_DB x (k / (N-1))^CURVE dB — a curve in
+// dB: gentle early, steeper later, the last repeat on the quiet floor so the
+// stop after it is not heard as a cut (N = 8: 0 / -0.6 / -2.4 / -5.5 / -9.8 /
+// -15.3 / -22 / -30 dB; N = 4: 0 / -3.3 / -13.3 / -30). A level never changes
+// inside a repeat: each step is a RAMP that ends exactly on the pass end (the
+// last one ramps to 0), so every repeat starts at its own level; then the loop
+// is freed. N = 1: the loop plays once. Turning K5 CCW on a playing loop counts
+// from then; FS2 hold pauses the count; back at noon the loop keeps its level.
 static constexpr float  VESTIGE_REPEAT_N_MAX       = 16.f;
-static constexpr float  VESTIGE_REPEAT_CURVE       = 2.f;    // 1 = linear in amplitude, higher = flatter early
+static constexpr float  VESTIGE_REPEAT_CURVE       = 2.f;    // 1 = even dB steps, higher = flatter early
+static constexpr float  VESTIGE_REPEAT_FLOOR_DB    = -30.f;  // the last repeat's level
 static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper

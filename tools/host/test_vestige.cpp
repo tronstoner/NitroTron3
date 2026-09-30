@@ -3265,7 +3265,7 @@ static void TestFadeVoiceCap() {
   cs.knob[4] = K5Fade(0.05f); noise_from = noise_to = -1;
 }
 // K5 CCW half = number of repeats N: the first at full level, repeat k at
-// 1 - (k/N)^VESTIGE_REPEAT_CURVE, the last one ramps out on its pass end and
+// VESTIGE_REPEAT_FLOOR_DB x (k/(N-1))^CURVE dB, the last one ramps out on its pass end and
 // the loop is freed; FS2 hold pauses the count; noon keeps the level.
 static float K5Repeats(int nrep) {              // raw knob for N repeats
   const float u = 1.f - logf((float)nrep) / logf(VESTIGE_REPEAT_N_MAX);
@@ -3301,12 +3301,13 @@ static void TestK5Repeats() {
   RunFor(0.02f);
   const bool freed = !v.active_[s];
   float db[4]; for (int k = 0; k < 4; k++) db[k] = 20.f * log10f(lv[k] / r0);
-  printf("      N %d: repeat levels %.1f / %.1f / %.1f / %.1f dB (want 0 / -0.6 / -2.5 / -7.2); last 1 ms peak %.4f; freed %d\n",
+  printf("      N %d: repeat levels %.1f / %.1f / %.1f / %.1f dB (want 0 / -3.3 / -13.3 / -30); last 1 ms peak %.4f; freed %d\n",
          nn, db[0], db[1], db[2], db[3], tail, (int)freed);
   Check(nn == 4, "K5 CCW maps to a whole number of repeats (N = 4 here)");
-  bool lv_ok = true; const float want[4] = {0.f, -0.561f, -2.499f, -7.180f};   // 1 - (k/4)^2
+  bool lv_ok = true; float want[4]; for (int k = 0; k < 4; k++) want[k] = 20.f * log10f(Vestige::RepeatLevel(k, 4));
   for (int k = 0; k < 4; k++) if (fabsf(db[k] - want[k]) > 0.7f) lv_ok = false;
-  Check(lv_ok, "repeat 1 at full level, then 1 - (k/N)^curve");
+  Check(lv_ok && fabsf(want[3] - VESTIGE_REPEAT_FLOOR_DB) < 0.01f && fabsf(want[1] + 3.333f) < 0.01f,
+        "repeat 1 at full level, then a dB curve down to the floor (0 / -3.3 / -13.3 / -30 for N = 4)");
   // (last 1 ms of a 10 ms linear ramp: <= 10% of the repeat's level, x ~3 noise crest)
   Check(tail < 0.35f * lv[3] && freed, "the last repeat ramps out on its pass end; the loop is freed");
   // No ducking inside a repeat: the level holds from the pass start until the
@@ -3319,9 +3320,9 @@ static void TestK5Repeats() {
       RunFor(1.f / sr); i++;
       if ((float)i < (float)Q - ramp - 96.f) dev = std::max(dev, fabsf(v.dec_g_[s] - g0));
     }
-    hit = fabsf(v.dec_g_[s] - 0.75f) < 0.02f;                 // at the wrap: repeat 3's level 1 - (2/4)^2
+    hit = fabsf(v.dec_g_[s] - Vestige::RepeatLevel(2, 4)) < 0.005f;   // at the wrap: repeat 3's level
     printf("      repeat 2: level %.4f from its first sample, max change before the ramp %.5f, at the wrap %.4f\n", g0, dev, v.dec_g_[s]);
-    Check(fabsf(g0 - 0.9375f) < 0.01f && dev < 1e-6f && hit, "a repeat starts at its own level and holds it; the step ends on the wrap"); }
+    Check(fabsf(g0 - Vestige::RepeatLevel(1, 4)) < 0.005f && dev < 1e-6f && hit, "a repeat starts at its own level and holds it; the step ends on the wrap"); }
   // N = 1: plays once.
   setup(); to_pass(); cs.knob[4] = K5Repeats(1); RunFor(0.011f);
   const float one = pass_rms(nullptr); RunFor(0.02f);

@@ -3304,13 +3304,21 @@ class Vestige : public Module {
   // trigger, and a parked pool triggers none).
   // K5 CCW = number of repeats, once per block. Per loop voice: rep_k_ counts
   // its passes since the count began (activation, or K5 leaving noon); repeat
-  // k (0 = the first) plays at base x (1 - (k/N)^VESTIGE_REPEAT_CURVE). A level
+  // k (0 = the first) plays at base x RepeatLevel(k, N) (a dB curve). A level
   // NEVER changes inside a repeat (no ducking while it plays): the step to
   // the next repeat's level is a VESTIGE_REPEAT_RAMP_MS ramp that ENDS on the
   // pass end, so every repeat starts at its own level; after the last one the
   // target is 0 and the next wrap frees the voice. A K5 change applies at the
   // next pass end. Noon / CW (N = 0): no count, the level stays where it is
   // (base follows it). FS2 hold pauses the count and the ramps.
+  // Level of repeat k (0 = the first, full) of N, as a gain: a curve in dB,
+  // FLOOR_DB x (k / (N-1))^CURVE — gentle early, steeper later, the last
+  // repeat on the quiet floor, so the stop after it is not heard as a cut.
+  static float RepeatLevel(int k, int N) {
+    if (k <= 0 || N <= 1) return 1.f;
+    const float x = (float)k / (float)(N - 1);
+    return powf(10.f, VESTIGE_REPEAT_FLOOR_DB * powf(x, VESTIGE_REPEAT_CURVE) / 20.f);
+  }
   void UpdateRepeats() {
     const int N = rep_n_;
     const float ramp = VESTIGE_REPEAT_RAMP_MS * 0.001f * sr_;
@@ -3331,7 +3339,7 @@ class Vestige : public Module {
       const float  rem = (float)((double)(rev ? fwd_[s] : L - fwd_[s]) / rho);   // output samples left
       if (rem <= ramp + 48.f) {                             // the ramp into the next repeat, ending on the wrap
         float nxt = 0.f;                                    // (after the last repeat: silence)
-        if (k + 1 < N) nxt = rep_base_[s] * (1.f - powf((float)(k + 1) / (float)N, VESTIGE_REPEAT_CURVE));
+        if (k + 1 < N) nxt = rep_base_[s] * RepeatLevel(k + 1, N);
         dec_t_[s] = nxt; dec_step_[s] = fabsf(dec_g_[s] - nxt) / (rem > 1.f ? rem : 1.f);
       }
     }
