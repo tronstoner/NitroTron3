@@ -131,7 +131,14 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
 // Main
 // ---------------------------------------------------------------------------
 int main() {
-  hw.Init();
+  // CPU clock: 480 MHz (libDaisy's "boost") on silicon revision V, which has
+  // the VOS0 core voltage it needs; any other revision (the early rev Y) stays
+  // at the 400 MHz default. Checked at boot, so an unexpected chip can never
+  // fail to start — the pedal is sealed and the DFU gesture is the only way in.
+  // (+20 % CPU; the SDRAM and audio clocks do not change: bit-identical audio.)
+  const uint32_t revid = HAL_GetREVID();
+  const bool boost = CT3_CPU_BOOST && (revid == REV_ID_V);
+  hw.Init(boost);
   hw.seed.StartLog(false);   // non-blocking USB serial log, available for module debugging
   // Enable FPU flush-to-zero: denormals on the Cortex-M7 hit a slow software path
   // that spikes the audio callback (starving the UI/main loop) once many filters
@@ -248,7 +255,8 @@ int main() {
         return (x > 0.f && x < 40000.f) ? (unsigned)(x * 100000.f + 0.5f) : 0u;
       };
       if (!vs_banner) {
-        DiagLine("VS DIAG online (DIAG=1 build), levels x100000");
+        DiagLine("VS DIAG online (DIAG=1 build), levels x100000, chip rev 0x%x, core %u MHz",
+                 (unsigned)HAL_GetREVID(), (unsigned)(SystemCoreClock / 1000000u));
         vs_banner = true; vs_hb = now;
       } else if (now - vs_hb >= 2000) {
         vs_hb = now;

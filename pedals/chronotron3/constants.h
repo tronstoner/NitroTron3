@@ -43,6 +43,10 @@ constexpr bool CT3_DIAG = true;
 constexpr bool CT3_DIAG = false;
 #endif
 
+// CPU clock boost: 480 MHz instead of libDaisy's 400 MHz default, applied at
+// boot only on silicon revision V (main.cpp); false = always 400 MHz.
+constexpr bool CT3_CPU_BOOST = true;
+
 // ---------------------------------------------------------------------------
 // Pitch-tracker profile. Used through core/blocks/pitch_tracker.h, which
 // `#include "constants.h"` and reads these global TRACK_* names. The consumer
