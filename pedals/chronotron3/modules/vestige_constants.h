@@ -435,7 +435,7 @@ static constexpr float  VESTIGE_TIMING_RHY_R_K_MAX   = 3.f;
 static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;
 // Colour on top of the rhythm: one DECIMATE or REVERSE hit (1-2 steps) with
 // this chance x depth per ~32 steps (decimate never on a rest).
-static constexpr float  VESTIGE_TIMING_RHY_COLOR_PROB = 0.25f;
+static constexpr float  VESTIGE_TIMING_RHY_COLOR_PROB = 1.0f;
 
 // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass ---
 // Level L = err_level_[kErrTiming]. L == 0: off. For any L > 0 a loop voice
