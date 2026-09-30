@@ -3304,7 +3304,7 @@ class Vestige : public Module {
   // trigger, and a parked pool triggers none).
   // K5 CCW = number of repeats, once per block. Per loop voice: rep_k_ counts
   // its passes since the count began (activation, or K5 leaving noon); repeat
-  // k (0 = the first) plays at base x (1 - k/N)^VESTIGE_REPEAT_CURVE. A level
+  // k (0 = the first) plays at base x (1 - (k/N)^VESTIGE_REPEAT_CURVE). A level
   // NEVER changes inside a repeat (no ducking while it plays): the step to
   // the next repeat's level is a VESTIGE_REPEAT_RAMP_MS ramp that ENDS on the
   // pass end, so every repeat starts at its own level; after the last one the
@@ -3331,7 +3331,7 @@ class Vestige : public Module {
       const float  rem = (float)((double)(rev ? fwd_[s] : L - fwd_[s]) / rho);   // output samples left
       if (rem <= ramp + 48.f) {                             // the ramp into the next repeat, ending on the wrap
         float nxt = 0.f;                                    // (after the last repeat: silence)
-        if (k + 1 < N) nxt = rep_base_[s] * powf(1.f - (float)(k + 1) / (float)N, VESTIGE_REPEAT_CURVE);
+        if (k + 1 < N) nxt = rep_base_[s] * (1.f - powf((float)(k + 1) / (float)N, VESTIGE_REPEAT_CURVE));
         dec_t_[s] = nxt; dec_step_[s] = fabsf(dec_g_[s] - nxt) / (rem > 1.f ? rem : 1.f);
       }
     }

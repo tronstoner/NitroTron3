@@ -3265,7 +3265,7 @@ static void TestFadeVoiceCap() {
   cs.knob[4] = K5Fade(0.05f); noise_from = noise_to = -1;
 }
 // K5 CCW half = number of repeats N: the first at full level, repeat k at
-// (1 - k/N)^VESTIGE_REPEAT_CURVE, the last one ramps out on its pass end and
+// 1 - (k/N)^VESTIGE_REPEAT_CURVE, the last one ramps out on its pass end and
 // the loop is freed; FS2 hold pauses the count; noon keeps the level.
 static float K5Repeats(int nrep) {              // raw knob for N repeats
   const float u = 1.f - logf((float)nrep) / logf(VESTIGE_REPEAT_N_MAX);
@@ -3283,13 +3283,13 @@ static void TestK5Repeats() {
   };
   auto to_pass = [&]() { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(1.f / sr); };
   // The rest of the current pass, up to the next wrap: RMS of its middle (past
-  // the 10 ms level ramp), and the peak of its last 2 ms.
+  // the 10 ms level ramp), and the peak of its last 1 ms.
   auto pass_rms = [&](float* tail) {
     hist_on = true; wet_hist.clear(); hist_n0 = n;
     { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(1.f / sr); }
     hist_on = false; if (!wet_hist.empty()) wet_hist.pop_back();   // (the wrap sample belongs to the next pass)
     double e = 0; long c = 0; for (size_t i = 960; i + 960 < wet_hist.size(); i++) { e += wet_hist[i] * wet_hist[i]; c++; }
-    if (tail) { float m = 0.f; for (size_t i = wet_hist.size() - 96; i < wet_hist.size(); i++) m = std::max(m, fabsf(wet_hist[i])); *tail = m; }
+    if (tail) { float m = 0.f; for (size_t i = wet_hist.size() - 48; i < wet_hist.size(); i++) m = std::max(m, fabsf(wet_hist[i])); *tail = m; }
     return (float)sqrt(e / (double)(c ? c : 1));
   };
   setup();
@@ -3301,13 +3301,14 @@ static void TestK5Repeats() {
   RunFor(0.02f);
   const bool freed = !v.active_[s];
   float db[4]; for (int k = 0; k < 4; k++) db[k] = 20.f * log10f(lv[k] / r0);
-  printf("      N %d: repeat levels %.1f / %.1f / %.1f / %.1f dB (want 0 / -5.0 / -12.0 / -24.1); last 2 ms peak %.4f; freed %d\n",
+  printf("      N %d: repeat levels %.1f / %.1f / %.1f / %.1f dB (want 0 / -0.6 / -2.5 / -7.2); last 1 ms peak %.4f; freed %d\n",
          nn, db[0], db[1], db[2], db[3], tail, (int)freed);
   Check(nn == 4, "K5 CCW maps to a whole number of repeats (N = 4 here)");
-  bool lv_ok = true; const float want[4] = {0.f, -5.f, -12.04f, -24.08f};
+  bool lv_ok = true; const float want[4] = {0.f, -0.561f, -2.499f, -7.180f};   // 1 - (k/4)^2
   for (int k = 0; k < 4; k++) if (fabsf(db[k] - want[k]) > 0.7f) lv_ok = false;
-  Check(lv_ok, "repeat 1 at full level, then (1 - k/N)^curve");
-  Check(tail < 0.02f * r0 * 4.f && freed, "the last repeat ramps out on its pass end; the loop is freed");
+  Check(lv_ok, "repeat 1 at full level, then 1 - (k/N)^curve");
+  // (last 1 ms of a 10 ms linear ramp: <= 10% of the repeat's level, x ~3 noise crest)
+  Check(tail < 0.35f * lv[3] && freed, "the last repeat ramps out on its pass end; the loop is freed");
   // No ducking inside a repeat: the level holds from the pass start until the
   // ramp into the next repeat, which ends on the wrap.
   { setup(); to_pass(); cs.knob[4] = K5Repeats(4); RunFor(0.011f); pass_rms(nullptr);   // repeat 1 done
@@ -3318,9 +3319,9 @@ static void TestK5Repeats() {
       RunFor(1.f / sr); i++;
       if ((float)i < (float)Q - ramp - 96.f) dev = std::max(dev, fabsf(v.dec_g_[s] - g0));
     }
-    hit = fabsf(v.dec_g_[s] - 0.25f) < 0.02f;                 // at the wrap: repeat 3's level (1 - 2/4)^2
+    hit = fabsf(v.dec_g_[s] - 0.75f) < 0.02f;                 // at the wrap: repeat 3's level 1 - (2/4)^2
     printf("      repeat 2: level %.4f from its first sample, max change before the ramp %.5f, at the wrap %.4f\n", g0, dev, v.dec_g_[s]);
-    Check(fabsf(g0 - 0.5625f) < 0.01f && dev < 1e-6f && hit, "a repeat starts at its own level and holds it; the step ends on the wrap"); }
+    Check(fabsf(g0 - 0.9375f) < 0.01f && dev < 1e-6f && hit, "a repeat starts at its own level and holds it; the step ends on the wrap"); }
   // N = 1: plays once.
   setup(); to_pass(); cs.knob[4] = K5Repeats(1); RunFor(0.011f);
   const float one = pass_rms(nullptr); RunFor(0.02f);
