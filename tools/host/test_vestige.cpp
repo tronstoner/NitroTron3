@@ -3308,6 +3308,19 @@ static void TestK5Repeats() {
   for (int k = 0; k < 4; k++) if (fabsf(db[k] - want[k]) > 0.7f) lv_ok = false;
   Check(lv_ok, "repeat 1 at full level, then (1 - k/N)^curve");
   Check(tail < 0.02f * r0 * 4.f && freed, "the last repeat ramps out on its pass end; the loop is freed");
+  // No ducking inside a repeat: the level holds from the pass start until the
+  // ramp into the next repeat, which ends on the wrap.
+  { setup(); to_pass(); cs.knob[4] = K5Repeats(4); RunFor(0.011f); pass_rms(nullptr);   // repeat 1 done
+    const float ramp = VESTIGE_REPEAT_RAMP_MS * 0.001f * sr;
+    const float g0 = v.dec_g_[s]; float dev = 0.f; long i = 0; bool hit = false;
+    const int32_t pp = v.pass_[s];
+    while (v.pass_[s] == pp) {
+      RunFor(1.f / sr); i++;
+      if ((float)i < (float)Q - ramp - 96.f) dev = std::max(dev, fabsf(v.dec_g_[s] - g0));
+    }
+    hit = fabsf(v.dec_g_[s] - 0.25f) < 0.02f;                 // at the wrap: repeat 3's level (1 - 2/4)^2
+    printf("      repeat 2: level %.4f from its first sample, max change before the ramp %.5f, at the wrap %.4f\n", g0, dev, v.dec_g_[s]);
+    Check(fabsf(g0 - 0.5625f) < 0.01f && dev < 1e-6f && hit, "a repeat starts at its own level and holds it; the step ends on the wrap"); }
   // N = 1: plays once.
   setup(); to_pass(); cs.knob[4] = K5Repeats(1); RunFor(0.011f);
   const float one = pass_rms(nullptr); RunFor(0.02f);

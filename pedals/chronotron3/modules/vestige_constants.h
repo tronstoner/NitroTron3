@@ -735,8 +735,9 @@ static constexpr float  VESTIGE_K5_DEADZONE        = 0.06f;
 // REPEATS (K5 CCW half): N = REPEAT_N_MAX just past the dead zone down to 1
 // at full CCW (whole numbers, log taper). The first repeat plays at full
 // level, repeat k (0-based) at (1 - k/N)^CURVE (2: N = 4 -> 0 / -5 / -12 /
-// -24 dB), each level reached by a RAMP at the pass start; the last repeat
-// ramps out to end exactly on its pass end, then the loop is freed. N = 1:
+// -24 dB). A level never changes inside a repeat: each step is a RAMP that
+// ends exactly on the pass end (the last one ramps to 0), so every repeat
+// starts at its own level; then the loop is freed. N = 1:
 // the loop plays once. Turning K5 CCW on a playing loop counts from then;
 // FS2 hold pauses the count; back at noon the loop keeps its level.
 static constexpr float  VESTIGE_REPEAT_N_MAX       = 16.f;
