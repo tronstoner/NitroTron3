@@ -420,15 +420,16 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // each, on the voice's running step count (it rolls across bars):
 //   stutters: a RHY_S_CYCLE (12) step cycle, S_K_MIN .. S_K_MAX hits with the
 //   depth (E(2,12) = dotted-quarter hemiola .. E(7,12) = the bell pattern);
-//   rests: a RHY_R_CYCLE (7) step cycle, R_K_MIN .. R_K_MAX hits (E(1,7) ..
-//   E(3,7)); a stutter wins where both land. 12 and 7 against the 16-step bar:
-//   the whole rhythm repeats only after lcm(12, 7, 16) = 336 steps (21 bars).
+//   rests: a RHY_R_CYCLE (8) step cycle, R_K_MIN .. R_K_MAX hits (E(1,8) ..
+//   E(3,8) = tresillo); a stutter wins where both land. 12 : 8 = 3:2 and
+//   12 : 16 = 4:3 (the cross-rhythms of the tradition; 7 was only coprime):
+//   the whole rhythm repeats after lcm(12, 8, 16) = 48 steps (3 bars).
 //   One small variation with chance RHY_VAR_PROB per ~32 steps.
 static constexpr float  VESTIGE_K3_DEADZONE          = 0.06f;
 static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
 static constexpr float  VESTIGE_TIMING_RHY_S_K_MIN   = 2.f;
 static constexpr float  VESTIGE_TIMING_RHY_S_K_MAX   = 7.f;
-static constexpr int    VESTIGE_TIMING_RHY_R_CYCLE   = 7;
+static constexpr int    VESTIGE_TIMING_RHY_R_CYCLE   = 8;
 static constexpr float  VESTIGE_TIMING_RHY_R_K_MIN   = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_R_K_MAX   = 3.f;
 static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;

@@ -2064,7 +2064,7 @@ class Vestige : public Module {
   // count (it never resets per pass or per line, so the rhythm rolls across
   // bars): STUTTERS on a RHY_S_CYCLE-step cycle (k = S_K_MIN .. S_K_MAX with
   // the depth: E(2,12) .. the E(7,12) bell), RESTS on a RHY_R_CYCLE-step cycle
-  // (R_K_MIN .. R_K_MAX: E(1,7) .. E(3,7)); a stutter wins where both land. Each
+  // (R_K_MIN .. R_K_MAX: E(1,8) .. E(3,8) tresillo); a stutter wins where both land. Each
   // loop has its own rotation of both. Every hit is one step. With chance
   // RHY_VAR_PROB per ~32 steps a pass gets one small VARIATION (a hit moves a
   // step, swaps stutter <-> rest, is added or dropped), for that pass only.

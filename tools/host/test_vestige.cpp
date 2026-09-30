@@ -3356,7 +3356,7 @@ static void TestK5Repeats() {
 // and rests (7-step cycle) on the running step count; it renders exactly like
 // the layers, rolls across bars, and varies by at most one small edit a pass.
 static void TestK3Rhythm() {
-  printf("-- K3 CCW: polymetric rhythm (stutters on 12, rests on 7)\n");
+  printf("-- K3 CCW: polymetric rhythm (stutters on %d, rests on %d)\n", VESTIGE_TIMING_RHY_S_CYCLE, VESTIGE_TIMING_RHY_R_CYCLE);
   const float depth = 0.6f;
   const LayerStats st = LayerRun(K3Ccw(depth), 2000, 16);
   printf("      render: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
@@ -3365,14 +3365,16 @@ static void TestK3Rhythm() {
         "rhythm renders exactly: every step = its source, rests silent, no bad reads");
   // The base itself: 12- and 7-step cycles, not the bar.
   { const uint32_t sr0 = 5, rr0 = 3; bool per84 = true, per16 = true;
-    for (int t = 0; t < 336; t++) {
-      if (Vestige::RhyBase(t, depth, sr0, rr0) != Vestige::RhyBase(t + 84, depth, sr0, rr0)) per84 = false;
+    auto gcd = [](int a, int b) { while (b) { const int t = a % b; a = b; b = t; } return a; };
+    const int cyc = VESTIGE_TIMING_RHY_S_CYCLE / gcd(VESTIGE_TIMING_RHY_S_CYCLE, VESTIGE_TIMING_RHY_R_CYCLE) * VESTIGE_TIMING_RHY_R_CYCLE;
+    for (int t = 0; t < 4 * cyc + 64; t++) {
+      if (Vestige::RhyBase(t, depth, sr0, rr0) != Vestige::RhyBase(t + cyc, depth, sr0, rr0)) per84 = false;
       if (Vestige::RhyBase(t, depth, sr0, rr0) != Vestige::RhyBase(t + 16, depth, sr0, rr0)) per16 = false;
     }
     std::string bars;
     for (int b = 0; b < 4; b++) { for (int i = 0; i < 16; i++) { const int c = Vestige::RhyBase(b * 16 + i, depth, sr0, rr0); bars += c == 2 ? '_' : c == 1 ? 's' : '-'; } bars += '|'; }
     printf("      base, 4 bars: |%s\n", bars.c_str());
-    Check(per84 && !per16, "rhythm: repeats with the 12 x 7 cycles (84 steps), not with the 16-step bar (it rolls)"); }
+    Check(per84 && !per16, "rhythm: repeats with the stutter x rest cycles (lcm), not with the 16-step bar (it rolls)"); }
   // Per pass on a playing loop: only one-step stutters + rests, mostly the base.
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; Taps({2000}); RunFor(0.6f);
   seen_acts = v.act_count_;
