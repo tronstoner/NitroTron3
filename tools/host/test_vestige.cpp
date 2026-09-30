@@ -3381,7 +3381,7 @@ static void TestK3Rhythm() {
   CapRec r{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &r); noise_from = noise_to = -1;
   const int s = r.s; RunFor(1.f);
   cs.knob[2] = K3Ccw(depth);
-  bool only_ok = true; int base_passes = 0, passes = 0, over_one = 0;
+  bool only_ok = true, dec_ok = true, var_ok = true; int base_passes = 0, passes = 0, over_one = 0, decs = 0;
   for (int p = 0; p < 24; p++) {
     { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }
     RunFor(0.005f);
@@ -3392,21 +3392,34 @@ static void TestK3Rhythm() {
       const auto& x = v.ln_hit_[s][l][h];
       if (x.len != 1) only_ok = false;
       if (l == 0 && x.type != Vestige::kFigStutter) only_ok = false;
-      if (l == 1 && x.type != Vestige::kFigRest) only_ok = false;
+      if (l == 1 && x.type != Vestige::kFigRest && x.type != Vestige::kFigDecimate) only_ok = false;
       if (l == 2) only_ok = false;
-      const int i = x.start - seg0; if (i >= 0 && i < G) line[i] = (l == 0) ? 's' : '_';
+      const int i = x.start - seg0;
+      if (i < 0 || i >= G) continue;
+      if (x.type == Vestige::kFigDecimate) {                 // on the 8th-note off-beats only
+        const int32_t t = v.rhy_t_[s] - G + i;
+        if (((t % 4) + 4) % 4 != 2) dec_ok = false;
+        decs++; continue;
+      }
+      line[i] = (l == 0) ? 's' : '_';
+    }
+    for (int h = 0; h < v.ln_nh_[s][1]; h++) {               // a decimate never shares a rest's step
+      const auto& x = v.ln_hit_[s][1][h]; if (x.type != Vestige::kFigDecimate) continue;
+      const int i = x.start - seg0; if (i >= 0 && i < G && line[i] == '_') dec_ok = false;
     }
     const int32_t t0 = v.rhy_t_[s] - G;                    // this pass's first running step
     int diff = 0;
     for (int i = 0; i < G; i++) {
       const int c = Vestige::RhyBase(t0 + i, v.rhy_level_, v.rhy_rot_[s], v.rhy_rrot_[s]);
-      if (line[i] != (c == 2 ? '_' : c == 1 ? 's' : '-')) diff++;
+      const char want = (c == 2 ? '_' : c == 1 ? 's' : '-');
+      if (line[i] != want) { diff++; if (!(want == '-' && line[i] == 's')) var_ok = false; }   // a variation = an added stutter
     }
-    passes++; if (diff == 0) base_passes++; if (diff > 2) over_one++;   // (a move changes 2 cells)
+    passes++; if (diff == 0) base_passes++; if (diff > 1) over_one++;
   }
-  printf("      %d passes: %d exactly the base, %d with more than one edit\n", passes, base_passes, over_one);
-  Check(only_ok, "rhythm: only one-step stutters (timing line) and rests (condition line), no playback hits");
-  Check(passes >= 10 && base_passes * 2 >= passes && over_one == 0, "rhythm: mostly the base; a variation is at most one small edit");
+  printf("      %d passes: %d exactly the base, %d with more than one edit; %d decimate hits\n", passes, base_passes, over_one, decs);
+  Check(only_ok, "rhythm: only one-step stutters (timing line), rests + decimates (condition line), no playback hits");
+  Check(passes >= 10 && base_passes * 2 >= passes && over_one == 0 && var_ok, "rhythm: mostly the base; a variation only adds one stutter");
+  Check(decs > 0 && dec_ok, "rhythm: decimate hits only on the 8th-note off-beats, never on a rest");
   cs.knob[2] = 0.5f; RunFor(0.1f);
 }
 static void TestTimingSlices() {
