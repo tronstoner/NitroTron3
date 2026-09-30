@@ -332,7 +332,7 @@ static constexpr float    VESTIGE_K4_DEADZONE     = 0.06f;
 // Deep BBD end (K4 CCW): input gain into the degrader, 0 dB at this share of
 // the BBD depth up to BOOST_DB at full CCW (linear in dB) — the chain's
 // low-passes make that end dark and quiet; the gain also drives its tanh.
-static constexpr float    VESTIGE_K4_BBD_BOOST_FROM = 0.75f;
+static constexpr float    VESTIGE_K4_BBD_BOOST_FROM = 0.5f;    // ~9:10 on K4
 static constexpr float    VESTIGE_K4_BBD_BOOST_DB   = 6.f;
 // The retired K4 sensitivity map (host tests use it to set thresholds).
 static constexpr float    VESTIGE_AUTO_THRESH_MIN = 0.005f;
