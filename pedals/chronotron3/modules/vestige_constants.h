@@ -413,10 +413,18 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 //   UP tape (speed + pitch follow T) · MIDDLE stretch (speed follows, pitch
 //   stays) · DOWN re-cut (cut / pad the end, non-destructive).
 
-// ---- Errors on K3 -----------------------------------------------------------
-// K3 sets the level (0..1) of all three error layers together (timing mode 3:
-// TIMING / CONDITION / PLAYBACK). CCW = no errors. SW2 is unused (it was the
-// stage 2.5 error-type editor with jump pickup).
+// ---- Errors on K3 (bipolar) -------------------------------------------------
+// CW half: the level (0..1) of all three error layers together (timing mode 3:
+// TIMING / CONDITION / PLAYBACK). Noon (+-VESTIGE_K3_DEADZONE): no errors. CCW
+// half: the RHYTHM line only — Euclidean stutters + rests, one step each, a
+// steady base with a rare one-cycle variation:
+//   hits per 16 steps k = RHY_K_MIN .. RHY_K_MAX with the depth, rests
+//   floor((k-1)/2) of them (E(3,16) 1 rest ... E(9,16) 4 rests); per line
+//   cycle (~2 bars) one small variation with chance RHY_VAR_PROB.
+static constexpr float  VESTIGE_K3_DEADZONE          = 0.06f;
+static constexpr float  VESTIGE_TIMING_RHY_K_MIN     = 2.f;
+static constexpr float  VESTIGE_TIMING_RHY_K_MAX     = 9.f;
+static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;
 
 // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass ---
 // Level L = err_level_[kErrTiming]. L == 0: off. For any L > 0 a loop voice

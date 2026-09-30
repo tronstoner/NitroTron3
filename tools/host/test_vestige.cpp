@@ -280,7 +280,7 @@ static void TestStage0() {
   Check(Live() == 1, "back to UP: 1 live voice");
 
   // Freeze.
-  cs.sw[0] = 2; cs.knob[1] = 0.0f; cs.knob[2] = 0.0f; RunFor(3.0f);
+  cs.sw[0] = 2; cs.knob[1] = 0.0f; cs.knob[2] = 0.5f; RunFor(3.0f);
   size_t maxL = 0;
   for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++)
     if (v.active_[s] && !v.dying_[s] && v.loop_len_[s] > maxL) maxL = v.loop_len_[s];
@@ -307,7 +307,7 @@ static void TestStage0() {
 // ---------------------------------------------------------------------------
 // Start each buffer scenario from a known state: effect on, not held, both
 // sides empty, UP, sensible knobs.
-// No error levels: K3 (the error amount, all three layers) back to CCW. A test
+// No error levels: K3 back to noon (CCW = rhythm, CW = the layers). A test
 // that moves K3 for another reason (e.g. the stage-0 "K3 inert in freeze"
 // check) would otherwise leave the errors on.
 // K4 is the degradation colour; capture sensitivity is a constant. Tests that
@@ -323,9 +323,18 @@ static float K5Fade(float u) {
   const float r = 0.5f + VESTIGE_K5_DEADZONE + u * (0.5f - VESTIGE_K5_DEADZONE);
   return r * (KNOB_MAX - KNOB_MIN) + KNOB_MIN;
 }
+// K3 is bipolar: raw knob for a CW-half layer level (0..1) / a CCW rhythm depth.
+static float K3Cw(float level) {
+  const float r = 0.5f + VESTIGE_K3_DEADZONE + level * (0.5f - VESTIGE_K3_DEADZONE);
+  return r * (KNOB_MAX - KNOB_MIN) + KNOB_MIN;
+}
+static float K3Ccw(float depth) {
+  const float r = 0.5f - VESTIGE_K3_DEADZONE - depth * (0.5f - VESTIGE_K3_DEADZONE);
+  return r * (KNOB_MAX - KNOB_MIN) + KNOB_MIN;
+}
 static void NoErrors() {
   for (int i = 0; i < 3; i++) v.err_level_[i] = 0.f;
-  cs.knob[2] = 0.f;
+  cs.knob[2] = 0.5f;   // K3 noon: no errors (bipolar)
 }
 static void Reset() {
   NoErrors();
@@ -3113,7 +3122,7 @@ static void StepWindows(const SlLog& lg, int s, size_t L, bool rev, int* ok, int
 // ratchet, silence) is checked against the output sample by sample.
 struct LayerStats { int G = 0, cells = 0; long steps = 0, good = 0, silent = 0, silent_ok = 0, bad_lines = 0;
                     bool changed = false; long first_pass_events = -1; };
-static LayerStats LayerRun(float k3, int tapms, int passes) {
+static LayerStats LayerRun(float k3raw, int tapms, int passes) {
   LayerStats st;
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; Taps({tapms}); RunFor(0.6f);
   seen_acts = v.act_count_;
@@ -3127,7 +3136,7 @@ static LayerStats LayerRun(float k3, int tapms, int passes) {
   wet_hist.clear(); hist_n0 = n; RunFor((float)(Q - 2) / sr);
   const std::vector<float> ref(wet_hist);
   auto refm = [&](long k) { k = ((k % Q) + Q) % Q; return (k >= 1 && k - 1 < (long)ref.size()) ? ref[k - 1] : 0.f; };
-  cs.knob[2] = k3;
+  cs.knob[2] = k3raw;
   std::vector<std::string> first(3);
   for (int p = 0; p < passes; p++) {
     to_pass();
@@ -3181,7 +3190,7 @@ static LayerStats LayerRun(float k3, int tapms, int passes) {
       }
     }
   }
-  audit_on = false; hist_on = false; blk = 48; cs.knob[2] = 0.f; Realign();
+  audit_on = false; hist_on = false; blk = 48; cs.knob[2] = 0.5f; Realign();
   return st;
 }
 static void TestTimingLayers() {
@@ -3191,7 +3200,7 @@ static void TestTimingLayers() {
   struct Len { int ms, G; } lens[] = {{500, 4}, {2000, 16}, {4000, 24}, {6000, 32}, {8000, 32}};
   bool g_ok = true; std::string gs;
   for (const Len& x : lens) {
-    const LayerStats st = LayerRun(0.65f, x.ms, 4);
+    const LayerStats st = LayerRun(K3Cw(0.65f), x.ms, 4);
     char b[48]; snprintf(b, sizeof b, "%d ms: G %d (line %d)  ", x.ms, st.G, st.cells); gs += b;
     if (st.G != x.G || st.cells < VESTIGE_TIMING_LINE_STEPS || st.cells % st.G) g_ok = false;
   }
@@ -3199,7 +3208,7 @@ static void TestTimingLayers() {
   Check(g_ok, "steps per pass: 500 ms 4 / 2 s 16 (125 ms) / 4 s 24 / 6 s 32 / 8 s 32 (250 ms); line >= 32 steps, whole passes");
   // Render: every step plays exactly its map; rests are silent; no bad reads.
   for (float k3 : {0.65f, 1.f}) {
-    const LayerStats st = LayerRun(k3, 2000, 12);
+    const LayerStats st = LayerRun(K3Cw(k3), 2000, 12);
     printf("      K3 %.2f, 2 s: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld, bad lines %ld\n",
            k3, st.good, st.steps, st.silent_ok, st.silent, audit_bad, st.bad_lines);
     char m[160]; snprintf(m, sizeof m, "K3 %.2f: every step = its source step (direction, ratchet) at c > 0.95; rests silent; no read outside the guard", k3);
@@ -3208,12 +3217,12 @@ static void TestTimingLayers() {
     Check(st.bad_lines == 0 && st.changed, m);
     if (k3 < 1.f) Check(st.first_pass_events == 0, "K3 up from 0: the first pass plays clean (the lines are built during it)");
   }
-  { const LayerStats st = LayerRun(1.f, 8000, 3);
+  { const LayerStats st = LayerRun(K3Cw(1.f), 8000, 3);
     Check(st.steps > 30 && st.good == st.steps && st.silent_ok == st.silent && audit_bad == 0,
           "8 s loop, K3 max: every step matches its map, rests silent, no bad reads"); }
   // K3 CCW: nothing at all.
-  { cs.knob[2] = 0.f; RunFor(0.1f);
-    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f, "K3 CCW: no error levels"); }
+  { cs.knob[2] = 0.5f; RunFor(0.1f);
+    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && v.rhy_level_ == 0.f, "K3 noon: no errors"); }
 }
 // K4 = degradation colour: clean (engine idle) around noon, BBD CCW, tape CW;
 // engaging / leaving / flipping never steps the wet more than the engaged sound.
@@ -3342,6 +3351,59 @@ static void TestK5Repeats() {
   const float a2 = pass_rms(nullptr); const float a3 = pass_rms(nullptr);
   Check(v.rep_n_ == 0 && v.active_[s] && fabsf(20.f * log10f(a3 / a2)) < 0.5f && a1 > 0.f, "K5 back at noon: endless, the level kept");
   blk = 48; Realign(); Reset();
+}
+// K3 CCW = the rhythm line: one-step Euclidean stutters + rests only, a
+// steady evenly spread base, at most one small edit in a cycle, and it renders
+// exactly like the layers.
+static void TestK3Rhythm() {
+  printf("-- K3 CCW: Euclidean rhythm (stutters + rests)\n");
+  const float depth = 3.f / 7.f;                  // k = 2 + 7 x depth = 5 per 16 steps
+  const LayerStats st = LayerRun(K3Ccw(depth), 2000, 16);
+  printf("      render: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
+         st.good, st.steps, st.silent_ok, st.silent, audit_bad);
+  Check(st.steps > 60 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0,
+        "rhythm renders exactly: every step = its source, rests silent, no bad reads");
+  // Line structure over many cycles (fresh run, sampled every pass).
+  Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; Taps({2000}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  CapRec r{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &r); noise_from = noise_to = -1;
+  const int s = r.s; RunFor(1.f);
+  cs.knob[2] = K3Ccw(depth);
+  bool only_ok = true; int base_cycles = 0, cycles = 0, over_one = 0; std::string base_str;
+  for (int p = 0; p < 40; p++) {
+    { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }
+    RunFor(0.005f);
+    if (v.ln_pass_[s] != 0) continue;                  // one sample per line cycle
+    const int C = v.ln_cells_[s];
+    std::string line(C, '-');
+    for (int l = 0; l < 3; l++) for (int h = 0; h < v.ln_nh_[s][l]; h++) {
+      const auto& x = v.ln_hit_[s][l][h];
+      if (x.len != 1) only_ok = false;
+      if (l == 0 && x.type != Vestige::kFigStutter) only_ok = false;
+      if (l == 1 && x.type != Vestige::kFigRest) only_ok = false;
+      if (l == 2) only_ok = false;
+      line[x.start] = (l == 0) ? 's' : '_';
+    }
+    // The base, rebuilt the way the engine does (no variation).
+    const int k = (int)(VESTIGE_TIMING_RHY_K_MIN + (VESTIGE_TIMING_RHY_K_MAX - VESTIGE_TIMING_RHY_K_MIN) * depth + 0.5f), j = (k - 1) / 2;
+    int kk = (k * C + 8) / 16, jj = (j * C + 8) / 16; if (jj > kk - 1) jj = kk - 1;
+    const int rot = (int)(v.rhy_rot_[s] % (uint32_t)C), rrot = (int)(v.rhy_rrot_[s] % (uint32_t)kk);
+    std::string base(C, '-'); int hh = 0;
+    for (int i = 0; i < C; i++) if (Vestige::RhyHit(i, kk, C, rot)) { base[i] = Vestige::RhyHit(hh, jj, kk, rrot) ? '_' : 's'; hh++; }
+    if (base_str.empty()) base_str = base;
+    int diff = 0; for (int i = 0; i < C; i++) if (line[i] != base[i]) diff++;
+    cycles++; if (diff == 0) base_cycles++; if (diff > 2) over_one++;   // (a move changes 2 cells)
+    // even spread: gaps between base hits differ by at most 1
+    if (p < 4) printf("      cycle: %s   base %s\n", line.c_str(), base.c_str());
+  }
+  int gmin = 99, gmax = 0, last = -1, first = -1;
+  for (int i = 0; i < (int)base_str.size(); i++) if (base_str[i] != '-') { if (last >= 0) { gmin = std::min(gmin, i - last); gmax = std::max(gmax, i - last); } else first = i; last = i; }
+  if (first >= 0) { const int g = (int)base_str.size() - last + first; gmin = std::min(gmin, g); gmax = std::max(gmax, g); }
+  printf("      %d cycles: %d exactly the base, %d with more than one edit; base gaps %d..%d\n", cycles, base_cycles, over_one, gmin, gmax);
+  Check(only_ok, "rhythm: only one-step stutters (timing line) and rests (condition line), no playback hits");
+  Check(cycles >= 10 && base_cycles * 2 >= cycles && over_one == 0, "rhythm: mostly the steady base; a variation is at most one small edit");
+  Check(gmax - gmin <= 1, "rhythm: the base hits are evenly spread (Euclidean)");
+  cs.knob[2] = 0.5f; RunFor(0.1f);
 }
 static void TestTimingSlices() {
   printf("-- stage 3: the TIMING error, mode 1: SLICE REARRANGEMENT (%d slices)\n", VESTIGE_TIMING_SLICES);
@@ -3723,6 +3785,7 @@ int main() {
   else if (VESTIGE_TIMING_MODE == 3) TestTimingLayers();
   else if (VESTIGE_TIMING_FIXED_ARRANGEMENT) TestTimingSlices();
   else printf("-- slice / pass-memory mode: behaviour tests skipped (discovery phase)\n");
+  TestK3Rhythm();
   TestK4Degrade();
   TestFadeVoiceCap();
   TestK5Repeats();
@@ -3734,13 +3797,17 @@ int main() {
   { printf("-- errors: K3\n");
     { Vestige fresh; Check(fresh.err_level_[0] == 0.f && fresh.err_level_[1] == 0.f && fresh.err_level_[2] == 0.f,
                            "error levels start at 0 (no errors until K3 moves)"); }
-    cs.sw[1] = 0; cs.knob[2] = 0.8f; RunFor(0.1f);
-    const float t = RemapKnob(0.8f);
-    Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "K3 sets all three levels");
+    cs.sw[1] = 0; cs.knob[2] = K3Cw(0.6f); RunFor(0.1f);
+    const float t = v.err_level_[0];
+    Check(fabsf(t - 0.6f) < 1e-4f && v.err_level_[1] == t && v.err_level_[2] == t && v.rhy_level_ == 0.f,
+          "K3 CW half: all three layers at the same level (0..1 over the half), no rhythm");
     cs.sw[1] = 2; RunFor(0.1f);
     Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "SW2 does not change the error levels");
-    cs.knob[2] = 0.f; RunFor(0.1f);
-    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f, "K3 CCW: all off");
+    cs.knob[2] = K3Ccw(0.5f); RunFor(0.1f);
+    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && fabsf(v.rhy_level_ - 0.5f) < 1e-4f,
+          "K3 CCW half: the rhythm only (layers off)");
+    cs.knob[2] = 0.5f; RunFor(0.1f);
+    Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 noon: all off");
     cs.sw[1] = 0; }
   // LED2 = effect state: off dark, on solid, recording rapid flicker, held slow blink.
   { printf("-- LED2\n");

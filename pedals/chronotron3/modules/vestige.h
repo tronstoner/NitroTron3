@@ -196,10 +196,18 @@ class Vestige : public Module {
     const int   sw2 = cs.Switch(1);          // how loops follow a T change: UP tape · MID stretch · DOWN re-cut
     const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
-    // ---- Errors: K3 sets all three layers' levels together ------------------
-    // (Was the stage 2.5 editor: SW2 picked a type, K3 edited its level with
-    // jump pickup. The builder runs all three together.)
-    err_level_[kErrTiming] = err_level_[kErrCondition] = err_level_[kErrPlayback] = k3;
+    // ---- K3, bipolar: CCW rhythm · noon clean · CW the three glitch layers ----
+    // Within VESTIGE_K3_DEADZONE of noon: no errors. CW half: the three layers
+    // (TIMING / CONDITION / PLAYBACK) together at level 0 -> 1 over the half.
+    // CCW half: the RHYTHM line (Euclidean stutters + rests, see
+    // TimingPlanRhythm) at depth 0 -> 1 towards full CCW.
+    {
+      const float c3 = k3 - 0.5f, a3 = fabsf(c3);
+      const float u3 = (a3 <= VESTIGE_K3_DEADZONE) ? 0.f : (a3 - VESTIGE_K3_DEADZONE) / (0.5f - VESTIGE_K3_DEADZONE);
+      const float cw = (c3 > 0.f) ? u3 : 0.f;
+      err_level_[kErrTiming] = err_level_[kErrCondition] = err_level_[kErrPlayback] = cw;
+      rhy_level_ = (c3 < 0.f) ? u3 : 0.f;
+    }
 
     // ---- SW2 = how playing loops follow a T change ---------------------------
     // UP tape (speed + pitch follow T) · MIDDLE stretch (speed follows, pitch
@@ -2051,6 +2059,58 @@ class Vestige : public Module {
   // each live layer, then render this pass's segment of the three lines into
   // per-step (source step, direction, ratchet, condition) and from those the
   // pass's events.
+  // ---- K3 CCW: the RHYTHM line ----------------------------------------------
+  // One Euclidean pattern over the whole line (C cells): k' = k x C/16 hits
+  // (k per 16 steps = RHY_K_MIN .. RHY_K_MAX with the depth), evenly spread,
+  // rotated by the loop's own draw; among them j' = floor((k-1)/2) x C/16 are
+  // RESTS (their own even spread over the hits, own rotation), the others
+  // STUTTERS (the step before again). Every hit is one step. At each line
+  // cycle start the base is rebuilt and, with chance RHY_VAR_PROB, one small
+  // VARIATION applies for that cycle only: a hit moves a step, a hit swaps
+  // stutter <-> rest, a hit is added or dropped. Stutters go on the TIMING
+  // line, rests on the CONDITION line, so the render stacks them as usual.
+  static bool RhyHit(int i, int k, int n, int rot) { return k > 0 && (((i + rot) % n) * k) % n < k; }
+  void TimingPlanRhythm(int s, int C) {
+    if (ln_pass_[s] != 0 && ln_nh_[s][kErrTiming] + ln_nh_[s][kErrCondition] > 0) return;   // mid-cycle: keep
+    const float u = rhy_level_;
+    const int k  = (int)(VESTIGE_TIMING_RHY_K_MIN + (VESTIGE_TIMING_RHY_K_MAX - VESTIGE_TIMING_RHY_K_MIN) * u + 0.5f);
+    const int j  = (k - 1) / 2;
+    int kk = (k * C + 8) / 16; if (kk < 1) kk = 1; if (kk > C) kk = C;
+    int jj = (j * C + 8) / 16; if (jj > kk - 1) jj = kk - 1; if (jj < 0) jj = 0;
+    uint8_t cell[VESTIGE_TIMING_LINE_MAX_CELLS];          // 0 pause, 1 stutter, 2 rest
+    const int rot = (int)(rhy_rot_[s] % (uint32_t)C), rrot = (int)(rhy_rrot_[s] % (uint32_t)(kk > 0 ? kk : 1));
+    int h = 0;
+    for (int i = 0; i < C; i++) {
+      cell[i] = 0;
+      if (RhyHit(i, kk, C, rot)) { cell[i] = RhyHit(h, jj, kk, rrot) ? 2 : 1; h++; }
+    }
+    // This cycle's variation (or none).
+    if (TimingRand() < VESTIGE_TIMING_RHY_VAR_PROB) {
+      int hits[VESTIGE_TIMING_LINE_MAX_CELLS], nh = 0, frees[VESTIGE_TIMING_LINE_MAX_CELLS], nf = 0;
+      for (int i = 0; i < C; i++) { if (cell[i]) hits[nh++] = i; else frees[nf++] = i; }
+      switch (TimingPick(4)) {
+        case 0: if (nh > 0) {                               // move a hit one step
+                  const int a = hits[TimingPick(nh)], b = (a + (TimingPick(2) ? 1 : C - 1)) % C;
+                  if (!cell[b]) { cell[b] = cell[a]; cell[a] = 0; }
+                } break;
+        case 1: if (nh > 0) { const int a = hits[TimingPick(nh)]; cell[a] = (cell[a] == 1) ? 2 : 1; } break;   // swap
+        case 2: if (nf > 0) cell[frees[TimingPick(nf)]] = TimingPick(2) ? 2 : 1; break;                     // add
+        default: if (nh > 1) cell[hits[TimingPick(nh)]] = 0; break;                                         // drop
+      }
+      timing_vars_++;
+    }
+    ln_nh_[s][kErrTiming] = ln_nh_[s][kErrCondition] = ln_nh_[s][kErrPlayback] = 0;
+    for (int i = 0; i < C; i++) {
+      if (!cell[i]) continue;
+      const int l = (cell[i] == 2) ? kErrCondition : kErrTiming;
+      if (ln_nh_[s][l] >= kLineMaxHits) continue;
+      LineHit& x = ln_hit_[s][l][ln_nh_[s][l]++];
+      x.start = (int8_t)i; x.len = 1; x.age = 0;
+      x.type = (int8_t)((cell[i] == 2) ? kFigRest : kFigStutter); x.sub = (int8_t)((cell[i] == 2) ? 1 : 0);
+    }
+    for (int l = 0; l < kErrTypes; l++) ln_ops_[s][l] = 0;
+    timing_edits_++;
+  }
   void TimingPlanLayers(int s, bool rev, size_t L, double rho, float el0) {
     if (!diag_clock_) { TimingPlanLayersImpl(s, rev, L, rho, el0); return; }
     const uint32_t t0 = diag_clock_();
@@ -2062,8 +2122,10 @@ class Vestige : public Module {
     trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
     sl_n_[s] = 0; TimingCond(s, 0);
     var_last_[s] = false;
-    const bool any = err_level_[kErrTiming] > 0.f || err_level_[kErrCondition] > 0.f || err_level_[kErrPlayback] > 0.f;
+    const bool rhythm = rhy_level_ > 0.f;
+    const bool any = rhythm || err_level_[kErrTiming] > 0.f || err_level_[kErrCondition] > 0.f || err_level_[kErrPlayback] > 0.f;
     if (!any) { LineClear(s); return; }
+    if (ln_rhythm_[s] != rhythm) { LineClear(s); ln_rhythm_[s] = rhythm; }   // the two halves never share lines
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
     const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
     // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to the
@@ -2089,8 +2151,9 @@ class Vestige : public Module {
     const bool ok4 = pass_out / (double)G / 4.0 >= min_step;
     const bool ok2 = pass_out / (double)G / 2.0 >= min_step;
     const bool okr = GuardReady(s);
-    // Evolve + age.
-    for (int l = 0; l < kErrTypes; l++) {
+    if (rhythm) TimingPlanRhythm(s, C);
+    // Evolve + age (the CW layers).
+    for (int l = 0; l < kErrTypes && !rhythm; l++) {
       const float lv = err_level_[l];
       if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; continue; }
       if (ln_nh_[s][l] == 0) { ln_ops_[s][l] = -1; continue; }   // empty: seed in the block tick (no hits to age)
@@ -2860,6 +2923,7 @@ class Vestige : public Module {
       play_len_[s] = L; cur_view_[s] = -1; rc_building_[s] = rc_ready_[s] = false; rc_want_[s] = L;
       trig_off_[s] = 0.f; trig_cnt_[s] = trig_next_[s] = 0; cur_pat_[s] = -1; trig_pass_[s] = pass_[s];   // (pass_ set just above)
       rot_seed_[s] = TimingRandU();                         // this loop's rotation, for its whole life
+      rhy_rot_[s] = TimingRandU(); rhy_rrot_[s] = TimingRandU();   // K3 CCW: this loop's rhythm rotations
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
       LineClear(s);                                            // mode 3: fresh, empty lines
@@ -3868,6 +3932,10 @@ class Vestige : public Module {
   int      ln_cells_[VESTIGE_VOICE_SLABS]    = {0};      // the line length the hits were placed on
   int      ln_pass_[VESTIGE_VOICE_SLABS]     = {0};      // which pass of the line plays
   int      ln_ops_[VESTIGE_VOICE_SLABS][kErrTypes] = {};   // changes still pending for the next pass
+  bool     ln_rhythm_[VESTIGE_VOICE_SLABS]   = {};       // the lines hold the K3 CCW rhythm
+  uint32_t rhy_rot_[VESTIGE_VOICE_SLABS]     = {};       // its rotations, drawn per loop
+  uint32_t rhy_rrot_[VESTIGE_VOICE_SLABS]    = {};
+  volatile float rhy_level_ = 0.f;                        // K3 CCW depth (0 = off)
   int8_t   tl_src_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},   // this pass's render (diag)
            tl_dir_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},
            tl_rat_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},
