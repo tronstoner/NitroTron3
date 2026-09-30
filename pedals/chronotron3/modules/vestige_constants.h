@@ -416,14 +416,21 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // ---- Errors on K3 (bipolar) -------------------------------------------------
 // CW half: the level (0..1) of all three error layers together (timing mode 3:
 // TIMING / CONDITION / PLAYBACK). Noon (+-VESTIGE_K3_DEADZONE): no errors. CCW
-// half: the RHYTHM line only — Euclidean stutters + rests, one step each, a
-// steady base with a rare one-cycle variation:
-//   hits per 16 steps k = RHY_K_MIN .. RHY_K_MAX with the depth, rests
-//   floor((k-1)/2) of them (E(3,16) 1 rest ... E(9,16) 4 rests); per line
-//   cycle (~2 bars) one small variation with chance RHY_VAR_PROB.
+// half: the RHYTHM only — polymetric Euclidean stutters + rests, one step
+// each, on the voice's running step count (it rolls across bars):
+//   stutters: a RHY_S_CYCLE (12) step cycle, S_K_MIN .. S_K_MAX hits with the
+//   depth (E(2,12) = dotted-quarter hemiola .. E(7,12) = the bell pattern);
+//   rests: a RHY_R_CYCLE (7) step cycle, R_K_MIN .. R_K_MAX hits (E(1,7) ..
+//   E(3,7)); a stutter wins where both land. 12 and 7 against the 16-step bar:
+//   the whole rhythm repeats only after lcm(12, 7, 16) = 336 steps (21 bars).
+//   One small variation with chance RHY_VAR_PROB per ~32 steps.
 static constexpr float  VESTIGE_K3_DEADZONE          = 0.06f;
-static constexpr float  VESTIGE_TIMING_RHY_K_MIN     = 2.f;
-static constexpr float  VESTIGE_TIMING_RHY_K_MAX     = 9.f;
+static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
+static constexpr float  VESTIGE_TIMING_RHY_S_K_MIN   = 2.f;
+static constexpr float  VESTIGE_TIMING_RHY_S_K_MAX   = 7.f;
+static constexpr int    VESTIGE_TIMING_RHY_R_CYCLE   = 7;
+static constexpr float  VESTIGE_TIMING_RHY_R_K_MIN   = 1.f;
+static constexpr float  VESTIGE_TIMING_RHY_R_K_MAX   = 3.f;
 static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;
 
 // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass ---

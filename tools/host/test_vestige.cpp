@@ -3352,57 +3352,59 @@ static void TestK5Repeats() {
   Check(v.rep_n_ == 0 && v.active_[s] && fabsf(20.f * log10f(a3 / a2)) < 0.5f && a1 > 0.f, "K5 back at noon: endless, the level kept");
   blk = 48; Realign(); Reset();
 }
-// K3 CCW = the rhythm line: one-step Euclidean stutters + rests only, a
-// steady evenly spread base, at most one small edit in a cycle, and it renders
-// exactly like the layers.
+// K3 CCW = the polymetric rhythm: one-step Euclidean stutters (12-step cycle)
+// and rests (7-step cycle) on the running step count; it renders exactly like
+// the layers, rolls across bars, and varies by at most one small edit a pass.
 static void TestK3Rhythm() {
-  printf("-- K3 CCW: Euclidean rhythm (stutters + rests)\n");
-  const float depth = 3.f / 7.f;                  // k = 2 + 7 x depth = 5 per 16 steps
+  printf("-- K3 CCW: polymetric rhythm (stutters on 12, rests on 7)\n");
+  const float depth = 0.6f;
   const LayerStats st = LayerRun(K3Ccw(depth), 2000, 16);
   printf("      render: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
          st.good, st.steps, st.silent_ok, st.silent, audit_bad);
   Check(st.steps > 60 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0,
         "rhythm renders exactly: every step = its source, rests silent, no bad reads");
-  // Line structure over many cycles (fresh run, sampled every pass).
+  // The base itself: 12- and 7-step cycles, not the bar.
+  { const uint32_t sr0 = 5, rr0 = 3; bool per84 = true, per16 = true;
+    for (int t = 0; t < 336; t++) {
+      if (Vestige::RhyBase(t, depth, sr0, rr0) != Vestige::RhyBase(t + 84, depth, sr0, rr0)) per84 = false;
+      if (Vestige::RhyBase(t, depth, sr0, rr0) != Vestige::RhyBase(t + 16, depth, sr0, rr0)) per16 = false;
+    }
+    std::string bars;
+    for (int b = 0; b < 4; b++) { for (int i = 0; i < 16; i++) { const int c = Vestige::RhyBase(b * 16 + i, depth, sr0, rr0); bars += c == 2 ? '_' : c == 1 ? 's' : '-'; } bars += '|'; }
+    printf("      base, 4 bars: |%s\n", bars.c_str());
+    Check(per84 && !per16, "rhythm: repeats with the 12 x 7 cycles (84 steps), not with the 16-step bar (it rolls)"); }
+  // Per pass on a playing loop: only one-step stutters + rests, mostly the base.
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; Taps({2000}); RunFor(0.6f);
   seen_acts = v.act_count_;
   CapRec r{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &r); noise_from = noise_to = -1;
   const int s = r.s; RunFor(1.f);
   cs.knob[2] = K3Ccw(depth);
-  bool only_ok = true; int base_cycles = 0, cycles = 0, over_one = 0; std::string base_str;
-  for (int p = 0; p < 40; p++) {
+  bool only_ok = true; int base_passes = 0, passes = 0, over_one = 0;
+  for (int p = 0; p < 24; p++) {
     { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }
     RunFor(0.005f);
-    if (v.ln_pass_[s] != 0) continue;                  // one sample per line cycle
-    const int C = v.ln_cells_[s];
-    std::string line(C, '-');
+    const int G = v.sl_n_[s], seg0 = v.ln_pass_[s] * G;
+    if (G <= 0 || !v.ln_rhythm_[s]) continue;
+    std::string line(G, '-');
     for (int l = 0; l < 3; l++) for (int h = 0; h < v.ln_nh_[s][l]; h++) {
       const auto& x = v.ln_hit_[s][l][h];
       if (x.len != 1) only_ok = false;
       if (l == 0 && x.type != Vestige::kFigStutter) only_ok = false;
       if (l == 1 && x.type != Vestige::kFigRest) only_ok = false;
       if (l == 2) only_ok = false;
-      line[x.start] = (l == 0) ? 's' : '_';
+      const int i = x.start - seg0; if (i >= 0 && i < G) line[i] = (l == 0) ? 's' : '_';
     }
-    // The base, rebuilt the way the engine does (no variation).
-    const int k = (int)(VESTIGE_TIMING_RHY_K_MIN + (VESTIGE_TIMING_RHY_K_MAX - VESTIGE_TIMING_RHY_K_MIN) * depth + 0.5f), j = (k - 1) / 2;
-    int kk = (k * C + 8) / 16, jj = (j * C + 8) / 16; if (jj > kk - 1) jj = kk - 1;
-    const int rot = (int)(v.rhy_rot_[s] % (uint32_t)C), rrot = (int)(v.rhy_rrot_[s] % (uint32_t)kk);
-    std::string base(C, '-'); int hh = 0;
-    for (int i = 0; i < C; i++) if (Vestige::RhyHit(i, kk, C, rot)) { base[i] = Vestige::RhyHit(hh, jj, kk, rrot) ? '_' : 's'; hh++; }
-    if (base_str.empty()) base_str = base;
-    int diff = 0; for (int i = 0; i < C; i++) if (line[i] != base[i]) diff++;
-    cycles++; if (diff == 0) base_cycles++; if (diff > 2) over_one++;   // (a move changes 2 cells)
-    // even spread: gaps between base hits differ by at most 1
-    if (p < 4) printf("      cycle: %s   base %s\n", line.c_str(), base.c_str());
+    const int32_t t0 = v.rhy_t_[s] - G;                    // this pass's first running step
+    int diff = 0;
+    for (int i = 0; i < G; i++) {
+      const int c = Vestige::RhyBase(t0 + i, v.rhy_level_, v.rhy_rot_[s], v.rhy_rrot_[s]);
+      if (line[i] != (c == 2 ? '_' : c == 1 ? 's' : '-')) diff++;
+    }
+    passes++; if (diff == 0) base_passes++; if (diff > 2) over_one++;   // (a move changes 2 cells)
   }
-  int gmin = 99, gmax = 0, last = -1, first = -1;
-  for (int i = 0; i < (int)base_str.size(); i++) if (base_str[i] != '-') { if (last >= 0) { gmin = std::min(gmin, i - last); gmax = std::max(gmax, i - last); } else first = i; last = i; }
-  if (first >= 0) { const int g = (int)base_str.size() - last + first; gmin = std::min(gmin, g); gmax = std::max(gmax, g); }
-  printf("      %d cycles: %d exactly the base, %d with more than one edit; base gaps %d..%d\n", cycles, base_cycles, over_one, gmin, gmax);
+  printf("      %d passes: %d exactly the base, %d with more than one edit\n", passes, base_passes, over_one);
   Check(only_ok, "rhythm: only one-step stutters (timing line) and rests (condition line), no playback hits");
-  Check(cycles >= 10 && base_cycles * 2 >= cycles && over_one == 0, "rhythm: mostly the steady base; a variation is at most one small edit");
-  Check(gmax - gmin <= 1, "rhythm: the base hits are evenly spread (Euclidean)");
+  Check(passes >= 10 && base_passes * 2 >= passes && over_one == 0, "rhythm: mostly the base; a variation is at most one small edit");
   cs.knob[2] = 0.5f; RunFor(0.1f);
 }
 static void TestTimingSlices() {
