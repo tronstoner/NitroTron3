@@ -166,6 +166,12 @@ static constexpr float  VESTIGE_FREEZE_WIN_MS   = 400.f;   // captured fragment 
 static constexpr size_t VESTIGE_FREEZE_SAMPLES  = (size_t)(VESTIGE_FREEZE_WIN_MS * 0.001f * VESTIGE_SR); // 19200
 static constexpr int    VESTIGE_FREEZE_BANDS    = 3;       // pinned band count (was the K3 chaos ramp)
 static constexpr float  VESTIGE_FREEZE_POS_FRAC = 0.f;     // read anchor in the window (0 = start)
+// Freeze capture window: skip the pick attack (EHX Freeze style — a freeze holds
+// the tone, not the transient): the grains read from this far into the capture,
+// less when that would leave under MIN_KEEP of tone. (A silence-ended capture
+// ends where the sound stopped, like the loop side: no silent tail.)
+static constexpr float  VESTIGE_FREEZE_ATTACK_SKIP_MS = 40.f;
+static constexpr float  VESTIGE_FREEZE_MIN_KEEP_MS    = 120.f;
 // Freeze slab sizing. A freeze grain is FROZEN: EmitBandGrain clamps its window
 // inside [0, L-glen], so the deepest read (GrainVoice's interpolation partner)
 // is index L — the freeze never reads across the loop seam and needs no

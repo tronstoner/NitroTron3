@@ -461,11 +461,13 @@ static void TestBufferSeparation() {
   play_input = false; sustain_input = false; RunFor(0.5f);
   printf("      freeze capture: furthest index %zu, row capacity %zu, ceiling %zu\n",
          frz_rec_max, (size_t)VESTIGE_FREEZE_CAP, (size_t)VESTIGE_FREEZE_SAMPLES);
-  size_t fl = 0;
+  size_t fl = 0, fb = 0;
   for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++)
-    if (v.active_[s] && !v.dying_[s]) fl = v.loop_len_[s];
+    if (v.active_[s] && !v.dying_[s]) { fl = v.loop_len_[s]; fb = v.frz_base_[s]; }
   Check(frz_rec_max >= VESTIGE_FREEZE_SAMPLES, "sustained freeze capture reached the 400 ms ceiling");
-  Check(fl == VESTIGE_FREEZE_SAMPLES, "ceiling capture committed at exactly 400 ms");
+  Check(fl + fb == VESTIGE_FREEZE_SAMPLES, "ceiling capture committed at exactly 400 ms");
+  Check(fb == (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * 48000.f),
+        "freeze window skips the attack: it plays from VESTIGE_FREEZE_ATTACK_SKIP_MS in");
   Check(frz_rec_max <= VESTIGE_FREEZE_CAP, "freeze capture never indexed past its row");
   Check(rec_overrun == 0, "no capture ever indexed past its scratch row (whole run)");
 }
@@ -3437,6 +3439,19 @@ static void TestK3Rhythm() {
   Check(decs > 0 && dec_ok, "rhythm: decimate hits only on the 8th-note off-beats, never on a rest");
   cs.knob[2] = 0.5f; RunFor(0.1f);
 }
+// Freeze capture window: a capture ended by silence ends where the sound
+// stopped (no ~80 ms silent tail), and the attack is skipped.
+static void TestFreezeWindow() {
+  printf("-- freeze capture window\n");
+  Reset(); cs.sw[0] = 2; RunFor(1.5f); seen_acts = v.act_count_;
+  CapRec q{}; noise_from = n; noise_to = n + 9600; WaitActivation(3.f, &q); noise_from = noise_to = -1;   // a 200 ms burst
+  const long len = (long)(v.loop_len_[q.s] + v.frz_base_[q.s]);
+  printf("      freeze of a 200 ms burst: window %ld samples (%.0f ms) incl. the skipped %zu\n", len, len / 48.0, v.frz_base_[q.s]);
+  Check(q.s >= VESTIGE_FREEZE_SLOT0 && len >= 9600 - 480 && len <= 9600 + 2400,
+        "freeze capture ended by silence: the window ends where the sound stopped (no silent tail)");
+  Check(v.frz_base_[q.s] == (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * 48000.f), "short freeze: the attack is skipped too");
+  cs.sw[0] = 0; Reset();
+}
 static void TestTimingSlices() {
   printf("-- stage 3: the TIMING error, mode 1: SLICE REARRANGEMENT (%d slices)\n", VESTIGE_TIMING_SLICES);
   // Level 0: nothing drawn.
@@ -3818,6 +3833,7 @@ int main() {
   else if (VESTIGE_TIMING_FIXED_ARRANGEMENT) TestTimingSlices();
   else printf("-- slice / pass-memory mode: behaviour tests skipped (discovery phase)\n");
   TestK3Rhythm();
+  TestFreezeWindow();
   TestK4Degrade();
   TestFadeVoiceCap();
   TestK5Repeats();

@@ -2463,7 +2463,7 @@ class Vestige : public Module {
     if (frozen) {
       float hi = (float)L - (float)glen; if (hi < 0.f) hi = 0.f;
       if (pos < 0.f) pos = 0.f; else if (pos > hi) pos = hi;
-      posi = (size_t)pos;
+      posi = (size_t)pos + frz_base_[s];                   // (past the skipped attack)
     } else {
       pos = fmodf(pos, (float)L); if (pos < 0.f) pos += (float)L;
       posi = (size_t)pos;
@@ -2787,14 +2787,14 @@ class Vestige : public Module {
           // this is really a phrase end: record its true length, not T.
           const bool ended = (VESTIGE_GATE_ENV_MODE != 0) && env_ < close && last_loud_ + 1 < rec_idx_;
           diag_end_ = ended ? 'c' : 'C';          // C = ceiling, c = ceiling but the sound had ended
-          IsrDecide(s, (ended && PoolOf(s) == kPoolLoop) ? last_loud_ + 1 : rec_idx_, now);
+          IsrDecide(s, ended ? last_loud_ + 1 : rec_idx_, now);   // (freeze too: no silent tail)
         } else if (g < close) {
           if (sil_run_ == 0) sil_onset_ = r;      // this sample is the first silent one
           if (++sil_run_ >= release_samples_) {
             if (VESTIGE_REARM_EVERY_END) rearm_block_ = true;   // next capture: onset or real quiet
             diag_end_ = 'S';
             const size_t raw_end = (VESTIGE_GATE_ENV_MODE == 0) ? sil_onset_ : last_loud_ + 1;
-            IsrDecide(s, (PoolOf(s) == kPoolLoop) ? raw_end : rec_idx_, now);
+            IsrDecide(s, raw_end, now);             // where the sound stopped (freeze too: no silent tail)
           }
         } else {
           sil_run_ = 0;
@@ -2905,7 +2905,17 @@ class Vestige : public Module {
   // happens here in one place, at the same sample.
   void IsrActivate(int s, uint32_t now) {
     pend_[s] = false; npend_--;
-    const size_t L = cap_len_[s];
+    size_t L = cap_len_[s];
+    // Freeze: skip the pick attack — the window starts VESTIGE_FREEZE_ATTACK_SKIP_MS
+    // in (less when that would leave under VESTIGE_FREEZE_MIN_KEEP_MS of tone).
+    size_t base = 0;
+    if (PoolOf(s) == kPoolFreeze) {
+      const size_t skip = (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * sr_);
+      const size_t keep = (size_t)(VESTIGE_FREEZE_MIN_KEEP_MS * 0.001f * sr_);
+      base = (L > keep) ? (L - keep < skip ? L - keep : skip) : 0;
+      L -= base;
+    }
+    frz_base_[s] = base;
     loop_len_[s] = L;
     play_pos_[s] = 0;
     timer_[s]    = 0;
@@ -3715,6 +3725,7 @@ class Vestige : public Module {
   K3Mode k3_mode_         = kLooper;
   float  scrub_back_frac_ = 0.f;  // backward scrub speed frac of hop (CCW→noon, →0 at noon)
   float  freeze_pos_frac_ = 0.f;  // freeze point: 0 = start (noon) → 1 = end (CW)
+  size_t frz_base_[VESTIGE_SLOTS] = {};   // freeze: the skipped attack (window read offset)
   float  k3_amt_          = 0.f;  // raw K3 (first-grain attack softening toward freeze)
 
   // Topology. target_voices_ comes from SW1 (1 / 6 / 1).
