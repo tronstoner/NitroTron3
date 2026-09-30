@@ -2089,15 +2089,8 @@ class Vestige : public Module {
     if (TimingRand() < VESTIGE_TIMING_RHY_VAR_PROB * (float)G / 32.f) {
       int hits[VESTIGE_TIMING_LAYER_MAX_STEPS], nh = 0, frees[VESTIGE_TIMING_LAYER_MAX_STEPS], nf = 0;
       for (int i = 0; i < G; i++) { if (cell[i]) hits[nh++] = i; else frees[nf++] = i; }
-      switch (TimingPick(4)) {
-        case 0: if (nh > 0) {                               // move a hit one step (inside the pass)
-                  const int a = hits[TimingPick(nh)], b = a + (TimingPick(2) ? 1 : -1);
-                  if (b >= 0 && b < G && !cell[b]) { cell[b] = cell[a]; cell[a] = 0; }
-                } break;
-        case 1: if (nh > 0) { const int a = hits[TimingPick(nh)]; cell[a] = (cell[a] == 1) ? 2 : 1; } break;   // swap
-        case 2: if (nf > 0) cell[frees[TimingPick(nf)]] = TimingPick(2) ? 2 : 1; break;                     // add
-        default: if (nh > 1) cell[hits[TimingPick(nh)]] = 0; break;                                         // drop
-      }
+      (void)hits; (void)nh;
+      if (nf > 0) cell[frees[TimingPick(nf)]] = 1;         // a variation = one added stutter
       timing_vars_++;
     }
     ln_nh_[s][kErrTiming] = ln_nh_[s][kErrCondition] = ln_nh_[s][kErrPlayback] = 0;
