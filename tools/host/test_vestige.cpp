@@ -3244,6 +3244,21 @@ static void TestK4Degrade() {
   const float lim = 1.5f * std::max(std::max(tape, bbd), clean);
   Check(in_tape <= lim && out_tape <= lim && in_bbd <= lim && flip <= lim && back <= lim,
         "K4 into / out of / across the colour: no step above 1.5x the engaged sound's own");
+  // Deep BBD end: the input gain is 0 dB up to BOOST_FROM of the BBD travel,
+  // then rises linearly in dB to BOOST_DB at full CCW; 0 dB on the tape side.
+  auto k4raw = [](float bbd_depth) {                 // raw K4 for a BBD depth 0..1
+    const float r = 0.5f - VESTIGE_K4_DEADZONE - bbd_depth * (0.5f - VESTIGE_K4_DEADZONE);
+    return r * (KNOB_MAX - KNOB_MIN) + KNOB_MIN;
+  };
+  auto gain_db = [&](float raw) { cs.knob[3] = raw; RunFor(0.02f); return 20.f * log10f(v.deg_in_tgt_); };
+  const float g_mid = gain_db(k4raw(VESTIGE_K4_BBD_BOOST_FROM * 0.9f));
+  const float g_half = gain_db(k4raw(VESTIGE_K4_BBD_BOOST_FROM + (1.f - VESTIGE_K4_BBD_BOOST_FROM) * 0.5f));
+  const float g_full = gain_db(0.f);
+  const float g_tape = gain_db(1.f);
+  printf("      deep-BBD input gain: before the knee %.2f dB, halfway %.2f dB, full CCW %.2f dB, tape side %.2f dB\n", g_mid, g_half, g_full, g_tape);
+  Check(fabsf(g_mid) < 0.01f && fabsf(g_half - VESTIGE_K4_BBD_BOOST_DB * 0.5f) < 0.2f &&
+        fabsf(g_full - VESTIGE_K4_BBD_BOOST_DB) < 0.05f && fabsf(g_tape) < 0.01f,
+        "K4 deep BBD: input gain 0 dB until BOOST_FROM, linear in dB to BOOST_DB at full CCW, none on the tape side");
   blk = 48; cs.knob[3] = 0.5f; Realign();
 }
 // Voice cap = the live voices + ONE fading tail: SW1 UP, a long K5 fade and
