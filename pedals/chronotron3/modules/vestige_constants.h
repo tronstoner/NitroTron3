@@ -433,9 +433,12 @@ static constexpr int    VESTIGE_TIMING_RHY_R_CYCLE   = 8;
 static constexpr float  VESTIGE_TIMING_RHY_R_K_MIN   = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_R_K_MAX   = 3.f;
 static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;
-// Colour on top of the rhythm: one DECIMATE or REVERSE hit (1-2 steps) with
-// this chance x depth per ~32 steps (decimate never on a rest).
-static constexpr float  VESTIGE_TIMING_RHY_COLOR_PROB = 1.0f;
+// Decimate colour on the rhythm: a Euclidean pattern on the 8th-note
+// off-beats, E(D_K, D_SLOTS) over 2 bars' off-beats (D_SLOTS = 8), D_K =
+// D_K_MIN just past noon .. D_K_MAX at full CCW; one step, never on a rest.
+static constexpr int    VESTIGE_TIMING_RHY_D_SLOTS  = 8;
+static constexpr float  VESTIGE_TIMING_RHY_D_K_MIN  = 1.f;
+static constexpr float  VESTIGE_TIMING_RHY_D_K_MAX  = 6.f;
 
 // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass ---
 // Level L = err_level_[kErrTiming]. L == 0: off. For any L > 0 a loop voice

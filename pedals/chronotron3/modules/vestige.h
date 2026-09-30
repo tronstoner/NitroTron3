@@ -2102,20 +2102,21 @@ class Vestige : public Module {
       x.start = (int8_t)(seg0 + i); x.len = 1; x.age = 0;
       x.type = (int8_t)((cell[i] == 2) ? kFigRest : kFigStutter); x.sub = (int8_t)((cell[i] == 2) ? 1 : 0);
     }
-    // COLOUR: now and then (chance RHY_COLOR_PROB x depth per ~32 steps) one
-    // DECIMATE (not on a rest) or REVERSE hit, 1-2 steps, on top.
-    if (TimingRand() < VESTIGE_TIMING_RHY_COLOR_PROB * rhy_level_ * (float)G / 32.f) {
-      const int len = 1 + TimingPick(2), a = TimingPick(G > len ? G - len + 1 : 1);
-      const bool dec = TimingPick(2) == 0;
-      bool ok = true;
-      if (dec) for (int i = a; i < a + len && i < G; i++) if (cell[i] == 2) ok = false;
-      const int l = dec ? kErrCondition : kErrPlayback;
-      if (ok && ln_nh_[s][l] < kLineMaxHits) {
-        LineHit& x = ln_hit_[s][l][ln_nh_[s][l]++];
-        x.start = (int8_t)(seg0 + a); x.len = (int8_t)len; x.age = 0;
-        x.type = (int8_t)(dec ? kFigDecimate : kFigReverse);
-        x.sub = dec ? (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)] : (int8_t)0;
-        timing_vars_++;
+    // DECIMATE colour: its own Euclidean pattern on the 8th-note OFF-BEATS
+    // (running steps t = 2 mod 4): E(k, RHY_D_SLOTS) over those slots, k =
+    // D_K_MIN .. D_K_MAX with the depth, rotated per loop; one step each,
+    // stacked on a stutter, never on a rest; its factor fixed per slot.
+    {
+      const int kd = (int)(VESTIGE_TIMING_RHY_D_K_MIN + (VESTIGE_TIMING_RHY_D_K_MAX - VESTIGE_TIMING_RHY_D_K_MIN) * rhy_level_ + 0.5f);
+      const int Nd = VESTIGE_TIMING_RHY_D_SLOTS, drot = (int)((rhy_rot_[s] >> 8) % (uint32_t)Nd);
+      for (int i = 0; i < G; i++) {
+        const int32_t t = t0 + i;
+        if ((((t % 4) + 4) % 4) != 2 || cell[i] == 2) continue;
+        const int q = (int)((((t / 4) % Nd) + Nd) % Nd);
+        if (!RhyHit(q, kd, Nd, drot) || ln_nh_[s][kErrCondition] >= kLineMaxHits) continue;
+        LineHit& x = ln_hit_[s][kErrCondition][ln_nh_[s][kErrCondition]++];
+        x.start = (int8_t)(seg0 + i); x.len = 1; x.age = 0; x.type = (int8_t)kFigDecimate;
+        x.sub = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[(q + drot) % VESTIGE_TIMING_DECIM_N];
       }
     }
     for (int l = 0; l < kErrTypes; l++) ln_ops_[s][l] = 0;
