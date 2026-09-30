@@ -45,7 +45,23 @@ Found on the way (not controls, but worth deciding):
 - Stale header comments in vestige.h / constants and `CONTROLS.md` (K3/K4
   meanings) — fix in the docs pass.
 
-## A. Proposal: the omitted controls on the freeze
+## A. Decisions (builder, 2026-09-30)
+
+- **K3 stays consistent: the loop side's glitch engine applied to the freeze
+  as is** (CW layers, CCW rhythm), not a separate freeze-blip scheduler. The
+  freeze needs a timeline for that: a virtual pass (T, or its window) whose
+  steps the layers / rhythm act on, with stutter / repeat / retrigger /
+  reverse working on the freeze's read position. To be worked out.
+- **Capture behaviour unchanged** — auto-capture is the core concept (as on
+  the Onward; the reason manual capture was retired). **SW2 unchanged** (the
+  follow mode stays; tape vs stretch still to be decided by testing). If SW2
+  is reassigned later: likely degrade textures and/or glitch modes; a unified
+  engine overlapping sprawl is a longer-term dream.
+- **Agreed: K1** (the same octave blend as the loop side), **K2** (SIZE +
+  reverse), **K5** (SUSTAIN on the CCW half).
+- Open: the freeze tail-trim / attack-skip fixes (they touch capture).
+
+## A. Proposal (original, for reference): the omitted controls on the freeze
 
 Onward's freeze side reacts to SIZE, SUSTAIN, TEXTURE and ERROR, and its
 errors there are **brief blips** (not rhythmic events): timing = churning,
