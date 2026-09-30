@@ -348,6 +348,13 @@ class Vestige : public Module {
       const float c = k4 - 0.5f, a = fabsf(c);
       const float d = (a <= VESTIGE_K4_DEADZONE) ? 0.f : (a - VESTIGE_K4_DEADZONE) / (0.5f - VESTIGE_K4_DEADZONE);
       degrade_.SetDepth(c < 0.f ? -d : d);
+      // Deep BBD end: an input gain into the degrader over the last part of
+      // the CCW travel (its low-passes make it dark and quiet there), 0 dB at
+      // VESTIGE_K4_BBD_BOOST_FROM of the BBD depth up to VESTIGE_K4_BBD_BOOST_DB.
+      float bdb = 0.f;
+      if (c < 0.f && d > VESTIGE_K4_BBD_BOOST_FROM)
+        bdb = VESTIGE_K4_BBD_BOOST_DB * (d - VESTIGE_K4_BBD_BOOST_FROM) / (1.f - VESTIGE_K4_BBD_BOOST_FROM);
+      deg_in_tgt_ = powf(10.f, bdb / 20.f);
     }
     // Idle-hiss guard: with no loop captured the engine's injected noise would
     // add a hiss bed to the output, so duck it to 0 until there is content.
@@ -774,7 +781,8 @@ class Vestige : public Module {
         // engine's own engage fade (Mix, 0 -> 1 leaving noon, back to 0 before
         // Idle) crossfades direct -> delayed + coloured, so neither edge steps
         // the delay. Engaged, the wet is ~3 ms late; at noon it is on the grid.
-        const float yc = degrade_.ColourProcess(yd);   // tape speed first, then head/electronics
+        deg_in_g_ += (deg_in_tgt_ - deg_in_g_) * VESTIGE_ROUTING_SMOOTH;   // (smoothed: no zipper)
+        const float yc = degrade_.ColourProcess(yd * deg_in_g_);   // tape speed first, then head/electronics
         const float m  = degrade_.Mix();
         y = y * (1.f - m) + yc * m;
       }
@@ -3618,6 +3626,8 @@ class Vestige : public Module {
   bool   ver_idle_[VESTIGE_SLOTS][2] = {};           // version emitted nothing last time (restart = instant attack)
   // K1 speed crossfade. Control -> ISR: side (-1 half / 0 / +1 double), amount.
   volatile int   k1_side_ = 0;
+  volatile float deg_in_tgt_ = 1.f;                       // K4 deep-BBD input gain (target)
+  float          deg_in_g_   = 1.f;                       // its smoothed value
   uint32_t (*diag_clock_)() = nullptr;                    // DIAG only (SetDiagClock)
   volatile uint32_t diag_plan_us_ = 0, diag_tick_us_ = 0, diag_proc_us_ = 0;
   volatile int      diag_gmax_ = 0;
