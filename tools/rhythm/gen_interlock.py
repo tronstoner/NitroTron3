@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
-"""Generate the two engine-2 INTERLOCK rhythm tables (K3 mode 1) from two rows JSONs.
+"""Generate the engine-2 INTERLOCK rhythm tables (K3 mode 1) from four rows JSONs.
 
-  CCW half: VESTIGE_TIMING_RHY_TABLE_CCW (traditional timelines)
-  CW  half: VESTIGE_TIMING_RHY_TABLE_CW  (academic odd-cycle Euclids)
+Two sets, both kept (vestige_constants.h VESTIGE_TIMING_RHY_IL_SET picks one):
+  set 0, timelines:       CCW VESTIGE_TIMING_RHY_TL_CCW   <- rows_ccw_trad.json
+                          CW  VESTIGE_TIMING_RHY_TL_CW    <- rows_cw_acad.json
+  set 1, intensity paths: CCW VESTIGE_TIMING_RHY_PATH_CCW <- rows_ccw_path.json
+                          CW  VESTIGE_TIMING_RHY_PATH_CW  <- rows_cw_path.json
+                          (the path JSONs are written by gen_paths.py)
 
-Writes four generated blocks (between BEGIN/END markers, replaced in place):
-  pedals/chronotron3/modules/vestige_constants.h  the CCW rows, the CW rows
-  tools/host/test_vestige.cpp                      kRhyLinesCcw[], kRhyLinesCw[]
+Writes eight generated blocks (between BEGIN/END markers, replaced in place):
+  pedals/chronotron3/modules/vestige_constants.h  the rows of the four tables
+                                                   (markers RHY CCW / CW / CCW_PATH / CW_PATH ROWS)
+  tools/host/test_vestige.cpp                      kRhyLinesCcw[], kRhyLinesCw[],
+                                                   kRhyLinesCcwPath[], kRhyLinesCwPath[]
                                                    (the JSON "line" = expected 3-bar base)
 Row counts follow the JSONs (each table's size).
-Usage: gen_interlock.py [ccw.json cw.json] [repo_root]
-  ccw.json / cw.json default to rows_ccw_trad.json / rows_cw_acad.json next to
-  this script. repo_root defaults to the NitroTron3 checkout.
+Usage: gen_interlock.py [ccw.json cw.json [ccw_path.json cw_path.json]] [repo_root]
+  The JSONs default to the four files above, next to this script (2 given =
+  the timelines pair only, 4 = all). repo_root defaults to the NitroTron3 checkout.
 Per row (JSON): stut, rest, dec (pattern strings, 'x' hit; dec = the overlaps
 of voice A and voice B, same length as rest), line (expected 3-bar base:
 s stutter, D stutter + decimate accent, _ rest, - plain), a / b (voice names),
-pr (duck | neg), a_k a_n a_rot, b_k b_n b_rot, n (= row + 1).
+pr (duck | neg), a_k a_n a_rot, b_k b_n b_rot, n (= row + 1); optional b_pat
+= an explicit voice-B pattern (instead of B = E(b_k, b_n, b_rot); then b_k =
+its hit count, b_n = its length, b_rot = 0, as the C meta prints them).
 Lengths: stut 2..64, rest = dec = lcm(a_n, b_n) <= 240 (the C side's limits,
 VESTIGE_TIMING_RHY_STUT_MAX / _MASK_MAX). Nothing is rotated here: the patterns
 are taken as they are.
@@ -24,9 +32,13 @@ import json, os, sys
 from math import gcd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC_CCW = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "rows_ccw_trad.json")
-SRC_CW = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "rows_cw_acad.json")
-ROOT = sys.argv[3] if len(sys.argv) > 3 else "/Users/ralf/src/tronstoner/daisyseed/NitroTron3"
+ARGS = sys.argv[1:]
+JSONS = [a for a in ARGS if a.endswith(".json")]
+OTHER = [a for a in ARGS if not a.endswith(".json")]
+assert len(JSONS) in (0, 2, 4) and len(OTHER) <= 1, "usage: gen_interlock.py [ccw.json cw.json [ccw_path.json cw_path.json]] [repo_root]"
+DEFAULTS = ["rows_ccw_trad.json", "rows_cw_acad.json", "rows_ccw_path.json", "rows_cw_path.json"]
+SRCS = JSONS + [os.path.join(HERE, d) for d in DEFAULTS[len(JSONS):]]
+ROOT = OTHER[0] if OTHER else "/Users/ralf/src/tronstoner/daisyseed/NitroTron3"
 CONST = os.path.join(ROOT, "pedals/chronotron3/modules/vestige_constants.h")
 TEST = os.path.join(ROOT, "tools/host/test_vestige.cpp")
 STUT_MAX, MASK_MAX = 64, 240
@@ -51,10 +63,15 @@ def check(i, r):
     assert s.count("x") == r["a_k"] and len(s) == r["a_n"], i
     if r["a"].startswith("E("):
         assert all((s[t] == "x") == euc(r["a_k"], r["a_n"], r["a_rot"], t) for t in range(len(s))), i
-    L = r["a_n"] * r["b_n"] // gcd(r["a_n"], r["b_n"])
+    bp = r.get("b_pat")                       # an explicit voice-B pattern (intensity paths)
+    if bp:                                    # (the meta prints its hit count / length, rot 0)
+        assert set(bp) <= set("x.") and bp.count("x") == r["b_k"] and len(bp) == r["b_n"] and r["b_rot"] == 0, i
+    bn = len(bp) if bp else r["b_n"]
+    L = r["a_n"] * bn // gcd(r["a_n"], bn)
     assert len(m) == L, (i, len(m), L)
     for t in range(L):
-        A, B = s[t % len(s)] == "x", euc(r["b_k"], r["b_n"], r["b_rot"], t)
+        A = s[t % len(s)] == "x"
+        B = (bp[t % len(bp)] == "x") if bp else euc(r["b_k"], r["b_n"], r["b_rot"], t)
         # the rest mask = voice B by its principle (ducking / negative space), never on a stutter
         want = (B and not A) if r["pr"] == "duck" else (not A and not B)
         assert (m[t] == "x") == want, (i, t)
@@ -87,7 +104,7 @@ def splice(path, begin, end, body):
     open(path, "w").write(txt)
 
 TAG = "gen_interlock.py — do not hand-edit"
-for side, src in (("CCW", SRC_CCW), ("CW", SRC_CW)):
+for side, src in zip(("CCW", "CW", "CCW_PATH", "CW_PATH"), SRCS):
     rows = json.load(open(src))
     c_lines, t_lines = render(rows)
     splice(CONST, "// BEGIN GENERATED RHY %s ROWS (%s)" % (side, TAG), "// END GENERATED RHY %s ROWS" % side, c_lines)
