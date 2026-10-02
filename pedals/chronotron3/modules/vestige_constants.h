@@ -471,10 +471,13 @@ static constexpr bool   VESTIGE_TIMING_RHY_ROT_RANDOM = true;
 // ... and only EVEN rotations (whole 8ths) of the stutter and rest cycles: an
 // odd one (a 16th off) reads as a flam. (The decimates sit on the off-beats.)
 static constexpr bool   VESTIGE_TIMING_RHY_ROT_EVEN   = true;
-// ... and NO FLAMS: of the allowed rest rotations, starting at the loop's own
-// draw, the first with no rest right next to (one step from) a stutter
-// (else the one with the fewest such neighbours), per pass at the depth.
-static constexpr bool   VESTIGE_TIMING_RHY_NO_FLAM    = true;
+// ... the stutters only on rotations that put a hit ON THE 1 (the loop's
+// first step; the builder's bench finding 2026-10-02), the loop's draw picks
+// one of them (per pass at the depth); RHY_ROT_EVEN then applies to the rests.
+static constexpr bool   VESTIGE_TIMING_RHY_ROT_ON1    = true;
+// (Was NO_FLAM: rests moved off a stutter's neighbour steps. Off — the
+// builder: a note with a rest after it is not a flam.)
+static constexpr bool   VESTIGE_TIMING_RHY_NO_FLAM    = false;
 // Engine 0 HIT VARIATION: ONE voice (stutters or rests, random) plays every
 // RHY_KVAR_EVERY_MIN-th .. _MAX-th run (one cycle of that voice; drawn anew
 // each time) with one hit more or less (random; at k = 1 / n - 1 the only way

@@ -2209,6 +2209,17 @@ class Vestige : public Module {
     if (!VESTIGE_TIMING_RHY_ROT_EVEN) return r % (uint32_t)n;
     return 2u * (r % (uint32_t)((n + 1) / 2));
   }
+  // ON THE 1: the loop's stutter word r picks one of the rotations of
+  // E(ks, Ns) that hit step 0 (there are ks of them).
+  static uint32_t RhyOn1Rot(uint32_t r, float u, int side) {
+    const int ks = RhyPolyKs(u, side), Ns = RhyPolyNs(side);
+    int m = 0;
+    for (int x = 0; x < Ns; x++) m += RhyHit(0, ks, Ns, x) ? 1 : 0;
+    if (m <= 0) return 0u;
+    int want = (int)(r % (uint32_t)m);
+    for (int x = 0; x < Ns; x++) if (RhyHit(0, ks, Ns, x) && want-- == 0) return (uint32_t)x;
+    return 0u;
+  }
   // NO FLAMS: from the drawn rest rotation rrot on, the first allowed one
   // (RhyRotOf's set) whose rests never sit one step from a stutter over the
   // whole lcm(Ns, Nr) period (else the fewest such rests); srot already folded.
@@ -2275,7 +2286,9 @@ class Vestige : public Module {
     const int32_t t0 = rhy_t_[s];
     const int side = rhy_side_;                            // (read once: one half per pass)
     // Rotations: this loop's own draws (RHY_ROT_RANDOM) or the fixed constants.
-    const uint32_t srot = VESTIGE_TIMING_RHY_ROT_RANDOM ? RhyRotOf(rhy_rot_[s], RhyPolyNs(side)) : (uint32_t)kRhySRot;
+    const uint32_t srot = !VESTIGE_TIMING_RHY_ROT_RANDOM ? (uint32_t)kRhySRot
+                        : VESTIGE_TIMING_RHY_ROT_ON1 ? RhyOn1Rot(rhy_rot_[s], rhy_level_, side)
+                        : RhyRotOf(rhy_rot_[s], RhyPolyNs(side));
     uint32_t rrot = VESTIGE_TIMING_RHY_ROT_RANDOM ? RhyRotOf(rhy_rrot_[s], RhyPolyNr(side)) : (uint32_t)kRhyRRot;
     if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rrot = RhyNoFlamRot(rhy_level_, srot, rrot, side);
     for (int i = 0; i < G; i++) {
@@ -4422,7 +4435,8 @@ class Vestige : public Module {
     if (VESTIGE_TIMING_RHY_ENGINE == 0) {
       const bool have = slot >= 0 && slot < VESTIGE_VOICE_SLABS;
       const int Ns = RhyPolyNs(side), Nr = RhyPolyNr(side), Nd = VESTIGE_TIMING_RHY_D_SLOTS;
-      const int sr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)RhyRotOf(rhy_rot_[slot], Ns) : 0) : kRhySRot;
+      const int sr = !VESTIGE_TIMING_RHY_ROT_RANDOM ? kRhySRot : !have ? 0
+                   : VESTIGE_TIMING_RHY_ROT_ON1 ? (int)RhyOn1Rot(rhy_rot_[slot], u, side) : (int)RhyRotOf(rhy_rot_[slot], Ns);
       int rr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)RhyRotOf(rhy_rrot_[slot], Nr) : 0) : kRhyRRot;
       if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rr = (int)RhyNoFlamRot(u, (uint32_t)sr, (uint32_t)rr, side);
       const int dr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)((rhy_rot_[slot] >> 8) % (uint32_t)Nd) : 0) : kRhyDRot;
