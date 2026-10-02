@@ -448,7 +448,7 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 //     plays VESTIGE_TIMING_RHY_TABLE_CCW, the CW half of mode 1
 //     VESTIGE_TIMING_RHY_TABLE_CW, each at its own half's depth; which pair
 //     (timelines / intensity paths) = VESTIGE_TIMING_RHY_IL_SET (below).
-static constexpr float  VESTIGE_K3_DEADZONE          = 0.02f;
+static constexpr float  VESTIGE_K3_DEADZONE          = 0.04f;
 static constexpr int    VESTIGE_TIMING_RHY_ENGINE    = 0;   // 0 polymetric · 1 afro table · 2 interlock table
 static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
 static constexpr float  VESTIGE_TIMING_RHY_S_K_MIN   = 2.f;
