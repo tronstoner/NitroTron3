@@ -170,7 +170,7 @@ static constexpr float  VESTIGE_FREEZE_POS_FRAC = 0.f;     // read anchor in the
 // the tone, not the transient): the grains read from this far into the capture,
 // less when that would leave under MIN_KEEP of tone. (A silence-ended capture
 // ends where the sound stopped, like the loop side: no silent tail.)
-static constexpr float  VESTIGE_FREEZE_ATTACK_SKIP_MS = 40.f;
+static constexpr float  VESTIGE_FREEZE_ATTACK_SKIP_MS = 100.f;
 static constexpr float  VESTIGE_FREEZE_MIN_KEEP_MS    = 120.f;
 // Freeze slab sizing. A freeze grain is FROZEN: EmitBandGrain clamps its window
 // inside [0, L-glen], so the deepest read (GrainVoice's interpolation partner)

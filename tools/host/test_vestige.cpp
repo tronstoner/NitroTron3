@@ -3451,7 +3451,10 @@ static void TestFreezeWindow() {
   printf("      freeze of a 200 ms burst: window %ld samples (%.0f ms) incl. the skipped %zu\n", len, len / 48.0, v.frz_base_[q.s]);
   Check(q.s >= VESTIGE_FREEZE_SLOT0 && len >= 9600 - 480 && len <= 9600 + 2400,
         "freeze capture ended by silence: the window ends where the sound stopped (no silent tail)");
-  Check(v.frz_base_[q.s] == (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * 48000.f), "short freeze: the attack is skipped too");
+  { const size_t skip = (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * 48000.f);
+    const size_t keep = (size_t)(VESTIGE_FREEZE_MIN_KEEP_MS * 0.001f * 48000.f);
+    const size_t want = ((size_t)len > keep) ? std::min(skip, (size_t)len - keep) : 0;
+    Check(v.frz_base_[q.s] == want && v.loop_len_[q.s] >= keep, "short freeze: the attack is skipped as far as MIN_KEEP of tone allows"); }
   cs.sw[0] = 0; Reset();
 }
 // K1 on the freeze side: the same octave crossfade as the loop side, per band
