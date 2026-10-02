@@ -217,8 +217,9 @@ for (const side of ["CCW", "CW"]) {
   const S = SIDES[side]; let num = 0, last = null;
   for (let i = 1; i <= LIST_STEPS; i++) {
     const u = i / LIST_STEPS;
-    const ks = kOf(S.ks[0], S.ks[1], u), kr = kOf(S.kr[0], S.kr[1], u), kd = kOf(KD[0], KD[1], u);
     const half = u < HALF_U;
+    const ks = kOf(S.ks[0], S.ks[1], u), kd = kOf(KD[0], KD[1], u);
+    const kr = (side === "CCW" && half) ? Math.max(2, kOf(S.kr[0], S.kr[1], u)) : kOf(S.kr[0], S.kr[1], u);   // CCW half time: rests >= E(2,8)
     if (last && last.ks === ks && last.kr === kr && last.kd === kd && last.half === half) { last.u1 = u; continue; }
     last = { side, num: ++num, ks, kr, kd, half, Ns: S.Ns, Nr: S.Nr, u0: (i - 1) / LIST_STEPS, u1: u };
     variants.push(last);

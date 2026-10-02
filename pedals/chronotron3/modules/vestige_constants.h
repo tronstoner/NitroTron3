@@ -499,6 +499,9 @@ static constexpr int    VESTIGE_TIMING_RHY_KVAR_EVERY_MAX = 5;
 // x2 = HALF TIME below depth HALF_U (the first rhythms past noon), else 1x.
 // (Double time at the top end was dropped for the ratchets below.)
 static constexpr float  VESTIGE_TIMING_RHY_HALF_U     = 0.25f;
+// CCW half time: the rests at least E(2,8) (the builder, 2026-10-02: E(1,8)
+// was too thin there).
+static constexpr int    VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW = 2;
 // RATCHETS at the top end (engine 0): from depth RAT_U0 on, each stutter of a
 // pass (drawn per pass) becomes a ratchet with chance p = RAT_P_MAX x ramp,
 // ramp = (u - RAT_U0) / (1 - RAT_U0); a ratchet is a QUADRUPLE (4 retrigs in

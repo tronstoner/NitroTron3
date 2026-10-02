@@ -2188,7 +2188,8 @@ class Vestige : public Module {
   }
   static int RhyPolyKr(float u, int side = kRhyCcw) {
     if (side == kRhyCw) return (int)(VESTIGE_TIMING_RHY_CW_R_K_MIN + (VESTIGE_TIMING_RHY_CW_R_K_MAX - VESTIGE_TIMING_RHY_CW_R_K_MIN) * u + 0.5f);
-    return (int)(VESTIGE_TIMING_RHY_R_K_MIN + (VESTIGE_TIMING_RHY_R_K_MAX - VESTIGE_TIMING_RHY_R_K_MIN) * u + 0.5f);
+    const int kr = (int)(VESTIGE_TIMING_RHY_R_K_MIN + (VESTIGE_TIMING_RHY_R_K_MAX - VESTIGE_TIMING_RHY_R_K_MIN) * u + 0.5f);
+    return (u < VESTIGE_TIMING_RHY_HALF_U && kr < VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW) ? VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW : kr;   // (CCW half time)
   }
   // Off-beat decimate density (engines 0 + 1) from the depth; engine 2 has no
   // off-beat decimate (0: its decimates are the rows' overlap masks).
@@ -2295,16 +2296,46 @@ class Vestige : public Module {
     rkv_t0_[s] = (t + N - 1) / N * N + (e - 1) * N; rkv_t1_[s] = rkv_t0_[s] + N;
     rkv_dk_[s] = 0;                                         // (its +-1: drawn when it starts)
   }
-  void RhyKVarAt(int s, int32_t t, int side, int& dks, int& dkr) {
+  // Audible rests of the run [t0, t1) with the rests' k changed by dkr.
+  int RhyKVarAudible(int32_t t0, int32_t t1, uint32_t srot, uint32_t rrot, int side, int dkr) const {
+    int a = 0;
+    for (int32_t t = t0; t < t1; t++) a += RhyPolyBase(t, rhy_level_, srot, rrot, side, 0, dkr) == 2 ? 1 : 0;
+    return a;
+  }
+  void RhyKVarAt(int s, int32_t t, int side, uint32_t srot, uint32_t rrot, int& dks, int& dkr) {
     if (rkv_next_[s] < 0) { RhyKVarPlan(s, t, side); rkv_next_[s] = 0; }   // a new loop: its first plan
     if (t >= rkv_t1_[s]) RhyKVarPlan(s, rkv_t1_[s], side);   // the varied run is over: plan the next
     if (t >= rkv_t0_[s] && rkv_dk_[s] == 0) {               // it starts: one hit more or less
-      const int v = rkv_voice_[s], N = v ? RhyPolyNr(side) : RhyPolyNs(side);
-      const int k = v ? RhyPolyKr(rhy_level_, side) : RhyPolyKs(rhy_level_, side);
-      rkv_dk_[s] = (int8_t)((k <= 1) ? 1 : (k >= N - 1) ? -1 : (TimingPick(2) ? 1 : -1));
+      const int ks = RhyPolyKs(rhy_level_, side), Ns = RhyPolyNs(side);
+      const int kr = RhyPolyKr(rhy_level_, side), Nr = RhyPolyNr(side);
+      const int first = TimingPick(2) ? 1 : -1;
+      // Stutters: k +-1 only if the varied cycle still hits its 1 (the run is
+      // one whole stutter cycle). Rests: must not lose them to the stutters —
+      // +1 keeps at least the base's audible rests, -1 at most one fewer (>= 1).
+      auto stut_ok = [&](int dd) {
+        return ks + dd >= 1 && ks + dd <= Ns - 1 && RhyHit(0, ks + dd, Ns, (int)(srot % (uint32_t)Ns));
+      };
+      auto rest_ok = [&](int dd) {
+        if (kr + dd < 1 || kr + dd > Nr - 1) return false;
+        const int base = RhyKVarAudible(rkv_t0_[s], rkv_t1_[s], srot, rrot, side, 0);
+        const int a = RhyKVarAudible(rkv_t0_[s], rkv_t1_[s], srot, rrot, side, dd);
+        return a >= 1 && a >= base - (dd < 0 ? 1 : 0);
+      };
+      auto pick = [&](int v) {
+        if (v == 1) return rest_ok(first) ? first : rest_ok(-first) ? -first : 0;
+        return stut_ok(first) ? first : stut_ok(-first) ? -first : 0;
+      };
+      int d = pick(rkv_voice_[s]);
+      if (d == 0) {                                         // the other voice, on its own next whole cycle
+        const int v2 = 1 - rkv_voice_[s], N2 = v2 ? Nr : Ns;
+        rkv_voice_[s] = (int8_t)v2; rkv_t0_[s] = (t + N2 - 1) / N2 * N2; rkv_t1_[s] = rkv_t0_[s] + N2;
+        d = pick(v2);
+      }
+      rkv_dk_[s] = (int8_t)(d != 0 ? d : kRkvNone);         // (none fits: this run plays the base)
     }
-    if (t >= rkv_t0_[s] && t < rkv_t1_[s]) (rkv_voice_[s] ? dkr : dks) = rkv_dk_[s];
+    if (t >= rkv_t0_[s] && t < rkv_t1_[s] && rkv_dk_[s] != kRkvNone) (rkv_voice_[s] ? dkr : dks) = rkv_dk_[s];
   }
+  static constexpr int8_t kRkvNone = 99;                  // hit variation: drawn, but nothing fits
   void TimingPlanRhythmPoly(int s, int G, int seg0) {
     uint8_t cell[VESTIGE_TIMING_LAYER_MAX_STEPS];
     const int32_t t0 = rhy_t_[s];
@@ -2320,8 +2351,11 @@ class Vestige : public Module {
     for (int i = 0; i < G; i++) {
       const int32_t t = t0 + i;
       int dks = 0, dkr = 0;
-      if (VESTIGE_TIMING_RHY_KVAR) RhyKVarAt(s, t, side, dks, dkr);
-      cell[i] = (uint8_t)RhyPolyBase(t, rhy_level_, srot, rrot, side, dks, dkr);
+      if (VESTIGE_TIMING_RHY_KVAR) RhyKVarAt(s, t, side, srot, rrot, dks, dkr);
+      int c = RhyPolyBase(t, rhy_level_, srot, rrot, side, dks, dkr);
+      // A stutter variation never lands on a rest (rests are never swallowed).
+      if (dks != 0 && c == 1 && RhyPolyBase(t, rhy_level_, srot, rrot, side) == 2) c = 2;
+      cell[i] = (uint8_t)c;
     }
     rhy_t_[s] = t0 + G;                                    // runs on across passes
     if (TimingRand() < VESTIGE_TIMING_RHY_VAR_PROB * (float)G / 32.f) {
