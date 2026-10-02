@@ -2220,6 +2220,30 @@ class Vestige : public Module {
     for (int x = 0; x < Ns; x++) if (RhyHit(0, ks, Ns, x) && want-- == 0) return (uint32_t)x;
     return 0u;
   }
+  // AUDIBLE RESTS (RHY_AUDIBLE_RESTS): the loop's rest word r picks one of
+  // the candidate rest rotations for depth u and stutter rotation srot.
+  static uint32_t RhyRestRot(uint32_t r, float u, uint32_t srot, int side) {
+    const int ks = RhyPolyKs(u, side), kr = RhyPolyKr(u, side), Ns = RhyPolyNs(side), Nr = RhyPolyNr(side);
+    int g = Ns, h = Nr; while (h) { const int x = g % h; g = h; h = x; }
+    const int L = Ns / g * Nr;
+    int aud[16] = {}, tot = 0, best = 0;
+    for (int x = 0; x < Nr && x < 16; x++) {
+      int n = 0, a = 0;
+      for (int t = 0; t < L; t++)
+        if (RhyHit(t % Nr, kr, Nr, x)) { n++; if (!RhyHit(t % Ns, ks, Ns, (int)(srot % (uint32_t)Ns))) a++; }
+      aud[x] = a; tot = n; if (a > best) best = a;
+    }
+    const int nx = Nr < 16 ? Nr : 16;
+    uint16_t cand = 0;
+    for (int x = 0; x < nx; x += 2) if (2 * aud[x] >= tot && aud[x] > 0) cand |= (uint16_t)(1u << x);   // even, >= half
+    if (!cand) for (int x = 0; x < nx; x++) if (2 * aud[x] >= tot && aud[x] > 0) cand |= (uint16_t)(1u << x);   // any, >= half
+    if (!cand) for (int x = 0; x < nx; x += 2) if (aud[x] == best && best > 0) cand |= (uint16_t)(1u << x);   // most, even
+    if (!cand) for (int x = 0; x < nx; x++) if (aud[x] == best) cand |= (uint16_t)(1u << x);   // most, any
+    int m = 0; for (int x = 0; x < nx; x++) m += (cand >> x) & 1u;
+    int want = (int)(r % (uint32_t)(m > 0 ? m : 1));
+    for (int x = 0; x < nx; x++) if (((cand >> x) & 1u) && want-- == 0) return (uint32_t)x;
+    return 0u;
+  }
   // NO FLAMS: from the drawn rest rotation rrot on, the first allowed one
   // (RhyRotOf's set) whose rests never sit one step from a stutter over the
   // whole lcm(Ns, Nr) period (else the fewest such rests); srot already folded.
@@ -2289,7 +2313,9 @@ class Vestige : public Module {
     const uint32_t srot = !VESTIGE_TIMING_RHY_ROT_RANDOM ? (uint32_t)kRhySRot
                         : VESTIGE_TIMING_RHY_ROT_ON1 ? RhyOn1Rot(rhy_rot_[s], rhy_level_, side)
                         : RhyRotOf(rhy_rot_[s], RhyPolyNs(side));
-    uint32_t rrot = VESTIGE_TIMING_RHY_ROT_RANDOM ? RhyRotOf(rhy_rrot_[s], RhyPolyNr(side)) : (uint32_t)kRhyRRot;
+    uint32_t rrot = !VESTIGE_TIMING_RHY_ROT_RANDOM ? (uint32_t)kRhyRRot
+                  : VESTIGE_TIMING_RHY_AUDIBLE_RESTS ? RhyRestRot(rhy_rrot_[s], rhy_level_, srot, side)
+                  : RhyRotOf(rhy_rrot_[s], RhyPolyNr(side));
     if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rrot = RhyNoFlamRot(rhy_level_, srot, rrot, side);
     for (int i = 0; i < G; i++) {
       const int32_t t = t0 + i;
@@ -4437,7 +4463,8 @@ class Vestige : public Module {
       const int Ns = RhyPolyNs(side), Nr = RhyPolyNr(side), Nd = VESTIGE_TIMING_RHY_D_SLOTS;
       const int sr = !VESTIGE_TIMING_RHY_ROT_RANDOM ? kRhySRot : !have ? 0
                    : VESTIGE_TIMING_RHY_ROT_ON1 ? (int)RhyOn1Rot(rhy_rot_[slot], u, side) : (int)RhyRotOf(rhy_rot_[slot], Ns);
-      int rr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)RhyRotOf(rhy_rrot_[slot], Nr) : 0) : kRhyRRot;
+      int rr = !VESTIGE_TIMING_RHY_ROT_RANDOM ? kRhyRRot : !have ? 0
+             : VESTIGE_TIMING_RHY_AUDIBLE_RESTS ? (int)RhyRestRot(rhy_rrot_[slot], u, (uint32_t)sr, side) : (int)RhyRotOf(rhy_rrot_[slot], Nr);
       if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rr = (int)RhyNoFlamRot(u, (uint32_t)sr, (uint32_t)rr, side);
       const int dr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)((rhy_rot_[slot] >> 8) % (uint32_t)Nd) : 0) : kRhyDRot;
       RhyRenderBars(pat, u, sr, rr, dr, side);

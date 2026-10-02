@@ -478,6 +478,14 @@ static constexpr bool   VESTIGE_TIMING_RHY_ROT_ON1    = true;
 // (Was NO_FLAM: rests moved off a stutter's neighbour steps. Off — the
 // builder: a note with a rest after it is not a flam.)
 static constexpr bool   VESTIGE_TIMING_RHY_NO_FLAM    = false;
+// AUDIBLE RESTS (the builder's no-go: rests that vanish on stutters). Per pass,
+// at the depth and the loop's stutter rotation, a rest rotation qualifies when
+// at least half of its rests (over the whole lcm(Ns, Nr) cycle) land off a
+// stutter. Candidates: the even rotations that qualify; none -> any rotation
+// that qualifies; none -> those with the most audible rests (even first). The
+// loop's own rest draw picks one of the candidates.
+static constexpr bool   VESTIGE_TIMING_RHY_AUDIBLE_RESTS = true;
+static_assert(VESTIGE_TIMING_RHY_R_CYCLE <= 16 && VESTIGE_TIMING_RHY_CW_R_CYCLE <= 16, "RhyRestRot: rest cycles <= 16");
 // Engine 0 HIT VARIATION: ONE voice (stutters or rests, random) plays every
 // RHY_KVAR_EVERY_MIN-th .. _MAX-th run (one cycle of that voice; drawn anew
 // each time) with one hit more or less (random; at k = 1 / n - 1 the only way
