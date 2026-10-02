@@ -147,3 +147,20 @@ profile shows. If B1-B3 already reach the target, B4/B5 wait.
 2. A: tail trim + attack skip on freeze captures — yes/no.
 3. B: OK to start with the bit-identical "free speed" build (B1-B3)?
 4. B: one DIAG profile round (B0) after it — or skip and go by the clicks.
+
+---
+
+## Rhythm concept notes (builder, 2026-10-02) — for the K3 rhythm design
+
+- A Euclidean pattern only means something against a reference: a straight
+  pulse (the loop's own playing) or other Euclidean layers whose hits rarely
+  or never coincide. Polymetric layers loop on their own cycles with no
+  master / slave beat, yet form one gestalt; rhythm becomes timbral colour.
+- Rests are not a voice: they make a second voice perceivable, two ways:
+  **ducking** (rests where the second rhythm would hit — the loop ducks like
+  a pad under a kick) and **negative space** (rests in the gaps where neither
+  rhythm would hit, so the composite of both is heard through the silence).
+  In vestige: stutters = voice A; rests on B's hits = ducking, rests on the
+  gaps of A ∪ B = negative space.
+- Method: rate by ear (DIAG `VS RHY` log), lock only liked combinations,
+  then test these rules against the ratings.
