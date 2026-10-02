@@ -58,6 +58,21 @@ APP_TYPE = BOOT_SRAM
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
 include $(SYSTEM_FILES_DIR)/Makefile
 
+# Speed flags for OUR C++ sources only (libdaisy.a is prebuilt separately).
+# Both keep floating-point results bit-identical (no -ffast-math: that would
+# break the isfinite() guards and reorder FP math):
+#  -fmove-loop-invariants  re-enables the RTL loop-invariant pass that libDaisy
+#                          turns off with -fno-move-loop-invariants (a code-size
+#                          flag inherited from avril/stmlib for 8-bit AVR, with
+#                          no documented reason for the M7). Last flag wins.
+#  -fno-math-errno         libm calls don't write errno (nothing reads it):
+#                          sqrtf becomes a bare vsqrt, and fmodf/expf/powf calls
+#                          no longer force reloads of members from memory.
+# Appended with += on purpose: CPPFLAGS is a recursive variable that holds
+# -MF"$(@:%.o=%.d)". A := filter-out would expand $@ to empty, and gcc would
+# then read the next flag (-fno-exceptions) as the dep-file name.
+CPPFLAGS += -fmove-loop-invariants -fno-math-errno
+
 # ---------------------------------------------------------------------------
 # User manual (PDF)
 # ---------------------------------------------------------------------------
