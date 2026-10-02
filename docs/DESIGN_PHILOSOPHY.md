@@ -137,8 +137,13 @@ DRAFT 2026-10-03 — consolidated from the agents' notes; open points are marked
 - Short replies, one step at a time (ADHD). Confirm intent on pasted content.
 - While he tests on hardware, the flashable binary does not change; name the
   exact build (hash) to flash. Minimal messages during tests.
-- Discovery phase: no behaviour tests for ideas that may be thrown away; keep
-  the safety suite. Write behaviour tests when he locks an idea in.
+- **Prototype, don't productise.** In research / exploration / discovery,
+  agents spend NO time on tests: no new behaviour tests, no updating old
+  ones per iteration. Tests that model an abandoned behaviour are skipped or
+  guarded, not rewritten. Only the existing safety checks (crashes, overruns,
+  unwritten reads, non-finite samples) keep running. Hardening with tests
+  happens only when he says an idea is locked in ("lock it in"). Making a
+  prototype production-ready too early kills the project.
 - Iteration speed matters: when only data changes (e.g. a rhythm set), no
   plumbing in between.
 - **[OPEN]** Builds: an older note says "after tuning edits don't build, he
