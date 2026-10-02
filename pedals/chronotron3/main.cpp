@@ -247,15 +247,19 @@ int main() {
     //   S t why=L|O side= ...      capture start (L = level gate, O = onset)
     //   E t why=S|C|c|R raw= Q=    capture end (S silence, C ceiling, c ceiling after the sound ended, R request)
     //   B t lift=Q|O               re-arm block lifted (Q = went quiet, O = onset)
-    //   VS RHY #n t k3= u= ks= kr= kd= |bars|
-    //                              K3 CCW rhythm #n now playing (debounced ~250 ms; engine 1:
-    //                              #row+1, row= kd= drot= slot=; engine 2: #row+1 t= k3= u=
-    //                              S=.. | R=.. | D=.. |bars|; "off" when it stops)
-    //   VS RHY LIST ...            once at start: header (fixed rotations), then one line
-    //                              per number: #n ks= kr= kd= u=from..to k3=from..to |bars|
-    //                              (engine 2: #n S=<A> k/n r | R=<duck|neg> <B> k/n r | D=overlaps
-    //                              k3=from..to |bars| — the exact values of both voices; the
-    //                              decimates = where they overlap, D in the bars)
+    //   VS RHY CCW#n t k3= u= ks= kr= kd= |bars|
+    //                              K3 mode-1 rhythm #n now playing, numbered per K3 side
+    //                              (CCW#n traditional table / CW#n academic table; debounced
+    //                              ~250 ms; engine 1: #row+1, row= kd= drot= slot=; engine 2:
+    //                              CCW#n or CW#n = row+1 t= k3= u= S=.. | R=.. | D=.. |bars|;
+    //                              "off" when it stops)
+    //   VS RHY LIST ...            once at start: header (engine 2: ccw= cw= row counts), then
+    //                              one line per number, one per main-loop iteration:
+    //                              CCW#n ks= kr= kd= u=from..to k3=from..to |bars|
+    //                              (engine 2: CCW#1.. then CW#1.., each S=<A> k/n r |
+    //                              R=<duck|neg> <B> k/n r | D=overlaps k3=from..to |bars| — the
+    //                              exact values of both voices; the decimates = where they
+    //                              overlap, D in the bars)
     if (CT3_DIAG && g_active == CT3_MODE_VESTIGE) {
       static uint32_t vs_hb = 0;
       static bool vs_banner = false;
@@ -285,7 +289,7 @@ int main() {
             (unsigned)vestige.TakeTickUs(), (unsigned)vestige.TakeProcUs(), vestige.DiagLive(),
             vestige.TakeGrainMax(), vestige.DiagK1(), F3(vestige.DiagSpX()));
       } else if (const char* rl = vestige.DiagRhyLine()) {
-        // K3 CCW rhythm line (prepared in Controls, debounced): its own tick.
+        // K3 mode-1 rhythm line (prepared in Controls, debounced): its own tick.
         // Kept pending and re-sent next tick if the port was busy (a few tries).
         static int rhy_tries = 0;
         const uint32_t drops = g_diag_usb_drops;

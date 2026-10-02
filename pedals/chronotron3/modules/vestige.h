@@ -212,12 +212,14 @@ class Vestige : public Module {
     const int   sw2 = cs.Switch(1);          // K3 mode: UP 1 Euclidean · MIDDLE 2 random · DOWN 3 straight
     const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
-    // ---- K3, bipolar: CCW rhythm · noon clean · CW the three glitch layers ----
-    // Within VESTIGE_K3_DEADZONE of noon: no errors. CW half: the three layers
-    // (TIMING / CONDITION / PLAYBACK) together at level 0 -> 1 over the half.
-    // CCW half: the RHYTHM line (stutters + rests, engine
-    // VESTIGE_TIMING_RHY_ENGINE, see TimingPlanRhythm) at depth 0 -> 1 towards
-    // full CCW.
+    // ---- K3, bipolar: noon clean; each half per SW2's K3 mode ----------------
+    // Within VESTIGE_K3_DEADZONE of noon: no errors. Mode 1 (SW2 UP): the
+    // RHYTHM line (stutters + rests, see TimingPlanRhythm) at depth 0 -> 1 over
+    // either half: CCW = the traditional table (engine
+    // VESTIGE_TIMING_RHY_ENGINE), CW = engine 2's academic odd-cycle table
+    // (VESTIGE_TIMING_RHY_TABLE_CW; engines 0 + 1: CW clean). Mode 2 (SW2
+    // MIDDLE) CW half: the three layers (TIMING / CONDITION / PLAYBACK)
+    // together at level 0 -> 1 over the half.
     {
       // Centred on the knob's real noon: a physical noon (raw 0.5) reads
       // RemapKnob(0.5) = 0.517, which a 0.02 dead zone around 0.5 would only
@@ -226,16 +228,23 @@ class Vestige : public Module {
       const float c3 = k3 - kNoon, a3 = fabsf(c3);
       const float half3 = (c3 > 0.f) ? (1.f - kNoon) : kNoon;
       const float u3 = (a3 <= VESTIGE_K3_DEADZONE) ? 0.f : fminf(1.f, (a3 - VESTIGE_K3_DEADZONE) / (half3 - VESTIGE_K3_DEADZONE));
-      // SW2 = the K3 MODE (each bipolar): UP 1 Euclidean (CCW afro rhythm, CW
-      // academic odd ratios — to come), MIDDLE 2 random (CW the three glitch
-      // layers, CCW tbd), DOWN 3 straight tremolo / shutter (tbd). A half that
-      // is not built yet is clean.
+      // SW2 = the K3 MODE (each bipolar): UP 1 Euclidean (CCW traditional
+      // timelines, CW academic odd-cycle Euclids), MIDDLE 2 random (CW the
+      // three glitch layers, CCW tbd), DOWN 3 straight tremolo / shutter (tbd).
+      // A half that is not built yet is clean.
       glitch_mode_ = (sw2 == 0) ? 0 : (sw2 == 1) ? 1 : 2;
       const float cw = (c3 > 0.f && glitch_mode_ == 1) ? u3 : 0.f;
       err_level_[kErrTiming] = err_level_[kErrCondition] = err_level_[kErrPlayback] = cw;
-      rhy_level_ = (c3 < 0.f && glitch_mode_ == 0) ? u3 : 0.f;
+      // Mode 1: one rhythm, its table by the side, its depth = that half's u3
+      // (the running step count and the planner are shared). The ISR reads
+      // side and depth separately: a pass planned across a jump over noon
+      // plays one valid row of either table (RhyRow clamps per table).
+      const int side = (c3 > 0.f) ? kRhyCw : kRhyCcw;
+      const bool rhy_on = glitch_mode_ == 0 && (side == kRhyCcw || VESTIGE_TIMING_RHY_ENGINE == 2);
+      rhy_side_  = side;
+      rhy_level_ = rhy_on ? u3 : 0.f;
     }
-    if (CT3_DIAG) DiagRhyTick(k3, sw2);     // DIAG builds: the K3 CCW rhythm log line
+    if (CT3_DIAG) DiagRhyTick(k3, sw2);     // DIAG builds: the K3 mode-1 rhythm log line (CCW# / CW#)
 
     // ---- How playing loops follow a T change: STRETCH (the builder's pick) ---
     // Tape (speed + pitch) and re-cut (cut / pad) stay in the code, selectable
@@ -2143,7 +2152,7 @@ class Vestige : public Module {
   // each live layer, then render this pass's segment of the three lines into
   // per-step (source step, direction, ratchet, condition) and from those the
   // pass's events.
-  // ---- K3 CCW: the RHYTHM -------------------------------------------------
+  // ---- K3 mode 1 (both halves): the RHYTHM --------------------------------
   // Three engines, VESTIGE_TIMING_RHY_ENGINE (vestige_constants.h): 0 the
   // POLYMETRIC Euclidean engine, 1 the curated AFRO TABLE, 2 the INTERLOCK
   // TABLE (default; 1 and 2 share the table machinery, VESTIGE_TIMING_RHY_TABLE
@@ -2152,6 +2161,8 @@ class Vestige : public Module {
   // them as usual; all share the one-added-stutter variation; engines 0 + 1
   // share the off-beat decimate colour, engine 2's decimates are its rows'
   // OVERLAP masks (dec). Every rotation is fixed — never random.
+  // Engine 2 has two tables, one per K3 half (rhy_side_: kRhyCcw traditional,
+  // kRhyCw academic); they share the planner and the running step count.
   void TimingPlanRhythm(int s, int G, int seg0) {
     if (VESTIGE_TIMING_RHY_ENGINE == 0) TimingPlanRhythmPoly(s, G, seg0);
     else                                TimingPlanRhythmTable(s, G, seg0);
@@ -2245,11 +2256,16 @@ class Vestige : public Module {
   // 1-step stutter), for that pass only.
   static int RhyMod(int32_t a, int n) { return (int)(((a % n) + n) % n); }
   static int32_t RhyDiv(int32_t a, int n) { return (a >= 0) ? a / n : -((-a + n - 1) / n); }   // floor
-  // The row for depth u (0 = off).
-  static int RhyRow(float u) {
-    int r = (int)(u * (float)VESTIGE_TIMING_RHY_ROWS);
+  // The table of K3 side `side` (kRhyCcw: the selected engine's table; kRhyCw:
+  // engine 2's CW table) and its row count.
+  static const VestigeRhyRow* RhyTab(int side) { return side == kRhyCw ? VESTIGE_TIMING_RHY_TABLE_CW : VESTIGE_TIMING_RHY_TABLE; }
+  static int RhyRows(int side) { return side == kRhyCw ? VESTIGE_TIMING_RHY_ROWS_CW : VESTIGE_TIMING_RHY_ROWS; }
+  // The row for depth u (0 = off) on side `side`: min(ROWS-1, (int)(u * ROWS)).
+  static int RhyRow(float u, int side = kRhyCcw) {
+    const int N = RhyRows(side);
+    int r = (int)(u * (float)N);
     if (r < 0) r = 0;
-    if (r > VESTIGE_TIMING_RHY_ROWS - 1) r = VESTIGE_TIMING_RHY_ROWS - 1;
+    if (r > N - 1) r = N - 1;
     return r;
   }
   // Pattern p at entry i (the row's grid index) / running step t (tremolo).
@@ -2262,24 +2278,24 @@ class Vestige : public Module {
     }
   }
   // The base cell (0 pause, 1 stutter, 2 rest) at running step t of row `row`.
-  static int RhyCell(int32_t t, int row) {
-    const VestigeRhyRow& R = VESTIGE_TIMING_RHY_TABLE[row];
+  static int RhyCell(int32_t t, int row, int side = kRhyCcw) {
+    const VestigeRhyRow& R = RhyTab(side)[row];
     const int32_t i = (R.grid == kRhyGridHalf) ? RhyDiv(t, 2) : t;
     if (RhyPatHit(R.stut, i, t)) return 1;                 // a stutter wins where both land
     if (RhyPatHit(R.rest, i, t)) return 2;
     return 0;
   }
-  static int RhyTableBase(int32_t t, float u) { return RhyCell(t, RhyRow(u)); }
+  static int RhyTableBase(int32_t t, float u, int side = kRhyCcw) { return RhyCell(t, RhyRow(u, side), side); }
   // Engine 2: a decimate accent at running step t of row `row` (the row's
   // overlap mask; the table guarantees it only lands on a stutter).
-  static bool RhyDecAt(int32_t t, int row) {
-    return VESTIGE_TIMING_RHY_ENGINE == 2 && RhyPatHit(VESTIGE_TIMING_RHY_TABLE[row].dec, t, t);
+  static bool RhyDecAt(int32_t t, int row, int side = kRhyCcw) {
+    return VESTIGE_TIMING_RHY_ENGINE == 2 && RhyPatHit(RhyTab(side)[row].dec, t, t);
   }
   // Its factor, fixed by the overlap's position in the dec cycle: the j-th
   // hit of the cycle takes DECIM_FACTORS[j % DECIM_N] (deterministic; the
   // same every cycle, every pass, every loop).
-  static int RhyDecFactor(int32_t t, int row) {
-    const VestigeRhyPat& p = VESTIGE_TIMING_RHY_TABLE[row].dec;
+  static int RhyDecFactor(int32_t t, int row, int side) {
+    const VestigeRhyPat& p = RhyTab(side)[row].dec;
     const int n = (p.kind == kRhyStr) ? p.len : (p.kind == kRhyEuc) ? p.n : 1;
     const int i = RhyMod(t, n > 0 ? n : 1);
     int j = 0;
@@ -2289,9 +2305,10 @@ class Vestige : public Module {
   void TimingPlanRhythmTable(int s, int G, int seg0) {
     uint8_t cell[VESTIGE_TIMING_LAYER_MAX_STEPS];
     const int32_t t0 = rhy_t_[s];
-    const int row = RhyRow(rhy_level_);
-    const bool half = VESTIGE_TIMING_RHY_TABLE[row].grid == kRhyGridHalf;
-    for (int i = 0; i < G; i++) cell[i] = (uint8_t)RhyCell(t0 + i, row);
+    const int side = (VESTIGE_TIMING_RHY_ENGINE == 2) ? rhy_side_ : kRhyCcw;   // (read once: one table per pass)
+    const int row = RhyRow(rhy_level_, side);
+    const bool half = RhyTab(side)[row].grid == kRhyGridHalf;
+    for (int i = 0; i < G; i++) cell[i] = (uint8_t)RhyCell(t0 + i, row, side);
     rhy_t_[s] = t0 + G;                                    // runs on across passes
     if (TimingRand() < VESTIGE_TIMING_RHY_VAR_PROB * (float)G / 32.f) {
       int frees[VESTIGE_TIMING_LAYER_MAX_STEPS], nf = 0;
@@ -2322,10 +2339,10 @@ class Vestige : public Module {
     if (VESTIGE_TIMING_RHY_ENGINE == 2) {
       for (int i = 0; i < G; i++) {
         const int32_t t = t0 + i;
-        if (cell[i] != 1 || !RhyDecAt(t, row) || ln_nh_[s][kErrCondition] >= kLineMaxHits) continue;
+        if (cell[i] != 1 || !RhyDecAt(t, row, side) || ln_nh_[s][kErrCondition] >= kLineMaxHits) continue;
         LineHit& x = ln_hit_[s][kErrCondition][ln_nh_[s][kErrCondition]++];
         x.start = (int8_t)(seg0 + i); x.len = 1; x.age = 0; x.type = (int8_t)kFigDecimate;
-        x.sub = (int8_t)RhyDecFactor(t, row);
+        x.sub = (int8_t)RhyDecFactor(t, row, side);
       }
     }
     // Engine 1: the DECIMATE colour = its own Euclidean pattern on the 8th-note
@@ -4128,20 +4145,23 @@ class Vestige : public Module {
   }
   uint32_t act_count_     = 0;
 
-  // ---- DIAG (CT3_DIAG builds only): the K3 CCW rhythm log -------------------
-  // Whenever the CCW rhythm that plays changes — engine 0: its (ks, kr, kd);
-  // engine 1: its table row (+ kd) or a new loop; engine 2: its row — ONE
+  // ---- DIAG (CT3_DIAG builds only): the K3 mode-1 rhythm log ----------------
+  // Whenever the rhythm that plays changes — engine 0: its (ks, kr, kd);
+  // engine 1: its table row (+ kd) or a new loop; engine 2: its side + row — ONE
   // line is prepared here in the main loop (Controls) once the change has held
   // for kRhySettleTicks control ticks (~250 ms: turning the knob does not
   // flood), and the shell sends it in a main-loop iteration of its own
   // (DiagRhyLine / DiagRhyDone). Also forced once when K3 enters the CCW half
-  // and when SW2 switches to UP. Each line starts with the rhythm's NUMBER #n:
-  // engine 0 numbers its distinct (ks, kr, kd) combinations #1 (just past the
-  // dead zone) .. #N (full CCW) in travel order; engines 1 + 2 = table row + 1
-  // (engine 2: #1 .. #ROWS, its decimates are part of the row).
+  // and when SW2 switches to UP. Each line starts with the rhythm's NUMBER,
+  // prefixed by its K3 side (CCW#n / CW#n): engine 0 numbers its distinct
+  // (ks, kr, kd) combinations CCW#1 (just past the dead zone) .. CCW#N (full
+  // CCW) in travel order; engines 1 + 2 = table row + 1 (engine 2: CCW#1 ..
+  // CCW#ROWS and CW#1 .. CW#ROWS_CW, numbered per side, each from noon's edge
+  // outwards; its decimates are part of the row).
   // At start the whole numbered list is sent once ("VS RHY LIST", a header
-  // with the fixed rotations, then one line per number, one per main-loop
-  // iteration; a changed-rhythm line goes first when both are pending).
+  // with the fixed rotations, then one line per number — engine 2: CCW#1..,
+  // then CW#1.. — one per main-loop iteration; a changed-rhythm line goes
+  // first when both are pending).
   // The pattern is the engine's own BASE from running step 0, 3 bars of 16:
   // s stutter · _ rest · d decimate · D decimate on a stutter · - plain.
   // Observation only: nothing here touches the audio thread's state or RNG.
@@ -4150,44 +4170,50 @@ class Vestige : public Module {
   // stutter / rest / decimate rotations srot / rrot / drot (engine 1: only
   // drot is used, its patterns carry their own fixed rotations; engine 2:
   // none, its decimates are the row's overlap mask).
-  static void RhyRenderBars(char* out, float u, int srot, int rrot, int drot) {
-    const int Nd = VESTIGE_TIMING_RHY_D_SLOTS, kd = RhyKd(u), row = RhyRow(u);
-    const bool half = (VESTIGE_TIMING_RHY_ENGINE != 0) && VESTIGE_TIMING_RHY_TABLE[row].grid == kRhyGridHalf;
+  // side: which K3 half's table (engine 2; engines 0 + 1: kRhyCcw only).
+  static void RhyRenderBars(char* out, float u, int srot, int rrot, int drot, int side = kRhyCcw) {
+    const int Nd = VESTIGE_TIMING_RHY_D_SLOTS, kd = RhyKd(u), row = RhyRow(u, side);
+    const bool half = (VESTIGE_TIMING_RHY_ENGINE != 0) && RhyTab(side)[row].grid == kRhyGridHalf;
     const int per = half ? 8 : 4;                           // the decimate's off-beat period
     int o = 0; out[o++] = '|';
     for (int t = 0; t < 48; t++) {
-      const int c = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyBase(t, u, (uint32_t)srot, (uint32_t)rrot) : RhyTableBase(t, u);
-      const bool dec = (VESTIGE_TIMING_RHY_ENGINE == 2) ? (c == 1 && RhyDecAt(t, row))
+      const int c = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyBase(t, u, (uint32_t)srot, (uint32_t)rrot) : RhyTableBase(t, u, side);
+      const bool dec = (VESTIGE_TIMING_RHY_ENGINE == 2) ? (c == 1 && RhyDecAt(t, row, side))
                      : c != 2 && t % per == per / 2 && RhyHit((t / per) % Nd, kd, Nd, RhyMod(drot, Nd));
       out[o++] = (c == 2) ? '_' : dec ? (c == 1 ? 'D' : 'd') : (c == 1 ? 's' : '-');
       if (t % 16 == 15) out[o++] = '|';
     }
     out[o] = 0;
   }
-  // The rhythm's key at depth u > 0: engine 0 (ks, kr, kd), engine 1 (row, 0, kd), engine 2 (row, 0, 0).
-  static void RhyKeyOf(float u, int& a, int& b, int& kd) {
-    a  = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyKs(u) : RhyRow(u);
+  // The rhythm's key at depth u > 0: engine 0 (ks, kr, kd), engine 1 (row, 0, kd), engine 2 (row, 0, 0) of side `side`.
+  static void RhyKeyOf(float u, int& a, int& b, int& kd, int side = kRhyCcw) {
+    a  = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyKs(u) : RhyRow(u, side);
     b  = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyKr(u) : 0;
     kd = RhyKd(u);
   }
-  // The numbered list, sampled over the travel: u = i / kRhyListSteps (exact
-  // binary fractions, so no float-rounding sliver splits a combination).
+  // The numbered list, sampled over each half's travel: u = i / kRhyListSteps
+  // (exact binary fractions, so no float-rounding sliver splits a
+  // combination); engine 2: the CCW side's rows, then the CW side's.
   void RhyBuildList() {
     rl_n_ = 0;
-    for (int i = 1; i <= kRhyListSteps; i++) {
-      const float u = (float)i / (float)kRhyListSteps;
-      int a, b, kd; RhyKeyOf(u, a, b, kd);
-      if (rl_n_ > 0 && rl_[rl_n_ - 1].a == a && rl_[rl_n_ - 1].b == b && rl_[rl_n_ - 1].kd == kd) { rl_[rl_n_ - 1].u1 = u; continue; }
-      if (rl_n_ >= (int)(sizeof rl_ / sizeof rl_[0])) break;
-      RhyEntry& e = rl_[rl_n_++];
-      e.a = a; e.b = b; e.kd = kd; e.u0 = (float)(i - 1) / (float)kRhyListSteps; e.u1 = u;
-      e.num = (VESTIGE_TIMING_RHY_ENGINE == 0) ? rl_n_ : a + 1;
+    const int sides = (VESTIGE_TIMING_RHY_ENGINE == 2) ? 2 : 1;
+    for (int side = kRhyCcw; side < sides; side++) {
+      const int first = rl_n_;
+      for (int i = 1; i <= kRhyListSteps; i++) {
+        const float u = (float)i / (float)kRhyListSteps;
+        int a, b, kd; RhyKeyOf(u, a, b, kd, side);
+        if (rl_n_ > first && rl_[rl_n_ - 1].a == a && rl_[rl_n_ - 1].b == b && rl_[rl_n_ - 1].kd == kd) { rl_[rl_n_ - 1].u1 = u; continue; }
+        if (rl_n_ >= (int)(sizeof rl_ / sizeof rl_[0])) break;
+        RhyEntry& e = rl_[rl_n_++];
+        e.a = a; e.b = b; e.kd = kd; e.side = side; e.u0 = (float)(i - 1) / (float)kRhyListSteps; e.u1 = u;
+        e.num = (VESTIGE_TIMING_RHY_ENGINE == 0) ? rl_n_ : a + 1;
+      }
     }
     rl_i_ = 0; rl_ready_ = false;
   }
-  // The number #n of the rhythm at depth u > 0 (0 = none).
-  int RhyNum(float u) const {
-    if (VESTIGE_TIMING_RHY_ENGINE != 0) return RhyRow(u) + 1;
+  // The number #n of the rhythm at depth u > 0 on side `side` (0 = none).
+  int RhyNum(float u, int side = kRhyCcw) const {
+    if (VESTIGE_TIMING_RHY_ENGINE != 0) return RhyRow(u, side) + 1;
     int a, b, kd; RhyKeyOf(u, a, b, kd);
     for (int i = 0; i < rl_n_; i++) if (rl_[i].a == a && rl_[i].b == b && rl_[i].kd == kd) return rl_[i].num;
     for (int i = 0; i < rl_n_; i++) if (u <= rl_[i].u1) return rl_[i].num;   // (a float sliver: by range)
@@ -4199,14 +4225,16 @@ class Vestige : public Module {
  private:
   static constexpr int kRhySettleTicks = 25;              // x ~10 ms control ticks
   static constexpr int kRhyLineN = 176;                   // < the shell's DiagLine buffer (192)
-  static constexpr int kRhyListMax = 48;                  // list entries (engine 0: 8, engine 1: ~17, engine 2: one per row)
-  static_assert(VESTIGE_TIMING_RHY_ENGINE != 2 || kRhyListMax >= VESTIGE_TIMING_RHY_ROWS, "DIAG rhythm list: one entry per interlock row");
+  static constexpr int kRhyListMax = 48;                  // list entries (engine 0: 8, engine 1: ~17, engine 2: one per row of both tables)
+  static_assert(VESTIGE_TIMING_RHY_ENGINE != 2 || kRhyListMax >= VESTIGE_TIMING_RHY_ROWS + VESTIGE_TIMING_RHY_ROWS_CW,
+                "DIAG rhythm list: one entry per interlock row (CCW + CW)");
   static constexpr int kRhyListSteps = 4096;              // list sampling of the depth
   struct RhyKey {
-    int on, a, b, kd, slot; uint32_t loop;
-    bool operator==(const RhyKey& o) const { return on == o.on && a == o.a && b == o.b && kd == o.kd && slot == o.slot && loop == o.loop; }
+    int on, side, a, b, kd, slot; uint32_t loop;
+    bool operator==(const RhyKey& o) const { return on == o.on && side == o.side && a == o.a && b == o.b && kd == o.kd && slot == o.slot && loop == o.loop; }
   };
-  struct RhyEntry { int num, a, b, kd; float u0, u1; };
+  struct RhyEntry { int num, side, a, b, kd; float u0, u1; };
+  static const char* RhySideName(int side) { return side == kRhyCw ? "CW" : "CCW"; }
   static void RhyFx3(char* b, size_t n, float x) {        // 0.123 (newlib-nano has no %f)
     if (!(x >= 0.f)) x = 0.f;
     int ip = (int)x, fp = (int)((x - (float)ip) * 1000.f + 0.5f);
@@ -4224,17 +4252,18 @@ class Vestige : public Module {
     else if (p.kind == kRhyStr && p.str) { nm = "str"; n = p.len; for (int i = 0; i < p.len; i++) k += p.str[i] == 'x'; }
     else if (p.kind == kRhyTrem) nm = "trem";
   }
-  static void RhyLayersFmt(char* b, size_t n, int row) {
-    const VestigeRhyRow& R = VESTIGE_TIMING_RHY_TABLE[row];
+  static void RhyLayersFmt(char* b, size_t n, int row, int side = kRhyCcw) {
+    const VestigeRhyRow& R = RhyTab(side)[row];
     const char *an, *bn; int ak, aN, ar, bk, bN, br;
     RhyVoiceOf(R.meta.a, R.stut, an, ak, aN, ar);
     RhyVoiceOf(R.meta.b, R.rest, bn, bk, bN, br);          // (no B in the meta: the rest pattern itself)
     const char* pr = R.meta.pr == kRhyPrDuck ? "duck" : R.meta.pr == kRhyPrNeg ? "neg" : "-";
     snprintf(b, n, "S=%s k%d/%d r%d | R=%s %s k%d/%d r%d | D=overlaps", an, ak, aN, ar, pr, bn, bk, bN, br);
   }
-  // K3's (remapped) reading at CCW depth u: the inverse of Controls' mapping.
-  static float RhyK3At(float u) {
+  // K3's (remapped) reading at depth u on side `side`: the inverse of Controls' mapping.
+  static float RhyK3At(float u, int side = kRhyCcw) {
     constexpr float kNoon = (0.5f - KNOB_MIN) / (KNOB_MAX - KNOB_MIN);
+    if (side == kRhyCw) return kNoon + VESTIGE_K3_DEADZONE + u * ((1.f - kNoon) - VESTIGE_K3_DEADZONE);
     return kNoon - VESTIGE_K3_DEADZONE - u * (kNoon - VESTIGE_K3_DEADZONE);
   }
   // The next list line into its own pending slot (rl_i_ 0 = the header).
@@ -4246,24 +4275,25 @@ class Vestige : public Module {
         snprintf(line, n, "VS RHY LIST engine=0 n=%d srot=%d rrot=%d drot=%d var=%s (fixed for every loop)",
                  rl_n_, kRhySRot, kRhyRRot, kRhyDRot, VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "on" : "off");
       else if (VESTIGE_TIMING_RHY_ENGINE == 2)            // (decimates = each row's A/B overlaps)
-        snprintf(line, n, "VS RHY LIST engine=2 n=%d rows=%d var=%s (fixed for every loop; D = A+B overlaps)",
-                 rl_n_, VESTIGE_TIMING_RHY_ROWS, VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "on" : "off");
+        snprintf(line, n, "VS RHY LIST engine=2 n=%d ccw=%d cw=%d var=%s (fixed for every loop; D = A+B overlaps)",
+                 rl_n_, VESTIGE_TIMING_RHY_ROWS, VESTIGE_TIMING_RHY_ROWS_CW, VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "on" : "off");
       else
         snprintf(line, n, "VS RHY LIST engine=1 n=%d rows=%d drot=%d var=%s (fixed for every loop)",
                  rl_n_, VESTIGE_TIMING_RHY_ROWS, kRhyDRot, VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "on" : "off");
     } else {
       const RhyEntry& e = rl_[rl_i_ - 1];
+      const char* sn = RhySideName(e.side);
       char u0[24], u1[24], k0[24], k1[24], pat[56];
       RhyFx3(u0, sizeof u0, e.u0); RhyFx3(u1, sizeof u1, e.u1);
-      RhyFx3(k0, sizeof k0, RhyK3At(e.u0)); RhyFx3(k1, sizeof k1, RhyK3At(e.u1));
-      RhyRenderBars(pat, 0.5f * (e.u0 + e.u1), kRhySRot, kRhyRRot, kRhyDRot);
+      RhyFx3(k0, sizeof k0, RhyK3At(e.u0, e.side)); RhyFx3(k1, sizeof k1, RhyK3At(e.u1, e.side));
+      RhyRenderBars(pat, 0.5f * (e.u0 + e.u1), kRhySRot, kRhyRRot, kRhyDRot, e.side);
       if (VESTIGE_TIMING_RHY_ENGINE == 0)
-        snprintf(line, n, "VS RHY LIST #%d ks=%d kr=%d kd=%d u=%s..%s k3=%s..%s %s", e.num, e.a, e.b, e.kd, u0, u1, k0, k1, pat);
+        snprintf(line, n, "VS RHY LIST %s#%d ks=%d kr=%d kd=%d u=%s..%s k3=%s..%s %s", sn, e.num, e.a, e.b, e.kd, u0, u1, k0, k1, pat);
       else if (VESTIGE_TIMING_RHY_ENGINE == 2) {
-        char ly[96]; RhyLayersFmt(ly, sizeof ly, e.a);
-        snprintf(line, n, "VS RHY LIST #%d %s k3=%s..%s %s", e.num, ly, k0, k1, pat);
+        char ly[96]; RhyLayersFmt(ly, sizeof ly, e.a, e.side);
+        snprintf(line, n, "VS RHY LIST %s#%d %s k3=%s..%s %s", sn, e.num, ly, k0, k1, pat);
       } else
-        snprintf(line, n, "VS RHY LIST #%d row=%d kd=%d u=%s..%s k3=%s..%s %s", e.num, e.a, e.kd, u0, u1, k0, k1, pat);
+        snprintf(line, n, "VS RHY LIST %s#%d row=%d kd=%d u=%s..%s k3=%s..%s %s", sn, e.num, e.a, e.kd, u0, u1, k0, k1, pat);
     }
     memcpy(rl_line_, line, sizeof rl_line_); rl_line_[sizeof rl_line_ - 1] = 0;
     rl_i_++; rl_ready_ = true;
@@ -4271,11 +4301,13 @@ class Vestige : public Module {
   void DiagRhyTick(float k3, int sw2) {
     RhyListNext();                                        // the numbered list, once (its own slot)
     const float u = rhy_level_;
+    const int side = (VESTIGE_TIMING_RHY_ENGINE == 2) ? rhy_side_ : kRhyCcw;
     const int slot = rhy_act_slot_;
     RhyKey k{};
     k.on = u > 0.f;
     if (k.on) {
-      RhyKeyOf(u, k.a, k.b, k.kd);
+      k.side = side;                                      // (CCW -> CW: a new line)
+      RhyKeyOf(u, k.a, k.b, k.kd, side);
       // Engines 0 + 2: a new loop plays the same rhythm (fixed rotations) - no line.
       if (VESTIGE_TIMING_RHY_ENGINE == 1) { k.slot = slot; k.loop = rhy_act_n_; }
     }
@@ -4289,20 +4321,21 @@ class Vestige : public Module {
     RhyFx3(k3s, sizeof k3s, k3); RhyFx3(us, sizeof us, u);
     const unsigned tms = (unsigned)daisy::System::GetNow();
     if (!k.on) { snprintf(line, sizeof line, "VS RHY t=%u k3=%s sw2=%d off", tms, k3s, sw2); DiagRhyPost(line); return; }
-    const int num = RhyNum(u);
+    const int num = RhyNum(u, side);
+    const char* sn = RhySideName(side);
     char pat[56];
     if (VESTIGE_TIMING_RHY_ENGINE == 0) {
       RhyRenderBars(pat, u, kRhySRot, kRhyRRot, kRhyDRot);
-      snprintf(line, sizeof line, "VS RHY #%d t=%u k3=%s u=%s ks=%d kr=%d kd=%d %s",
-               num, tms, k3s, us, k.a, k.b, k.kd, pat);
+      snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s ks=%d kr=%d kd=%d %s",
+               sn, num, tms, k3s, us, k.a, k.b, k.kd, pat);
     } else if (VESTIGE_TIMING_RHY_ENGINE == 2) {
-      RhyRenderBars(pat, u, 0, 0, 0);
-      char ly[96]; RhyLayersFmt(ly, sizeof ly, RhyRow(u));
-      snprintf(line, sizeof line, "VS RHY #%d t=%u k3=%s u=%s %s %s", num, tms, k3s, us, ly, pat);
+      RhyRenderBars(pat, u, 0, 0, 0, side);
+      char ly[96]; RhyLayersFmt(ly, sizeof ly, RhyRow(u, side), side);
+      snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s %s %s", sn, num, tms, k3s, us, ly, pat);
     } else {
       RhyRenderBars(pat, u, 0, 0, kRhyDRot);
-      snprintf(line, sizeof line, "VS RHY #%d t=%u k3=%s u=%s row=%d kd=%d drot=%d slot=%d %s",
-               num, tms, k3s, us, k.a, k.kd, kRhyDRot, slot, pat);
+      snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s row=%d kd=%d drot=%d slot=%d %s",
+               sn, num, tms, k3s, us, k.a, k.kd, kRhyDRot, slot, pat);
     }
     DiagRhyPost(line);
   }
@@ -4406,7 +4439,8 @@ class Vestige : public Module {
   uint32_t rhy_rot_[VESTIGE_VOICE_SLABS]     = {};       // per-loop word (unused: every rotation is fixed; drawn for the RNG sequence)
   uint32_t rhy_rrot_[VESTIGE_VOICE_SLABS]    = {};       //  (unused: engine 0's rotations are fixed constants)
   int32_t  rhy_t_[VESTIGE_VOICE_SLABS]       = {};       // running step count (the polymeter's clock)
-  volatile float rhy_level_ = 0.f;                        // K3 CCW depth (0 = off)
+  volatile float rhy_level_ = 0.f;                        // K3 mode-1 rhythm depth, either half (0 = off)
+  volatile int   rhy_side_  = 0;                          //  its half: kRhyCcw / kRhyCw (which table)
   int8_t   tl_src_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},   // this pass's render (diag)
            tl_dir_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},
            tl_rat_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},

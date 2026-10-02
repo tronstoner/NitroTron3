@@ -3129,7 +3129,8 @@ static void StepWindows(const SlLog& lg, int s, size_t L, bool rev, int* ok, int
 // ratchet, silence) is checked against the output sample by sample.
 struct LayerStats { int G = 0, cells = 0; long steps = 0, good = 0, silent = 0, silent_ok = 0, bad_lines = 0;
                     bool changed = false; long first_pass_events = -1; };
-static LayerStats LayerRun(float k3raw, int tapms, int passes) {
+// sw2: SW2 for the K3 mode (-1: by the side, CW = mode 2 layers, CCW = mode 1 rhythm).
+static LayerStats LayerRun(float k3raw, int tapms, int passes, int sw2 = -1) {
   LayerStats st;
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; Taps({tapms}); RunFor(0.6f);
   seen_acts = v.act_count_;
@@ -3143,7 +3144,7 @@ static LayerStats LayerRun(float k3raw, int tapms, int passes) {
   wet_hist.clear(); hist_n0 = n; RunFor((float)(Q - 2) / sr);
   const std::vector<float> ref(wet_hist);
   auto refm = [&](long k) { k = ((k % Q) + Q) % Q; return (k >= 1 && k - 1 < (long)ref.size()) ? ref[k - 1] : 0.f; };
-  cs.sw[1] = (k3raw > 0.5f) ? 1 : 0;                       // CW layers = mode 2, CCW rhythm = mode 1
+  cs.sw[1] = (sw2 >= 0) ? sw2 : (k3raw > 0.5f) ? 1 : 0;    // default: CW layers = mode 2, CCW rhythm = mode 1
   cs.knob[2] = k3raw;
   std::vector<std::string> first(3);
   for (int p = 0; p < passes; p++) {
@@ -3487,11 +3488,12 @@ static void TestK3RhythmPoly() {
 // layers, each row's base is exactly its table entry, and a pass varies by at
 // most one added stutter.
 // The depth in the middle of row r's zone.
-static float RhyDepth(int r) { return ((float)r + 0.5f) / (float)VESTIGE_TIMING_RHY_ROWS; }
+// (side: which K3 half's table; engines 0 + 1 have the CCW side only.)
+static float RhyDepth(int r, int side = kRhyCcw) { return ((float)r + 0.5f) / (float)Vestige::RhyRows(side); }
 // The expected base of a table row over `steps` running steps, built directly
 // from the table (not through the module): '-' pause, 's' stutter, '_' rest.
-static std::string RhyExpect(int row, int steps) {
-  const VestigeRhyRow& R = VESTIGE_TIMING_RHY_TABLE[row];
+static std::string RhyExpect(int row, int steps, int side = kRhyCcw) {
+  const VestigeRhyRow& R = Vestige::RhyTab(side)[row];
   const int g = (R.grid == kRhyGridHalf) ? 2 : 1;
   auto expand = [&](const VestigeRhyPat& p, bool is_rest) {
     std::string o(steps, '.');
@@ -3600,101 +3602,147 @@ static void TestK3RhythmTable() {
     cs.knob[2] = 0.5f; RunFor(0.1f);
   }
 }
-// K3 CCW, engine 2 = the INTERLOCK table (VESTIGE_TIMING_RHY_TABLE_INTERLOCK):
-// rows on the 1x grid, stutters + rests (each a Euclid E(k, n, rot), n = 8 /
-// 12 / 16, or a pattern string of any length, each indexed by the running
-// step count modulo its own length) + the row's decimate mask dec = the
-// OVERLAPS of voice A and voice B (decimate accents on those stutters; no
-// off-beat decimate), no per-loop rotation. Everything else expected here is
-// derived from the table itself (new rows need no test edits).
+// K3 mode 1, engine 2 = the two INTERLOCK tables: CCW half
+// VESTIGE_TIMING_RHY_TABLE_CCW (traditional timelines), CW half
+// VESTIGE_TIMING_RHY_TABLE_CW (academic odd-cycle Euclids); rows on the 1x
+// grid, stutters + rests (each a Euclid E(k, n, rot), n = 8 / 12 / 16, or a
+// pattern string of any length, each indexed by the running step count modulo
+// its own length) + the row's decimate mask dec = the OVERLAPS of voice A and
+// voice B (decimate accents on those stutters; no off-beat decimate), no
+// per-loop rotation. The two sides share the planner and the running step
+// count; only the table and the depth switch. Everything else expected here
+// is derived from the tables themselves (new rows need no test edits).
 // The expected 3-bar base of every row (s stutter, D stutter + decimate
-// accent, _ rest, - plain), from the rows JSON's "line" (generated with the table).
-static const char* const kInterlockLines[] = {
-  // BEGIN GENERATED INTERLOCK LINES (gen_interlock.py — do not hand-edit)
+// accent, _ rest, - plain), from the rows JSONs' "line" (generated with the tables).
+static const char* const kRhyLinesCcw[] = {
+  // BEGIN GENERATED RHY CCW LINES (gen_interlock.py — do not hand-edit)
+  /* #1  */ "D---s-D---s-D---s-_-s-s-_-s-s-_-s---D-s---D-s---",
+  /* #2  */ "D--s--_s--s-D---s-_s---s_-s-s-_-s--s_--s--D-s---",
+  /* #3  */ "D--s_-s-_-s-D---D--s_-s-_-s-D---D--s_-s-_-s-D---",
+  /* #4  */ "D--D--D-_-s_--D-D--D--D-_-s_--D-D--D--D-_-s_--D-",
+  /* #5  */ "D--s_-s-D--s_-s-D--s_-s-D--s_-s-D--s_-s-D--s_-s-",
+  /* #6  */ "D--D--D-_-s_s-_-D--D--D-_-s_s-_-D--D--D-_-s_s-_-",
+  /* #7  */ "D-s-D--s_s--D-s-D--s_s--D-s-D--s_s--D-s-D--s_s--",
+  /* #8  */ "D--s_-s-_s--D--s_-s-_s--D--s_-s-_s--D--s_-s-_s--",
+  /* #9  */ "D--D--D--_s-_s-_s-_s-_s-_-s_-s_-s_-s_-s_--D--D--",
+  /* #10 */ "D--D--D-s_-s_-s_s-_s-_s-D--D--D-s_-s_-s_s-_s-_s-",
+  /* #11 */ "D-s_s-_s_s-_s-D-D--D-s_-D-s_s-_s_s-_s-D-D--D-s_-",
+  /* #12 */ "D-s-Ds-s_s-sD-s-Ds-s_s-sD-s-Ds-s_s-sD-s-Ds-s_s-s",
+  /* #13 */ "D-ss-sD-s-ss_ss-s-Ds-ss-D-ss-sD-s-ss_ss-s-Ds-ss-",
+  /* #14 */ "D-sD-sD-s_ss_ss_s-Ds-Ds-D-sD-sD-s_ss_ss_s-Ds-Ds-",
+  // END GENERATED RHY CCW LINES
+};
+static const char* const kRhyLinesCw[] = {
+  // BEGIN GENERATED RHY CW LINES (gen_interlock.py — do not hand-edit)
   /* #1  */ "D---D--s_-s-_-s-_s--D---D--s_-s-_-s-_s--D---D--s",
   /* #2  */ "D--_s-_-D--_s-_s_--D--_s_--D--D-_-s_--D-_-s_-s_-",
   /* #3  */ "D--s_s--D-s-_s-s_-s-D--s_s--D-s-_s-s_-s-D--s_s--",
-  /* #4  */ "D--s_-s_--D-s-_-s_-s_-s-_-s_s-_-s-_s-_s-_-s-D--_",
-  /* #5  */ "D--s_s-s_-s-D-s-_s-s_s--D-s-D--s_s-s_-s-D-s-_s-s",
-  /* #6  */ "D--D--D-D--D-s_-D--D-s_-D-s_-s_-D-s_-s_s_-s_-s_s",
-  /* #7  */ "D--s_s-s_-s-D-s_s--D-s-D--s_s-D-s-_s-s_s--D-s_s-",
-  /* #8  */ "D--D-_s-D-_s-_s_s-_s_-s_s_-s_-D-s_-D--D-D--D-_s-",
-  /* #9  */ "D--_s_s-_-D-s_-_s-_-D-s_-_s-D-_-s_-_s-D-_-s_s_--",
-  /* #10 */ "D-s-D--D-s_-s-D-s_-s_s--D-s_s-_s-s_-s_s-D--s_s-_",
-  /* #11 */ "D--D-D-_s-D-_s_s-_s_s_-s_s_-D-s_-D-D--D-D-_s-D-_",
-  /* #12 */ "D--s_s-s_s-s_s-s_-s-D-s-D-s-D-s-_s-s_s-s_s-s_s--",
-  /* #13 */ "D--D-s_s_s-_s-D-D-s_-s_s_s-D--D-D-s_s-_s_s-D-s_-",
-  /* #14 */ "D--D-D-s_s_s-_s_s-D-D-s_-D-s_s_s-D-_s-D-D-s_s_-s",
-  /* #15 */ "D--D-D-s_-D-s_s_s-_s_s-D-_s-D-D-s_-D-s_s_-s_s_s-",
-  /* #16 */ "D--D-D-D-D-_s-D-D-D-_s_s-D-D-_s_s_s-D-_s_s_s_s-_",
-  /* #17 */ "D-s-Ds-s_ss-D-ss_s-sD-s-Ds-s_ss-D-ss_s-sD-s-Ds-s",
-  /* #18 */ "D-s-Ds-D-s_ss-D-sD-s_s-sD-s_ss_s-s_ss_s-Ds-s_s-D",
-  /* #19 */ "D-s_sD-D-sD-D-Ds-D-Ds_s-Ds_s_ss_s_sD-s_sD-D-sD-D",
-  /* #20 */ "D-sD-Ds_s-Ds_sD-s_sD-Ds-D-Ds_ss_s_sD-sD-D-Ds-Ds_",
-  // END GENERATED INTERLOCK LINES
+  /* #4  */ "D--s_s-s_-s-D-s-_s-s_s--D-s-D--s_s-s_-s-D-s-_s-s",
+  /* #5  */ "D--D--D-D--D-s_-D--D-s_-D-s_-s_-D-s_-s_s_-s_-s_s",
+  /* #6  */ "D--s_s-s_-s-D-s_s--D-s-D--s_s-D-s-_s-s_s--D-s_s-",
+  /* #7  */ "D--D-D-_s-D-_s_s-_s_s_-s_s_-D-s_-D-D--D-D-_s-D-_",
+  /* #8  */ "D--s_s-s_s-s_s-s_-s-D-s-D-s-D-s-_s-s_s-s_s-s_s--",
+  /* #9  */ "D--D-s_s_s-_s-D-D-s_-s_s_s-D--D-D-s_s-_s_s-D-s_-",
+  /* #10 */ "D--D-D-s_s_s-_s_s-D-D-s_-D-s_s_s-D-_s-D-D-s_s_-s",
+  /* #11 */ "D--D-D-s_-D-s_s_s-_s_s-D-_s-D-D-s_-D-s_s_-s_s_s-",
+  /* #12 */ "D--D-D-D-D-_s-D-D-D-_s_s-D-D-_s_s_s-D-_s_s_s_s-_",
+  /* #13 */ "D-s-Ds-s_ss-D-ss_s-sD-s-Ds-s_ss-D-ss_s-sD-s-Ds-s",
+  /* #14 */ "D-s_sD-D-sD-D-Ds-D-Ds_s-Ds_s_ss_s_sD-s_sD-D-sD-D",
+  // END GENERATED RHY CW LINES
 };
-static constexpr int kInterlockLinesN = (int)(sizeof kInterlockLines / sizeof kInterlockLines[0]);
+static constexpr int kRhyLinesCcwN = (int)(sizeof kRhyLinesCcw / sizeof kRhyLinesCcw[0]);
+static constexpr int kRhyLinesCwN  = (int)(sizeof kRhyLinesCw / sizeof kRhyLinesCw[0]);
+static const char* SideName(int side) { return side == kRhyCw ? "CW" : "CCW"; }
+// The raw K3 for depth u on side `side` (mode 1: both halves are the rhythm).
+static float K3Side(float u, int side) { return side == kRhyCw ? K3Cw(u) : K3Ccw(u); }
 static int RhyPatLen(const VestigeRhyPat& p) { return p.kind == kRhyStr ? p.len : p.kind == kRhyEuc ? p.n : 1; }
 static long RhyGcd(long a, long b) { while (b) { const long t = a % b; a = b; b = t; } return a; }
 // Row r's decimate mask at running step t (the dec string / pattern, test side).
-static bool InterlockDec(int r, int t) {
-  const VestigeRhyPat& p = VESTIGE_TIMING_RHY_TABLE_INTERLOCK[r].dec;
+static bool InterlockDec(int r, int t, int side = kRhyCcw) {
+  const VestigeRhyPat& p = Vestige::RhyTab(side)[r].dec;
   if (p.kind == kRhyStr) return p.str[t % p.len] == 'x';
   if (p.kind == kRhyEuc) return ((((t % p.n) + p.rot) % p.n) * p.k) % p.n < p.k;
   return false;
 }
 // The full expected cells of row r over `steps` running steps, decimates
 // included ('s' '_' '-' 'D', as the log renders them), from the table.
-static std::string InterlockExpect(int r, int steps) {
-  std::string o = RhyExpect(r, steps);
+static std::string InterlockExpect(int r, int steps, int side = kRhyCcw) {
+  std::string o = RhyExpect(r, steps, side);
   for (int t = 0; t < steps; t++)
-    if (InterlockDec(r, t)) o[t] = (o[t] == 's') ? 'D' : '!';   // ('!' = a decimate off a stutter: never)
+    if (InterlockDec(r, t, side)) o[t] = (o[t] == 's') ? 'D' : '!';   // ('!' = a decimate off a stutter: never)
   return o;
 }
 // The log's layer values of row r (test side, from the table's meta):
 // "S=<A> k/n r | R=<duck|neg> <B> k/n r | D=overlaps".
-static std::string InterlockLayers(int r) {
-  const VestigeRhyMeta& m = VESTIGE_TIMING_RHY_TABLE_INTERLOCK[r].meta;
+static std::string InterlockLayers(int r, int side = kRhyCcw) {
+  const VestigeRhyMeta& m = Vestige::RhyTab(side)[r].meta;
   char b[128];
   snprintf(b, sizeof b, "S=%s k%d/%d r%d | R=%s %s k%d/%d r%d | D=overlaps",
            m.a.name ? m.a.name : "?", m.a.k, m.a.n, m.a.rot, m.pr == kRhyPrDuck ? "duck" : m.pr == kRhyPrNeg ? "neg" : "-",
            m.b.name ? m.b.name : "?", m.b.k, m.b.n, m.b.rot);
   return b;
 }
-static void TestK3RhythmInterlock() {
-  printf("-- K3 CCW: interlock rhythm table (%d rows, 1x grid, fixed rotations, decimates = the A/B overlaps; variation %.2f)\n",
-         VESTIGE_TIMING_RHY_ROWS, (double)VESTIGE_TIMING_RHY_VAR_PROB);
+// A loop at the given knob position (mode 1): its passes read back and
+// compared to the expected cells of the row (passes, exact, over_one, var_ok).
+static int RhyPlayLoop(int passes_want, const std::string& exp_cells, std::map<int32_t, char>& map, RhyPassCheck& ck,
+                       int& passes, int& exact, int& over_one, bool& var_ok) {
+  seen_acts = v.act_count_;
+  CapRec rc{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &rc); noise_from = noise_to = -1;
+  const int s = rc.s;
+  for (int p = 0; p < passes_want; p++) {
+    { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }
+    RunFor(0.005f);
+    const int G = v.sl_n_[s];
+    if (G <= 0 || !v.ln_rhythm_[s]) continue;
+    std::map<int32_t, char> one; RhyReadPass(s, one, ck);
+    int diff = 0;
+    for (const auto& kv : one) {
+      const char want = (kv.first >= 0 && kv.first < (int32_t)exp_cells.size()) ? exp_cells[kv.first] : '?';
+      if (kv.second != want) { diff++; if (!(want == '-' && kv.second == 's')) var_ok = false; }
+      map[kv.first] = kv.second;
+    }
+    passes++; if (diff == 0) exact++; if (diff > 1) over_one++;
+  }
+  return s;
+}
+static void TestK3RhythmInterlockSide(int side, const char* const* lines, int lines_n, std::vector<int> rend, std::vector<int> loops) {
+  const char* sn = SideName(side);
+  const int NR = Vestige::RhyRows(side);
+  printf("-- K3 mode 1 %s half: interlock rhythm table %s (%d rows, 1x grid, fixed rotations, decimates = the A/B overlaps; variation %.2f)\n",
+         sn, side == kRhyCw ? "CW (academic odd-cycle Euclids)" : "CCW (traditional timelines)", NR, (double)VESTIGE_TIMING_RHY_VAR_PROB);
   // (a) Every row: the module's base = the pattern built from the table (3
   // bars printed, its whole period checked); the depth picks row = min(R-1,
-  // (int)(u * R)); #n = row + 1; no off-beat decimate; a rest never lands on
-  // a stutter; a decimate only on a stutter.
-  { const int NR = VESTIGE_TIMING_RHY_ROWS;
-    bool rows_ok = NR >= 1, base_ok = true, num_ok = true, kd_ok = true, shape_ok = true, coin_ok = true, meta_ok = true, dec_ok = true;
-    auto pat_ok = [](const VestigeRhyPat& p) {
-      return p.kind == kRhyNone || (p.kind == kRhyStr && p.len > 0) ||
+  // (int)(u * R)); #n = row + 1 per side; no off-beat decimate; a rest never
+  // lands on a stutter; a decimate only on a stutter.
+  { bool rows_ok = NR >= 1, base_ok = true, num_ok = true, kd_ok = true, shape_ok = true, coin_ok = true, meta_ok = true, dec_ok = true;
+    int max_stut = 0, max_mask = 0;
+    auto pat_ok = [](const VestigeRhyPat& p, int max_len) {
+      return p.kind == kRhyNone || (p.kind == kRhyStr && p.len > 0 && p.len <= max_len) ||
              (p.kind == kRhyEuc && (p.n == 8 || p.n == 12 || p.n == 16) && p.k >= 0 && p.k <= p.n && p.rot >= 0); };
     for (int r = 0; r < NR; r++) {
-      const VestigeRhyRow& R = VESTIGE_TIMING_RHY_TABLE[r];
-      const float u = RhyDepth(r);
+      const VestigeRhyRow& R = Vestige::RhyTab(side)[r];
+      const float u = RhyDepth(r, side);
       const long ls = RhyPatLen(R.stut), lr = RhyPatLen(R.rest), ld = RhyPatLen(R.dec);
+      max_stut = std::max(max_stut, (int)ls); max_mask = std::max(max_mask, (int)std::max(lr, ld));
       long per = ls / RhyGcd(ls, lr) * lr; per = per / RhyGcd(per, ld) * ld; per = per / RhyGcd(per, 16) * 16;   // stutters x rests x dec x the bar
       const int steps = (int)std::max(48L, std::min(per, 20000L));
-      const std::string want = RhyExpect(r, steps);
+      const std::string want = RhyExpect(r, steps, side);
       std::string got(steps, '-');
-      for (int t = 0; t < steps; t++) { const int c = Vestige::RhyTableBase(t, u); got[t] = c == 2 ? '_' : c == 1 ? 's' : '-'; }
-      if (got != want) { base_ok = false; printf("      #%-2d MISMATCH: got   %s\n                 table %s\n", r + 1, RhyBars(got.substr(0, 48)).c_str(), RhyBars(want.substr(0, 48)).c_str()); }
+      for (int t = 0; t < steps; t++) { const int c = Vestige::RhyTableBase(t, u, side); got[t] = c == 2 ? '_' : c == 1 ? 's' : '-'; }
+      if (got != want) { base_ok = false; printf("      %s#%-2d MISMATCH: got   %s\n                 table %s\n", sn, r + 1, RhyBars(got.substr(0, 48)).c_str(), RhyBars(want.substr(0, 48)).c_str()); }
       const float z0 = (float)r / (float)NR + 1e-4f, z1 = (float)(r + 1) / (float)NR - 1e-4f;
-      if (Vestige::RhyRow(u) != r || Vestige::RhyRow(z0) != r || Vestige::RhyRow(z1) != r) rows_ok = false;
-      if (v.RhyNum(u) != r + 1) num_ok = false;
+      if (Vestige::RhyRow(u, side) != r || Vestige::RhyRow(z0, side) != r || Vestige::RhyRow(z1, side) != r) rows_ok = false;
+      if (v.RhyNum(u, side) != r + 1) num_ok = false;
       if (Vestige::RhyKd(u) != 0) kd_ok = false;               // no off-beat decimate in engine 2
-      if (R.grid != kRhyGrid1x || !pat_ok(R.stut) || !pat_ok(R.rest) || !pat_ok(R.dec) || R.dec.kind == kRhyNone) shape_ok = false;
+      if (R.grid != kRhyGrid1x || !pat_ok(R.stut, VESTIGE_TIMING_RHY_STUT_MAX) || !pat_ok(R.rest, VESTIGE_TIMING_RHY_MASK_MAX) ||
+          !pat_ok(R.dec, VESTIGE_TIMING_RHY_MASK_MAX) || R.dec.kind == kRhyNone) shape_ok = false;
       for (long t = 0; t < per; t++) {                         // over their whole period: a rest never on a stutter,
         const bool S = Vestige::RhyPatHit(R.stut, (int32_t)t, (int32_t)t);   //  a decimate only on a stutter
         if (S && Vestige::RhyPatHit(R.rest, (int32_t)t, (int32_t)t)) {
-          if (coin_ok) printf("      #%-2d a rest on a stutter at running step %ld\n", r + 1, t);
+          if (coin_ok) printf("      %s#%-2d a rest on a stutter at running step %ld\n", sn, r + 1, t);
           coin_ok = false; }
-        if (Vestige::RhyDecAt((int32_t)t, r) != InterlockDec(r, (int)t) || (!S && InterlockDec(r, (int)t))) {
-          if (dec_ok) printf("      #%-2d a decimate off a stutter (or module != table) at running step %ld\n", r + 1, t);
+        if (Vestige::RhyDecAt((int32_t)t, r, side) != InterlockDec(r, (int)t, side) || (!S && InterlockDec(r, (int)t, side))) {
+          if (dec_ok) printf("      %s#%-2d a decimate off a stutter (or module != table) at running step %ld\n", sn, r + 1, t);
           dec_ok = false; }
       }
       // The meta (what the log prints) = what the patterns are: A's hits / base
@@ -3715,111 +3763,158 @@ static void TestK3RhythmInterlock() {
             if ((R.dec.str[t] == 'x') != (A && B)) ok = false;
           }
         }
-        if (!ok) { meta_ok = false; printf("      #%-2d meta does not match the patterns\n", r + 1); } }
-      printf("      #%-2d %s %s\n", r + 1, InterlockLayers(r).c_str(), RhyBars(InterlockExpect(r, 48)).c_str());
+        if (!ok) { meta_ok = false; printf("      %s#%-2d meta does not match the patterns\n", sn, r + 1); } }
+      printf("      %s#%-2d %s %s\n", sn, r + 1, InterlockLayers(r, side).c_str(), RhyBars(InterlockExpect(r, 48, side)).c_str());
     }
-    if (Vestige::RhyRow(1.f) != NR - 1 || Vestige::RhyRow(1e-4f) != 0) rows_ok = false;
-    Check(rows_ok && shape_ok, "interlock: rows on the 1x grid (stutters / rests = Euclid n 8|12|16 or a pattern string), equal zones, row = min(R-1, (int)(u*R))");
-    Check(base_ok, "interlock: every row's module base (its whole period) = the pattern built from the table");
+    if (Vestige::RhyRow(1.f, side) != NR - 1 || Vestige::RhyRow(1e-4f, side) != 0) rows_ok = false;
+    printf("      longest stutter cycle %d (max %d), longest rest / dec mask %d (max %d)\n", max_stut, VESTIGE_TIMING_RHY_STUT_MAX, max_mask, VESTIGE_TIMING_RHY_MASK_MAX);
+    char msg[220];
+    snprintf(msg, sizeof msg, "interlock %s: rows on the 1x grid (stutters <= %d / rests + dec <= %d steps), equal zones, row = min(R-1, (int)(u*R))",
+             sn, VESTIGE_TIMING_RHY_STUT_MAX, VESTIGE_TIMING_RHY_MASK_MAX);
+    Check(rows_ok && shape_ok, msg);
+    snprintf(msg, sizeof msg, "interlock %s: every row's module base (its whole period) = the pattern built from the table", sn);
+    Check(base_ok, msg);
     // ... and = the rows JSON's expected 3-bar line (s / D / _ / -), row for
     // row: the module's base + its decimate accents, and the log's render.
-    { bool line_ok = kInterlockLinesN == NR, log_ok = true;
-      for (int r = 0; r < NR && r < kInterlockLinesN; r++) {
+    { bool line_ok = lines_n == NR, log_ok = true;
+      for (int r = 0; r < NR && r < lines_n; r++) {
         std::string got(48, '-');
         for (int t = 0; t < 48; t++) {
-          const int c = Vestige::RhyTableBase(t, RhyDepth(r));
-          got[t] = c == 2 ? '_' : c == 1 ? (Vestige::RhyDecAt(t, r) ? 'D' : 's') : (Vestige::RhyDecAt(t, r) ? '!' : '-');
+          const int c = Vestige::RhyTableBase(t, RhyDepth(r, side), side);
+          const bool d = Vestige::RhyDecAt(t, r, side);
+          got[t] = c == 2 ? '_' : c == 1 ? (d ? 'D' : 's') : (d ? '!' : '-');
         }
-        if (got != kInterlockLines[r]) { line_ok = false; printf("      #%-2d MISMATCH vs rows JSON: got %s\n                                want %s\n", r + 1, got.c_str(), kInterlockLines[r]); }
-        char pat[64]; Vestige::RhyRenderBars(pat, RhyDepth(r), 0, 0, 0);
+        if (got != lines[r]) { line_ok = false; printf("      %s#%-2d MISMATCH vs rows JSON: got %s\n                                want %s\n", sn, r + 1, got.c_str(), lines[r]); }
+        char pat[64]; Vestige::RhyRenderBars(pat, RhyDepth(r, side), 0, 0, 0, side);
         std::string bars; for (const char* c = pat; *c; c++) if (*c != '|') bars += *c;
-        if (bars != kInterlockLines[r]) { log_ok = false; printf("      #%-2d log render %s != rows JSON line\n", r + 1, pat); }
+        if (bars != lines[r]) { log_ok = false; printf("      %s#%-2d log render %s != rows JSON line\n", sn, r + 1, pat); }
       }
-      char msg[160]; snprintf(msg, sizeof msg, "interlock: every row's module base + decimates (3 bars, s/D/_/-) = the rows JSON's expected line (%d rows, %d lines)", NR, kInterlockLinesN);
+      snprintf(msg, sizeof msg, "interlock %s: every row's module base + decimates (3 bars, s/D/_/-) = the rows JSON's 'line' (%d rows, %d lines)", sn, NR, lines_n);
       Check(line_ok, msg);
-      Check(log_ok, "interlock: the log's 3-bar render of every row = the rows JSON's expected line"); }
-    Check(coin_ok, "interlock: no rest ever coincides with a stutter");
-    Check(dec_ok, "interlock: decimates only on stutters (the row's overlap mask), module = table");
-    Check(kd_ok, "interlock: no off-beat decimate pattern (RhyKd = 0)");
-    Check(num_ok, "interlock: numbering = row + 1 (#1 .. #R)");
-    Check(meta_ok, "interlock: every row's logged values (A k/n r, principle, B k/n r) are exactly what its patterns are; dec = exactly the A/B overlaps"); }
-  // (a2) The machinery is generic: Euclids on 8 / 12 / 16 at fixed rotations
-  // and strings of any length, each indexed by the running step count modulo
-  // its own length (synthetic patterns, not table rows).
+      snprintf(msg, sizeof msg, "interlock %s: the log's 3-bar render of every row = the rows JSON's 'line'", sn);
+      Check(log_ok, msg); }
+    snprintf(msg, sizeof msg, "interlock %s: no rest ever coincides with a stutter", sn); Check(coin_ok, msg);
+    snprintf(msg, sizeof msg, "interlock %s: decimates only on stutters (the row's overlap mask), module = table", sn); Check(dec_ok, msg);
+    snprintf(msg, sizeof msg, "interlock %s: no off-beat decimate pattern (RhyKd = 0)", sn); Check(kd_ok, msg);
+    snprintf(msg, sizeof msg, "interlock %s: numbering per side = row + 1 (%s#1 .. %s#%d)", sn, sn, sn, NR); Check(num_ok, msg);
+    snprintf(msg, sizeof msg, "interlock %s: every row's logged values (A k/n r, principle, B k/n r) are exactly its patterns; dec = exactly the A/B overlaps", sn);
+    Check(meta_ok, msg); }
+  // (b) Renders exactly, for a few rows (SW2 UP, K3 on this side).
+  for (int r : rend) {
+    if (r < 0 || r >= NR) continue;
+    const LayerStats st = LayerRun(K3Side(RhyDepth(r, side), side), 2000, 8, 0);
+    printf("      %s#%-2d render (G %d): %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
+           sn, r + 1, st.G, st.good, st.steps, st.silent_ok, st.silent, audit_bad);
+    char msg[160]; snprintf(msg, sizeof msg, "interlock %s#%d renders exactly: every step = its source, rests silent, no bad reads", sn, r + 1);
+    Check(st.steps > 30 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0, msg);
+  }
+  // (c) Two loops at the same knob position play the identical pattern; every
+  // pass = the row's base + its decimates, exactly; the log render = what plays.
+  for (int r : loops) {
+    if (r < 0 || r >= NR) continue;
+    const std::string exp_cells = InterlockExpect(r, 8192, side);
+    Reset(); cs.sw[0] = 0; cs.sw[1] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; cs.knob[2] = K3Side(RhyDepth(r, side), side); Taps({2000}); RunFor(0.6f);
+    std::map<int32_t, char> mapA, mapB; RhyPassCheck ck; ck.offbeat = false;   // (decimates on the overlaps, not the off-beats)
+    bool var_ok = true; int passes = 0, exact = 0, over_one = 0;
+    const int sA = RhyPlayLoop(12, exp_cells, mapA, ck, passes, exact, over_one, var_ok);
+    const int sB = RhyPlayLoop(6, exp_cells, mapB, ck, passes, exact, over_one, var_ok);
+    int common = 0, differ = 0;
+    for (const auto& kv : mapB) { auto it = mapA.find(kv.first); if (it == mapA.end()) continue; common++; if (it->second != kv.second) differ++; }
+    char pat[64]; Vestige::RhyRenderBars(pat, v.rhy_level_, 0, 0, 0, v.rhy_side_);
+    std::string bars; for (const char* c = pat; *c; c++) if (*c != '|') bars += *c;
+    int log_bad = 0, log_n = 0;
+    for (int t = 0; t < 48; t++) { auto it = mapA.find(t); if (it == mapA.end()) continue; log_n++; if (it->second != bars[t] || bars[t] != exp_cells[t]) log_bad++; }
+    printf("      %s#%-2d: %d passes on 2 loops (slots %d, %d): %d exact; %d decimate hits; %d common steps, %d differ; log vs loop A %d / %d differ\n",
+           sn, r + 1, passes, sA, sB, exact, ck.decs, common, differ, log_bad, log_n);
+    char msg[200];
+    snprintf(msg, sizeof msg, "interlock %s#%d: only one-step stutters (timing line), rests + decimates (condition line), no playback hits", sn, r + 1);
+    Check(ck.only_ok && v.rhy_side_ == side, msg);
+    snprintf(msg, sizeof msg, "interlock %s#%d: decimates only on stutters, exactly the row's A/B overlaps, never on a rest", sn, r + 1);
+    Check(ck.decs > 0 && ck.dec_ok && var_ok, msg);
+    snprintf(msg, sizeof msg, "interlock %s#%d (variation %s): every pass plays %s its base", sn, r + 1,
+             VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "on" : "off", VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "mostly" : "exactly");
+    Check(passes >= 12 && (VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? (exact * 2 >= passes && over_one == 0) : exact == passes), msg);
+    snprintf(msg, sizeof msg, "interlock %s#%d: two different loops at the same knob position play the identical pattern", sn, r + 1);
+    Check(common >= 48 && differ == 0, msg);
+    snprintf(msg, sizeof msg, "interlock %s#%d: the log's 3-bar render is exactly what a loop plays (decimates included)", sn, r + 1);
+    Check(log_n >= 32 && log_bad == 0, msg);
+    cs.knob[2] = 0.5f; RunFor(0.1f);
+  }
+}
+static void TestK3RhythmInterlock() {
+  // The machinery is generic: Euclids on 8 / 12 / 16 at fixed rotations and
+  // strings of any length (up to the 240-step masks), each indexed by the
+  // running step count modulo its own length (synthetic patterns, not rows).
   { bool gen_ok = true;
     static const char kS48[] = "x.......x...x.....x.x...........x.....x...x....x";   // 48 entries
-    const VestigeRhyPat pats[] = { RhyEuc(3, 8, 2), RhyEuc(5, 12, 7), RhyEuc(5, 16, 3), RhyStr("x..x.x.."), RhyStr(kS48), RhyStr("x....") };
+    static char kS240[241] = {};
+    for (int i = 0; i < 240; i++) kS240[i] = (i % 7 == 0 || i % 11 == 3) ? 'x' : '.';
+    const VestigeRhyPat pats[] = { RhyEuc(3, 8, 2), RhyEuc(5, 12, 7), RhyEuc(5, 16, 3), RhyStr("x..x.x.."), RhyStr(kS48), RhyStr("x...."),
+                                   VestigeRhyPat{kRhyStr, kS240, 240, 0, 0, 0} };
     for (const VestigeRhyPat& p : pats)
       for (int32_t t = 0; t < 960; t++) {
         const bool want = (p.kind == kRhyEuc) ? ((((t % p.n) + p.rot) % p.n) * p.k) % p.n < p.k : p.str[t % p.len] == 'x';
         if (Vestige::RhyPatHit(p, t, t) != want) gen_ok = false;
       }
-    Check(gen_ok, "interlock machinery: Euclid E(k, 8|12|16, rot) and strings of any length, each indexed t mod its own length"); }
-  // (b) Renders exactly, for a few rows (#1, #9, #17, #23).
-  const int NRw = VESTIGE_TIMING_RHY_ROWS;
-  std::vector<int> rend = {0, 8, 16, 22};
-  for (int r : rend) {
-    if (r < 0 || r >= VESTIGE_TIMING_RHY_ROWS) continue;
-    const LayerStats st = LayerRun(K3Ccw(RhyDepth(r)), 2000, 8);
-    printf("      #%-2d render (G %d): %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
-           r + 1, st.G, st.good, st.steps, st.silent_ok, st.silent, audit_bad);
-    char msg[160]; snprintf(msg, sizeof msg, "interlock #%d renders exactly: every step = its source, rests silent, no bad reads", r + 1);
-    Check(st.steps > 30 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0, msg);
-  }
-  // (c) Two loops at the same knob position play the identical pattern; every
-  // pass = the row's base + its decimates, exactly; the log render = what plays.
-  std::vector<int> loops = {NRw / 2, NRw - 1};
-  loops.erase(std::unique(loops.begin(), loops.end()), loops.end());
-  for (int r : loops) {
-    if (r < 0 || r >= VESTIGE_TIMING_RHY_ROWS) continue;
-    const std::string exp_cells = InterlockExpect(r, 8192);
-    auto play_loop = [&](int passes_want, std::map<int32_t, char>& map, RhyPassCheck& ck, int& passes, int& exact, int& over_one, bool& var_ok) {
-      seen_acts = v.act_count_;
-      CapRec rc{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &rc); noise_from = noise_to = -1;
-      const int s = rc.s;
-      for (int p = 0; p < passes_want; p++) {
+    Check(gen_ok, "interlock machinery: Euclid E(k, 8|12|16, rot) and strings of any length (to 240), each indexed t mod its own length"); }
+  // Per side: CCW = the traditional table, CW = the academic table.
+  TestK3RhythmInterlockSide(kRhyCcw, kRhyLinesCcw, kRhyLinesCcwN, {0, 8}, {VESTIGE_TIMING_RHY_ROWS_CCW / 2, VESTIGE_TIMING_RHY_ROWS_CCW - 1});
+  TestK3RhythmInterlockSide(kRhyCw, kRhyLinesCw, kRhyLinesCwN, {1, 5}, {VESTIGE_TIMING_RHY_ROWS_CW / 2, VESTIGE_TIMING_RHY_ROWS_CW - 1});
+  // (d) Side switching on a playing loop (SW2 UP): K3 from the CCW half
+  // straight to the CW half. The running step count runs on (never reset),
+  // the planner stays the same, only the table (and the depth) switch: every
+  // pass before plays the CCW row, every pass after the CW row, at the same
+  // running steps.
+  { printf("-- K3 mode 1: side switching (CCW -> CW -> CCW on one loop)\n");
+    const int rc = VESTIGE_TIMING_RHY_ROWS_CCW / 2, rw = VESTIGE_TIMING_RHY_ROWS_CW / 2;
+    const std::string expC = InterlockExpect(rc, 8192, kRhyCcw), expW = InterlockExpect(rw, 8192, kRhyCw);
+    Reset(); cs.sw[0] = 0; cs.sw[1] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; cs.knob[2] = K3Ccw(RhyDepth(rc, kRhyCcw)); Taps({2000}); RunFor(0.6f);
+    seen_acts = v.act_count_;
+    CapRec r{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &r); noise_from = noise_to = -1;
+    const int s = r.s;
+    auto passes_vs = [&](int npass, const std::string& exp, int& ok, int& tot, int32_t& t_first, int32_t& t_last) {
+      t_first = -1;
+      for (int p = 0; p < npass; p++) {
         { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }
         RunFor(0.005f);
         const int G = v.sl_n_[s];
         if (G <= 0 || !v.ln_rhythm_[s]) continue;
-        std::map<int32_t, char> one; RhyReadPass(s, one, ck);
-        int diff = 0;
-        for (const auto& kv : one) {
-          const char want = (kv.first >= 0 && kv.first < (int32_t)exp_cells.size()) ? exp_cells[kv.first] : '?';
-          if (kv.second != want) { diff++; if (!(want == '-' && kv.second == 's')) var_ok = false; }
-          map[kv.first] = kv.second;
-        }
-        passes++; if (diff == 0) exact++; if (diff > 1) over_one++;
+        RhyPassCheck ck; ck.offbeat = false; std::map<int32_t, char> one; RhyReadPass(s, one, ck);
+        bool same = ck.only_ok && ck.dec_ok;
+        for (const auto& kv : one) if (kv.first < 0 || kv.first >= (int32_t)exp.size() || kv.second != exp[kv.first]) same = false;
+        tot++; if (same) ok++;
+        if (t_first < 0) t_first = v.rhy_t_[s] - G;
+        t_last = v.rhy_t_[s];
       }
-      return s;
     };
-    Reset(); cs.sw[0] = 0; cs.sw[1] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; cs.knob[2] = K3Ccw(RhyDepth(r)); Taps({2000}); RunFor(0.6f);
-    std::map<int32_t, char> mapA, mapB; RhyPassCheck ck; ck.offbeat = false;   // (decimates on the overlaps, not the off-beats)
-    bool var_ok = true; int passes = 0, exact = 0, over_one = 0;
-    const int sA = play_loop(12, mapA, ck, passes, exact, over_one, var_ok);
-    const int sB = play_loop(6, mapB, ck, passes, exact, over_one, var_ok);
-    int common = 0, differ = 0;
-    for (const auto& kv : mapB) { auto it = mapA.find(kv.first); if (it == mapA.end()) continue; common++; if (it->second != kv.second) differ++; }
-    char pat[64]; Vestige::RhyRenderBars(pat, v.rhy_level_, 0, 0, 0);
-    std::string bars; for (const char* c = pat; *c; c++) if (*c != '|') bars += *c;
-    int log_bad = 0, log_n = 0;
-    for (int t = 0; t < 48; t++) { auto it = mapA.find(t); if (it == mapA.end()) continue; log_n++; if (it->second != bars[t] || bars[t] != exp_cells[t]) log_bad++; }
-    printf("      #%-2d: %d passes on 2 loops (slots %d, %d): %d exact; %d decimate hits; %d common steps, %d differ; log vs loop A %d / %d differ\n",
-           r + 1, passes, sA, sB, exact, ck.decs, common, differ, log_bad, log_n);
-    char msg[200];
-    snprintf(msg, sizeof msg, "interlock #%d: only one-step stutters (timing line), rests + decimates (condition line), no playback hits", r + 1);
-    Check(ck.only_ok, msg);
-    snprintf(msg, sizeof msg, "interlock #%d: decimates only on stutters, exactly the row's A/B overlaps, never on a rest", r + 1);
-    Check(ck.decs > 0 && ck.dec_ok && var_ok, msg);
-    snprintf(msg, sizeof msg, "interlock #%d (variation %s): every pass plays %s its base", r + 1,
-             VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "on" : "off", VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "mostly" : "exactly");
-    Check(passes >= 12 && (VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? (exact * 2 >= passes && over_one == 0) : exact == passes), msg);
-    snprintf(msg, sizeof msg, "interlock #%d: two different loops at the same knob position play the identical pattern", r + 1);
-    Check(common >= 48 && differ == 0, msg);
-    snprintf(msg, sizeof msg, "interlock #%d: the log's 3-bar render is exactly what a loop plays (decimates included)", r + 1);
-    Check(log_n >= 32 && log_bad == 0, msg);
-    cs.knob[2] = 0.5f; RunFor(0.1f);
-  }
+    int okC = 0, totC = 0, okW = 0, totW = 0, okC2 = 0, totC2 = 0; int32_t c0, c1, w0, w1, d0, d1;
+    passes_vs(6, expC, okC, totC, c0, c1);
+    const bool ccw_side = v.rhy_side_ == kRhyCcw && v.rhy_level_ > 0.f;
+    cs.knob[2] = K3Cw(RhyDepth(rw, kRhyCw)); RunFor(0.02f);    // straight across noon
+    const bool cw_side = v.rhy_side_ == kRhyCw && v.rhy_level_ > 0.f && v.err_level_[0] == 0.f;
+    { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }   // (the pass in flight)
+    passes_vs(6, expW, okW, totW, w0, w1);
+    cs.knob[2] = K3Ccw(RhyDepth(rc, kRhyCcw)); RunFor(0.02f);
+    { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }
+    passes_vs(4, expC, okC2, totC2, d0, d1);
+    printf("      CCW#%d: %d / %d passes exact (steps %d..%d); CW#%d: %d / %d (steps %d..%d); back CCW#%d: %d / %d (steps %d..%d)\n",
+           rc + 1, okC, totC, (int)c0, (int)c1, rw + 1, okW, totW, (int)w0, (int)w1, rc + 1, okC2, totC2, (int)d0, (int)d1);
+    Check(ccw_side && cw_side, "side switch: K3 CCW -> CW (SW2 UP) moves the rhythm to the CW table (depth on, layers off)");
+    Check(totC >= 5 && okC == totC && totW >= 5 && okW == totW && totC2 >= 3 && okC2 == totC2,
+          "side switch: every pass plays its side's table row exactly: CCW row, then the CW row, then the CCW row again");
+    Check(c0 >= 0 && w0 > c1 && d0 > w1,
+          "side switch: the running step count runs on across the switch (shared, never reset)");
+    cs.knob[2] = 0.5f; RunFor(0.1f); }
+  // (e) Mode 2 (SW2 MIDDLE) CW half: still the random glitch layers, not the
+  // CW table: layer levels on, no rhythm, and a loop plays layer hits.
+  { printf("-- K3 mode 2 CW half: the glitch layers (not the CW rhythm table)\n");
+    const LayerStats st = LayerRun(K3Cw(0.65f), 2000, 6, 1);
+    cs.sw[1] = 1; cs.knob[2] = K3Cw(0.65f); RunFor(0.1f);
+    const bool on = v.err_level_[0] > 0.6f && v.err_level_[1] == v.err_level_[0] && v.err_level_[2] == v.err_level_[0] && v.rhy_level_ == 0.f;
+    printf("      mode 2 CW render: %ld / %ld steps match their map, %ld / %ld rests silent, changed %d\n", st.good, st.steps, st.silent_ok, st.silent, (int)st.changed);
+    Check(on && st.steps > 30 && st.good == st.steps && st.changed,
+          "K3 mode 2 CW half: the three random glitch layers (levels on, they evolve), no rhythm table");
+    cs.sw[1] = 0; cs.knob[2] = 0.5f; RunFor(0.1f); }
 }
 static void TestK3Rhythm() {
   if (VESTIGE_TIMING_RHY_ENGINE == 0) TestK3RhythmPoly();
@@ -3842,7 +3937,7 @@ static int RhyLogRun(int ticks, std::vector<std::string>& out) {   // 10 ms tick
   return got;
 }
 static void TestRhyDiagLog() {
-  printf("-- K3 CCW: DIAG rhythm log line\n");
+  printf("-- K3 mode 1: DIAG rhythm log line (CCW# / CW#)\n");
   if (!CT3_DIAG) { printf("      (not a DIAG build: skipped)\n"); return; }
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; Taps({2000}); RunFor(0.6f);
   seen_acts = v.act_count_;
@@ -3859,34 +3954,39 @@ static void TestRhyDiagLog() {
     for (const auto& x : lst) printf("      %s\n", x.c_str());
     bool ok = got == N + 1 && (int)lst.size() == N + 1 && N > 1 && lst[0].rfind("VS RHY LIST engine=", 0) == 0;
     if (VESTIGE_TIMING_RHY_ENGINE == 2) {
-      // Engine 2: one entry per row #1..#ROWS:
-      // "#n S=<A> k/n r | R=<duck|neg> <B> k/n r | D=overlaps k3=<from>..<to> |3 bars|",
-      // the k3 ranges contiguous from noon's edge to full CCW.
-      ok = ok && N == VESTIGE_TIMING_RHY_ROWS;
-      char kfrom[24], kto[24]; Vestige::RhyFx3(kfrom, sizeof kfrom, Vestige::RhyK3At(0.f)); Vestige::RhyFx3(kto, sizeof kto, Vestige::RhyK3At(1.f));
-      std::string prev = kfrom;
-      for (int i = 1; ok && i <= N; i++) {
-        const std::string& x = lst[i];
-        const VestigeRhyRow& R = VESTIGE_TIMING_RHY_TABLE[i - 1];
-        (void)R;
-        const std::string head = "VS RHY LIST #" + std::to_string(i) + " " + InterlockLayers(i - 1) + " k3=";
-        char k0[16] = {}, k1[16] = {};
-        if (x.rfind(head, 0) != 0 || sscanf(x.c_str() + head.size(), "%5s..%5s", k0, k1) != 2) { ok = false; break; }
-        if (prev != k0) ok = false;
-        prev = k1;
-        char pat[64]; Vestige::RhyRenderBars(pat, RhyDepth(i - 1), 0, 0, 0);
-        const size_t bp = x.find(" |", head.size());              // the 3 bars, after k3=from..to
-        if (bp == std::string::npos || x.substr(bp + 1) != pat || x.find(" u=") != std::string::npos || (int)x.size() >= Vestige::kRhyLineN - 1) ok = false;
+      // Engine 2: one entry per row of each table, CCW#1..#R first, then
+      // CW#1..#R_CW: "<side>#n S=<A> k/n r | R=<duck|neg> <B> k/n r |
+      // D=overlaps k3=<from>..<to> |3 bars|", the k3 ranges contiguous from
+      // noon's edge to that half's end.
+      const int NC = VESTIGE_TIMING_RHY_ROWS_CCW, NW = VESTIGE_TIMING_RHY_ROWS_CW;
+      ok = ok && N == NC + NW;
+      char hdr[96]; snprintf(hdr, sizeof hdr, "VS RHY LIST engine=2 n=%d ccw=%d cw=%d ", NC + NW, NC, NW);
+      if (ok && lst[0].rfind(hdr, 0) != 0) ok = false;
+      for (int side = kRhyCcw; ok && side <= kRhyCw; side++) {
+        const int NR = Vestige::RhyRows(side), base = (side == kRhyCw) ? 1 + NC : 1;
+        char kfrom[24], kto[24]; Vestige::RhyFx3(kfrom, sizeof kfrom, Vestige::RhyK3At(0.f, side)); Vestige::RhyFx3(kto, sizeof kto, Vestige::RhyK3At(1.f, side));
+        std::string prev = kfrom;
+        for (int i = 1; ok && i <= NR; i++) {
+          const std::string& x = lst[base + i - 1];
+          const std::string head = std::string("VS RHY LIST ") + SideName(side) + "#" + std::to_string(i) + " " + InterlockLayers(i - 1, side) + " k3=";
+          char k0[16] = {}, k1[16] = {};
+          if (x.rfind(head, 0) != 0 || sscanf(x.c_str() + head.size(), "%5s..%5s", k0, k1) != 2) { ok = false; printf("      bad list line: %s\n", x.c_str()); break; }
+          if (prev != k0) ok = false;
+          prev = k1;
+          char pat[64]; Vestige::RhyRenderBars(pat, RhyDepth(i - 1, side), 0, 0, 0, side);
+          const size_t bp = x.find(" |", head.size());              // the 3 bars, after k3=from..to
+          if (bp == std::string::npos || x.substr(bp + 1) != pat || x.find(" u=") != std::string::npos || (int)x.size() >= Vestige::kRhyLineN - 1) ok = false;
+        }
+        if (prev != kto) ok = false;
       }
-      if (prev != kto) ok = false;
-      Check(ok, "rhythm log (engine 2): the list at start = header + one entry per row #1..#R: S=.. | R=.. | D=.. (exact values) k3=from..to |3 bars|, k3 ranges tile the CCW half");
+      Check(ok, "rhythm log (engine 2): the list at start = header + CCW#1..#R then CW#1..#R: S=.. | R=.. | D=.. (exact values) k3=from..to |3 bars|, each side's k3 ranges tile its half");
     }
     std::string prev_to = "0.000";
     for (int i = 1; ok && i <= N && VESTIGE_TIMING_RHY_ENGINE != 2; i++) {
       const std::string& x = lst[i];
       int num = 0; char u0[16] = {}, u1[16] = {};
       const size_t up = x.find(" u=");
-      if (x.rfind("VS RHY LIST #", 0) != 0 || sscanf(x.c_str(), "VS RHY LIST #%d", &num) != 1 || up == std::string::npos ||
+      if (x.rfind("VS RHY LIST CCW#", 0) != 0 || sscanf(x.c_str(), "VS RHY LIST CCW#%d", &num) != 1 || up == std::string::npos ||
           sscanf(x.c_str() + up, " u=%5s..%5s", u0, u1) != 2) { ok = false; break; }
       if (VESTIGE_TIMING_RHY_ENGINE == 0 && num != i) ok = false;
       if (prev_to != u0) ok = false;                           // contiguous: each range starts where the last ended
@@ -3897,20 +3997,24 @@ static void TestRhyDiagLog() {
     if (VESTIGE_TIMING_RHY_ENGINE != 2) Check(ok, "rhythm log: the numbered list at start = header + #1..#N in travel order, one per tick, u ranges tile 0..1");
     // Numbering over the travel: #1 just past the dead zone, #N at full CCW,
     // never decreasing, one step at a time; the live key is the list's own.
-    bool mono = true, key_ok = true; int last = 0;
-    for (int i = 1; i <= 20000; i++) {
-      const float u = (float)i / 20000.f;
-      const int num = v.RhyNum(u);
-      if (num < last || num > last + 1 || (i == 1 && num != 1)) mono = false;
-      last = num;
-      if (VESTIGE_TIMING_RHY_ENGINE == 0) {
-        int a, b, kd; Vestige::RhyKeyOf(u, a, b, kd);
-        const auto& e = v.rl_[num - 1];
-        if (e.num != num || e.a != a || e.b != b || e.kd != kd) key_ok = false;
-      } else if (num != Vestige::RhyRow(u) + 1) key_ok = false;
+    // Engine 2: per side (CCW#1 .. CCW#R, CW#1 .. CW#R_CW), each from noon out.
+    bool mono = true, key_ok = true, top_ok = true;
+    for (int side = kRhyCcw; side <= ((VESTIGE_TIMING_RHY_ENGINE == 2) ? kRhyCw : kRhyCcw); side++) {
+      int last = 0;
+      for (int i = 1; i <= 20000; i++) {
+        const float u = (float)i / 20000.f;
+        const int num = v.RhyNum(u, side);
+        if (num < last || num > last + 1 || (i == 1 && num != 1)) mono = false;
+        last = num;
+        if (VESTIGE_TIMING_RHY_ENGINE == 0) {
+          int a, b, kd; Vestige::RhyKeyOf(u, a, b, kd);
+          const auto& e = v.rl_[num - 1];
+          if (e.num != num || e.a != a || e.b != b || e.kd != kd) key_ok = false;
+        } else if (num != Vestige::RhyRow(u, side) + 1) key_ok = false;
+      }
+      if (last != ((VESTIGE_TIMING_RHY_ENGINE == 0) ? N : Vestige::RhyRows(side))) top_ok = false;
     }
-    const int top = (VESTIGE_TIMING_RHY_ENGINE == 0) ? N : VESTIGE_TIMING_RHY_ROWS;
-    Check(mono && key_ok && last == top, "rhythm log: numbering is monotonic over the CCW travel, #1 near noon .. #N full CCW"); }
+    Check(mono && key_ok && top_ok, "rhythm log: numbering per side is monotonic over its travel, #1 near noon .. #N at the half's end"); }
   // (a) K3 into the CCW half: nothing before ~250 ms, then exactly one line.
   cs.knob[2] = K3Ccw(0.6f);
   const int early = RhyLogRun(20, L);
@@ -3941,7 +4045,7 @@ static void TestRhyDiagLog() {
     if (t % 16 == 15) pat += '|';
   }
   char want[200], head[32];
-  snprintf(head, sizeof head, "VS RHY #%d t=", v.RhyNum(u));
+  snprintf(head, sizeof head, "VS RHY CCW#%d t=", v.RhyNum(u));
   if (VESTIGE_TIMING_RHY_ENGINE == 0)
     snprintf(want, sizeof want, " ks=%d kr=%d kd=%d %s",
              (int)(VESTIGE_TIMING_RHY_S_K_MIN + (VESTIGE_TIMING_RHY_S_K_MAX - VESTIGE_TIMING_RHY_S_K_MIN) * u + 0.5f),
@@ -3955,7 +4059,30 @@ static void TestRhyDiagLog() {
   const bool no_rot = VESTIGE_TIMING_RHY_ENGINE == 1 ||
       (ln.find("rot=") == std::string::npos && ln.find("slot=") == std::string::npos && (VESTIGE_TIMING_RHY_ENGINE == 0 || ln.find("row=") == std::string::npos));
   Check(one && ln.rfind(head, 0) == 0 && ln.find(want) != std::string::npos && no_rot && ln.size() < 190,
-        "rhythm log: entering the CCW half logs ONE line after ~250 ms, starting with #n, fields + 3-bar base pattern as the engine plays it");
+        "rhythm log: entering the CCW half logs ONE line after ~250 ms, starting with CCW#n, fields + 3-bar base pattern as the engine plays it");
+  // (a2) Engine 2: K3 straight over to the CW half (SW2 UP): one line, CW#n
+  // = the CW table's row + 1, its exact values + 3 bars.
+  if (VESTIGE_TIMING_RHY_ENGINE == 2) {
+    L.clear(); cs.knob[2] = K3Cw(0.4f);
+    const int e2 = RhyLogRun(20, L), l2 = RhyLogRun(30, L);
+    for (const auto& x : L) printf("      %s\n", x.c_str());
+    const float uw = v.rhy_level_; const int rw = Vestige::RhyRow(uw, kRhyCw);
+    std::string pw = "|";
+    for (int t = 0; t < 48; t++) {
+      const int c = Vestige::RhyTableBase(t, uw, kRhyCw);
+      const bool d = c == 1 && InterlockDec(rw, t, kRhyCw);
+      pw += (c == 2) ? '_' : d ? 'D' : (c == 1 ? 's' : '-');
+      if (t % 16 == 15) pw += '|';
+    }
+    char us[24]; Vestige::RhyFx3(us, sizeof us, uw);
+    char hw[32], ww[200];
+    snprintf(hw, sizeof hw, "VS RHY CW#%d t=", rw + 1);
+    snprintf(ww, sizeof ww, " u=%s %s %s", us, InterlockLayers(rw, kRhyCw).c_str(), pw.c_str());
+    const std::string lw = L.empty() ? std::string() : L.back();
+    Check(e2 == 0 && l2 == 1 && v.rhy_side_ == kRhyCw && lw.rfind(hw, 0) == 0 && lw.find(ww) != std::string::npos && lw.size() < 190,
+          "rhythm log: K3 from CCW to CW logs ONE line after ~250 ms, CW#n (the CW table's row + 1), exact values + its 3-bar base");
+    cs.knob[2] = K3Ccw(0.6f); RhyLogRun(50, L);              // (back to the CCW position the checks below start from)
+  }
   // (b) A knob sweep (a new combination every 50 ms) logs nothing until it settles, then one line.
   L.clear(); int during = 0;
   for (int i = 0; i < 12; i++) { cs.knob[2] = K3Ccw(i % 2 ? 1.f : 0.1f + 0.07f * (float)i); during += RhyLogRun(5, L); }
@@ -4491,12 +4618,16 @@ int main() {
     Check(fabsf(t - 0.6f) < 1e-4f && v.err_level_[1] == t && v.err_level_[2] == t && v.rhy_level_ == 0.f,
           "K3 mode 2 (SW2 MIDDLE) CW half: all three layers at the same level (0..1 over the half), no rhythm");
     cs.sw[1] = 0; RunFor(0.1f);
-    Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 1 (SW2 UP) CW half: clean until the Spiegel side exists");
+    if (VESTIGE_TIMING_RHY_ENGINE == 2)
+      Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && fabsf(v.rhy_level_ - 0.6f) < 1e-4f && v.rhy_side_ == kRhyCw,
+            "K3 mode 1 (SW2 UP) CW half: the CW rhythm table at the half's depth (layers off)");
+    else
+      Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 1 (SW2 UP) CW half: clean (engines 0 + 1 have no CW table)");
     cs.sw[1] = 2; RunFor(0.1f);
     Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 3 (SW2 DOWN): clean until built");
     cs.sw[1] = 0; cs.knob[2] = K3Ccw(0.5f); RunFor(0.1f);
-    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && fabsf(v.rhy_level_ - 0.5f) < 1e-4f,
-          "K3 mode 1 CCW half: the rhythm only (layers off)");
+    Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && fabsf(v.rhy_level_ - 0.5f) < 1e-4f && v.rhy_side_ == kRhyCcw,
+          "K3 mode 1 CCW half: the rhythm only, CCW table (layers off)");
     cs.sw[1] = 1; RunFor(0.1f);
     Check(v.rhy_level_ == 0.f && v.err_level_[0] == 0.f, "K3 mode 2 CCW half: clean until built");
     cs.sw[1] = 0;

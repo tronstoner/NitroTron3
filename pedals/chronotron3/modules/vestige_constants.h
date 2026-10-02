@@ -426,10 +426,12 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // end) stay in the code. SW2 selects the K3 mode instead.
 
 // ---- Errors on K3 (bipolar) -------------------------------------------------
-// CW half: the level (0..1) of all three error layers together (timing mode 3:
-// TIMING / CONDITION / PLAYBACK). Noon (+-VESTIGE_K3_DEADZONE): no errors. CCW
-// half (K3 mode 1, SW2 UP): the RHYTHM only, depth u = 0 just past the dead
-// zone .. 1 at full CCW, from one of three engines (VESTIGE_TIMING_RHY_ENGINE):
+// K3 mode 2 (SW2 MIDDLE) CW half: the level (0..1) of all three error layers
+// together (timing mode 3: TIMING / CONDITION / PLAYBACK). Noon
+// (+-VESTIGE_K3_DEADZONE): no errors. K3 mode 1 (SW2 UP): the RHYTHM only,
+// depth u = 0 just past the dead zone .. 1 at that half's end; the CCW half
+// from one of three engines (VESTIGE_TIMING_RHY_ENGINE), the CW half from
+// engine 2's CW table (engines 0 + 1: CW clean):
 //   0 POLYMETRIC: Euclidean stutters + rests, one step each, on the
 //     voice's running step count (it rolls across bars), at FIXED rotations
 //     (RHY_S_ROT / RHY_R_ROT / RHY_D_ROT below, the same for every loop):
@@ -441,9 +443,11 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 //     the whole rhythm repeats after lcm(12, 8, 16) = 48 steps (3 bars).
 //   1 AFRO TABLE: a CURATED table of afro-based patterns,
 //     VESTIGE_TIMING_RHY_TABLE_AFRO, 12 rows across the CCW travel (below).
-//   2 INTERLOCK TABLE (default): VESTIGE_TIMING_RHY_ROWS rows of two
-//     interlocking voices (A = stutters, B = rests), decimate accents where
-//     they overlap, VESTIGE_TIMING_RHY_TABLE_INTERLOCK (below).
+//   2 INTERLOCK TABLES (default): rows of two interlocking voices (A =
+//     stutters, B = rests), decimate accents where they overlap: the CCW half
+//     plays VESTIGE_TIMING_RHY_TABLE_CCW (traditional timelines), the CW half
+//     of mode 1 VESTIGE_TIMING_RHY_TABLE_CW (academic odd-cycle Euclids), each
+//     at its own half's depth (below).
 static constexpr float  VESTIGE_K3_DEADZONE          = 0.02f;
 static constexpr int    VESTIGE_TIMING_RHY_ENGINE    = 2;   // 0 polymetric · 1 afro table · 2 interlock table
 static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
@@ -524,83 +528,119 @@ static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE_AFRO[] = {
   /* 11 standard bell + tremolo rests on every odd 16th  */ {kRhyGrid1x,   RhyStr("x.x.xx.x.x.x"),       RhyTrem(kRhyTremOdd)},
   // -> full CCW
 };
-// Engine 2: the INTERLOCK table. Rotation is part of the rhythm — fixed, never
-// random; rows chosen by the builder's ear via the DIAG #n log. Every row is
-// on the 1x 16th grid (kRhyGrid1x), indexed by the voice's RUNNING step count
-// t (never reset per pass), with NO per-loop rotation for anything. A row =
+// Engine 2: the two INTERLOCK tables, one per K3 half of mode 1 (SW2 UP):
+//   CCW half: VESTIGE_TIMING_RHY_TABLE_CCW = TRADITIONAL timelines (shiko,
+//     claves, gahu, tresillo, bells, bossa, cinquillo, ...) against a second
+//     Euclidean voice;
+//   CW half:  VESTIGE_TIMING_RHY_TABLE_CW  = ACADEMIC odd-cycle Euclids
+//     (E(k, 5 / 7 / 9 / 10 / 11 / 13 / 15 / 16)) against a second voice.
+// Both share the machinery, the voice's running step count and the planner;
+// only the table (and the depth, each half's own) switch with the side.
+// (Engines 0 + 1: the CCW half only, mode 1's CW half stays clean.)
+// Rotation is part of the rhythm — fixed, never random; rows chosen by the
+// builder's ear via the DIAG CCW#n / CW#n log. Every row is on the 1x 16th
+// grid (kRhyGrid1x), indexed by the voice's RUNNING step count t (never reset
+// per pass), with NO per-loop rotation for anything. A row =
 // {kRhyGrid1x, stutters, rests, dec, meta}:
-//   stutters = voice A: a Euclid or a named cell (clave, bell, shiko, gahu,
-//     tresillo, cinquillo, bossa, ...) as its 8 / 12 / 16 step string, in its
-//     traditional orientation (rotation 0);
-//   rests = a mask of length lcm(A, B) built from a second voice B = E(k, n),
-//     never on a stutter, by the row's principle:
+//   stutters = voice A: a Euclid or a named cell as its step string (any
+//     cycle 2 .. VESTIGE_TIMING_RHY_STUT_MAX), in its traditional orientation
+//     (rotation 0);
+//   rests = a mask of length lcm(A, B) (<= VESTIGE_TIMING_RHY_MASK_MAX) built
+//     from a second voice B = E(k, n), never on a stutter, by the row's
+//     principle:
 //       ducking        = rests where voice B hits and A does not;
 //       negative space = rests in the gaps where neither A nor B hits;
 //   dec = the OVERLAPS of A and B (same length as the rests): where both hit,
 //     the stutter gets a one-step DECIMATE accent (its factor fixed by the
 //     overlap's position in the dec cycle); the ONLY decimates of engine 2;
-//   each pattern = RhyStr("x..x....") (any length, 'x' = hit, entry t % L),
+//   each pattern = RhyStr("x..x....") ('x' = hit, entry t % L),
 //     RhyEuc(k, n, rot) (n = 8 / 12 / 16) or RhyNone(); every hit is ONE step:
 //     a stutter replays the previous step, a rest silences it;
 //   meta = {{A name, k, n, rot}, kRhyPrDuck | kRhyPrNeg, {B name, k, n, rot}}
 //     — the exact values the DIAG log prints.
 // (Checked at compile time, below: grid 1x, Euclid n in {8, 12, 16},
-// 0 <= k <= n, rot >= 0, strings non-empty; a rest never on a stutter; a
-// decimate only on a stutter.)
-// Rows #1 just past the dead zone near noon .. #ROWS full CCW;
-// row = min(ROWS-1, (int)(u * ROWS)). The comment per row names a (voice A),
-// the principle and b (voice B); the same values are in the row's meta.
-// GENERATED by gen_interlock.py from a rows JSON (rows24.json) — regenerate,
-// do not hand-edit.
-static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE_INTERLOCK[] = {
+// 0 <= k <= n, rot >= 0, strings non-empty, stutters <= STUT_MAX, rests / dec
+// <= MASK_MAX; a rest never on a stutter; a decimate only on a stutter.)
+// Per table: rows #1 just past the dead zone near noon .. #ROWS at that
+// half's end; row = min(ROWS-1, (int)(u * ROWS)), u = the half's own depth.
+// The comment per row names a (voice A), the principle and b (voice B); the
+// same values are in the row's meta.
+// GENERATED by gen_interlock.py from two rows JSONs (rows_ccw_trad.json,
+// rows_cw_acad.json) — regenerate, do not hand-edit.
+enum { kRhyCcw = 0, kRhyCw = 1 };                     // K3 mode-1 side: which table plays
+static constexpr int VESTIGE_TIMING_RHY_STUT_MAX = 64;    // stutter string cycle, steps
+static constexpr int VESTIGE_TIMING_RHY_MASK_MAX = 240;   // rest / dec string = lcm(A, B), steps
+static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE_CCW[] = {
   // noon ->
-  // BEGIN GENERATED INTERLOCK ROWS (gen_interlock.py — do not hand-edit)
+  // BEGIN GENERATED RHY CCW ROWS (gen_interlock.py — do not hand-edit)
+  /* #1  a=shiko ducking b=E(2,12), decimates = the 5 overlaps */
+  {kRhyGrid1x, RhyStr("x...x.x...x.x..."), RhyStr("..................x.....x.....x................."), RhyStr("x.....x.....x.......................x.....x....."), {{"shiko", 5, 16, 0}, kRhyPrDuck, {"E(2,12)", 2, 12, 0}}},
+  /* #2  a=rumba_3-2 ducking b=E(2,12), decimates = the 3 overlaps */
+  {kRhyGrid1x, RhyStr("x..x...x..x.x..."), RhyStr("......x...........x.....x.....x.....x..........."), RhyStr("x...........x.............................x....."), {{"rumba_3-2", 5, 16, 0}, kRhyPrDuck, {"E(2,12)", 2, 12, 0}}},
+  /* #3  a=son_3-2 ducking b=E(2,8), decimates = the 2 overlaps */
+  {kRhyGrid1x, RhyStr("x..x..x...x.x..."), RhyStr("....x...x......."), RhyStr("x...........x..."), {{"son_3-2", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
+  /* #4  a=gahu ducking b=E(3,8), decimates = the 4 overlaps */
+  {kRhyGrid1x, RhyStr("x..x..x...x...x."), RhyStr("........x..x...."), RhyStr("x..x..x.......x."), {{"gahu", 5, 16, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
+  /* #5  a=tresillo ducking b=E(2,8), decimates = the 1 overlaps */
+  {kRhyGrid1x, RhyStr("x..x..x."), RhyStr("....x..."), RhyStr("x......."), {{"tresillo", 3, 8, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
+  /* #6  a=son_3-2 ducking b=E(3,8), decimates = the 3 overlaps */
+  {kRhyGrid1x, RhyStr("x..x..x...x.x..."), RhyStr("........x..x..x."), RhyStr("x..x..x........."), {{"son_3-2", 5, 16, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
+  /* #7  a=bell_5 ducking b=E(2,8), decimates = the 4 overlaps */
+  {kRhyGrid1x, RhyStr("x.x.x..x.x.."), RhyStr("........x...........x..."), RhyStr("x...x.......x...x......."), {{"bell_5", 5, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
+  /* #8  a=E(4,12) ducking b=E(2,8), decimates = the 2 overlaps */
+  {kRhyGrid1x, RhyStr("x..x..x..x.."), RhyStr("....x...x.......x...x..."), RhyStr("x...........x..........."), {{"E(4,12)", 4, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
+  /* #9  a=bossa ducking b=E(4,12), decimates = the 5 overlaps */
+  {kRhyGrid1x, RhyStr("x..x..x...x..x.."), RhyStr(".........x..x..x..x..x..x..x..x..x..x..x........"), RhyStr("x..x..x...................................x..x.."), {{"bossa", 5, 16, 0}, kRhyPrDuck, {"E(4,12)", 4, 12, 0}}},
+  /* #10 a=tresillo ducking b=E(4,12), decimates = the 3 overlaps */
+  {kRhyGrid1x, RhyStr("x..x..x."), RhyStr(".........x..x..x..x..x.."), RhyStr("x..x..x................."), {{"tresillo", 3, 8, 0}, kRhyPrDuck, {"E(4,12)", 4, 12, 0}}},
+  /* #11 a=bell_5 ducking b=E(3,8), decimates = the 4 overlaps */
+  {kRhyGrid1x, RhyStr("x.x.x..x.x.."), RhyStr("...x..x.x..x..........x."), RhyStr("x.............x.x..x...."), {{"bell_5", 5, 12, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
+  /* #12 a=bell_7 ducking b=E(2,8), decimates = the 4 overlaps */
+  {kRhyGrid1x, RhyStr("x.x.xx.x.x.x"), RhyStr("........x...........x..."), RhyStr("x...x.......x...x......."), {{"bell_7", 7, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
+  /* #13 a=cinquillo ducking b=E(2,12), decimates = the 3 overlaps */
+  {kRhyGrid1x, RhyStr("x.xx.xx."), RhyStr("............x..........."), RhyStr("x.....x...........x....."), {{"cinquillo", 5, 8, 0}, kRhyPrDuck, {"E(2,12)", 2, 12, 0}}},
+  /* #14 a=cinquillo ducking b=E(4,12), decimates = the 5 overlaps */
+  {kRhyGrid1x, RhyStr("x.xx.xx."), RhyStr(".........x..x..x........"), RhyStr("x..x..x...........x..x.."), {{"cinquillo", 5, 8, 0}, kRhyPrDuck, {"E(4,12)", 4, 12, 0}}},
+  // END GENERATED RHY CCW ROWS
+  // -> full CCW
+};
+static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE_CW[] = {
+  // noon ->
+  // BEGIN GENERATED RHY CW ROWS (gen_interlock.py — do not hand-edit)
   /* #1  a=E(3,10) ducking b=E(2,8), decimates = the 4 overlaps */
   {kRhyGrid1x, RhyStr("x...x..x.."), RhyStr("........x...x...x...........x...x...x..."), RhyStr("x...x...............x...x..............."), {{"E(3,10)", 3, 10, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
   /* #2  a=E(4,15) ducking b=E(3,8), decimates = the 12 overlaps */
   {kRhyGrid1x, RhyStr("x...x...x...x.."), RhyStr("...x..x....x..x.x.....x.x.......x..x....x..x..x.x..x..x.x..x..x....x..x.......x.x.....x.x..x....x..x....x..x..x.x..x..x."), RhyStr("x.......x..........x.......x..x.......x.........................x.......x..x.......x..........x.......x................."), {{"E(4,15)", 4, 15, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
   /* #3  a=E(2,5) ducking b=E(2,8), decimates = the 4 overlaps */
   {kRhyGrid1x, RhyStr("x..x."), RhyStr("....x.......x...x.......x.......x...x..."), RhyStr("x.......x...........x.......x..........."), {{"E(2,5)", 2, 5, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #4  a=son_3-2 ducking b=E(3,10), decimates = the 9 overlaps */
-  {kRhyGrid1x, RhyStr("x..x..x...x.x..."), RhyStr("....x..x......x..x..x...x..x..x...x..x..x......x..x......x...................x.."), RhyStr("x.........x.................................x.........x.....x...x..x..x...x....."), {{"son_3-2", 5, 16, 0}, kRhyPrDuck, {"E(3,10)", 3, 10, 0}}},
-  /* #5  a=E(3,7) ducking b=E(2,8), decimates = the 6 overlaps */
+  /* #4  a=E(3,7) ducking b=E(2,8), decimates = the 6 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x."), RhyStr("....x...x.......x...x...........x...x.......x...x......."), RhyStr("x...........x...........x...x...........x...........x..."), {{"E(3,7)", 3, 7, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #6  a=E(5,13) ducking b=E(3,8), decimates = the 15 overlaps */
+  /* #5  a=E(5,13) ducking b=E(3,8), decimates = the 15 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x.x..x."), RhyStr("..............x.......x....x..x....x..x.x..x..x.x..x..x.x..x..x.x..x..x.x..x....x..x....x.......x......."), RhyStr("x..x..x.x..x....x..x....x.......x.............................................x.......x....x..x....x..x."), {{"E(5,13)", 5, 13, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
-  /* #7  a=E(7,16) ducking b=E(4,15), decimates = the 28 overlaps */
+  /* #6  a=E(7,16) ducking b=E(4,15), decimates = the 28 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x.x..x.x.x."), RhyStr("....x...x......x...........x......x...x......x...x.......x..........x...x..x...x..................x...x..x...x...x......x...........x......x...x......x...........x......x...x...x..x...x..................x...x..x...x..........x.......x...x.."), RhyStr("x...........x......x...x......x...........x..........x......x...x..................x...x..x...x......................x......x...x......x...........x......x...x......x......................x...x..x...x..................x...x......x.........."), {{"E(7,16)", 7, 16, 0}, kRhyPrDuck, {"E(4,15)", 4, 15, 0}}},
-  /* #8  a=tresillo ducking b=E(2,5), decimates = the 6 overlaps */
-  {kRhyGrid1x, RhyStr("x..x..x."), RhyStr(".....x....x..x.x..x.x..x.x..x....x......"), RhyStr("x..x....x.....................x....x..x."), {{"tresillo", 3, 8, 0}, kRhyPrDuck, {"E(2,5)", 2, 5, 0}}},
-  /* #9  a=shiko ducking b=E(2,5), decimates = the 10 overlaps */
-  {kRhyGrid1x, RhyStr("x...x.x...x.x..."), RhyStr("...x.x..x....x.x..x....x.x....x..x.x....x..x.x....x..x.x.......x.x.......x.x..x."), RhyStr("x.........x.........x.......x.........x.........x.........x.x.......x.x........."), {{"shiko", 5, 16, 0}, kRhyPrDuck, {"E(2,5)", 2, 5, 0}}},
-  /* #10 a=bell_5 ducking b=E(3,10), decimates = the 8 overlaps */
-  {kRhyGrid1x, RhyStr("x.x.x..x.x.."), RhyStr("..........x......x..x......x..x...x..x......x..x......x....."), RhyStr("x...x..x......x.........x...............x.........x......x.."), {{"bell_5", 5, 12, 0}, kRhyPrDuck, {"E(3,10)", 3, 10, 0}}},
-  /* #11 a=E(4,10) ducking b=E(3,7), decimates = the 12 overlaps */
+  /* #7  a=E(4,10) ducking b=E(3,7), decimates = the 12 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x..x."), RhyStr(".......x....x.x..x.x.x..x.x....x..........x....x.x..x.x.x..x.x....x..."), RhyStr("x..x.x....x.................x....x.x..x.x....x.................x....x."), {{"E(4,10)", 4, 10, 0}, kRhyPrDuck, {"E(3,7)", 3, 7, 0}}},
-  /* #12 a=E(7,15) ducking b=E(2,8), decimates = the 14 overlaps */
+  /* #8  a=E(7,15) ducking b=E(2,8), decimates = the 14 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x.x.x.x.x."), RhyStr("....x...x...x...x...............x...x...x...x...................x...x...x...x...............x...x...x...x..............."), RhyStr("x...................x...x...x...................x...x...x...x...................x...x...x...................x...x...x..."), {{"E(7,15)", 7, 15, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #13 a=E(4,9) ducking b=E(3,8), decimates = the 12 overlaps */
+  /* #9  a=E(4,9) ducking b=E(3,8), decimates = the 12 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x.x."), RhyStr("......x.x..x.......x..x.x..........x..x.x.....x....x....x.....x.x..x...."), RhyStr("x..x..........x.x..........x..x.x..........x....x.....x....x..........x."), {{"E(4,9)", 4, 9, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
-  /* #14 a=E(5,11) ducking b=E(2,5), decimates = the 10 overlaps */
+  /* #10 a=E(5,11) ducking b=E(2,5), decimates = the 10 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x.x.x."), RhyStr("........x.x..x.x.......x....x.x....x.......x.x..x.x...."), RhyStr("x..x.x............x.x....x.......x....x.x............x."), {{"E(5,11)", 5, 11, 0}, kRhyPrDuck, {"E(2,5)", 2, 5, 0}}},
-  /* #15 a=E(7,16) ducking b=E(2,5), decimates = the 14 overlaps */
+  /* #11 a=E(7,16) ducking b=E(2,5), decimates = the 14 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x.x..x.x.x."), RhyStr("........x....x.x..x.x....x.......x....x.x..x.x....x............x.x..x.x..x.x...."), RhyStr("x..x.x....x............x....x.x....x............x....x.x..x.x.................x."), {{"E(7,16)", 7, 16, 0}, kRhyPrDuck, {"E(2,5)", 2, 5, 0}}},
-  /* #16 a=E(4,9) ducking b=E(5,11), decimates = the 20 overlaps */
+  /* #12 a=E(4,9) ducking b=E(5,11), decimates = the 20 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x.x."), RhyStr("...........x........x.x......x.x.x....x.x.x.x..x.x.x.x.x..x.x.x.x....x.x.x......x.x........x......."), RhyStr("x..x.x.x.x....x.x.x......x.x........x.............................x........x.x......x.x.x....x.x.x."), {{"E(4,9)", 4, 9, 0}, kRhyPrDuck, {"E(5,11)", 5, 11, 0}}},
-  /* #17 a=E(3,5) ducking b=E(2,8), decimates = the 6 overlaps */
+  /* #13 a=E(3,5) ducking b=E(2,8), decimates = the 6 overlaps */
   {kRhyGrid1x, RhyStr("x.x.x"), RhyStr("........x.......x...........x.......x..."), RhyStr("x...x.......x.......x...x.......x......."), {{"E(3,5)", 3, 5, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #18 a=bell_7 ducking b=E(3,10), decimates = the 10 overlaps */
-  {kRhyGrid1x, RhyStr("x.x.xx.x.x.x"), RhyStr("..........x.........x......x..x...x..x......x.........x....."), RhyStr("x...x..x......x..x......x...............x......x..x......x.."), {{"bell_7", 7, 12, 0}, kRhyPrDuck, {"E(3,10)", 3, 10, 0}}},
-  /* #19 a=E(3,5) ducking b=E(3,7), decimates = the 9 overlaps */
+  /* #14 a=E(3,5) ducking b=E(3,7), decimates = the 9 overlaps */
   {kRhyGrid1x, RhyStr("x.x.x"), RhyStr("...x.................x....x.x..x.x."), RhyStr("x....x.x..x.x.x..x.x....x.........."), {{"E(3,5)", 3, 5, 0}, kRhyPrDuck, {"E(3,7)", 3, 7, 0}}},
-  /* #20 a=cinquillo ducking b=E(3,7), decimates = the 15 overlaps */
-  {kRhyGrid1x, RhyStr("x.xx.xx."), RhyStr(".......x....x....x..........x..x.x.............x.x..x..."), RhyStr("x..x.x....x...x....x.x..x.x........x..x.x.x..x........x."), {{"cinquillo", 5, 8, 0}, kRhyPrDuck, {"E(3,7)", 3, 7, 0}}},
-  // END GENERATED INTERLOCK ROWS
-  // -> full CCW
+  // END GENERATED RHY CW ROWS
+  // -> full CW
 };
-// Engine 2's table, checked at compile time.
-constexpr bool VestigeRhyIlPatOk(const VestigeRhyPat& p) {
-  return p.kind == kRhyNone || (p.kind == kRhyStr && p.len > 0) ||
+// Engine 2's tables, checked at compile time.
+constexpr bool VestigeRhyIlPatOk(const VestigeRhyPat& p, int max_len) {
+  return p.kind == kRhyNone || (p.kind == kRhyStr && p.len > 0 && p.len <= max_len) ||
          (p.kind == kRhyEuc && (p.n == 8 || p.n == 12 || p.n == 16) && p.k >= 0 && p.k <= p.n && p.rot >= 0);
 }
 constexpr int VestigeRhyIlLen(const VestigeRhyPat& p) { return p.kind == kRhyStr ? p.len : p.kind == kRhyEuc ? p.n : 1; }
@@ -609,24 +649,30 @@ constexpr bool VestigeRhyIlHit(const VestigeRhyPat& p, int t) {   // (the module
        : p.kind == kRhyEuc ? p.k > 0 && ((((t % p.n) + p.rot) % p.n) * p.k) % p.n < p.k : false;
 }
 constexpr int VestigeRhyGcd(int a, int b) { return b ? VestigeRhyGcd(b, a % b) : a; }
-constexpr bool VestigeRhyIlTableOk() {
-  for (const VestigeRhyRow& R : VESTIGE_TIMING_RHY_TABLE_INTERLOCK) {
-    if (R.grid != kRhyGrid1x || !VestigeRhyIlPatOk(R.stut) || !VestigeRhyIlPatOk(R.rest) || !VestigeRhyIlPatOk(R.dec)) return false;
-    const int ls = VestigeRhyIlLen(R.stut), lr = VestigeRhyIlLen(R.rest), ld = VestigeRhyIlLen(R.dec);
-    const int l2 = ls / VestigeRhyGcd(ls, lr) * lr, L = l2 / VestigeRhyGcd(l2, ld) * ld;   // their whole period
-    for (int t = 0; t < L; t++) {
-      const bool S = VestigeRhyIlHit(R.stut, t);
-      if (S && VestigeRhyIlHit(R.rest, t)) return false;   // a rest never on a stutter
-      if (!S && VestigeRhyIlHit(R.dec, t)) return false;   // a decimate only on a stutter
-    }
+constexpr bool VestigeRhyIlRowOk(const VestigeRhyRow& R) {
+  if (R.grid != kRhyGrid1x || !VestigeRhyIlPatOk(R.stut, VESTIGE_TIMING_RHY_STUT_MAX) ||
+      !VestigeRhyIlPatOk(R.rest, VESTIGE_TIMING_RHY_MASK_MAX) || !VestigeRhyIlPatOk(R.dec, VESTIGE_TIMING_RHY_MASK_MAX)) return false;
+  const int ls = VestigeRhyIlLen(R.stut), lr = VestigeRhyIlLen(R.rest), ld = VestigeRhyIlLen(R.dec);
+  const int l2 = ls / VestigeRhyGcd(ls, lr) * lr, L = l2 / VestigeRhyGcd(l2, ld) * ld;   // their whole period
+  for (int t = 0; t < L; t++) {
+    const bool S = VestigeRhyIlHit(R.stut, t);
+    if (S && VestigeRhyIlHit(R.rest, t)) return false;   // a rest never on a stutter
+    if (!S && VestigeRhyIlHit(R.dec, t)) return false;   // a decimate only on a stutter
   }
   return true;
 }
-// The selected engine's table (engines 1 + 2 share the table machinery).
+constexpr bool VestigeRhyIlTableOk(const VestigeRhyRow* T, int n) {
+  for (int i = 0; i < n; i++) if (!VestigeRhyIlRowOk(T[i])) return false;
+  return n > 0;
+}
+static constexpr int VESTIGE_TIMING_RHY_ROWS_CCW = (int)(sizeof(VESTIGE_TIMING_RHY_TABLE_CCW) / sizeof(VESTIGE_TIMING_RHY_TABLE_CCW[0]));
+static constexpr int VESTIGE_TIMING_RHY_ROWS_CW  = (int)(sizeof(VESTIGE_TIMING_RHY_TABLE_CW) / sizeof(VESTIGE_TIMING_RHY_TABLE_CW[0]));
+// The selected engine's CCW table (engines 1 + 2 share the table machinery);
+// the CW table is engine 2's only.
 static constexpr const VestigeRhyRow* VESTIGE_TIMING_RHY_TABLE =
-    (VESTIGE_TIMING_RHY_ENGINE == 2) ? VESTIGE_TIMING_RHY_TABLE_INTERLOCK : VESTIGE_TIMING_RHY_TABLE_AFRO;
+    (VESTIGE_TIMING_RHY_ENGINE == 2) ? VESTIGE_TIMING_RHY_TABLE_CCW : VESTIGE_TIMING_RHY_TABLE_AFRO;
 static constexpr int    VESTIGE_TIMING_RHY_ROWS = (VESTIGE_TIMING_RHY_ENGINE == 2)
-    ? (int)(sizeof(VESTIGE_TIMING_RHY_TABLE_INTERLOCK) / sizeof(VESTIGE_TIMING_RHY_TABLE_INTERLOCK[0]))
+    ? VESTIGE_TIMING_RHY_ROWS_CCW
     : (int)(sizeof(VESTIGE_TIMING_RHY_TABLE_AFRO) / sizeof(VESTIGE_TIMING_RHY_TABLE_AFRO[0]));
 // All engines: one small variation with chance RHY_VAR_PROB per ~32 steps:
 // one added 1-step stutter on a free step, for that pass only. Was 0.3; 0 =
@@ -642,10 +688,11 @@ static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.f;
 static constexpr int    VESTIGE_TIMING_RHY_D_SLOTS  = 8;
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MIN  = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MAX  = 6.f;
-static_assert(VestigeRhyIlTableOk(),
-              "VESTIGE_TIMING_RHY_TABLE_INTERLOCK: rows are {kRhyGrid1x, stutters, rests, dec, meta}; a Euclid needs "
-              "n = 8, 12 or 16, 0 <= k <= n, rot >= 0; a string is non-empty; a rest never on a stutter; "
-              "a decimate (dec) only on a stutter");
+static_assert(VestigeRhyIlTableOk(VESTIGE_TIMING_RHY_TABLE_CCW, VESTIGE_TIMING_RHY_ROWS_CCW) &&
+              VestigeRhyIlTableOk(VESTIGE_TIMING_RHY_TABLE_CW, VESTIGE_TIMING_RHY_ROWS_CW),
+              "VESTIGE_TIMING_RHY_TABLE_CCW / _CW: rows are {kRhyGrid1x, stutters, rests, dec, meta}; a Euclid needs "
+              "n = 8, 12 or 16, 0 <= k <= n, rot >= 0; a string is non-empty, stutters <= RHY_STUT_MAX, "
+              "rests / dec <= RHY_MASK_MAX; a rest never on a stutter; a decimate (dec) only on a stutter");
 
 // ---- Stage 3: the TIMING error — a steady Euclidean groove inside a pass ---
 // Level L = err_level_[kErrTiming]. L == 0: off. For any L > 0 a loop voice
