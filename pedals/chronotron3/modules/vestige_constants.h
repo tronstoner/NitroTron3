@@ -1193,5 +1193,6 @@ static constexpr float  VESTIGE_FRIP_DECAY_MAX = 1.0f;   // infinite sustain (fr
 // ---------------------------------------------------------------------------
 static constexpr int    VESTIGE_BLINK_SLOW = 50;  // *10 ms → 500 ms half-period
 static constexpr int    VESTIGE_BLINK_FAST = 12;  // *10 ms → 120 ms half-period
+static constexpr int    VESTIGE_BLINK_HELD_ON = 25; // *10 ms → 250 ms half-period: LED2 held + on (held + bypassed = SLOW)
 static constexpr int    VESTIGE_BLINK_FLICKER = 3; // *10 ms → 30 ms half-period: LED2 while recording
 static constexpr int    VESTIGE_FLASH_TICKS = 30; // clear-confirm flash duration

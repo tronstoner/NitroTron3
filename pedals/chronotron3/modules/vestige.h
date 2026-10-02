@@ -3982,8 +3982,8 @@ class Vestige : public Module {
 
   // -------------------------------------------------------------------------
   // LED mapping (single-colour). Stage 1:
-  //   led1 (CLOCK):  while engaged, one 40 ms flash per T, anchored to this
-  //                   side's most recent capture start · off when off
+  //   led1 (CLOCK):  always (on or bypassed: T can be tapped either way), one
+  //                   40 ms flash per T, anchored to this side's most recent capture start
   //   led2 (CAPTURE/HOLD): solid while a capture is recording · slow-blink while
   //                   the buffer is held · off otherwise
   //   playing = 1 flashing / 2 off (on while capturing) · held-playing = 1
@@ -4002,9 +4002,9 @@ class Vestige : public Module {
     }
 
     // LED1 = the clock: one flash per T, anchored to this side's most recent
-    // capture start (the current "one"), never free-running. Only while the
-    // effect is on, so off still reads as off.
-    if (engaged_ && period_ > 0) {
+    // capture start (the current "one"), never free-running. Always — on or
+    // bypassed — since T can be tapped while bypassed too.
+    if (period_ > 0) {
       const uint32_t width = (uint32_t)((float)VESTIGE_LED1_FLASH_MS * 0.001f * sr_);
       const int ls = led_slot_[pool_];
       if (pool_ == kPoolLoop && !recording_ &&
@@ -4022,10 +4022,12 @@ class Vestige : public Module {
     }
 
     // LED2 = the effect's state (builder's spec, 2026-09-29):
-    //   recording -> rapid flicker · held -> slow blink · on -> solid · off -> dark
+    //   recording -> rapid flicker · held + on -> blink (2x the slow rate) ·
+    //   held + bypassed -> slow blink · on -> solid · off -> dark
     const bool flicker = ((blink_ / VESTIGE_BLINK_FLICKER) & 1) != 0;
+    const bool held_on = ((blink_ / VESTIGE_BLINK_HELD_ON) & 1) != 0;
     if (recording_)     led2.Set(flicker ? 1.f : 0.f);
-    else if (held_)     led2.Set(slow ? 1.f : 0.f);
+    else if (held_)     led2.Set(engaged_ ? (held_on ? 1.f : 0.f) : (slow ? 1.f : 0.f));
     else if (engaged_)  led2.Set(1.f);
     else                led2.Set(0.f);
   }
