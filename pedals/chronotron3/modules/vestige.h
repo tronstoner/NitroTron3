@@ -3409,6 +3409,18 @@ class Vestige : public Module {
                       ? (uint32_t)cap_len_[s] : 1u;
         continue;
       }
+      // Freeze side: at most 2 freezes sound at once. With 2 already sounding
+      // (live / fading / stolen), steal the oldest not-yet-stolen one (fast
+      // VESTIGE_STEAL_RELEASE_S release) and start this one once it is silent.
+      if (PoolOf(s) == kPoolFreeze) {
+        int n = 0, oldest = -1; uint32_t best = 0xFFFFFFFFu;
+        for (int v = PoolLo(kPoolFreeze); v < PoolHi(kPoolFreeze); v++) {
+          if (!active_[v]) continue;
+          n++;
+          if (!stolen_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
+        }
+        if (n >= 2) { StealVoice(oldest); continue; }   // retry next sample
+      }
       IsrActivate(s, now);
     }
   }
