@@ -428,10 +428,27 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // ---- Errors on K3 (bipolar) -------------------------------------------------
 // CW half: the level (0..1) of all three error layers together (timing mode 3:
 // TIMING / CONDITION / PLAYBACK). Noon (+-VESTIGE_K3_DEADZONE): no errors. CCW
-// half (K3 mode 1, SW2 UP): the RHYTHM only — a CURATED table of afro-based
-// patterns, VESTIGE_TIMING_RHY_ROWS rows across the CCW travel.
-static constexpr float  VESTIGE_K3_DEADZONE          = 0.06f;
-// Depth u (0 just past the dead zone .. 1 at full CCW) picks a row: the travel
+// half (K3 mode 1, SW2 UP): the RHYTHM only, depth u = 0 just past the dead
+// zone .. 1 at full CCW, from one of two engines (VESTIGE_TIMING_RHY_ENGINE):
+//   0 POLYMETRIC (default): Euclidean stutters + rests, one step each, on the
+//     voice's running step count (it rolls across bars), rotated per loop:
+//     stutters: a RHY_S_CYCLE (12) step cycle, S_K_MIN .. S_K_MAX hits with the
+//     depth (E(2,12) = dotted-quarter hemiola .. E(7,12) = the bell pattern);
+//     rests: a RHY_R_CYCLE (8) step cycle, R_K_MIN .. R_K_MAX hits (E(1,8) ..
+//     E(3,8) = tresillo); a stutter wins where both land. 12 : 8 = 3:2 and
+//     12 : 16 = 4:3 (the cross-rhythms of the tradition; 7 was only coprime):
+//     the whole rhythm repeats after lcm(12, 8, 16) = 48 steps (3 bars).
+//   1 AFRO TABLE: a CURATED table of afro-based patterns,
+//     VESTIGE_TIMING_RHY_ROWS rows across the CCW travel (below).
+static constexpr float  VESTIGE_K3_DEADZONE          = 0.02f;
+static constexpr int    VESTIGE_TIMING_RHY_ENGINE    = 0;   // 0 polymetric · 1 afro table
+static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
+static constexpr float  VESTIGE_TIMING_RHY_S_K_MIN   = 2.f;
+static constexpr float  VESTIGE_TIMING_RHY_S_K_MAX   = 7.f;
+static constexpr int    VESTIGE_TIMING_RHY_R_CYCLE   = 8;
+static constexpr float  VESTIGE_TIMING_RHY_R_K_MIN   = 1.f;
+static constexpr float  VESTIGE_TIMING_RHY_R_K_MAX   = 3.f;
+// Engine 1 (afro table): depth u (0 just past the dead zone .. 1 at full CCW) picks a row: the travel
 // is cut into ROWS equal zones, row = min(ROWS-1, (int)(u * ROWS)), 4 rows per
 // third. Each row = a GRID, a STUTTER pattern and a REST pattern, all indexed
 // by the voice's RUNNING step count t (16th steps; it never resets per pass,
@@ -482,14 +499,15 @@ static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE[] = {
   // -> full CCW
 };
 static constexpr int    VESTIGE_TIMING_RHY_ROWS = (int)(sizeof(VESTIGE_TIMING_RHY_TABLE) / sizeof(VESTIGE_TIMING_RHY_TABLE[0]));
-// One small variation with chance RHY_VAR_PROB per ~32 steps: one added 1-step
-// stutter on a free step, for that pass only.
+// Both engines: one small variation with chance RHY_VAR_PROB per ~32 steps:
+// one added 1-step stutter on a free step, for that pass only.
 static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;
 // Decimate colour on the rhythm: a Euclidean pattern on the 8th-note
 // off-beats, E(D_K, D_SLOTS) over 2 bars' off-beats (D_SLOTS = 8), D_K =
 // D_K_MIN just past noon .. D_K_MAX at full CCW; one step, never on a rest,
-// stacked on a stutter. In HALF-grid rows on the QUARTER off-beats instead
-// (t % 8 == 4), the same slot logic (slot = t / 8).
+// stacked on a stutter, rotated per loop (both engines). Engine 1 only: in
+// HALF-grid rows on the QUARTER off-beats instead (t % 8 == 4), the same slot
+// logic (slot = t / 8).
 static constexpr int    VESTIGE_TIMING_RHY_D_SLOTS  = 8;
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MIN  = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MAX  = 6.f;

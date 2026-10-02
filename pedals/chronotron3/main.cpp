@@ -247,6 +247,9 @@ int main() {
     //   S t why=L|O side= ...      capture start (L = level gate, O = onset)
     //   E t why=S|C|c|R raw= Q=    capture end (S silence, C ceiling, c ceiling after the sound ended, R request)
     //   B t lift=Q|O               re-arm block lifted (Q = went quiet, O = onset)
+    //   VS RHY t k3= u= ks= kr= kd= srot= rrot= drot= slot= |bars|
+    //                              K3 CCW rhythm now playing (debounced ~250 ms; engine 1:
+    //                              row= instead of ks/kr/srot/rrot; "off" when it stops)
     if (CT3_DIAG && g_active == CT3_MODE_VESTIGE) {
       static uint32_t vs_hb = 0;
       static bool vs_banner = false;
@@ -275,6 +278,13 @@ int main() {
             (unsigned)vestige.DiagCapDrops(), (unsigned)vestige.DiagJumps(), (unsigned)vestige.TakePlanUs(),
             (unsigned)vestige.TakeTickUs(), (unsigned)vestige.TakeProcUs(), vestige.DiagLive(),
             vestige.TakeGrainMax(), vestige.DiagK1(), F3(vestige.DiagSpX()));
+      } else if (const char* rl = vestige.DiagRhyLine()) {
+        // K3 CCW rhythm line (prepared in Controls, debounced): its own tick.
+        // Kept pending and re-sent next tick if the port was busy (a few tries).
+        static int rhy_tries = 0;
+        const uint32_t drops = g_diag_usb_drops;
+        DiagLine("%s", rl);
+        if (g_diag_usb_drops == drops || ++rhy_tries >= 5) { vestige.DiagRhyDone(); rhy_tries = 0; }
       } else {
         Vestige::GateDiag r;
         if (vestige.DiagPop(r)) {
