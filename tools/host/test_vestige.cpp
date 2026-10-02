@@ -109,6 +109,19 @@ static void Tick() {
   led1_prev = on;
 }
 static int& fs2_down_ticks = fs_down_ticks[1];
+// LED1 rises in [from, to): their count, and the largest deviation of an
+// interval between consecutive rises from T (tick-quantised: <= 480 samples
+// when it flashes once per T). -1 with fewer than two rises.
+static long LedIntervalErr(size_t T, long from, long to, int* count) {
+  long prev = -1, worst = -1; *count = 0;
+  for (long r : led1_rises) {
+    if (r < from || r >= to) continue;
+    (*count)++;
+    if (prev >= 0) { const long d = labs((r - prev) - (long)T); if (d > worst) worst = d; }
+    prev = r;
+  }
+  return worst;
+}
 
 static int  blk = 48;                  // Process() block size (1 = per-sample audit mode)
 static bool audit_on = false;
@@ -240,12 +253,18 @@ static void TestStage0() {
   play_input = false; RunFor(1.0f);
   Check(!v.recording_ && peak > 0.01f, "held-playing: loop sustains, no capture");
 
-  Tap(); RunFor(1.5f);
+  Tap(); const long hs_from = n; RunFor(1.5f);
   Check(!v.engaged_ && v.held_ && v.Bypassed(), "tap while held: held-stopped");
   Check(v.HasContent(), "held-stopped: buffer preserved after fade-out");
   RunFor(0.5f);
   Check(peak < 1e-4f, "held-stopped: wet silent after fade");
-  Check(led1.v == 0.f, "held-stopped: LED1 off");
+  RunFor(2.0f);   // LED1 = the clock, also while bypassed (T can be tapped bypassed)
+  { int cnt = 0; const long err = LedIntervalErr(v.period_, hs_from, n, &cnt);
+    const int want = (int)((double)(n - hs_from) / (double)v.period_);
+    printf("      held-stopped: %d LED1 flashes in %.1f s at T %.0f ms, interval error <= %ld samples\n",
+           cnt, (n - hs_from) / sr, v.period_ / 48.0, err);
+    Check(v.period_ > 0 && cnt >= want - 1 && cnt >= 2 && err >= 0 && err <= 480,
+          "held-stopped (bypassed): LED1 keeps flashing once per T"); }
 
   Tap(); RunFor(1.5f);
   Check(v.engaged_ && v.held_ && peak > 0.01f, "tap again: held-playing, old loop returns with no input");
@@ -630,10 +649,20 @@ static void TestTimeBase() {
   Check(v.period_ == TapT(700) && (long)v.led_anchor_[Vestige::kPoolLoop] == a2,
         "tap with a loop playing: new T, anchor stays on the capture start");
   RunFor(1.0f);
-  // (e) off = LED1 dark.
-  Tap(); RunFor(1.5f);
-  Check(!v.engaged_, "setup: effect off");
-  Check(led1_on_while_off == 0, "LED1 never lit while the effect is off (whole run)");
+  // (e) off (bypassed): LED1 keeps the clock — once per T, and a tap while
+  // bypassed sets T and re-times the flash from its down-press.
+  { Tap(); led1_on_while_off = 0; const long off_from = n; RunFor(2.2f);
+    Check(!v.engaged_, "setup: effect off");
+    int cnt = 0; const long err = LedIntervalErr(v.period_, off_from, n, &cnt);
+    printf("      off: %d LED1 flashes in %.1f s at T %.0f ms (interval error <= %ld samples), %ld lit ticks\n",
+           cnt, (n - off_from) / sr, v.period_ / 48.0, err, led1_on_while_off);
+    Check(led1_on_while_off > 0 && cnt >= 2 && err >= 0 && err <= 480, "effect off: LED1 still flashes once per T");
+    Taps({500});
+    const long ta = (long)v.led_anchor_[Vestige::kPoolLoop], tfrom = n;
+    RunFor(2.6f);
+    int tc = 0; const long tl = LedWorstLate(ta, TapT(500), tfrom, n, &tc);
+    Check(!v.engaged_ && v.period_ == TapT(500) && tc >= 4 && tl >= 0,
+          "effect off: a tap sets T, LED1 flashes once per new T from the tap"); }
   Tap(); RunFor(0.2f);
 
   // A held loop parked on the other side keeps running (stays on its beat).
@@ -3127,7 +3156,7 @@ static void StepWindows(const SlLog& lg, int s, size_t L, bool rev, int* ok, int
 // A noise loop is captured; one clean pass is kept as the reference; then with
 // K3 up every pass's rendered map (per step: which step's material, direction,
 // ratchet, silence) is checked against the output sample by sample.
-struct LayerStats { int G = 0, cells = 0; long steps = 0, good = 0, silent = 0, silent_ok = 0, bad_lines = 0;
+struct LayerStats { int G = 0, cells = 0; long steps = 0, good = 0, silent = 0, silent_ok = 0, bad_lines = 0, rat_steps = 0;
                     bool changed = false; long first_pass_events = -1; };
 // sw2: SW2 for the K3 mode (-1: by the side, CW = mode 2 layers, CCW = mode 1 rhythm).
 static LayerStats LayerRun(float k3raw, int tapms, int passes, int sw2 = -1) {
@@ -3179,6 +3208,7 @@ static LayerStats LayerRun(float k3raw, int tapms, int passes, int sw2 = -1) {
     auto bnd = [&](int i) { return (i >= G) ? Q : (long)((double)Q * i / G + 0.5); };
     for (int i = 0; i < G; i++) {
       const int rt = v.tl_rat_[s][i], src = v.tl_src_[s][i], dr = v.tl_dir_[s][i], cn = v.tl_cnd_[s][i];
+      if (rt > 1) st.rat_steps++;                              // (a ratchet / double step rendered)
       for (int j = 0; j < rt; j++) {
         const long b0 = bnd(i), b1 = bnd(i + 1);
         const long a = (j == 0) ? b0 : (long)(b0 + (double)(b1 - b0) * j / rt + 0.5);
@@ -3376,111 +3406,577 @@ static void TestK5Repeats() {
   Check(v.rep_n_ == 0 && v.active_[s] && fabsf(20.f * log10f(a3 / a2)) < 0.5f && a1 > 0.f, "K5 back at noon: endless, the level kept");
   blk = 48; Realign(); Reset();
 }
-// K3 CCW, engine 0 = the polymetric rhythm: one-step Euclidean stutters (12-step
-// cycle) and rests (8-step cycle) on the running step count, at FIXED rotations
-// (VESTIGE_TIMING_RHY_S/R/D_ROT): it renders exactly like the layers, rolls
-// across bars, is the same on every loop, and (variation off) every pass is
-// exactly its base.
+// K3 mode 1, engine 0 = the POLYMETRIC rhythm, both halves: one-step Euclidean
+// stutters E(ks, Ns) against rests E(kr, Nr) on the voice's running step count
+// (CCW 12 : 8, CW 15 : 10; depth u per half), at rotations every loop draws
+// for itself (VESTIGE_TIMING_RHY_ROT_RANDOM): the stutters always ON THE 1
+// (ROT_ON1), the rests audible (AUDIBLE_RESTS); re-drawn when K3 moves to
+// another rhythm (REROLL). Half time below HALF_U, ratchets from RAT_U0, a
+// one-run hit variation every 4th / 5th run (KVAR), one added stutter now and
+// then (VAR_PROB), decimates on the 8th-note off-beats.
 // One pass of a rhythm loop, read from its lines into running step -> cell
 // ('s' stutter, '_' rest, 'd' decimate, 'D' decimate on a stutter, '-' plain).
 // offbeat: decimates must sit on the 8th-note off-beats (engines 0 + 1);
 // false (engine 2): they must sit on a stutter (the rows' overlap masks).
-struct RhyPassCheck { bool only_ok = true, dec_ok = true; int decs = 0; bool offbeat = true; };
+// allow_rat (engine 0): a double / ratchet hit on the timing line is allowed
+// ON a stutter (counted in rats, rat_bad when it sits anywhere else).
+struct RhyPassCheck { bool only_ok = true, dec_ok = true; int decs = 0; bool offbeat = true;
+                      bool allow_rat = false; int rats = 0, rat_bad = 0; };
 static void RhyReadPass(int s, std::map<int32_t, char>& out, RhyPassCheck& ck) {
   const int G = v.sl_n_[s], seg0 = v.ln_pass_[s] * G;
   const int32_t t0 = v.rhy_t_[s] - G;                      // this pass's first running step
   std::string line(G, '-');
-  std::vector<int> dec;
+  std::vector<int> dec, rat;
   for (int l = 0; l < 3; l++) for (int h = 0; h < v.ln_nh_[s][l]; h++) {
     const auto& x = v.ln_hit_[s][l][h];
     if (x.len != 1) ck.only_ok = false;
-    if (l == 0 && x.type != Vestige::kFigStutter) ck.only_ok = false;
+    const bool is_rat = l == 0 && (x.type == Vestige::kFigDouble || x.type == Vestige::kFigRatchet);
+    if (l == 0 && x.type != Vestige::kFigStutter && !(ck.allow_rat && is_rat)) ck.only_ok = false;
     if (l == 1 && x.type != Vestige::kFigRest && x.type != Vestige::kFigDecimate) ck.only_ok = false;
     if (l == 2) ck.only_ok = false;
     const int i = x.start - seg0;
     if (i < 0 || i >= G) continue;
+    if (is_rat) { rat.push_back(i); continue; }
     if (x.type == Vestige::kFigDecimate) {                   // on the 8th-note off-beats only (engine 2: anywhere, on a stutter)
       if (ck.offbeat && (((t0 + i) % 4) + 4) % 4 != 2) ck.dec_ok = false;
       dec.push_back(i); ck.decs++; continue;
     }
     line[i] = (l == 0) ? 's' : '_';
   }
+  for (int i : rat) { ck.rats++; if (line[i] != 's') ck.rat_bad++; }
   for (int i : dec) { if (line[i] == '_' || (!ck.offbeat && line[i] != 's')) ck.dec_ok = false; else line[i] = (line[i] == 's') ? 'D' : 'd'; }   // never on a rest
   for (int i = 0; i < G; i++) out[t0 + i] = line[i];
 }
-static void TestK3RhythmPoly() {
-  printf("-- K3 CCW: polymetric rhythm (stutters on %d, rests on %d; fixed rotations s%d r%d d%d; variation %.2f)\n",
-         VESTIGE_TIMING_RHY_S_CYCLE, VESTIGE_TIMING_RHY_R_CYCLE, VESTIGE_TIMING_RHY_S_ROT, VESTIGE_TIMING_RHY_R_ROT,
-         VESTIGE_TIMING_RHY_D_ROT, (double)VESTIGE_TIMING_RHY_VAR_PROB);
-  const float depth = 0.6f;
-  const LayerStats st = LayerRun(K3Ccw(depth), 2000, 16);
-  printf("      render: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
-         st.good, st.steps, st.silent_ok, st.silent, audit_bad);
-  Check(st.steps > 60 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0,
-        "rhythm renders exactly: every step = its source, rests silent, no bad reads");
-  // The base itself: 12- and 8-step cycles, not the bar.
-  { const uint32_t sr0 = (uint32_t)Vestige::kRhySRot, rr0 = (uint32_t)Vestige::kRhyRRot; bool per84 = true, per16 = true;
-    auto gcd = [](int a, int b) { while (b) { const int t = a % b; a = b; b = t; } return a; };
-    const int cyc = VESTIGE_TIMING_RHY_S_CYCLE / gcd(VESTIGE_TIMING_RHY_S_CYCLE, VESTIGE_TIMING_RHY_R_CYCLE) * VESTIGE_TIMING_RHY_R_CYCLE;
-    for (int t = 0; t < 4 * cyc + 64; t++) {
-      if (Vestige::RhyPolyBase(t, depth, sr0, rr0) != Vestige::RhyPolyBase(t + cyc, depth, sr0, rr0)) per84 = false;
-      if (Vestige::RhyPolyBase(t, depth, sr0, rr0) != Vestige::RhyPolyBase(t + 16, depth, sr0, rr0)) per16 = false;
+// ---- engine 0 reference model (test side) ----------------------------------
+// E(k, n) rotated by rot hits step i if ((i + rot) % n * k) % n < k.
+static bool Euc(long i, int k, int n, int rot) {
+  if (k <= 0 || n <= 0) return false;
+  const long im = ((i % n) + n) % n;
+  return ((im + rot) % n * k) % n < k;
+}
+static int Gcd0(int a, int b) { while (b) { const int t = a % b; a = b; b = t; } return a; }
+static int RhyNs(int side) { return side == kRhyCw ? VESTIGE_TIMING_RHY_CW_S_CYCLE : VESTIGE_TIMING_RHY_S_CYCLE; }
+static int RhyNr(int side) { return side == kRhyCw ? VESTIGE_TIMING_RHY_CW_R_CYCLE : VESTIGE_TIMING_RHY_R_CYCLE; }
+// A loop's rotations as the planner derives them from its two words.
+struct RhyRots { int sr = 0, rr = 0, dr = 0; };
+static RhyRots RhyRotsOf(uint32_t w, uint32_t wr, float u, int side) {
+  RhyRots o;
+  o.sr = (int)Vestige::RhyOn1Rot(w, u, side);
+  o.rr = (int)Vestige::RhyRestRot(wr, u, (uint32_t)o.sr, side);
+  o.dr = (int)((w >> 8) % (uint32_t)VESTIGE_TIMING_RHY_D_SLOTS);
+  return o;
+}
+static RhyRots RhyRotsOfSlot(int s, float u, int side) { return RhyRotsOf(v.rhy_rot_[s], v.rhy_rrot_[s], u, side); }
+// The base cell at running step t ('s' / '_' / '-', with_dec: 'D' / 'd' on the decimate off-beats).
+static char RhyBaseCh(long t, float u, const RhyRots& R, int side, bool with_dec = true) {
+  const int ks = Vestige::RhyPolyKs(u, side), kr = Vestige::RhyPolyKr(u, side);
+  const char c = Euc(t, ks, RhyNs(side), R.sr) ? 's' : Euc(t, kr, RhyNr(side), R.rr) ? '_' : '-';
+  if (!with_dec || c == '_') return c;
+  const int Nd = VESTIGE_TIMING_RHY_D_SLOTS;
+  const bool dec = ((t % 4) + 4) % 4 == 2 && Euc((t / 4) % Nd, Vestige::RhyKd(u), Nd, R.dr);
+  return dec ? (c == 's' ? 'D' : 'd') : c;
+}
+static std::string RhyBaseBars(float u, const RhyRots& R, int side) {   // |16|16|16|, like the log
+  std::string o = "|";
+  for (int t = 0; t < 48; t++) { o += RhyBaseCh(t, u, R, side); if (t % 16 == 15) o += '|'; }
+  return o;
+}
+static char RhyStrip(char c) { return c == 'D' ? 's' : c == 'd' ? '-' : c; }
+// Rests of rest rotation x against stutter rotation sr over lcm(Ns, Nr): audible (off a stutter) / total.
+static void RhyRestAud(float u, int sr, int x, int side, int& aud, int& tot) {
+  const int Ns = RhyNs(side), Nr = RhyNr(side), L = Ns / Gcd0(Ns, Nr) * Nr;
+  const int ks = Vestige::RhyPolyKs(u, side), kr = Vestige::RhyPolyKr(u, side);
+  aud = tot = 0;
+  for (int t = 0; t < L; t++) if (Euc(t, kr, Nr, x)) { tot++; if (!Euc(t, ks, Ns, sr)) aud++; }
+}
+// ---- the planner without audio: a second module instance -------------------
+// TimingPlanRhythmPoly (the real planner, its RNG, the hit variation, the
+// ratchets, the re-roll) on slot s with G steps per pass, seg0 = 0.
+static Vestige& RhySim() { static Vestige* p = new Vestige; return *p; }
+static void RhySimNewLoop(Vestige& q, int s) {               // what a loop start resets (vestige.h)
+  q.rhy_rot_[s] = q.TimingRandU(); q.rhy_rrot_[s] = q.TimingRandU();
+  q.rhy_t_[s] = 0; q.rkv_next_[s] = -1; q.rkv_t0_[s] = q.rkv_t1_[s] = 0; q.rhy_key_[s] = -1;
+}
+struct RhySimPass { long t0 = 0; std::string cell; std::vector<int> rat; bool var = false, bad = false; uint32_t w = 0, wr = 0; };
+static RhySimPass RhySimPlan(Vestige& q, int s, int G) {
+  RhySimPass o; o.t0 = q.rhy_t_[s];
+  const uint32_t tv = q.timing_vars_;
+  q.TimingPlanRhythmPoly(s, G, 0);
+  o.var = q.timing_vars_ != tv; o.w = q.rhy_rot_[s]; o.wr = q.rhy_rrot_[s];
+  o.cell.assign(G, '-'); o.rat.assign(G, 0);
+  std::vector<int> dec;
+  for (int l = 0; l < 3; l++) for (int h = 0; h < q.ln_nh_[s][l]; h++) {
+    const auto& x = q.ln_hit_[s][l][h];
+    const int i = x.start;
+    if (i < 0 || i >= G || x.len != 1) { o.bad = true; continue; }
+    if (l == 0 && x.type == Vestige::kFigStutter) { if (o.cell[i] != '-') o.bad = true; o.cell[i] = 's'; }
+    else if (l == 0 && (x.type == Vestige::kFigDouble || x.type == Vestige::kFigRatchet)) {
+      if (o.rat[i]) o.bad = true;
+      o.rat[i] = (x.type == Vestige::kFigRatchet) ? 4 : 2;
     }
-    std::string bars;
-    for (int b = 0; b < 4; b++) { for (int i = 0; i < 16; i++) { const int c = Vestige::RhyPolyBase(b * 16 + i, depth, sr0, rr0); bars += c == 2 ? '_' : c == 1 ? 's' : '-'; } bars += '|'; }
-    printf("      base, 4 bars: |%s\n", bars.c_str());
-    Check(per84 && !per16, "rhythm: repeats with the stutter x rest cycles (lcm), not with the 16-step bar (it rolls)"); }
-  // Per pass on a playing loop: only one-step stutters + rests; every pass the base.
-  auto play_loop = [&](int passes_want, std::map<int32_t, char>& map, RhyPassCheck& ck, int& passes, int& base_passes,
-                       int& over_one, bool& var_ok, uint32_t& rot_word) -> int {
-    seen_acts = v.act_count_;
-    CapRec r{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &r); noise_from = noise_to = -1;
-    const int s = r.s; rot_word = v.rhy_rot_[s];
-    for (int p = 0; p < passes_want; p++) {
-      { const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000; while (v.pass_[s] == pp && n < lim) RunFor(0.001f); }
-      RunFor(0.005f);
-      const int G = v.sl_n_[s];
-      if (G <= 0 || !v.ln_rhythm_[s]) continue;
-      std::map<int32_t, char> one; RhyReadPass(s, one, ck);
-      int diff = 0;
-      for (const auto& kv : one) {
-        const int c = Vestige::RhyPolyBase(kv.first, v.rhy_level_, (uint32_t)Vestige::kRhySRot, (uint32_t)Vestige::kRhyRRot);
-        const char want = (c == 2 ? '_' : c == 1 ? 's' : '-');
-        const char got = (kv.second == 'D') ? 's' : (kv.second == 'd') ? '-' : kv.second;
-        if (got != want) { diff++; if (!(want == '-' && got == 's')) var_ok = false; }   // a variation = an added stutter
-        map[kv.first] = kv.second;
+    else if (l == 1 && x.type == Vestige::kFigRest) { if (o.cell[i] != '-') o.bad = true; o.cell[i] = '_'; }
+    else if (l == 1 && x.type == Vestige::kFigDecimate) dec.push_back(i);
+    else o.bad = true;
+  }
+  for (int i : dec) { if (o.cell[i] == '_') o.bad = true; else o.cell[i] = (o.cell[i] == 's') ? 'D' : 'd'; }
+  for (int i = 0; i < G; i++) if (o.rat[i] && o.cell[i] != 's' && o.cell[i] != 'D') o.bad = true;   // a ratchet only on a stutter
+  return o;
+}
+struct RhySimRes {
+  long passes = 0, plain = 0, steps = 0, base = 0, stut = 0, rat = 0, quad = 0, on1 = 0, on1_bad = 0, on_rest = 0,
+       dec_bad = 0, bad = 0, runs = 0, var_s = 0, var_r = 0, unexplained = 0, words_changed = 0, gap_min = 1L << 30;
+};
+// `loops` fresh loops x `passes` passes each at depth u on side `side`, read
+// back and checked against the reference model:
+//   on1     every stutter cycle's step 0 is a stutter (all passes)
+//   on_rest a stutter on a base rest (passes without the one-added-stutter variation)
+//   dec_bad a decimate that is not exactly the off-beat pattern on a non-rest step
+//   runs    every whole stutter cycle = E(ks, Ns) or E(ks +- 1, Ns) minus the base
+//           rests, every whole rest cycle = E(kr, Nr) or E(kr +- 1, Nr) off the
+//           played stutters (cycles in passes without the added-stutter variation);
+//           unexplained = neither; var_s / var_r = the k +- 1 (varied) runs;
+//           gap_min = the shortest gap between two varied runs.
+static void RhySimRun(float u, int side, int loops, int passes, RhySimRes& R) {
+  Vestige& q = RhySim(); const int s = 0, G = 16;
+  q.rhy_side_ = side; q.rhy_level_ = u;
+  const int Ns = RhyNs(side), Nr = RhyNr(side), ks = Vestige::RhyPolyKs(u, side), kr = Vestige::RhyPolyKr(u, side);
+  const int Nd = VESTIGE_TIMING_RHY_D_SLOTS, kd = Vestige::RhyKd(u);
+  for (int lp = 0; lp < loops; lp++) {
+    RhySimNewLoop(q, s);
+    const uint32_t w0 = q.rhy_rot_[s], wr0 = q.rhy_rrot_[s];
+    const RhyRots rot = RhyRotsOf(w0, wr0, u, side);
+    const long T = (long)passes * G;
+    std::string cell((size_t)T, '?'); std::vector<char> vp((size_t)T, 0);
+    for (int p = 0; p < passes; p++) {
+      const RhySimPass ps = RhySimPlan(q, s, G);
+      if (ps.w != w0 || ps.wr != wr0) R.words_changed++;
+      if (ps.bad) R.bad++;
+      R.passes++; if (!ps.var) R.plain++;
+      for (int i = 0; i < G; i++) {
+        const long t = ps.t0 + i;
+        if (t < 0 || t >= T) { R.bad++; continue; }
+        cell[t] = ps.cell[i]; vp[t] = ps.var;
+        if (RhyStrip(ps.cell[i]) == 's') { R.stut++; if (ps.rat[i]) { R.rat++; if (ps.rat[i] == 4) R.quad++; } }
       }
-      passes++; if (diff == 0) base_passes++; if (diff > 1) over_one++;
     }
-    return s;
-  };
+    for (long t = 0; t < T; t++) {
+      const char c = RhyStrip(cell[t]), b = RhyBaseCh(t, u, rot, side, false);
+      R.steps++; if (cell[t] == RhyBaseCh(t, u, rot, side)) R.base++;
+      if (t % Ns == 0) { R.on1++; if (c != 's') R.on1_bad++; }
+      if (!vp[t] && b == '_' && c == 's') R.on_rest++;
+      const bool want_dec = c != '_' && t % 4 == 2 && Euc((t / 4) % Nd, kd, Nd, rot.dr);
+      if ((cell[t] == 'D' || cell[t] == 'd') != want_dec) R.dec_bad++;
+    }
+    struct VRun { long a, b; };
+    std::vector<VRun> vr;
+    auto clean = [&](long a, long b) { if (b > T) return false; for (long t = a; t < b; t++) if (vp[t]) return false; return true; };
+    for (int voice = 0; voice < 2; voice++) {
+      const int N = voice ? Nr : Ns, k = voice ? kr : ks;
+      for (long a = 0; a + N <= T; a += N) {
+        if (!clean(a, a + N)) continue;
+        R.runs++;
+        int match = 99;
+        for (int d : {0, -1, 1}) {
+          if (d != 0 && (k + d < 1 || k + d > N - 1)) continue;
+          bool ok = true;
+          for (long t = a; t < a + N && ok; t++) {
+            if (voice == 0) {                                  // stutters: E(ks + d), never on a base rest
+              const bool want = Euc(t, ks + d, Ns, rot.sr) && RhyBaseCh(t, u, rot, side, false) != '_';
+              if ((RhyStrip(cell[t]) == 's') != want) ok = false;
+            } else {                                           // rests: E(kr + d), off the played stutters
+              const bool want = RhyStrip(cell[t]) != 's' && Euc(t, kr + d, Nr, rot.rr);
+              if ((cell[t] == '_') != want) ok = false;
+            }
+          }
+          if (ok) { match = d; break; }
+        }
+        if (match == 99) R.unexplained++;
+        else if (match != 0) { (voice ? R.var_r : R.var_s)++; vr.push_back({a, a + N}); }
+      }
+    }
+    std::sort(vr.begin(), vr.end(), [](const VRun& x, const VRun& y) { return x.a < y.a; });
+    for (size_t i = 1; i < vr.size(); i++) { const long g = vr[i].a - vr[i - 1].b; if (g < R.gap_min) R.gap_min = g; }
+  }
+}
+// The hit variation's scheduler alone (RhyKVarAt, called per step like the
+// planner does) over T steps of a fresh loop: every fresh plan puts its
+// varied run on the 4th or 5th whole cycle of its voice from the plan point;
+// varied runs are whole cycles of ONE voice with k +- 1; a varied stutter run
+// still hits its step 0; a varied rest run keeps its rests audible.
+struct RhyKvRes { long plans = 0, e4 = 0, e5 = 0, fallbacks = 0, vs = 0, vr = 0, bad = 0; };
+static void RhyKVarRun(float u, int side, long T, RhyKvRes& K) {
+  Vestige& q = RhySim(); const int s = 1;
+  q.rhy_side_ = side; q.rhy_level_ = u;
+  RhySimNewLoop(q, s);
+  const RhyRots R = RhyRotsOf(q.rhy_rot_[s], q.rhy_rrot_[s], u, side);
+  const int Ns = RhyNs(side), Nr = RhyNr(side), ks = Vestige::RhyPolyKs(u, side), kr = Vestige::RhyPolyKr(u, side);
+  std::vector<int> ds((size_t)T, 0), dr((size_t)T, 0);
+  bool first = true;
+  for (long t = 0; t < T; t++) {
+    const long o0 = q.rkv_t0_[s], o1 = q.rkv_t1_[s];
+    int dks = 0, dkr = 0;
+    q.RhyKVarAt(s, (int32_t)t, side, (uint32_t)R.sr, (uint32_t)R.rr, dks, dkr);
+    ds[t] = dks; dr[t] = dkr;
+    if (dks && dkr) K.bad++;
+    const long n0 = q.rkv_t0_[s], n1 = q.rkv_t1_[s];
+    if (first || n0 != o0 || n1 != o1) {
+      const int N = q.rkv_voice_[s] ? Nr : Ns;
+      if (n1 - n0 != N || n0 % N != 0) K.bad++;              // one whole cycle of its voice
+      if (q.rkv_dk_[s] == 0) {                               // a fresh plan from p (the loop start / the last run's end)
+        const long p = first ? t : o1, c0 = (p + N - 1) / N * N;
+        K.plans++;
+        if ((n0 - c0) % N != 0 || (n0 - c0) / N < 3 || (n0 - c0) / N > 4) K.bad++;
+        else ((n0 - c0) / N == 3 ? K.e4 : K.e5)++;           // the 4th / 5th run from the plan point
+      } else K.fallbacks++;                                   // nothing fits: the other voice, its next cycle
+      first = false;
+    }
+  }
+  for (long a = 0; a < T;) {
+    if (!ds[a] && !dr[a]) { a++; continue; }
+    const bool st = ds[a] != 0; const int d = st ? ds[a] : dr[a], N = st ? Ns : Nr;
+    long b = a; while (b < T && (st ? ds[b] : dr[b]) == d) b++;
+    if (a % N != 0 || (b - a != N && b != T) || (d != 1 && d != -1)) K.bad++;
+    if (st) {
+      if (!(ks + d >= 1 && ks + d <= Ns - 1 && Euc(0, ks + d, Ns, R.sr))) K.bad++;
+      K.vs++;
+    } else {
+      int a0 = 0, a1 = 0;
+      for (long t = a; t < b; t++) if (!Euc(t, ks, Ns, R.sr)) { a0 += Euc(t, kr, Nr, R.rr); a1 += Euc(t, kr + d, Nr, R.rr); }
+      if (a1 < 1 || a1 < a0 - (d < 0 ? 1 : 0)) K.bad++;
+      K.vr++;
+    }
+    a = b;
+  }
+}
+// A real loop's passes, read back (RhyReadPass) into one running-step map.
+struct RhyLoop { int s = -1; std::map<int32_t, char> map; int passes = 0, word_changes = 0, G = 0; uint32_t w = 0, wr = 0; };
+static void RhyNextPass(int s) {
+  const int32_t pp = v.pass_[s]; const long lim = n + 5L * 48000;
+  while (v.pass_[s] == pp && n < lim) RunFor(0.001f);
+  RunFor(0.005f);
+}
+static RhyLoop RhyCapture() {                                // a new loop (a noise burst), its words
+  RhyLoop L; seen_acts = v.act_count_;
+  CapRec r{}; noise_from = n; noise_to = n + 96000; WaitActivation(8.f, &r); noise_from = noise_to = -1;
+  L.s = r.s; L.w = v.rhy_rot_[L.s]; L.wr = v.rhy_rrot_[L.s];
+  return L;
+}
+static void RhyRecord(RhyLoop& L, int passes, RhyPassCheck& ck) {
+  for (int p = 0; p < passes; p++) {
+    RhyNextPass(L.s);
+    const int G = v.sl_n_[L.s];
+    if (G <= 0 || !v.ln_rhythm_[L.s]) continue;
+    if (v.rhy_rot_[L.s] != L.w || v.rhy_rrot_[L.s] != L.wr) L.word_changes++;
+    std::map<int32_t, char> one; RhyReadPass(L.s, one, ck);
+    for (const auto& kv : one) L.map[kv.first] = kv.second;
+    L.passes++; L.G = G;
+  }
+}
+// Played vs the loop's own base: steps equal / steps; every stutter cycle's step 0 a stutter.
+static void RhyAgree(const RhyLoop& L, float u, int side, int& same, int& all, int& on1, int& on1_bad) {
+  const RhyRots R = RhyRotsOf(L.w, L.wr, u, side);
+  same = all = on1 = on1_bad = 0;
+  for (const auto& kv : L.map) {
+    all++; if (kv.second == RhyBaseCh(kv.first, u, R, side)) same++;
+    if (kv.first % RhyNs(side) == 0) { on1++; if (RhyStrip(kv.second) != 's') on1_bad++; }
+  }
+}
+static void TestK3RhythmPoly() {
+  printf("-- K3 mode 1: polymetric rhythm, both halves (CCW E(ks,%d) vs E(kr,%d), CW E(ks,%d) vs E(kr,%d); rotations per loop, on the 1, audible rests; variation %.2f)\n",
+         VESTIGE_TIMING_RHY_S_CYCLE, VESTIGE_TIMING_RHY_R_CYCLE, VESTIGE_TIMING_RHY_CW_S_CYCLE, VESTIGE_TIMING_RHY_CW_R_CYCLE,
+         (double)VESTIGE_TIMING_RHY_VAR_PROB);
+  const char* const sn[2] = {"CCW", "CW"};
+  // (1) The cycles and hit counts per half: ks, kr from the depth (the
+  // constants' ranges, rounded), CCW half time with at least E(2,8) rests.
+  { bool cyc = RhyNs(kRhyCcw) == 12 && RhyNr(kRhyCcw) == 8 && RhyNs(kRhyCw) == 15 && RhyNr(kRhyCw) == 10 &&
+               Vestige::RhyPolyNs(kRhyCcw) == 12 && Vestige::RhyPolyNr(kRhyCcw) == 8 &&
+               Vestige::RhyPolyNs(kRhyCw) == 15 && Vestige::RhyPolyNr(kRhyCw) == 10;
+    bool k_ok = true, mono = true;
+    for (int side = kRhyCcw; side <= kRhyCw; side++) {
+      const float smin = side ? VESTIGE_TIMING_RHY_CW_S_K_MIN : VESTIGE_TIMING_RHY_S_K_MIN, smax = side ? VESTIGE_TIMING_RHY_CW_S_K_MAX : VESTIGE_TIMING_RHY_S_K_MAX;
+      const float rmin = side ? VESTIGE_TIMING_RHY_CW_R_K_MIN : VESTIGE_TIMING_RHY_R_K_MIN, rmax = side ? VESTIGE_TIMING_RHY_CW_R_K_MAX : VESTIGE_TIMING_RHY_R_K_MAX;
+      int pks = 0, pkr = 0;
+      for (int i = 1; i <= 4096; i++) {
+        const float u = (float)i / 4096.f;
+        const int ks = Vestige::RhyPolyKs(u, side), kr = Vestige::RhyPolyKr(u, side);
+        int wkr = (int)(rmin + (rmax - rmin) * u + 0.5f);
+        if (side == kRhyCcw && u < VESTIGE_TIMING_RHY_HALF_U && wkr < VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW) wkr = VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW;
+        if (ks != (int)(smin + (smax - smin) * u + 0.5f) || kr != wkr) k_ok = false;
+        if (ks < pks || kr < pkr) mono = false;
+        pks = ks; pkr = kr;
+      }
+    }
+    const bool ends = Vestige::RhyPolyKs(1e-4f, kRhyCcw) == 2 && Vestige::RhyPolyKs(1.f, kRhyCcw) == 7 &&
+                      Vestige::RhyPolyKr(1e-4f, kRhyCcw) == 2 && Vestige::RhyPolyKr(1.f, kRhyCcw) == 3 &&
+                      Vestige::RhyPolyKs(1e-4f, kRhyCw) == 2 && Vestige::RhyPolyKs(1.f, kRhyCw) == 8 &&
+                      Vestige::RhyPolyKr(1e-4f, kRhyCw) == 1 && Vestige::RhyPolyKr(1.f, kRhyCw) == 4;
+    printf("      CCW: E(%d..%d,12) vs E(%d..%d,8) (half time: kr >= %d)   CW: E(%d..%d,15) vs E(%d..%d,10)\n",
+           Vestige::RhyPolyKs(1e-4f), Vestige::RhyPolyKs(1.f), Vestige::RhyPolyKr(1e-4f), Vestige::RhyPolyKr(1.f), VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW,
+           Vestige::RhyPolyKs(1e-4f, kRhyCw), Vestige::RhyPolyKs(1.f, kRhyCw), Vestige::RhyPolyKr(1e-4f, kRhyCw), Vestige::RhyPolyKr(1.f, kRhyCw));
+    Check(cyc && k_ok && mono && ends,
+          "rhythm: CCW = E(2..7,12) stutters vs E(1..3,8) rests, CW = E(2..8,15) vs E(1..4,10), k from the half's depth (CCW half time: rests >= E(2,8))"); }
+  // (2) It rolls: the base repeats with lcm(Ns, Nr), not with the 16-step bar (any rotation, both halves).
+  { bool per = true, per16 = true;
+    for (int side = kRhyCcw; side <= kRhyCw; side++) {
+      const int L = RhyNs(side) / Gcd0(RhyNs(side), RhyNr(side)) * RhyNr(side);
+      for (float u : {0.3f, 0.6f, 1.f}) for (int sr = 0; sr < RhyNs(side); sr += 5) for (int rr = 0; rr < RhyNr(side); rr += 3) {
+        bool p16 = true;
+        for (int t = 0; t < 4 * L + 64; t++) {
+          const int c = Vestige::RhyPolyBase(t, u, (uint32_t)sr, (uint32_t)rr, side);
+          if (c != Vestige::RhyPolyBase(t + L, u, (uint32_t)sr, (uint32_t)rr, side)) per = false;
+          if (c != Vestige::RhyPolyBase(t + 16, u, (uint32_t)sr, (uint32_t)rr, side)) p16 = false;
+          const char want = Euc(t, Vestige::RhyPolyKs(u, side), RhyNs(side), sr) ? 1 : Euc(t, Vestige::RhyPolyKr(u, side), RhyNr(side), rr) ? 2 : 0;
+          if (c != want) per = false;                          // (and it IS the two Euclids, a stutter winning)
+        }
+        if (p16) per16 = false;
+      }
+    }
+    Check(per && per16, "rhythm: the base = the two Euclids (a stutter wins), repeats with lcm(Ns, Nr) (CCW 24, CW 30), not the 16-step bar (it rolls)"); }
+  // (3) ON THE 1: every stutter rotation a loop can draw hits the cycle's step
+  // 0, at every depth, both halves; the draws cover all ks such rotations.
+  { bool on1 = true, cover = true;
+    for (int side = kRhyCcw; side <= kRhyCw; side++)
+      for (int i = 1; i <= 512; i++) {
+        const float u = (float)i / 512.f;
+        const int ks = Vestige::RhyPolyKs(u, side), Ns = RhyNs(side);
+        uint32_t seen = 0;
+        for (uint32_t w = 0; w < 64; w++) {
+          const uint32_t ww = w;
+          const int r = (int)Vestige::RhyOn1Rot(ww, u, side);
+          if (r < 0 || r >= Ns || !Euc(0, ks, Ns, r)) on1 = false;
+          seen |= 1u << r;
+          if (Vestige::RhyPolyBase(5 * Ns, u, (uint32_t)r, ww, side) != 1) on1 = false;
+        }
+        int want = 0; for (int r = 0; r < Ns; r++) want += Euc(0, ks, Ns, r);
+        if (__builtin_popcount(seen) != want || want != ks) cover = false;
+      }
+    Check(on1 && cover, "rhythm: every loop's stutter rotation puts a stutter on the cycle's step 0 (on the 1), every depth, both halves; the draws cover all ks such rotations"); }
+  // (4) AUDIBLE RESTS: the rest rotation a loop draws, for every depth, every
+  // on-the-1 stutter rotation, both halves: never one whose rests all vanish
+  // on stutters; at least half of them audible whenever a rotation allows
+  // it; an even rotation whenever an even one qualifies; the draws = exactly
+  // the candidate set (even >= half, else any >= half, else the most audible).
+  { bool never_silent = true, half_ok = true, even_ok = true, set_ok = true;
+    int ccw6 = 0, ccw6_odd = 0, cw3 = 0, cw3_r0 = 0;
+    for (int side = kRhyCcw; side <= kRhyCw; side++)
+      for (int i = 1; i <= 256; i++) {
+        const float u = (float)i / 256.f;
+        const int Ns = RhyNs(side), Nr = RhyNr(side), ks = Vestige::RhyPolyKs(u, side), kr = Vestige::RhyPolyKr(u, side);
+        for (int sr = 0; sr < Ns; sr++) {
+          if (!Euc(0, ks, Ns, sr)) continue;                   // (only on-the-1 rotations are ever drawn)
+          int aud[16], tot = 0, best = 0; bool any_half = false, even_half = false;
+          for (int x = 0; x < Nr; x++) { RhyRestAud(u, sr, x, side, aud[x], tot); if (aud[x] > best) best = aud[x];
+                                         if (2 * aud[x] >= tot && aud[x] > 0) { any_half = true; if (x % 2 == 0) even_half = true; } }
+          uint32_t cand = 0;
+          for (int x = 0; x < Nr; x++) {
+            const bool q = 2 * aud[x] >= tot && aud[x] > 0;
+            if (even_half ? (q && x % 2 == 0) : any_half ? q : false) cand |= 1u << x;
+          }
+          if (!cand) { for (int x = 0; x < Nr; x += 2) if (aud[x] == best && best > 0) cand |= 1u << x; }
+          if (!cand) { for (int x = 0; x < Nr; x++) if (aud[x] == best) cand |= 1u << x; }
+          uint32_t seen = 0;
+          for (uint32_t w = 0; w < 32; w++) {
+            const int rr = (int)Vestige::RhyRestRot(w, u, (uint32_t)sr, side);
+            seen |= 1u << rr;
+            if (aud[rr] == 0) never_silent = false;
+            if (any_half && 2 * aud[rr] < tot) half_ok = false;
+            if (even_half && rr % 2) even_ok = false;
+            if (side == kRhyCcw && ks == 6 && kr == 2) { ccw6++; if (rr % 2) ccw6_odd++; }
+            if (side == kRhyCw && ks == 3) { cw3++; if (rr == 0) cw3_r0++; }
+          }
+          if (seen != cand) set_ok = false;
+        }
+      }
+    printf("      CCW ks=6 kr=2 (CCW#6): %d / %d rest draws on an odd rotation (every even one vanishes under E(6,12)); CW ks=3 (CW#2-4): %d / %d draws on rotation 0 (all on stutters)\n",
+           ccw6_odd, ccw6, cw3_r0, cw3);
+    Check(never_silent && ccw6 > 0 && ccw6_odd == ccw6 && cw3 > 0 && cw3_r0 == 0,
+          "rhythm: a loop's rest rotation never lets all its rests vanish on stutters (e.g. CCW#6: odd rotations only; CW#2-4: never rotation 0)");
+    Check(half_ok && even_ok && set_ok,
+          "rhythm: the rest draw = the candidates (even rotations with >= half the rests audible, else any such, else the most audible)"); }
+  // (5) Tempo: half time below HALF_U (the step x2), 1x above; ratchet ramp 0 up to RAT_U0, 1 at full.
+  { const bool tempo = Vestige::RhyTempoStep(0.01f) == 2.f && Vestige::RhyTempoStep(VESTIGE_TIMING_RHY_HALF_U - 0.001f) == 2.f &&
+                       Vestige::RhyTempoStep(VESTIGE_TIMING_RHY_HALF_U + 0.001f) == 1.f && Vestige::RhyTempoStep(1.f) == 1.f &&
+                       strcmp(Vestige::RhyTempoName(0.1f), "half") == 0 && strcmp(Vestige::RhyTempoName(0.5f), "1x") == 0;
+    const bool ramp = Vestige::RhyRatRamp(0.3f) == 0.f && Vestige::RhyRatRamp(VESTIGE_TIMING_RHY_RAT_U0) == 0.f &&
+                      fabsf(Vestige::RhyRatRamp(0.8f) - 0.5f) < 1e-4f && Vestige::RhyRatRamp(1.f) == 1.f;
+    Check(tempo && ramp, "rhythm: half time below depth 0.25 (step x2), 1x above; the ratchet ramp is 0 up to depth 0.6, 1 at full"); }
+  // (6) The planner itself (no audio, a second module instance), both
+  // halves over the depth: every pass = the loop's base, except whole cycles
+  // of one voice with k +- 1 and the one added stutter; checked per step.
+  { struct Case { int side; float u; };
+    const Case cases[] = { {kRhyCcw, 0.1f}, {kRhyCcw, 0.3f}, {kRhyCcw, 0.6f}, {kRhyCcw, 0.8f}, {kRhyCcw, 1.f},
+                           {kRhyCw, 0.05f}, {kRhyCw, 0.3f}, {kRhyCw, 0.6f}, {kRhyCw, 0.8f}, {kRhyCw, 1.f} };
+    bool all_ok = true, words_ok = true, on1_ok = true, rest_ok = true, dec_ok = true, var_ok = true, gap_ok = true;
+    bool rat_low = true, rat_mid = true, rat_top = true;
+    long tot_vs = 0, tot_vr = 0;
+    for (const Case& c : cases) {
+      RhySimRes R; RhySimRun(c.u, c.side, 40, 48, R);
+      const int Ns = RhyNs(c.side), Nr = RhyNr(c.side);
+      const double pr = R.stut ? (double)R.rat / (double)R.stut : 0.0, pq = R.rat ? (double)R.quad / (double)R.rat : 0.0;
+      const double ramp = Vestige::RhyRatRamp(c.u);
+      const double want_p = VESTIGE_TIMING_RHY_RAT_P_MAX * pow(ramp, VESTIGE_TIMING_RHY_RAT_P_CURVE), want_q = VESTIGE_TIMING_RHY_RAT_Q_MAX * ramp;
+      printf("      %-3s u=%.2f E(%d,%d) vs E(%d,%d): base %5.1f%% of %ld steps, on-1 bad %ld/%ld, unexplained runs %ld/%ld, varied S %ld R %ld (min gap %ld), "
+             "ratchets %ld/%ld = %.3f (want %.3f), x4 %.2f (want %.2f)\n",
+             sn[c.side], (double)c.u, Vestige::RhyPolyKs(c.u, c.side), Ns, Vestige::RhyPolyKr(c.u, c.side), Nr,
+             100.0 * R.base / R.steps, R.steps, R.on1_bad, R.on1, R.unexplained, R.runs, R.var_s, R.var_r,
+             R.gap_min == (1L << 30) ? -1L : R.gap_min, R.rat, R.stut, pr, want_p, pq, want_q);
+      if (R.bad) all_ok = false;
+      if (R.words_changed) words_ok = false;
+      if (R.on1_bad) on1_ok = false;
+      if (R.on_rest) rest_ok = false;
+      if (R.dec_bad) dec_ok = false;
+      if (R.unexplained || R.base * 10 < R.steps * 8) var_ok = false;
+      if (R.gap_min < 3L * std::min(Ns, Nr)) gap_ok = false;
+      tot_vs += R.var_s; tot_vr += R.var_r;
+      if (c.u <= VESTIGE_TIMING_RHY_RAT_U0 && R.rat != 0) rat_low = false;
+      if (c.u > VESTIGE_TIMING_RHY_RAT_U0 && c.u < 0.9f && !(R.rat > 0 && pr < 0.2 && fabs(pr - want_p) < 0.05)) rat_mid = false;
+      if (c.u == 1.f && !(fabs(pr - want_p) < 0.06 && fabs(pq - want_q) < 0.1)) rat_top = false;
+    }
+    Check(all_ok, "planner: only one-step stutters + rests + decimates (+ ratchets on stutters), one per step, inside the pass");
+    Check(words_ok, "planner: a loop's rotation words stay fixed while the rhythm does not change");
+    Check(on1_ok, "planner: every stutter cycle's step 0 is a stutter, every pass (variations included), both halves");
+    Check(rest_ok, "planner: a variation never puts a stutter on a base rest");
+    Check(var_ok && tot_vs > 0 && tot_vr > 0,
+          "planner: every pass = the loop's base, but for whole cycles of one voice with k +- 1 (the hit variation) and the one added stutter");
+    Check(gap_ok, "planner: varied runs never overlap, at least 3 whole cycles apart");
+    Check(dec_ok, "planner: decimates exactly on the loop's E(kd, 8) of the 8th-note off-beats, never on a rest");
+    Check(rat_low, "ratchets: none up to depth 0.6");
+    Check(rat_mid, "ratchets: rare just past 0.6 (p = 0.5 x ramp^2: 0.125 at depth 0.8)");
+    Check(rat_top, "ratchets: at full depth half the stutters ratchet (p 0.5), half of those x4, the rest x2"); }
+  // (7) The hit variation's scheduler: the 4th / 5th run of its voice.
+  { RhyKvRes K;
+    for (int side = kRhyCcw; side <= kRhyCw; side++)
+      for (float u : {0.1f, 0.3f, 0.5f, 0.7f, 0.9f, 1.f}) for (int lp = 0; lp < 6; lp++) RhyKVarRun(u, side, 2400, K);
+    printf("      hit variation: %ld plans (%ld on the 4th run, %ld on the 5th), %ld switched to the other voice, varied runs S %ld R %ld, bad %ld\n",
+           K.plans, K.e4, K.e5, K.fallbacks, K.vs, K.vr, K.bad);
+    Check(K.bad == 0 && K.plans > 100 && K.e4 > K.plans / 4 && K.e5 > K.plans / 4 && K.vs > 0 && K.vr > 0,
+          "hit variation: each varied run = the 4th or 5th whole cycle of its voice, k +- 1 for that run only (stutters still on the 1, rests still audible)"); }
+  // (8) Re-roll (planner): another rhythm (ks / kr / kd / tempo / side) -> new
+  // rotation words at the loop's next pass; the same rhythm keeps them.
+  { Vestige& q = RhySim(); const int s = 2;
+    q.rhy_side_ = kRhyCcw; q.rhy_level_ = 0.6f; RhySimNewLoop(q, s);
+    const uint32_t w0 = q.rhy_rot_[s], wr0 = q.rhy_rrot_[s];
+    for (int p = 0; p < 3; p++) RhySimPlan(q, s, 16);
+    const bool first_keep = q.rhy_rot_[s] == w0 && q.rhy_rrot_[s] == wr0;
+    q.rhy_level_ = 0.65f; RhySimPlan(q, s, 16); RhySimPlan(q, s, 16);   // CCW#5 still (ks 5, kr 2, kd 4, 1x)
+    const bool same_keep = q.rhy_rot_[s] == w0 && q.rhy_rrot_[s] == wr0;
+    auto rerolls = [&](float u, int side) {
+      const uint32_t a = q.rhy_rot_[s], b = q.rhy_rrot_[s], na = q.rhy_act_n_;
+      q.rhy_level_ = u; q.rhy_side_ = side; RhySimPlan(q, s, 16);
+      const bool changed = q.rhy_rot_[s] != a && q.rhy_rrot_[s] != b && q.rhy_act_n_ == na + 1 && q.rhy_act_slot_ == s;
+      const uint32_t c = q.rhy_rot_[s], d = q.rhy_rrot_[s];
+      RhySimPlan(q, s, 16); RhySimPlan(q, s, 16);
+      return changed && q.rhy_rot_[s] == c && q.rhy_rrot_[s] == d;   // (and then kept)
+    };
+    const bool ks_r = rerolls(0.8f, kRhyCcw);                 // CCW#7: ks 6, kr 3, kd 5
+    const bool tempo_a = rerolls(0.24f, kRhyCcw);             // CCW#2: ks 3, kr 2, kd 2, half
+    const bool tempo_b = rerolls(0.26f, kRhyCcw);             // CCW#3: the same hits, 1x
+    const bool side_r = rerolls(0.26f, kRhyCw);               // the CW half
+    Check(first_keep && same_keep, "re-roll: a loop keeps its rotations while K3 stays on the same rhythm (also moving inside it)");
+    Check(ks_r && tempo_a && tempo_b && side_r,
+          "re-roll: another rhythm (its hits, its tempo only, or the other half) draws new rotations at the loop's next pass, then keeps them"); }
+  // (9) The real module, audio: the rhythm renders exactly like the layers
+  // (both halves, ratchets at full depth).
+  { const LayerStats st = LayerRun(K3Ccw(0.6f), 2000, 16);
+    printf("      render CCW 0.6: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
+           st.good, st.steps, st.silent_ok, st.silent, audit_bad);
+    Check(st.steps > 60 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0,
+          "rhythm renders exactly: every step = its source, rests silent, no bad reads"); }
+  { const LayerStats st = LayerRun(K3Ccw(1.f), 2000, 16);
+    printf("      render CCW 1.0: %ld / %ld steps match their map, %ld ratchet steps, %ld / %ld rests silent, audit bad %ld\n",
+           st.good, st.steps, st.rat_steps, st.silent_ok, st.silent, audit_bad);
+    Check(st.steps > 60 && st.good == st.steps && st.rat_steps > 0 && st.silent_ok == st.silent && audit_bad == 0,
+          "rhythm at full depth renders exactly, ratchets included (every retrig = its source step)"); }
+  { const LayerStats st = LayerRun(K3Cw(0.6f), 2000, 16, 0);
+    printf("      render CW 0.6 (SW2 UP): %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld\n",
+           st.good, st.steps, st.silent_ok, st.silent, audit_bad);
+    Check(st.steps > 60 && st.good == st.steps && st.silent > 0 && st.silent_ok == st.silent && audit_bad == 0,
+          "rhythm CW half (SW2 UP) renders exactly: every step = its source, rests silent, no bad reads"); }
+  // (10) Real loops: two loops at the same CCW position play their OWN
+  // (B captured while A still plays: A fades out over B's first passes)
+  // rotations (different), each fixed over its passes, each mostly its base,
+  // always on the 1; decimates on the off-beats.
+  const float depth = 0.6f;
   Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; cs.knob[2] = K3Ccw(depth); Taps({2000}); RunFor(0.6f);
-  std::map<int32_t, char> mapA, mapB; RhyPassCheck ck;
-  bool var_ok = true; int base_passes = 0, passes = 0, over_one = 0; uint32_t rotA = 0, rotB = 0;
-  const int sA = play_loop(24, mapA, ck, passes, base_passes, over_one, var_ok, rotA);
-  const int sB = play_loop(8, mapB, ck, passes, base_passes, over_one, var_ok, rotB);
-  printf("      %d passes on 2 loops (slots %d, %d): %d exactly the base, %d with more than one edit; %d decimate hits\n",
-         passes, sA, sB, base_passes, over_one, ck.decs);
-  Check(ck.only_ok, "rhythm: only one-step stutters (timing line), rests + decimates (condition line), no playback hits");
-  if (VESTIGE_TIMING_RHY_VAR_PROB > 0.f)
-    Check(passes >= 16 && base_passes * 2 >= passes && over_one == 0 && var_ok, "rhythm: mostly the base; a variation only adds one stutter");
-  else
-    Check(passes >= 16 && base_passes == passes && var_ok, "rhythm (variation off): every pass plays exactly its base");
-  Check(ck.decs > 0 && ck.dec_ok, "rhythm: decimate hits only on the 8th-note off-beats, never on a rest");
-  // Two loops, the same knob position: the identical pattern step for step
-  // (their random per-loop words differ — engine 0 ignores them).
-  { int common = 0, differ = 0;
-    for (const auto& kv : mapB) { auto it = mapA.find(kv.first); if (it == mapA.end()) continue; common++; if (it->second != kv.second) differ++; }
-    char pat[64]; Vestige::RhyRenderBars(pat, v.rhy_level_, Vestige::kRhySRot, Vestige::kRhyRRot, Vestige::kRhyDRot);
-    std::string bars; for (const char* c = pat; *c; c++) if (*c != '|') bars += *c;
-    int log_bad = 0, log_n = 0;
-    for (int t = 0; t < 48; t++) { auto it = mapA.find(t); if (it == mapA.end()) continue; log_n++; if (it->second != bars[t]) log_bad++; }
+  RhyPassCheck ck; ck.allow_rat = true;
+  RhyLoop A = RhyCapture(); RhyRecord(A, 16, ck);
+  RhyLoop B = RhyCapture(); RhyRecord(B, 8, ck);
+  { int sa, na, oa, oba, sb, nb, ob, obb;
+    RhyAgree(A, v.rhy_level_, kRhyCcw, sa, na, oa, oba); RhyAgree(B, v.rhy_level_, kRhyCcw, sb, nb, ob, obb);
+    const RhyRots ra = RhyRotsOf(A.w, A.wr, depth, kRhyCcw), rb = RhyRotsOf(B.w, B.wr, depth, kRhyCcw);
+    int common = 0, differ = 0;
+    for (const auto& kv : B.map) { auto it = A.map.find(kv.first); if (it == A.map.end()) continue; common++; if (it->second != kv.second) differ++; }
     std::string a3, b3;
-    for (int t = 48; t < 96; t++) { auto ia = mapA.find(t), ib = mapB.find(t); a3 += ia == mapA.end() ? '?' : ia->second; b3 += ib == mapB.end() ? '?' : ib->second; if (t % 16 == 15) { a3 += '|'; b3 += '|'; } }
-    printf("      loop A steps 48..95: |%s  rot word %08x\n      loop B steps 48..95: |%s  rot word %08x\n", a3.c_str(), rotA, b3.c_str(), rotB);
-    printf("      %d running steps on both loops, %d differ; log render vs loop A: %d / %d steps differ\n", common, differ, log_bad, log_n);
-    Check(common >= 48 && differ == 0, "rhythm: two different loops at the same knob position play the identical pattern (fixed rotations)");
-    Check(log_n >= 32 && log_bad == 0, "rhythm: the log's 3-bar render is exactly what a loop plays (decimates included)"); }
+    for (int t = 48; t < 96; t++) { auto ia = A.map.find(t), ib = B.map.find(t); a3 += ia == A.map.end() ? '?' : ia->second; b3 += ib == B.map.end() ? '?' : ib->second; if (t % 16 == 15) { a3 += '|'; b3 += '|'; } }
+    printf("      loop A (slot %d) E(%d,12)r%d E(%d,8)r%d dr%d, steps 48..95: |%s\n      loop B (slot %d) E(%d,12)r%d E(%d,8)r%d dr%d, steps 48..95: |%s\n",
+           A.s, Vestige::RhyPolyKs(depth), ra.sr, Vestige::RhyPolyKr(depth), ra.rr, ra.dr, a3.c_str(),
+           B.s, Vestige::RhyPolyKs(depth), rb.sr, Vestige::RhyPolyKr(depth), rb.rr, rb.dr, b3.c_str());
+    printf("      A: %d passes, %d / %d steps = its base, on-1 bad %d / %d; B: %d passes, %d / %d, on-1 bad %d / %d; %d common steps, %d differ; %d ratchets, %d decimates\n",
+           A.passes, sa, na, oba, oa, B.passes, sb, nb, obb, ob, common, differ, ck.rats, ck.decs);
+    Check(ck.only_ok, "rhythm: only one-step stutters (timing line), rests + decimates (condition line), no playback hits");
+    Check(ck.decs > 0 && ck.dec_ok, "rhythm: decimate hits only on the 8th-note off-beats, never on a rest");
+    Check(A.passes >= 12 && B.passes >= 6 && A.word_changes == 0 && B.word_changes == 0,
+          "rhythm: a loop keeps its own rotations pass after pass (K3 unchanged)");
+    Check(A.s != B.s && (A.w != B.w || A.wr != B.wr) && (ra.sr != rb.sr || ra.rr != rb.rr || ra.dr != rb.dr) && common >= 48 && differ > 0,
+          "rhythm: two loops at the same knob position draw different rotations (random per loop) and play different patterns");
+    Check(sa * 10 >= na * 8 && sb * 10 >= nb * 8 && oba == 0 && obb == 0 && oa > 0 && ob > 0,
+          "rhythm: each loop plays mostly its own base (variations aside), always a stutter on the 1");
+    // The first 3 bars a loop plays = the base the log renders for it.
+    int log_n = 0, log_same = 0; const std::string bars = RhyBaseBars(depth, ra, kRhyCcw);
+    std::string flat; for (char c : bars) if (c != '|') flat += c;
+    char pat[64]; Vestige::RhyRenderBars(pat, depth, ra.sr, ra.rr, ra.dr, kRhyCcw);
+    for (int t = 0; t < 48; t++) { auto it = A.map.find(t); if (it == A.map.end()) continue; log_n++; if (it->second == flat[t]) log_same++; }
+    printf("      log render for A: %s, its first 3 bars as played: %d / %d steps equal\n", pat, log_same, log_n);
+    Check(bars == pat && log_n >= 32 && log_same * 10 >= log_n * 8,
+          "rhythm: the log's 3-bar render = the loop's own base (its rotations, decimates included) = what it plays (variations aside)"); }
+  // (11) Half time (on B, the live loop: SW1 UP keeps one, A has faded out):
+  // below depth 0.25 the same loop runs half the steps per
+  // pass; the CCW rests stay at E(2,8), audible.
+  { const int g1 = B.G;
+    cs.knob[2] = K3Ccw(0.2f); RhyNextPass(B.s);
+    RhyLoop H = B; H.map.clear(); H.passes = 0; H.w = v.rhy_rot_[B.s]; H.wr = v.rhy_rrot_[B.s];
+    RhyPassCheck hk; hk.allow_rat = true; RhyRecord(H, 4, hk);
+    int rests = 0; for (const auto& kv : H.map) rests += kv.second == '_';
+    printf("      half time: K3 depth 0.2 -> %d steps per pass (1x: %d), kr %d, %d rests in %d passes\n", H.G, g1, Vestige::RhyPolyKr(v.rhy_level_), rests, H.passes);
+    Check(g1 > 0 && H.G * 2 == g1 && Vestige::RhyPolyKr(v.rhy_level_) >= 2 && rests > 0 && hk.only_ok && hk.rats == 0,
+          "rhythm: below depth 0.25 half time (half the steps per pass), CCW rests at least E(2,8) and audible"); }
+  // (12) Re-roll on a playing loop: K3 inside the same rhythm keeps the
+  // rotations; to another rhythm, the loop draws new ones at its next pass.
+  { cs.knob[2] = K3Ccw(0.6f); RhyNextPass(B.s); RhyNextPass(B.s);
+    const uint32_t w1 = v.rhy_rot_[B.s], wr1 = v.rhy_rrot_[B.s];
+    cs.knob[2] = K3Ccw(0.65f); RhyNextPass(B.s); RhyNextPass(B.s);
+    const bool same = v.rhy_rot_[B.s] == w1 && v.rhy_rrot_[B.s] == wr1;
+    cs.knob[2] = K3Ccw(0.8f); RunFor(0.1f);
+    const bool not_yet = v.rhy_rot_[B.s] == w1 && v.rhy_rrot_[B.s] == wr1;
+    RhyNextPass(B.s);
+    const bool rolled = v.rhy_rot_[B.s] != w1 && v.rhy_rrot_[B.s] != wr1;
+    const uint32_t w2 = v.rhy_rot_[B.s];
+    RhyNextPass(B.s); RhyNextPass(B.s);
+    printf("      re-roll: same rhythm %s, another rhythm: before its next pass %s, after %s (then %s)\n",
+           same ? "kept" : "CHANGED", not_yet ? "kept" : "CHANGED", rolled ? "new" : "KEPT", v.rhy_rot_[B.s] == w2 ? "kept" : "CHANGED");
+    Check(same && not_yet && rolled && v.rhy_rot_[B.s] == w2,
+          "re-roll: K3 to another rhythm makes a playing loop draw new rotations at its next pass; the same rhythm keeps them"); }
+  // (13) The CW half on a real loop: 15-step stutter cycle, on the 1, mostly its base.
+  { cs.knob[2] = 0.5f; RunFor(0.1f);
+    Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f; cs.sw[1] = 0; cs.knob[2] = K3Cw(depth); Taps({2000}); RunFor(0.6f);
+    RhyPassCheck wk; wk.allow_rat = true;
+    RhyLoop W = RhyCapture(); RhyRecord(W, 8, wk);
+    int sw, nw, ow, owb; RhyAgree(W, v.rhy_level_, kRhyCw, sw, nw, ow, owb);
+    printf("      CW loop (slot %d): side %s, %d passes, %d / %d steps = its base, on-1 (every 15) bad %d / %d\n",
+           W.s, sn[v.rhy_side_], W.passes, sw, nw, owb, ow);
+    Check(v.rhy_side_ == kRhyCw && wk.only_ok && wk.dec_ok && W.passes >= 6 && W.word_changes == 0 && sw * 10 >= nw * 8 && owb == 0 && ow > 0,
+          "rhythm CW half (SW2 UP): E(ks,15) vs E(kr,10) on a playing loop, its own rotations, on the 1, mostly its base"); }
+  // (14) Mode 1, both halves on, noon's dead zone (+-0.04) clean.
+  { cs.sw[1] = 0;
+    auto at = [&](float raw) { cs.knob[2] = raw; RunFor(0.02f); return std::make_pair((float)v.rhy_level_, (int)v.rhy_side_); };
+    const auto in_ccw = at(K3Ccw(-0.05f)), in_cw = at(K3Cw(-0.05f)), noon = at(0.5f), out_ccw = at(K3Ccw(0.02f)), out_cw = at(K3Cw(0.02f));
+    const auto full_ccw = at(K3Ccw(1.f)), full_cw = at(K3Cw(1.f));
+    printf("      K3 dead zone: inside CCW %.3f / CW %.3f / noon %.3f; just outside CCW %.3f (%s) / CW %.3f (%s); full CCW %.3f / CW %.3f\n",
+           (double)in_ccw.first, (double)in_cw.first, (double)noon.first, (double)out_ccw.first, sn[out_ccw.second],
+           (double)out_cw.first, sn[out_cw.second], (double)full_ccw.first, (double)full_cw.first);
+    Check(in_ccw.first == 0.f && in_cw.first == 0.f && noon.first == 0.f && out_ccw.first > 0.f && out_ccw.second == kRhyCcw &&
+          out_cw.first > 0.f && out_cw.second == kRhyCw && fabsf(full_ccw.first - 1.f) < 1e-3f && fabsf(full_cw.first - 1.f) < 1e-3f,
+          "K3 mode 1: both halves play the rhythm (depth 0..1 per half), the dead zone around noon is clean"); }
   cs.knob[2] = 0.5f; RunFor(0.1f);
 }
 // K3 CCW, engine 1 = the curated afro rhythm table (VESTIGE_TIMING_RHY_TABLE): per row
@@ -3987,8 +4483,9 @@ static void TestK3Rhythm() {
   else printf("-- K3 CCW: interlock table tests skipped (VESTIGE_TIMING_RHY_ENGINE = %d)\n", VESTIGE_TIMING_RHY_ENGINE);
 }
 // DIAG rhythm log (CT3_DIAG builds; the host tests are built with it): one
-// line per settled change of the CCW rhythm (~250 ms debounce), forced when K3
-// enters the CCW half / SW2 goes UP, "off" when it stops; the pattern is the
+// line per settled change of the mode-1 rhythm, either half (~250 ms
+// debounce), forced when K3 enters a half / SW2 goes UP, "off" when it stops;
+// engine 0 also on a new loop / a re-roll (new rotations); the pattern is the
 // engine's own base (+ decimates) for the newest loop's rotations.
 static int RhyLogRun(int ticks, std::vector<std::string>& out) {   // 10 ms ticks, collects lines like the shell
   int got = 0;
@@ -3997,6 +4494,53 @@ static int RhyLogRun(int ticks, std::vector<std::string>& out) {   // 10 ms tick
     if (const char* l = v.DiagRhyLine()) { out.push_back(l); v.DiagRhyDone(); got++; }
   }
   return got;
+}
+// Engine 0: the numbered list, modelled here: each half's depth sampled at
+// i / 4096 (like the module), one entry per run of the same rhythm = (ks, kr,
+// kd, tempo); u from .. to, numbered #1.. from noon out, per half.
+struct RhyListE { int side, num, ks, kr, kd; bool half; int i0, i1; };
+static std::vector<RhyListE> RhyListModel() {
+  std::vector<RhyListE> o;
+  for (int side = kRhyCcw; side <= kRhyCw; side++) {
+    int num = 0;
+    for (int i = 1; i <= 4096; i++) {
+      const float u = (float)i / 4096.f;
+      const int ks = Vestige::RhyPolyKs(u, side), kr = Vestige::RhyPolyKr(u, side), kd = Vestige::RhyKd(u);
+      const bool half = u < VESTIGE_TIMING_RHY_HALF_U;
+      if (num > 0) { RhyListE& e = o.back(); if (e.ks == ks && e.kr == kr && e.kd == kd && e.half == half) { e.i1 = i; continue; } }
+      o.push_back({side, ++num, ks, kr, kd, half, i - 1, i});
+    }
+  }
+  return o;
+}
+static int RhyListNum(const std::vector<RhyListE>& M, float u, int side) {   // #n of the rhythm at depth u
+  const bool half = u < VESTIGE_TIMING_RHY_HALF_U;
+  for (const RhyListE& e : M)
+    if (e.side == side && e.ks == Vestige::RhyPolyKs(u, side) && e.kr == Vestige::RhyPolyKr(u, side) && e.kd == Vestige::RhyKd(u) && e.half == half) return e.num;
+  return 0;
+}
+static float RhyK3Rem(float u, int side) {                   // K3's remapped reading at depth u on side `side`
+  const float nn = (0.5f - KNOB_MIN) / (KNOB_MAX - KNOB_MIN);
+  return side == kRhyCw ? nn + VESTIGE_K3_DEADZONE + u * ((1.f - nn) - VESTIGE_K3_DEADZONE)
+                        : nn - VESTIGE_K3_DEADZONE - u * (nn - VESTIGE_K3_DEADZONE);
+}
+static std::string Fx3(float x) { char b[24]; Vestige::RhyFx3(b, sizeof b, x); return b; }
+// Engine 0, the per-change line after "t=<ms> k3=<k3>": " u=<u> <1x|half>
+// E(ks,Ns)r<sr> E(kr,Nr)r<rr> kd=<kd> dr<dr> |3 bars|" for rotations R.
+static std::string RhyLineTail(float u, int side, const RhyRots& R) {
+  char b[200];
+  snprintf(b, sizeof b, " u=%s %s E(%d,%d)r%d E(%d,%d)r%d kd=%d dr%d %s", Fx3(u).c_str(), u < VESTIGE_TIMING_RHY_HALF_U ? "half" : "1x",
+           Vestige::RhyPolyKs(u, side), RhyNs(side), R.sr, Vestige::RhyPolyKr(u, side), RhyNr(side), R.rr, Vestige::RhyKd(u), R.dr,
+           RhyBaseBars(u, R, side).c_str());
+  return b;
+}
+// The line `ln` = "VS RHY <side>#<num> t=<ms> k3=<K3 now>" + tail.
+static bool RhyLineIs(const std::string& ln, int side, int num, const std::string& tail) {
+  char head[48]; snprintf(head, sizeof head, "VS RHY %s#%d t=", side == kRhyCw ? "CW" : "CCW", num);
+  if (ln.rfind(head, 0) != 0) return false;
+  const size_t k = ln.find(" k3=" + Fx3(RemapKnob(cs.knob[2])) + " u=");
+  const size_t up = ln.find(" u=");
+  return k != std::string::npos && up != std::string::npos && ln.substr(up) == tail && ln.size() < (size_t)Vestige::kRhyLineN;
 }
 static void TestRhyDiagLog() {
   printf("-- K3 mode 1: DIAG rhythm log line (CCW# / CW#)\n");
@@ -4043,8 +4587,34 @@ static void TestRhyDiagLog() {
       }
       Check(ok, "rhythm log (engine 2): the list at start = header + CCW#1..#R then CW#1..#R: S=.. | R=.. | D=.. (exact values) k3=from..to |3 bars|, each side's k3 ranges tile its half");
     }
+    if (VESTIGE_TIMING_RHY_ENGINE == 0) {
+      // Engine 0: header, then CCW#1..#NC, then CW#1..#NW, one per tick:
+      // "<side>#n <1x|half> ks= kr= kd= u=from..to k3=from..to |3 bars at rot 0|",
+      // the u and k3 ranges tiling each half from noon's edge out.
+      const std::vector<RhyListE> M = RhyListModel();
+      int NC = 0, NW = 0; for (const RhyListE& e : M) (e.side == kRhyCw ? NW : NC)++;
+      char hdr[160];
+      snprintf(hdr, sizeof hdr, "VS RHY LIST engine=0 n=%d ccw=%d:%d cw=%d:%d var=%s (rotations drawn per loop; list at rot 0)",
+               NC + NW, VESTIGE_TIMING_RHY_S_CYCLE, VESTIGE_TIMING_RHY_R_CYCLE, VESTIGE_TIMING_RHY_CW_S_CYCLE, VESTIGE_TIMING_RHY_CW_R_CYCLE,
+               VESTIGE_TIMING_RHY_VAR_PROB > 0.f ? "on" : "off");
+      ok = ok && N == NC + NW && lst[0] == hdr;
+      bool tile = true;
+      for (size_t j = 0; ok && j < M.size(); j++) {
+        const RhyListE& e = M[j];
+        const float u0 = (float)e.i0 / 4096.f, u1 = (float)e.i1 / 4096.f, um = 0.5f * (u0 + u1);
+        char want[200];
+        snprintf(want, sizeof want, "VS RHY LIST %s#%d %s ks=%d kr=%d kd=%d u=%s..%s k3=%s..%s %s", e.side == kRhyCw ? "CW" : "CCW", e.num,
+                 e.half ? "half" : "1x", e.ks, e.kr, e.kd, Fx3(u0).c_str(), Fx3(u1).c_str(), Fx3(RhyK3Rem(u0, e.side)).c_str(),
+                 Fx3(RhyK3Rem(u1, e.side)).c_str(), RhyBaseBars(um, RhyRots{}, e.side).c_str());
+        if (lst[1 + j] != want) { ok = false; printf("      list line %zu: got  %s\n                  want %s\n", j + 1, lst[1 + j].c_str(), want); }
+        const bool first = j == 0 || M[j - 1].side != e.side, last = j + 1 == M.size() || M[j + 1].side != e.side;
+        if ((first && (e.i0 != 0 || e.num != 1)) || (!first && (e.i0 != M[j - 1].i1 || e.num != M[j - 1].num + 1)) || (last && e.i1 != 4096)) tile = false;
+      }
+      printf("      list: %d CCW + %d CW entries\n", NC, NW);
+      Check(ok && tile, "rhythm log (engine 0): the list at start = header + CCW#1..#N then CW#1..#N (tempo, ks kr kd, u + k3 ranges, 3 bars at rot 0), one per tick; the ranges tile each half");
+    }
     std::string prev_to = "0.000";
-    for (int i = 1; ok && i <= N && VESTIGE_TIMING_RHY_ENGINE != 2; i++) {
+    for (int i = 1; ok && i <= N && VESTIGE_TIMING_RHY_ENGINE == 1; i++) {
       const std::string& x = lst[i];
       int num = 0; char u0[16] = {}, u1[16] = {};
       const size_t up = x.find(" u=");
@@ -4055,29 +4625,34 @@ static void TestRhyDiagLog() {
       prev_to = u1;
       if (x.find("|") == std::string::npos || x.size() >= 190) ok = false;
     }
-    if (VESTIGE_TIMING_RHY_ENGINE != 2 && prev_to != "1.000") ok = false;
-    if (VESTIGE_TIMING_RHY_ENGINE != 2) Check(ok, "rhythm log: the numbered list at start = header + #1..#N in travel order, one per tick, u ranges tile 0..1");
+    if (VESTIGE_TIMING_RHY_ENGINE == 1 && prev_to != "1.000") ok = false;
+    if (VESTIGE_TIMING_RHY_ENGINE == 1) Check(ok, "rhythm log: the numbered list at start = header + #1..#N in travel order, one per tick, u ranges tile 0..1");
     // Numbering over the travel: #1 just past the dead zone, #N at full CCW,
     // never decreasing, one step at a time; the live key is the list's own.
-    // Engine 2: per side (CCW#1 .. CCW#R, CW#1 .. CW#R_CW), each from noon out.
+    // Engines 0 + 2: per side (CCW#1 .., CW#1 ..), each from noon out.
     bool mono = true, key_ok = true, top_ok = true;
-    for (int side = kRhyCcw; side <= ((VESTIGE_TIMING_RHY_ENGINE == 2) ? kRhyCw : kRhyCcw); side++) {
-      int last = 0;
+    for (int side = kRhyCcw; side <= ((VESTIGE_TIMING_RHY_ENGINE != 1) ? kRhyCw : kRhyCcw); side++) {
+      int last = 0, n_side = 0;
+      for (int j = 0; j < v.RhyListN(); j++) n_side += v.rl_[j].side == side;
       for (int i = 1; i <= 20000; i++) {
         const float u = (float)i / 20000.f;
         const int num = v.RhyNum(u, side);
         if (num < last || num > last + 1 || (i == 1 && num != 1)) mono = false;
         last = num;
         if (VESTIGE_TIMING_RHY_ENGINE == 0) {
-          int a, b, kd; Vestige::RhyKeyOf(u, a, b, kd);
-          const auto& e = v.rl_[num - 1];
-          if (e.num != num || e.a != a || e.b != b || e.kd != kd) key_ok = false;
+          int a, b, kd; Vestige::RhyKeyOf(u, a, b, kd, side);
+          const Vestige::RhyEntry* e = nullptr;
+          for (int j = 0; j < v.RhyListN(); j++) if (v.rl_[j].side == side && v.rl_[j].num == num) e = &v.rl_[j];
+          if (!e || e->a != a || e->b != b || e->kd != kd || (i % 97 == 0 && num != RhyListNum(RhyListModel(), u, side))) key_ok = false;
         } else if (num != Vestige::RhyRow(u, side) + 1) key_ok = false;
       }
-      if (last != ((VESTIGE_TIMING_RHY_ENGINE == 0) ? N : Vestige::RhyRows(side))) top_ok = false;
+      if (last != ((VESTIGE_TIMING_RHY_ENGINE == 0) ? n_side : Vestige::RhyRows(side))) top_ok = false;
     }
     Check(mono && key_ok && top_ok, "rhythm log: numbering per side is monotonic over its travel, #1 near noon .. #N at the half's end"); }
   // (a) K3 into the CCW half: nothing before ~250 ms, then exactly one line.
+  // Engine 0: K3 moved right after a pass of the loop began (its rhythm
+  // starts at the next pass, ~2 s later: the line comes first).
+  if (VESTIGE_TIMING_RHY_ENGINE == 0) RhyNextPass(s);
   cs.knob[2] = K3Ccw(0.6f);
   const int early = RhyLogRun(20, L);
   const int later = RhyLogRun(30, L);
@@ -4120,8 +4695,55 @@ static void TestRhyDiagLog() {
     snprintf(want, sizeof want, " row=%d kd=%d drot=%d slot=%d %s", Vestige::RhyRow(u), kd, drot, s, pat.c_str());
   const bool no_rot = VESTIGE_TIMING_RHY_ENGINE == 1 ||
       (ln.find("rot=") == std::string::npos && ln.find("slot=") == std::string::npos && (VESTIGE_TIMING_RHY_ENGINE == 0 || ln.find("row=") == std::string::npos));
-  Check(one && ln.rfind(head, 0) == 0 && ln.find(want) != std::string::npos && no_rot && ln.size() < 190,
-        "rhythm log: entering the CCW half logs ONE line after ~250 ms, starting with CCW#n, fields + 3-bar base pattern as the engine plays it");
+  if (VESTIGE_TIMING_RHY_ENGINE != 0)
+    Check(one && ln.rfind(head, 0) == 0 && ln.find(want) != std::string::npos && no_rot && ln.size() < 190,
+          "rhythm log: entering the CCW half logs ONE line after ~250 ms, starting with CCW#n, fields + 3-bar base pattern as the engine plays it");
+  else {
+    // Engine 0: "VS RHY CCW#n t=<ms> k3=<K3> u=<u> <1x|half> E(ks,12)r<sr>
+    // E(kr,8)r<rr> kd=<kd> dr<dr> |3 bars|", the rotations = the newest loop's
+    // own (its words), the bars = that loop's base; then the loop plays it.
+    const RhyRots R = RhyRotsOfSlot(s, u, kRhyCcw);
+    const int num = RhyListNum(RhyListModel(), u, kRhyCcw);
+    const bool fmt = one && v.rhy_act_slot_ == s && num == v.RhyNum(u) && RhyLineIs(ln, kRhyCcw, num, RhyLineTail(u, kRhyCcw, R));
+    if (!fmt) printf("      want  VS RHY CCW#%d t=.. k3=%s%s\n", num, Fx3(RemapKnob(cs.knob[2])).c_str(), RhyLineTail(u, kRhyCcw, R).c_str());
+    Check(fmt, "rhythm log: entering the CCW half logs ONE line after ~250 ms: CCW#n t= k3= u= tempo E(ks,12)r E(kr,8)r kd= dr |3 bars| with the newest loop's rotations");
+    RhyLoop Ls; Ls.s = s; Ls.w = v.rhy_rot_[s]; Ls.wr = v.rhy_rrot_[s];
+    RhyPassCheck lk; lk.allow_rat = true; RhyRecord(Ls, 3, lk);
+    const size_t bp = ln.find(" |"); std::string flat;
+    if (bp != std::string::npos) for (size_t i = bp + 1; i < ln.size(); i++) if (ln[i] != '|') flat += ln[i];
+    int same = 0, all = 0;
+    for (int t = 0; t < 48 && flat.size() == 48; t++) { auto it = Ls.map.find(t); if (it == Ls.map.end()) continue; all++; if (it->second == flat[t]) same++; }
+    printf("      the loop's first 3 bars vs the logged ones: %d / %d steps equal (rotations kept: %s)\n", same, all, Ls.word_changes ? "NO" : "yes");
+    Check(all >= 40 && same * 10 >= all * 8 && Ls.word_changes == 0,
+          "rhythm log: the logged 3 bars are what that loop then plays (its base; variations aside)");
+    // (a2) K3 straight over to the CW half (SW2 UP), right after a pass
+    // began: ONE line after ~250 ms (CW#n, E(ks,15) vs E(kr,10)); at its next
+    // pass the loop re-rolls (another rhythm) and ONE more line follows, with
+    // the loop's new rotations.
+    RhyNextPass(s); L.clear();
+    const uint32_t w0 = v.rhy_rot_[s], wr0 = v.rhy_rrot_[s];
+    cs.knob[2] = K3Cw(0.4f);
+    const int e2 = RhyLogRun(20, L), l2 = RhyLogRun(30, L);
+    const float uw = v.rhy_level_;
+    const int nw = RhyListNum(RhyListModel(), uw, kRhyCw);
+    const std::string l1 = L.empty() ? std::string() : L.back();
+    char hw[32]; snprintf(hw, sizeof hw, "VS RHY CW#%d t=", nw);
+    const std::string mid = std::string(" E(") + std::to_string(Vestige::RhyPolyKs(uw, kRhyCw)) + ",15)r";
+    const bool first_ok = e2 == 0 && l2 == 1 && v.rhy_side_ == kRhyCw && l1.rfind(hw, 0) == 0 && l1.find(mid) != std::string::npos &&
+                          l1.find(" E(" + std::to_string(Vestige::RhyPolyKr(uw, kRhyCw)) + ",10)r") != std::string::npos;
+    const uint32_t an = v.rhy_act_n_;
+    RhyNextPass(s);
+    const int l3 = RhyLogRun(40, L);
+    for (const auto& x : L) printf("      %s\n", x.c_str());
+    const std::string l2s = L.empty() ? std::string() : L.back();
+    const bool rolled = v.rhy_rot_[s] != w0 && v.rhy_rrot_[s] != wr0 && v.rhy_act_n_ == an + 1 && v.rhy_act_slot_ == s;
+    const bool second_ok = l3 == 1 && RhyLineIs(l2s, kRhyCw, nw, RhyLineTail(uw, kRhyCw, RhyRotsOfSlot(s, uw, kRhyCw)));
+    Check(first_ok, "rhythm log: K3 from CCW to CW logs ONE line after ~250 ms, CW#n (E(ks,15) vs E(kr,10))");
+    Check(rolled && second_ok, "rhythm log: the loop's re-roll (another rhythm, at its next pass) logs ONE more line, with its new rotations + 3 bars");
+    // (back on the CCW position the checks below start from, the loop
+    // re-rolled to it, its line drained; right after a pass began)
+    cs.knob[2] = K3Ccw(0.6f); RhyLogRun(40, L); RhyNextPass(s); RhyLogRun(40, L);
+  }
   // (a2) Engine 2: K3 straight over to the CW half (SW2 UP): one line, CW#n
   // = the CW table's row + 1, its exact values + 3 bars.
   if (VESTIGE_TIMING_RHY_ENGINE == 2) {
@@ -4159,16 +4781,24 @@ static void TestRhyDiagLog() {
   cs.sw[1] = 1; RhyLogRun(40, L); cs.sw[1] = 0; RhyLogRun(40, L);
   for (const auto& x : L) printf("      %s\n", x.c_str());
   Check(off && L.size() == 2, "rhythm log: back at noon logs 'off'; SW2 switching to UP logs once");
-  // (e) A new loop with the rhythm on. Engine 0: the same rhythm (fixed
-  // rotations), so no line; engine 1: a new line (its slot / decimate rotation).
+  // (e) A new loop with the rhythm on. Engine 0: a new line, the new loop's
+  // own rotations (the old loop first re-rolled to this rhythm, so it adds
+  // none); engine 2: the same rhythm (fixed), no line; engine 1: a new line
+  // (its slot / decimate rotation).
   L.clear(); cs.knob[2] = K3Ccw(0.3f); RhyLogRun(40, L);
+  if (VESTIGE_TIMING_RHY_ENGINE == 0) { RhyNextPass(s); RhyLogRun(40, L); }
   seen_acts = v.act_count_; noise_from = n; noise_to = n + 96000;
   const size_t before = L.size();
   { long lim = n + 8L * 48000; while (v.act_count_ == seen_acts && n < lim) RhyLogRun(1, L); }
   noise_from = noise_to = -1; RhyLogRun(40, L);
   for (size_t i = before; i < L.size(); i++) printf("      %s\n", L[i].c_str());
-  if (VESTIGE_TIMING_RHY_ENGINE != 1)
-    Check(v.act_count_ != seen_acts && L.size() == before, "rhythm log: a new loop logs nothing (engines 0 + 2: same rhythm, fixed rotations)");
+  if (VESTIGE_TIMING_RHY_ENGINE == 0) {
+    const int ns = v.last_act_slot_; const float ue = v.rhy_level_;
+    const bool ok = v.act_count_ != seen_acts && ns != s && v.rhy_act_slot_ == ns && L.size() == before + 1 &&
+                    RhyLineIs(L.back(), kRhyCcw, RhyListNum(RhyListModel(), ue, kRhyCcw), RhyLineTail(ue, kRhyCcw, RhyRotsOfSlot(ns, ue, kRhyCcw)));
+    Check(ok, "rhythm log: a new loop logs ONE line, with the new loop's own rotations + 3 bars");
+  } else if (VESTIGE_TIMING_RHY_ENGINE == 2)
+    Check(v.act_count_ != seen_acts && L.size() == before, "rhythm log: a new loop logs nothing (engine 2: same rhythm, fixed rotations)");
   else
     Check(L.size() == before + 1 && L.back().find("slot=" + std::to_string(v.rhy_act_slot_) + " ") != std::string::npos,
           "rhythm log: a new loop logs one line for the new slot");
@@ -4680,11 +5310,12 @@ int main() {
     Check(fabsf(t - 0.6f) < 1e-4f && v.err_level_[1] == t && v.err_level_[2] == t && v.rhy_level_ == 0.f,
           "K3 mode 2 (SW2 MIDDLE) CW half: all three layers at the same level (0..1 over the half), no rhythm");
     cs.sw[1] = 0; RunFor(0.1f);
-    if (VESTIGE_TIMING_RHY_ENGINE == 2)
+    if (VESTIGE_TIMING_RHY_ENGINE != 1)
       Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && fabsf(v.rhy_level_ - 0.6f) < 1e-4f && v.rhy_side_ == kRhyCw,
-            "K3 mode 1 (SW2 UP) CW half: the CW rhythm table at the half's depth (layers off)");
+            VESTIGE_TIMING_RHY_ENGINE == 0 ? "K3 mode 1 (SW2 UP) CW half: the CW rhythm (E(ks,15) vs E(kr,10)) at the half's depth (layers off)"
+                                           : "K3 mode 1 (SW2 UP) CW half: the CW rhythm table at the half's depth (layers off)");
     else
-      Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 1 (SW2 UP) CW half: clean (engines 0 + 1 have no CW table)");
+      Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 1 (SW2 UP) CW half: clean (engine 1 has no CW table)");
     cs.sw[1] = 2; RunFor(0.1f);
     Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 3 (SW2 DOWN): clean until built");
     cs.sw[1] = 0; cs.knob[2] = K3Ccw(0.5f); RunFor(0.1f);
@@ -4696,7 +5327,9 @@ int main() {
     cs.knob[2] = 0.5f; RunFor(0.1f);
     Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 noon: all off");
     cs.sw[1] = 0; }
-  // LED2 = effect state: off dark, on solid, recording rapid flicker, held slow blink.
+  // LED2 = effect state: off dark, on solid, recording rapid flicker, held +
+  // on blink (VESTIGE_BLINK_HELD_ON half-period), held + bypassed slow blink
+  // (VESTIGE_BLINK_SLOW).
   { printf("-- LED2\n");
     auto Sample = [](float secs, int& ons, int& toggles) {   // LED2 over secs, per 10 ms tick
       ons = 0; toggles = 0; bool prev = led2.v > 0.5f;
@@ -4712,7 +5345,16 @@ int main() {
     sustain_input = false; play_input = false; RunFor(1.0f);
     Check(rec && tg >= 8 && ons > 5 && ons < 35, "LED2 flickers rapidly while recording");
     Hold(); Sample(2.0f, ons, tg);
-    Check(v.held_ && tg >= 2 && tg <= 6, "LED2 blinks slowly while held");
+    { const int want = 200 / VESTIGE_BLINK_HELD_ON;            // toggles in 2 s (10 ms ticks)
+      printf("      held + on: %d toggles, %d / 200 ticks lit in 2 s (half-period %d ms)\n", tg, ons, VESTIGE_BLINK_HELD_ON * 10);
+      Check(v.held_ && v.engaged_ && tg >= want - 1 && tg <= want + 1 && ons >= 80 && ons <= 120,
+            "LED2 blinks while held and on (VESTIGE_BLINK_HELD_ON half-period, 250 ms)"); }
+    Tap(); RunFor(1.5f); Sample(2.0f, ons, tg);
+    { const int want = 200 / VESTIGE_BLINK_SLOW;
+      printf("      held + bypassed: %d toggles, %d / 200 ticks lit in 2 s (half-period %d ms)\n", tg, ons, VESTIGE_BLINK_SLOW * 10);
+      Check(v.held_ && !v.engaged_ && tg >= want - 1 && tg <= want + 1 && ons >= 50 && ons <= 150,
+            "LED2 blinks slowly while held and bypassed (VESTIGE_BLINK_SLOW half-period, 500 ms)"); }
+    Tap(); RunFor(0.3f);
     Unhold(); RunFor(0.3f); }
   { const int cfg = v.follow_mode_cfg_; v.follow_mode_cfg_ = -1;
     int m[3], km[3]; for (int p = 0; p < 3; p++) { cs.sw[1] = p; RunFor(0.1f); m[p] = v.follow_mode_; km[p] = v.glitch_mode_; }
