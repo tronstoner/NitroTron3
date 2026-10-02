@@ -475,6 +475,14 @@ static constexpr bool   VESTIGE_TIMING_RHY_ROT_EVEN   = true;
 // draw, the first with no rest right next to (one step from) a stutter
 // (else the one with the fewest such neighbours), per pass at the depth.
 static constexpr bool   VESTIGE_TIMING_RHY_NO_FLAM    = true;
+// Engine 0 HIT VARIATION: every RHY_KVAR_BARS_MIN .. _MAX bars (16 steps;
+// drawn anew each time) ONE voice (stutters or rests, random) plays ONE of its
+// cycles (from its next cycle start) with one hit more or less (random; at
+// k = 1 / n - 1 the only way that fits), then back to the original. Its
+// rotation stays. (On top of RHY_VAR_PROB's one added stutter.)
+static constexpr bool   VESTIGE_TIMING_RHY_KVAR       = true;
+static constexpr int    VESTIGE_TIMING_RHY_KVAR_BARS_MIN = 2;
+static constexpr int    VESTIGE_TIMING_RHY_KVAR_BARS_MAX = 4;
 // Rhythm TEMPO by depth (both halves, engine 0): the step the rhythm runs on
 // is the layers' step (VESTIGE_TIMING_STEP_MS, the loop-length scaled one)
 // x2 = HALF TIME below depth HALF_U (the first rhythms past noon), x0.5 =

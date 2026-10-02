@@ -2235,13 +2235,35 @@ class Vestige : public Module {
   static constexpr int kRhyRRot = VESTIGE_TIMING_RHY_R_ROT % VESTIGE_TIMING_RHY_R_CYCLE;
   static constexpr int kRhyDRot = VESTIGE_TIMING_RHY_D_ROT % VESTIGE_TIMING_RHY_D_SLOTS;
   // The base cell (0 pause, 1 stutter, 2 rest) at running step t, depth u.
-  static int RhyPolyBase(int32_t t, float u, uint32_t srot, uint32_t rrot, int side = kRhyCcw) {
-    const int ks = RhyPolyKs(u, side), kr = RhyPolyKr(u, side);
+  // dks / dkr: a hit variation's change of the stutters' / rests' k (clamped).
+  static int RhyPolyBase(int32_t t, float u, uint32_t srot, uint32_t rrot, int side = kRhyCcw, int dks = 0, int dkr = 0) {
     const int Ns = RhyPolyNs(side), Nr = RhyPolyNr(side);
+    int ks = RhyPolyKs(u, side) + dks, kr = RhyPolyKr(u, side) + dkr;
+    ks = ks < 0 ? 0 : ks > Ns ? Ns : ks;
+    kr = kr < 0 ? 0 : kr > Nr ? Nr : kr;
     const int ts = (int)(((t % Ns) + Ns) % Ns), tr = (int)(((t % Nr) + Nr) % Nr);
     if (RhyHit(ts, ks, Ns, (int)(srot % (uint32_t)Ns))) return 1;   // a stutter wins where both land
     if (RhyHit(tr, kr, Nr, (int)(rrot % (uint32_t)Nr))) return 2;
     return 0;
+  }
+  // HIT VARIATION (RHY_KVAR) at running step t of loop s: schedules / ends
+  // the one-cycle k +-1 of one voice; dks / dkr = its change at t.
+  int RhyKVarGap() {
+    const int b = VESTIGE_TIMING_RHY_KVAR_BARS_MIN + TimingPick(VESTIGE_TIMING_RHY_KVAR_BARS_MAX - VESTIGE_TIMING_RHY_KVAR_BARS_MIN + 1);
+    return 16 * b;
+  }
+  void RhyKVarAt(int s, int32_t t, int side, int& dks, int& dkr) {
+    if (rkv_next_[s] < 0) rkv_next_[s] = t + RhyKVarGap();          // a new loop: its first gap
+    if (rkv_t1_[s] > 0 && t >= rkv_t1_[s]) { rkv_next_[s] = rkv_t1_[s] + RhyKVarGap(); rkv_t0_[s] = rkv_t1_[s] = 0; }
+    if (rkv_t1_[s] == 0 && t >= rkv_next_[s]) {
+      const int v = TimingPick(2);                          // 0 stutters, 1 rests
+      const int N = v ? RhyPolyNr(side) : RhyPolyNs(side);
+      const int k = v ? RhyPolyKr(rhy_level_, side) : RhyPolyKs(rhy_level_, side);
+      const int d = (k <= 1) ? 1 : (k >= N - 1) ? -1 : (TimingPick(2) ? 1 : -1);
+      rkv_voice_[s] = (int8_t)v; rkv_dk_[s] = (int8_t)d;
+      rkv_t0_[s] = (t + N - 1) / N * N; rkv_t1_[s] = rkv_t0_[s] + N;   // its next whole cycle
+    }
+    if (rkv_t1_[s] > 0 && t >= rkv_t0_[s] && t < rkv_t1_[s]) (rkv_voice_[s] ? dkr : dks) = rkv_dk_[s];
   }
   void TimingPlanRhythmPoly(int s, int G, int seg0) {
     uint8_t cell[VESTIGE_TIMING_LAYER_MAX_STEPS];
@@ -2251,7 +2273,12 @@ class Vestige : public Module {
     const uint32_t srot = VESTIGE_TIMING_RHY_ROT_RANDOM ? RhyRotOf(rhy_rot_[s], RhyPolyNs(side)) : (uint32_t)kRhySRot;
     uint32_t rrot = VESTIGE_TIMING_RHY_ROT_RANDOM ? RhyRotOf(rhy_rrot_[s], RhyPolyNr(side)) : (uint32_t)kRhyRRot;
     if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rrot = RhyNoFlamRot(rhy_level_, srot, rrot, side);
-    for (int i = 0; i < G; i++) cell[i] = (uint8_t)RhyPolyBase(t0 + i, rhy_level_, srot, rrot, side);
+    for (int i = 0; i < G; i++) {
+      const int32_t t = t0 + i;
+      int dks = 0, dkr = 0;
+      if (VESTIGE_TIMING_RHY_KVAR) RhyKVarAt(s, t, side, dks, dkr);
+      cell[i] = (uint8_t)RhyPolyBase(t, rhy_level_, srot, rrot, side, dks, dkr);
+    }
     rhy_t_[s] = t0 + G;                                    // runs on across passes
     if (TimingRand() < VESTIGE_TIMING_RHY_VAR_PROB * (float)G / 32.f) {
       int hits[VESTIGE_TIMING_LAYER_MAX_STEPS], nh = 0, frees[VESTIGE_TIMING_LAYER_MAX_STEPS], nf = 0;
@@ -3248,6 +3275,7 @@ class Vestige : public Module {
       // variations) stays exactly as it was.
       rhy_rot_[s] = TimingRandU(); rhy_rrot_[s] = TimingRandU();
       rhy_t_[s] = 0;                                        //  and its running step count
+      rkv_next_[s] = -1; rkv_t0_[s] = rkv_t1_[s] = 0;         //  and no hit variation yet
       if (CT3_DIAG) { rhy_act_slot_ = s; rhy_act_n_ = rhy_act_n_ + 1; }   // DIAG: the rhythm log's newest loop
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
@@ -4498,6 +4526,11 @@ class Vestige : public Module {
   uint32_t rhy_rot_[VESTIGE_VOICE_SLABS]     = {};       // per-loop word (unused: every rotation is fixed; drawn for the RNG sequence)
   uint32_t rhy_rrot_[VESTIGE_VOICE_SLABS]    = {};       //  (unused: engine 0's rotations are fixed constants)
   int32_t  rhy_t_[VESTIGE_VOICE_SLABS]       = {};       // running step count (the polymeter's clock)
+  int32_t  rkv_next_[VESTIGE_VOICE_SLABS]    = {};       // hit variation: next start (-1 = draw; set at loop start)
+  int32_t  rkv_t0_[VESTIGE_VOICE_SLABS]      = {};       //  its cycle [t0, t1) (t1 0 = none)
+  int32_t  rkv_t1_[VESTIGE_VOICE_SLABS]      = {};
+  int8_t   rkv_voice_[VESTIGE_VOICE_SLABS]   = {};       //  0 stutters, 1 rests
+  int8_t   rkv_dk_[VESTIGE_VOICE_SLABS]      = {};       //  +1 / -1 hit
   volatile float rhy_level_ = 0.f;                        // K3 mode-1 rhythm depth, either half (0 = off)
   volatile int   rhy_side_  = 0;                          //  its half: kRhyCcw / kRhyCw (which table)
   int8_t   tl_src_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},   // this pass's render (diag)
