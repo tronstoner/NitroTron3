@@ -336,6 +336,7 @@ nobody will find.
 
 - `AGENTS.md` (repo root) — **current.** AI agent entry point; routes to the right doc per task. `CLAUDE.md` just includes it.
 - `agents-instructions.md` (repo root) — **current.** Hard rules for agent behaviour: git, documentation, decision-making.
+- `DESIGN_PHILOSOPHY.md` — **current (draft).** The builder's design and collaboration rules, read before any work: the ear decides, no precautionary audio processing, sacrosanct paths, nothing hidden, discuss before building, tuning and rhythm principles.
 - `README.md` (repo root) — **current.** User-facing overview + the control/LED tables.
 - `PROJECT.md` — **current.** This file. Top-level plan, hardware, staging timeline, preset system, current status.
 
