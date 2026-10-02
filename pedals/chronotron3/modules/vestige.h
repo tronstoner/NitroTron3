@@ -2196,12 +2196,13 @@ class Vestige : public Module {
     if (VESTIGE_TIMING_RHY_ENGINE == 2) return 0;
     return (int)(VESTIGE_TIMING_RHY_D_K_MIN + (VESTIGE_TIMING_RHY_D_K_MAX - VESTIGE_TIMING_RHY_D_K_MIN) * u + 0.5f);
   }
-  // The rhythm's step scale at depth u: 2 = half time (u < HALF_U), 0.5 =
-  // double time (u >= DOUBLE_U), else 1.
-  static float RhyTempoStep(float u) {
-    return (u < VESTIGE_TIMING_RHY_HALF_U) ? 2.f : (u >= VESTIGE_TIMING_RHY_DOUBLE_U) ? 0.5f : 1.f;
+  // The rhythm's step scale at depth u: 2 = half time (u < HALF_U), else 1.
+  static float RhyTempoStep(float u) { return (u < VESTIGE_TIMING_RHY_HALF_U) ? 2.f : 1.f; }
+  static const char* RhyTempoName(float u) { return RhyTempoStep(u) > 1.f ? "half" : "1x"; }
+  // The ratchet ramp at depth u: 0 below RAT_U0 .. 1 at full.
+  static float RhyRatRamp(float u) {
+    return u <= VESTIGE_TIMING_RHY_RAT_U0 ? 0.f : fminf(1.f, (u - VESTIGE_TIMING_RHY_RAT_U0) / (1.f - VESTIGE_TIMING_RHY_RAT_U0));
   }
-  static const char* RhyTempoName(float u) { const float x = RhyTempoStep(u); return x > 1.f ? "half" : x < 1.f ? "double" : "1x"; }
   // A loop's drawn rotation word r on an n-step cycle: 0 .. n-1, or with
   // RHY_ROT_EVEN only the even ones (0, 2, 4, ...).
   static uint32_t RhyRotOf(uint32_t r, int n) {
@@ -2288,6 +2289,7 @@ class Vestige : public Module {
       timing_vars_++;
     }
     ln_nh_[s][kErrTiming] = ln_nh_[s][kErrCondition] = ln_nh_[s][kErrPlayback] = 0;
+    const float ramp = RhyRatRamp(rhy_level_);
     for (int i = 0; i < G; i++) {
       if (!cell[i]) continue;
       const int l = (cell[i] == 2) ? kErrCondition : kErrTiming;
@@ -2295,6 +2297,14 @@ class Vestige : public Module {
       LineHit& x = ln_hit_[s][l][ln_nh_[s][l]++];
       x.start = (int8_t)(seg0 + i); x.len = 1; x.age = 0;
       x.type = (int8_t)((cell[i] == 2) ? kFigRest : kFigStutter); x.sub = (int8_t)((cell[i] == 2) ? 1 : 0);
+      // RATCHETS (top end): this stutter also retriggers 2x / 4x in its step
+      // (a second hit on the same cell: the stutter sets the source, the
+      // ratchet the retrig count; the render falls back below MIN_STEP).
+      if (cell[i] == 1 && ramp > 0.f && ln_nh_[s][kErrTiming] < kLineMaxHits && TimingRand() < VESTIGE_TIMING_RHY_RAT_P_MAX * ramp) {
+        LineHit& r = ln_hit_[s][kErrTiming][ln_nh_[s][kErrTiming]++];
+        r.start = (int8_t)(seg0 + i); r.len = 1; r.age = 0; r.sub = 0;
+        r.type = (int8_t)((TimingRand() < VESTIGE_TIMING_RHY_RAT_Q_MAX * ramp) ? kFigRatchet : kFigDouble);
+      }
     }
     // DECIMATE colour: its own Euclidean pattern on the 8th-note OFF-BEATS
     // (running steps t = 2 mod 4): E(k, RHY_D_SLOTS) over those slots, k =

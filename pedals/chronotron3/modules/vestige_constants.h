@@ -485,11 +485,17 @@ static constexpr int    VESTIGE_TIMING_RHY_KVAR_BARS_MIN = 2;
 static constexpr int    VESTIGE_TIMING_RHY_KVAR_BARS_MAX = 4;
 // Rhythm TEMPO by depth (both halves, engine 0): the step the rhythm runs on
 // is the layers' step (VESTIGE_TIMING_STEP_MS, the loop-length scaled one)
-// x2 = HALF TIME below depth HALF_U (the first rhythms past noon), x0.5 =
-// DOUBLE TIME from depth DOUBLE_U (the top end); in between 1x. (Bounded by
-// VESTIGE_TIMING_LAYER_MAX_STEPS per pass: very long loops get less than 2x.)
+// x2 = HALF TIME below depth HALF_U (the first rhythms past noon), else 1x.
+// (Double time at the top end was dropped for the ratchets below.)
 static constexpr float  VESTIGE_TIMING_RHY_HALF_U     = 0.25f;
-static constexpr float  VESTIGE_TIMING_RHY_DOUBLE_U   = 0.85f;
+// RATCHETS at the top end (engine 0): from depth RAT_U0 on, each stutter of a
+// pass (drawn per pass) becomes a ratchet with chance p = RAT_P_MAX x ramp,
+// ramp = (u - RAT_U0) / (1 - RAT_U0); a ratchet is a QUADRUPLE (4 retrigs in
+// its step) with chance RAT_Q_MAX x ramp, else a DOUBLE (2). Steps shorter
+// than VESTIGE_TIMING_MIN_STEP_MS per retrig fall back (4 -> 2 -> none).
+static constexpr float  VESTIGE_TIMING_RHY_RAT_U0     = 0.6f;
+static constexpr float  VESTIGE_TIMING_RHY_RAT_P_MAX  = 0.75f;
+static constexpr float  VESTIGE_TIMING_RHY_RAT_Q_MAX  = 0.5f;
 // Engine 0 ROTATIONS: rotation is part of the rhythm — fixed, never random; to
 // be chosen by ear per rhythm. E(k, n) rotated by rot: hit at i if
 // ((i + rot) % n * k) % n < k. S_ROT rotates the stutter cycle (0 .. S_CYCLE-1),
