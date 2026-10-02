@@ -134,6 +134,7 @@ class Vestige : public Module {
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) { dec_g_[q] = dec_t_[q] = rep_base_[q] = 1.f; }   // K5 repeats: full level
+    for (int q = 0; q < VESTIGE_FREEZE_SLABS; q++) { sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; }  // K5 sustain: full level
     release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
     gate_rel_coef_   = 1.f - expf(-1.f / (VESTIGE_GATE_RELEASE_MS * 0.001f * sr_)); // gate meter fall (mode 1)
     onset_refr_len_  = (int)((float)VESTIGE_ONSET_REFRACTORY_MS * 0.001f * sr_);
@@ -315,6 +316,11 @@ class Vestige : public Module {
     const float fade_u = (c5 > 0.f) ? u5 : 0.f;
     rep_n_ = (c5 < 0.f && u5 > 0.f) ? (int)(powf(VESTIGE_REPEAT_N_MAX, 1.f - u5) + 0.5f) : 0;   // 0 = endless
     if (rep_n_ < 0) rep_n_ = 0;
+    // Freeze side: K5 CCW = SUSTAIN TIME (s), log taper SUSTAIN_MAX_S just past
+    // the dead zone -> SUSTAIN_MIN_S at full CCW; 0 = off (noon / CW).
+    sus_s_ = (c5 < 0.f && u5 > 0.f)
+             ? VESTIGE_FREEZE_SUSTAIN_MAX_S * powf(VESTIGE_FREEZE_SUSTAIN_MIN_S / VESTIGE_FREEZE_SUSTAIN_MAX_S, u5)
+             : 0.f;
     float atk_s = fade_u * VESTIGE_FADE_ATTACK_MAX_S;
     float rel_s = fade_u * VESTIGE_FADE_RELEASE_MAX_S;
     // Floor at a short declick so K5 hard-CCW is "instant" but not a 1-sample
@@ -510,6 +516,7 @@ class Vestige : public Module {
     // age-ramp gains follow the live set.
     if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); UpdateTapeTargets(); }
     UpdateRepeats();
+    UpdateSustain(size);
     const uint32_t dt0 = diag_clock_ ? diag_clock_() : 0;
     if (VESTIGE_TIMING_MODE == 3) TimingLayerTick();
     if (diag_clock_) { const uint32_t d = diag_clock_() - dt0; if (d > diag_tick_us_) diag_tick_us_ = d; }
@@ -792,6 +799,11 @@ class Vestige : public Module {
         //  3. K5 loop fade.
         if (s < VESTIGE_VOICE_SLABS) {                        // K5 CCW: the per-repeat level
           float& g = dec_g_[s]; const float t = dec_t_[s], st = dec_step_[s];
+          if (g < t) { g += st; if (g > t) g = t; } else if (g > t) { g -= st; if (g < t) g = t; }
+          pv *= g;
+        } else if (PoolOf(s) == kPoolFreeze && s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS) {   // K5 CCW: freeze sustain
+          const int q = s - VESTIGE_FREEZE_SLOT0;
+          float& g = sus_g_[q]; const float t = sus_t_[q], st = sus_step_[q];
           if (g < t) { g += st; if (g > t) g = t; } else if (g > t) { g -= st; if (g < t) g = t; }
           pv *= g;
         }
@@ -3507,6 +3519,9 @@ class Vestige : public Module {
     active_[s] = true; dying_[s] = false; stolen_[s] = false;
     if (s < VESTIGE_VOICE_SLABS) {                          // a new loop: full level, its count from 0
       dec_g_[s] = dec_t_[s] = rep_base_[s] = 1.f; dec_step_[s] = 0.f; rep_k_[s] = 0; rep_pass_[s] = pass_[s];
+    } else if (PoolOf(s) == kPoolFreeze && s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS) {   // a new freeze: its own sustain from 0
+      const int q = s - VESTIGE_FREEZE_SLOT0;
+      sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; sus_step_[q] = 0.f; sus_x_[q] = 0.f;
     }
     StartFadeIn(s);                     // swells in over K5; first grain instant
     ResumeFromMute();                   // record END unpauses the retained loops (stage-0 behaviour)
@@ -3969,6 +3984,36 @@ class Vestige : public Module {
       }
     }
   }
+  // K5 CCW on the freeze = SUSTAIN, once per block. Each freeze fades from its
+  // start over sus_s_ seconds: progress x 0 -> 1, level = base x the repeat
+  // curve FLOOR_DB x x^CURVE dB (RepeatLevel's shape, continuous), times a
+  // linear VESTIGE_REPEAT_RAMP_MS tail to 0 so it ends silent exactly at x = 1;
+  // then the slot is freed. A K5 move changes only the rate: x (and so the
+  // level) stays continuous and the rest follows the new time. Per-sample
+  // linear ramp to the block-end target. Noon / CW: the level holds, the next
+  // CCW starts a fresh sustain from it. FS2 hold pauses it.
+  void UpdateSustain(size_t n) {
+    const float T = sus_s_;
+    const float ramp = VESTIGE_REPEAT_RAMP_MS * 0.001f * sr_;
+    for (int q = 0; q < VESTIGE_FREEZE_SLABS; q++) {
+      const int s = VESTIGE_FREEZE_SLOT0 + q;
+      if (!active_[s]) continue;
+      if (T <= 0.f) {                                        // noon / CW: hold the level
+        sus_base_[q] = sus_g_[q]; sus_t_[q] = sus_g_[q]; sus_step_[q] = 0.f; sus_x_[q] = 0.f; continue;
+      }
+      if (sus_x_[q] >= 1.f && sus_g_[q] <= 0.f) {             // finished: retire like a finished fade
+        active_[s] = false; dying_[s] = false; stolen_[s] = false;
+        loop_len_[s] = 0; gain_[s] = 0.f; fade_gain_[s] = 0.f; fade_target_[s] = 0.f; fade_phase_[s] = 1.f;
+        continue;
+      }
+      if (!held_) { sus_x_[q] += (float)n / (T * sr_); if (sus_x_[q] > 1.f) sus_x_[q] = 1.f; }
+      const float x = sus_x_[q];
+      const float rem = (1.f - x) * T * sr_;                  // output samples left
+      float t = sus_base_[q] * powf(10.f, VESTIGE_REPEAT_FLOOR_DB * powf(x, VESTIGE_REPEAT_CURVE) / 20.f);
+      if (rem < ramp) t *= rem / ramp;
+      sus_t_[q] = t; sus_step_[q] = fabsf(sus_g_[q] - t) / (float)(n > 0 ? n : 1);
+    }
+  }
   void UpdateVoicedGains() {
     // Level tracks the ACTUAL active-voice count. Age-ramp weights (newest = 1,
     // oldest = 1-d) are power-normalized as a SET so the total power equals a
@@ -4242,6 +4287,12 @@ class Vestige : public Module {
   float      rep_base_[VESTIGE_VOICE_SLABS] = {};      // the level the count started from
   int        rep_k_[VESTIGE_VOICE_SLABS] = {};         // repeats played since the count began
   int32_t    rep_pass_[VESTIGE_VOICE_SLABS] = {};      // last pass seen
+  volatile float sus_s_ = 0.f;                         // K5 CCW freeze sustain time (s), 0 = off
+  float      sus_g_[VESTIGE_FREEZE_SLABS] = {};        // per freeze slot sustain level
+  float      sus_t_[VESTIGE_FREEZE_SLABS] = {};        // its block-end target
+  float      sus_step_[VESTIGE_FREEZE_SLABS] = {};     // its ramp step per sample
+  float      sus_base_[VESTIGE_FREEZE_SLABS] = {};     // level the sustain started from
+  float      sus_x_[VESTIGE_FREEZE_SLABS] = {};        // sustain progress 0..1
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
   bool       first_grain_[VESTIGE_SLOTS] = {false};  // next grain skips its fade-in

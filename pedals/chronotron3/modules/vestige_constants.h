@@ -1189,6 +1189,11 @@ static constexpr float  VESTIGE_REPEAT_N_MAX       = 16.f;
 static constexpr float  VESTIGE_REPEAT_CURVE       = 2.f;    // 1 = even dB steps, higher = flatter early
 static constexpr float  VESTIGE_REPEAT_FLOOR_DB    = -30.f;  // the last repeat's level
 static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
+// FREEZE side K5 CCW = SUSTAIN time (independent of T): MAX_S just past the dead
+// zone -> MIN_S at full CCW, log taper. Each freeze fades from its start over it
+// with the repeat dB curve above, ending silent, then retires.
+static constexpr float  VESTIGE_FREEZE_SUSTAIN_MAX_S = 8.f;
+static constexpr float  VESTIGE_FREEZE_SUSTAIN_MIN_S = 0.5f;
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
 // volume knob and the SW2 dry gate are gone. VESTIGE_LOOP_BOOST_MAX is kept for
