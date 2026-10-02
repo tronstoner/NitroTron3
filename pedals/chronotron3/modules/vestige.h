@@ -83,7 +83,21 @@ static float DSY_SDRAM_BSS vestige_freeze_slab[VESTIGE_SLOTS - VESTIGE_FREEZE_SL
 static constexpr size_t VESTIGE_RECUT_GUARD_LEN = VESTIGE_GUARD_SAMPLES + 4;
 static float DSY_SDRAM_BSS vestige_recut_guard[VESTIGE_VOICE_SLABS][2][VESTIGE_RECUT_GUARD_LEN];
 // Post-grain warble modulated-delay line (K4 tape/BBD pitch modulation).
-static float DSY_SDRAM_BSS vestige_warble_slab[VESTIGE_WARBLE_LEN];
+// Written EVERY sample (also with K4 idle), so it lives in internal RAM, not
+// SDRAM: in SDRAM each write is FMC traffic that can close the row the next
+// grain fetch needs. Placement: RAM_D2 (D2 SRAM1 from 0x30008000, cacheable;
+// the first 32 KB = the MPU's non-cacheable DMA window stays libDaisy's). The
+// libDaisy SRAM linker script maps that region only through its `.heap`
+// output section (NOLOAD, before `end`, so newlib's sbrk heap starts after it).
+// Not DTCM: the DIAG build leaves only ~20 KB of DTCM for the stack, this ring
+// would eat almost all of it. Not RAM_D2_DMA: ~16 KB free < 19.2 KB. NOLOAD =
+// not zeroed at boot; Init() memsets it (RingBuffer::Init), same as before.
+#if defined(__arm__)
+#define VESTIGE_D2_BSS __attribute__((section(".heap")))
+#else
+#define VESTIGE_D2_BSS                 // host build (tools/host): plain static
+#endif
+static float VESTIGE_D2_BSS vestige_warble_slab[VESTIGE_WARBLE_LEN];
 
 // xorshift32 RNG for grain scatter (audio-thread only).
 static uint32_t vestige_rng = 0x1234567u;
@@ -657,11 +671,20 @@ class Vestige : public Module {
       // Per slot, per version: [0] = clean (rate 1), [1] = K1 speed version.
       float slot_sum[VESTIGE_SLOTS] = {0.f};
       float slot_sp[VESTIGE_SLOTS]  = {0.f};
-      for (int g = 0; g < VESTIGE_GRAINS; g++) {
-        if (grains_[g].IsActive()) {
-          const float gv = grains_[g].Process(*grain_src_[g]);
-          if (grain_ver_[g]) slot_sp[grain_slot_[g]]  += gv;
-          else               slot_sum[grain_slot_[g]] += gv;
+      // Only the grains in grain_live_ (a superset of the active ones), visited
+      // in ASCENDING index order — the same grains in the same order as a scan
+      // of all VESTIGE_GRAINS, so the float sums are bit-identical. A grain that
+      // ended (here, or overwritten elsewhere) leaves the mask.
+      for (int w = 0; w < kGrainLiveWords; w++) {
+        for (uint32_t m = grain_live_[w]; m != 0; m &= m - 1) {
+          const int b = __builtin_ctz(m);
+          const int g = w * 32 + b;
+          if (grains_[g].IsActive()) {
+            const float gv = grains_[g].Process(*grain_src_[g]);
+            if (grain_ver_[g]) slot_sp[grain_slot_[g]]  += gv;
+            else               slot_sum[grain_slot_[g]] += gv;
+          }
+          if (!grains_[g].IsActive()) grain_live_[w] &= ~(1u << b);
         }
       }
       float y = 0.f;
@@ -964,6 +987,7 @@ class Vestige : public Module {
     float atk_scale = first_grain_[s] ? k3_amt_ : 1.f;
     // rate = tape varispeed (K4): the grain reads its window at this rate, so
     // playback transposes; the head speed above matches it → coupled pitch+time.
+    MarkGrainLive(g);                      // hot loop renders it from now on
     grains_[g].Trigger(ring_[s], delay, glen, false, pitch_rate_s_,
                        gain_[s] * ov_comp, 1, 1.0f, atk_scale);
     first_grain_[s] = false;
@@ -2418,6 +2442,7 @@ class Vestige : public Module {
     grain_slot_[g] = s;
     grain_ver_[g]  = (uint8_t)ver;
     const float ov_comp = 2.f / VESTIGE_MB_OVERLAP;
+    MarkGrainLive(g);                      // hot loop renders it from now on
     grains_[g].Trigger(ring_[s], delay, glen, rev, r, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
     // C re-cut: the grain reads the loop through the view current NOW, and
     // keeps it for its whole life (a later change swaps only new grains).
@@ -2484,6 +2509,7 @@ class Vestige : public Module {
     // Reverse: same [posi, posi+glen] window as forward, read backward — so the
     // wrap-guard coverage is identical. Every grain in a band shares glen, so the
     // overlap-add stays coherent on the backward-walking head.
+    MarkGrainLive(g);                      // hot loop renders it from now on
     grains_[g].Trigger(ring_[s], delay, glen, rev, 1.f, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
     first_grain_[s] = false;
     if (coef) grains_[g].SetBandFilter(coef[0], coef[1], coef[2], coef[3], coef[4]);
@@ -3619,6 +3645,19 @@ class Vestige : public Module {
   GrainVoice       grains_[VESTIGE_GRAINS];
   const RingBuffer* grain_src_[VESTIGE_GRAINS];
   int              grain_slot_[VESTIGE_GRAINS] = {0};  // which slot emitted grain g
+  // Bit g set = grain g may be active (set at every Trigger, cleared by the
+  // per-sample render once the grain is inactive). Only ever a SUPERSET of the
+  // active grains, so starting with all bits set is safe; the render keeps it
+  // exact. Lets the per-sample render skip the idle part of the pool.
+  // Two 32-bit words (not one uint64_t): __builtin_ctz is one rbit+clz on the
+  // M7, __builtin_ctzll a libgcc call.
+  static constexpr int kGrainLiveWords = 2;
+  static_assert(VESTIGE_GRAINS > 32 && VESTIGE_GRAINS <= 64, "grain_live_ init assumes 2 words");
+  static constexpr uint32_t GrainLiveAll(int w) {      // every grain of word w (no bit past the pool)
+    return (VESTIGE_GRAINS - w * 32 >= 32) ? 0xFFFFFFFFu : ((1u << (VESTIGE_GRAINS - w * 32)) - 1u);
+  }
+  uint32_t         grain_live_[kGrainLiveWords] = {GrainLiveAll(0), GrainLiveAll(1)};
+  void MarkGrainLive(int g) { grain_live_[g >> 5] |= 1u << (g & 31); }
   int              next_grain_ = 0;
   uint8_t          grain_ver_[VESTIGE_GRAINS] = {0};  // 0 = clean, 1 = K1 speed version
   int8_t           grain_view_[VESTIGE_GRAINS];       // C re-cut view it reads (slot*2+v), -1 = raw row
