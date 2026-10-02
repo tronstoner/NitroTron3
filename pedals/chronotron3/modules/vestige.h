@@ -2249,22 +2249,26 @@ class Vestige : public Module {
   }
   // HIT VARIATION (RHY_KVAR) at running step t of loop s: schedules / ends
   // the one-cycle k +-1 of one voice; dks / dkr = its change at t.
-  int RhyKVarGap() {
-    const int b = VESTIGE_TIMING_RHY_KVAR_BARS_MIN + TimingPick(VESTIGE_TIMING_RHY_KVAR_BARS_MAX - VESTIGE_TIMING_RHY_KVAR_BARS_MIN + 1);
-    return 16 * b;
+  // The next varied run from step t on: a voice v (random), then its
+  // EVERY_MIN-th .. EVERY_MAX-th whole cycle from t (that many runs of it,
+  // the last one varied).
+  void RhyKVarPlan(int s, int32_t t, int side) {
+    const int v = TimingPick(2);                            // 0 stutters, 1 rests
+    const int N = v ? RhyPolyNr(side) : RhyPolyNs(side);
+    const int e = VESTIGE_TIMING_RHY_KVAR_EVERY_MIN + TimingPick(VESTIGE_TIMING_RHY_KVAR_EVERY_MAX - VESTIGE_TIMING_RHY_KVAR_EVERY_MIN + 1);
+    rkv_voice_[s] = (int8_t)v;
+    rkv_t0_[s] = (t + N - 1) / N * N + (e - 1) * N; rkv_t1_[s] = rkv_t0_[s] + N;
+    rkv_dk_[s] = 0;                                         // (its +-1: drawn when it starts)
   }
   void RhyKVarAt(int s, int32_t t, int side, int& dks, int& dkr) {
-    if (rkv_next_[s] < 0) rkv_next_[s] = t + RhyKVarGap();          // a new loop: its first gap
-    if (rkv_t1_[s] > 0 && t >= rkv_t1_[s]) { rkv_next_[s] = rkv_t1_[s] + RhyKVarGap(); rkv_t0_[s] = rkv_t1_[s] = 0; }
-    if (rkv_t1_[s] == 0 && t >= rkv_next_[s]) {
-      const int v = TimingPick(2);                          // 0 stutters, 1 rests
-      const int N = v ? RhyPolyNr(side) : RhyPolyNs(side);
+    if (rkv_next_[s] < 0) { RhyKVarPlan(s, t, side); rkv_next_[s] = 0; }   // a new loop: its first plan
+    if (t >= rkv_t1_[s]) RhyKVarPlan(s, rkv_t1_[s], side);   // the varied run is over: plan the next
+    if (t >= rkv_t0_[s] && rkv_dk_[s] == 0) {               // it starts: one hit more or less
+      const int v = rkv_voice_[s], N = v ? RhyPolyNr(side) : RhyPolyNs(side);
       const int k = v ? RhyPolyKr(rhy_level_, side) : RhyPolyKs(rhy_level_, side);
-      const int d = (k <= 1) ? 1 : (k >= N - 1) ? -1 : (TimingPick(2) ? 1 : -1);
-      rkv_voice_[s] = (int8_t)v; rkv_dk_[s] = (int8_t)d;
-      rkv_t0_[s] = (t + N - 1) / N * N; rkv_t1_[s] = rkv_t0_[s] + N;   // its next whole cycle
+      rkv_dk_[s] = (int8_t)((k <= 1) ? 1 : (k >= N - 1) ? -1 : (TimingPick(2) ? 1 : -1));
     }
-    if (rkv_t1_[s] > 0 && t >= rkv_t0_[s] && t < rkv_t1_[s]) (rkv_voice_[s] ? dkr : dks) = rkv_dk_[s];
+    if (t >= rkv_t0_[s] && t < rkv_t1_[s]) (rkv_voice_[s] ? dkr : dks) = rkv_dk_[s];
   }
   void TimingPlanRhythmPoly(int s, int G, int seg0) {
     uint8_t cell[VESTIGE_TIMING_LAYER_MAX_STEPS];
