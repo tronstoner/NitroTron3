@@ -338,6 +338,7 @@ static void NoErrors() {
 }
 static void Reset() {
   NoErrors();
+  cs.sw[1] = 0;                                  // K3 mode 1 (Euclidean)
   play_input = false;
   cs.knob[1] = 0.85f; SetK4Thresh(0.1f); cs.knob[4] = K5Fade(0.05f);
   cs.sw[0] = 0; RunFor(0.1f);
@@ -3138,6 +3139,7 @@ static LayerStats LayerRun(float k3raw, int tapms, int passes) {
   wet_hist.clear(); hist_n0 = n; RunFor((float)(Q - 2) / sr);
   const std::vector<float> ref(wet_hist);
   auto refm = [&](long k) { k = ((k % Q) + Q) % Q; return (k >= 1 && k - 1 < (long)ref.size()) ? ref[k - 1] : 0.f; };
+  cs.sw[1] = (k3raw > 0.5f) ? 1 : 0;                       // CW layers = mode 2, CCW rhythm = mode 1
   cs.knob[2] = k3raw;
   std::vector<std::string> first(3);
   for (int p = 0; p < passes; p++) {
@@ -3936,15 +3938,20 @@ int main() {
   { printf("-- errors: K3\n");
     { Vestige fresh; Check(fresh.err_level_[0] == 0.f && fresh.err_level_[1] == 0.f && fresh.err_level_[2] == 0.f,
                            "error levels start at 0 (no errors until K3 moves)"); }
-    cs.sw[1] = 0; cs.knob[2] = K3Cw(0.6f); RunFor(0.1f);
+    cs.sw[1] = 1; cs.knob[2] = K3Cw(0.6f); RunFor(0.1f);
     const float t = v.err_level_[0];
     Check(fabsf(t - 0.6f) < 1e-4f && v.err_level_[1] == t && v.err_level_[2] == t && v.rhy_level_ == 0.f,
-          "K3 CW half: all three layers at the same level (0..1 over the half), no rhythm");
+          "K3 mode 2 (SW2 MIDDLE) CW half: all three layers at the same level (0..1 over the half), no rhythm");
+    cs.sw[1] = 0; RunFor(0.1f);
+    Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 1 (SW2 UP) CW half: clean until the Spiegel side exists");
     cs.sw[1] = 2; RunFor(0.1f);
-    Check(v.err_level_[0] == t && v.err_level_[1] == t && v.err_level_[2] == t, "SW2 does not change the error levels");
-    cs.knob[2] = K3Ccw(0.5f); RunFor(0.1f);
+    Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 mode 3 (SW2 DOWN): clean until built");
+    cs.sw[1] = 0; cs.knob[2] = K3Ccw(0.5f); RunFor(0.1f);
     Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && fabsf(v.rhy_level_ - 0.5f) < 1e-4f,
-          "K3 CCW half: the rhythm only (layers off)");
+          "K3 mode 1 CCW half: the afro rhythm only (layers off)");
+    cs.sw[1] = 1; RunFor(0.1f);
+    Check(v.rhy_level_ == 0.f && v.err_level_[0] == 0.f, "K3 mode 2 CCW half: clean until built");
+    cs.sw[1] = 0;
     cs.knob[2] = 0.5f; RunFor(0.1f);
     Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 noon: all off");
     cs.sw[1] = 0; }
@@ -3967,11 +3974,11 @@ int main() {
     Check(v.held_ && tg >= 2 && tg <= 6, "LED2 blinks slowly while held");
     Unhold(); RunFor(0.3f); }
   { const int cfg = v.follow_mode_cfg_; v.follow_mode_cfg_ = -1;
-    int m[3]; for (int p = 0; p < 3; p++) { cs.sw[1] = p; RunFor(0.1f); m[p] = v.follow_mode_; }
-    Check(m[0] == Vestige::kFollowTape && m[1] == Vestige::kFollowStretch && m[2] == Vestige::kFollowRecut,
-          "SW2 selects the follow mode: UP tape, MIDDLE stretch, DOWN re-cut");
+    int m[3], km[3]; for (int p = 0; p < 3; p++) { cs.sw[1] = p; RunFor(0.1f); m[p] = v.follow_mode_; km[p] = v.glitch_mode_; }
+    Check(m[0] == Vestige::kFollowStretch && m[1] == Vestige::kFollowStretch && m[2] == Vestige::kFollowStretch,
+          "follow mode fixed at stretch (SW2 does not change it)");
+    Check(km[0] == 0 && km[1] == 1 && km[2] == 2, "SW2 selects the K3 mode: UP Euclidean, MIDDLE random, DOWN straight");
     cs.sw[1] = 0; v.follow_mode_cfg_ = cfg; RunFor(0.1f); }
-  { Vestige fresh; Check(fresh.follow_mode_cfg_ == -1, "by default SW2 selects the follow mode"); }
   printf(fails ? "FAILURES: %d\n" : "ALL OK\n", fails);
   return fails ? 1 : 0;
 }

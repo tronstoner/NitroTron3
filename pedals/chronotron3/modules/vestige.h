@@ -207,7 +207,7 @@ class Vestige : public Module {
     diag_k4_ = k4;                            // DIAG heartbeat only
     const float k5  = RemapKnob(cs.Knob(4)); // loop fade in/out
     const int   sw1 = cs.Switch(0);          // 0=UP 1-voice · 1=MID 6-voice · 2=DOWN freeze
-    const int   sw2 = cs.Switch(1);          // how loops follow a T change: UP tape · MID stretch · DOWN re-cut
+    const int   sw2 = cs.Switch(1);          // K3 mode: UP 1 Euclidean · MIDDLE 2 random · DOWN 3 straight
     const FootswitchEvent f1 = cs.Foot(0);   // tap tempo: the tap interval IS T
     const FootswitchEvent f2 = cs.Foot(1);   // tap: on/off · hold: buffer hold
     // ---- K3, bipolar: CCW rhythm · noon clean · CW the three glitch layers ----
@@ -218,17 +218,20 @@ class Vestige : public Module {
     {
       const float c3 = k3 - 0.5f, a3 = fabsf(c3);
       const float u3 = (a3 <= VESTIGE_K3_DEADZONE) ? 0.f : (a3 - VESTIGE_K3_DEADZONE) / (0.5f - VESTIGE_K3_DEADZONE);
-      const float cw = (c3 > 0.f) ? u3 : 0.f;
+      // SW2 = the K3 MODE (each bipolar): UP 1 Euclidean (CCW afro rhythm, CW
+      // academic odd ratios — to come), MIDDLE 2 random (CW the three glitch
+      // layers, CCW tbd), DOWN 3 straight tremolo / shutter (tbd). A half that
+      // is not built yet is clean.
+      glitch_mode_ = (sw2 == 0) ? 0 : (sw2 == 1) ? 1 : 2;
+      const float cw = (c3 > 0.f && glitch_mode_ == 1) ? u3 : 0.f;
       err_level_[kErrTiming] = err_level_[kErrCondition] = err_level_[kErrPlayback] = cw;
-      rhy_level_ = (c3 < 0.f) ? u3 : 0.f;
+      rhy_level_ = (c3 < 0.f && glitch_mode_ == 0) ? u3 : 0.f;
     }
 
-    // ---- SW2 = how playing loops follow a T change ---------------------------
-    // UP tape (speed + pitch follow T) · MIDDLE stretch (speed follows, pitch
-    // stays) · DOWN re-cut (cut / pad the end). follow_mode_cfg_ >= 0 overrides
-    // the switch (host tests).
-    follow_mode_ = (follow_mode_cfg_ >= 0) ? follow_mode_cfg_
-                 : (sw2 == 0) ? kFollowTape : (sw2 == 1) ? kFollowStretch : kFollowRecut;
+    // ---- How playing loops follow a T change: STRETCH (the builder's pick) ---
+    // Tape (speed + pitch) and re-cut (cut / pad) stay in the code, selectable
+    // only through follow_mode_cfg_ (host tests); SW2 is the K3 mode now.
+    follow_mode_ = (follow_mode_cfg_ >= 0) ? follow_mode_cfg_ : kFollowStretch;
 
 
     // ---- K1 = playback speed crossfade (rework stage 6, plan §4.2) -------------
@@ -4066,7 +4069,8 @@ class Vestige : public Module {
   uint32_t pool_full_ = 0;                               // grains lost to a full physical pool (diag)
   volatile float err_level_[kErrTypes] = {0.f, 0.f, 0.f};   // 0 = off; start with no errors
   volatile int follow_mode_ = kFollowTape;
-  int follow_mode_cfg_ = -1;                    // -1 = SW2 selects; >= 0 forces a mode (host tests)
+  int follow_mode_cfg_ = -1;                    // -1 = stretch; >= 0 forces a mode (host tests)
+  volatile int glitch_mode_ = 0;                // SW2 = the K3 mode: 0 Euclidean · 1 random · 2 straight
   double   rho_t_[VESTIGE_SLOTS];            // tape-rate target per slot (ISR, per block)
   double   rho_d_[VESTIGE_SLOTS];            // glide state (double: see SmoothTape)
   float    rho_s_[VESTIGE_SLOTS];            // float copy for grain rates / diagnostics

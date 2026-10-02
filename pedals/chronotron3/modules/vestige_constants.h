@@ -421,9 +421,9 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // stretch, DOWN = C re-cut). Each loop keeps its division d; its target length
 // is Boundary(d, T_now). A (tape): rate = material / target on the head and the
 // grain read rate — pitch and time together, composed with K1.
-// How playing loops follow a T change is on SW2 (vestige.h Controls):
-//   UP tape (speed + pitch follow T) · MIDDLE stretch (speed follows, pitch
-//   stays) · DOWN re-cut (cut / pad the end, non-destructive).
+// How playing loops follow a T change: STRETCH (speed follows, pitch stays),
+// fixed (vestige.h Controls). Tape (speed + pitch) and re-cut (cut / pad the
+// end) stay in the code. SW2 selects the K3 mode instead.
 
 // ---- Errors on K3 (bipolar) -------------------------------------------------
 // CW half: the level (0..1) of all three error layers together (timing mode 3:
