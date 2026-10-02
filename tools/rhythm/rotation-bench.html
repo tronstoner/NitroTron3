@@ -64,6 +64,9 @@ button.primary{background:var(--play);border-color:var(--play);color:var(--accen
 .rot .mini i.s{background:var(--stut)} .rot .mini i.r{background:var(--rest)}
 .rot .dot{position:absolute;top:5px;right:6px;width:8px;height:8px;border-radius:50%}
 .rot .odd{font-size:10px;color:var(--muted)}
+.rot .aud{font-size:10px;color:var(--muted)}
+.rot.ped .aud{color:var(--great);font-weight:600}
+.custom{font-family:var(--mono);font-size:11px;color:var(--bad);font-weight:600}
 .pat{overflow:auto;max-height:360px;border:1px solid var(--line);border-radius:4px;padding:6px;background:var(--bg)}
 .bar{display:grid;grid-template-columns:52px repeat(var(--g,8),minmax(18px,1fr));gap:2px;margin-bottom:2px;align-items:center}
 .bar .bn{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
@@ -128,7 +131,14 @@ textarea#out{width:100%;min-height:150px;font-family:var(--mono);font-size:12px}
           <div class="rots" id="srots"></div>
         </div>
         <div>
-          <h2>Rest rotation <span class="k">← →</span></h2>
+          <div class="row" style="margin-bottom:8px">
+            <h2 style="margin:0">Rest voice</h2>
+            <label class="field">base n <select id="rn"></select></label>
+            <label class="field">hits k <select id="rk"></select></label>
+            <button id="rreset">Pedal values</button>
+            <span class="custom" id="rcustom" hidden>custom, not on the pedal</span>
+          </div>
+          <h2>Rest rotation <span class="k">← →</span> <span class="k">· green "aud" = the pedal may pick it (≥ half the rests audible, even first)</span></h2>
           <div class="rots" id="rrots"></div>
         </div>
         <div class="row" id="decrow">
@@ -227,12 +237,35 @@ function rotSet(k, n, on1) {
 }
 
 // ---- state ------------------------------------------------------------
-const st = { vi: 0, srot: 0, rrot: 0, dr: 0, decOn: true };
+const st = { vi: 0, srot: 0, rrot: 0, dr: 0, decOn: true, rn: null, rk: null };   // rn / rk: rest voice override (null = the pedal's)
 let ratings = {};
 try { ratings = JSON.parse(localStorage.getItem("vrb.ratings") || "{}") || {}; } catch (e) { ratings = {}; }
 const saveRatings = () => { try { localStorage.setItem("vrb.ratings", JSON.stringify(ratings)); } catch (e) {} };
-const V = () => variants[st.vi];
-const keyOf = (v, s, r, dOn, dr) => `${v.side}#${v.num}|s${s}|r${r}|${dOn ? "d" + dr : "nodec"}`;
+// The selected rhythm, with the rest voice overridden (st.rn / st.rk) when set.
+const V = () => {
+  const b = variants[st.vi];
+  if (!st.rn) return b;
+  return Object.assign({}, b, { Nr: st.rn, kr: Math.min(st.rk, st.rn), custom: true });
+};
+const keyOf = (v, s, r, dOn, dr) => `${v.side}#${v.num}${v.custom ? `|R${v.kr}/${v.Nr}` : ""}|s${s}|r${r}|${dOn ? "d" + dr : "nodec"}`;
+// The pedal's AUDIBLE RESTS rule (vestige.h RhyRestRot): per rest rotation, its
+// audible rests over lcm(Ns, Nr); candidates = even rotations with >= half
+// audible; else any with >= half; else the most audible (even first).
+function restAudit(v, srot) {
+  const L = lcm(v.Ns, v.Nr), aud = [];
+  let tot = 0;
+  for (let x = 0; x < v.Nr; x++) {
+    let n = 0, a = 0;
+    for (let t = 0; t < L; t++) if (hit(t % v.Nr, v.kr, v.Nr, x)) { n++; if (!hit(t % v.Ns, v.ks, v.Ns, srot)) a++; }
+    aud.push(a); tot = n;
+  }
+  const best = Math.max(...aud), all = [...aud.keys()];
+  let cand = all.filter(x => x % 2 === 0 && 2 * aud[x] >= tot && aud[x] > 0);
+  if (!cand.length) cand = all.filter(x => 2 * aud[x] >= tot && aud[x] > 0);
+  if (!cand.length) cand = all.filter(x => x % 2 === 0 && aud[x] === best && best > 0);
+  if (!cand.length) cand = all.filter(x => aud[x] === best);
+  return { aud, tot, cand: new Set(cand) };
+}
 const curKey = () => keyOf(V(), st.srot, st.rrot, st.decOn, st.dr);
 
 // The cell at running step t: 1 stutter, 2 rest, 0 plain (a stutter wins where both land).
@@ -273,6 +306,7 @@ function renderList() {
 }
 function selectVariant(i) {
   st.vi = (i + variants.length) % variants.length;
+  st.rn = null; st.rk = null;
   const v = V();
   st.srot = rotSet(v.ks, v.Ns, true)[0].r;
   st.rrot = rotSet(v.kr, v.Nr, false)[0].r;
@@ -287,12 +321,15 @@ function renderRots() {
       const b = document.createElement("button");
       b.className = "rot" + (r === cur ? " sel" : "");
       const mini = [...p].map(ch => `<i class="${ch === "x" ? cls : ""}"></i>`).join("");
-      let dot = "";
+      let dot = "", audTxt = "";
       if (isRest) {
         const rt = ratings[keyOf(v, st.srot, r, st.decOn, st.dr)];
         if (rt) dot = `<span class="dot" style="background:${RCOL[rt.rating]}"></span>`;
+        const au = restAudit(v, st.srot);
+        audTxt = `<span class="aud">aud ${au.aud[r]}/${au.tot}</span>`;
+        if (au.cand.has(r)) b.classList.add("ped");
       }
-      b.innerHTML = `${dot}<span>r${r}${r % 2 ? ' <span class="odd">odd</span>' : ""}</span><span class="mini">${mini}</span>`;
+      b.innerHTML = `${dot}<span>r${r}${r % 2 ? ' <span class="odd">odd</span>' : ""}</span><span class="mini">${mini}</span>${audTxt}`;
       b.onclick = () => onPick(r);
       box.appendChild(b);
     });
@@ -325,11 +362,11 @@ function renderRate() {
   $("note").value = r ? (r.note || "") : "";
 }
 function renderOut() {
-  const order = k => { const v = variants.find(x => k.startsWith(`${x.side}#${x.num}|`)); return v ? variants.indexOf(v) : 999; };
+  const order = k => { const v = variants.find(x => k.startsWith(`${x.side}#${x.num}|`)); return v ? variants.indexOf(v) : 999; };   // (custom keys: "#n|R..")
   const keys = Object.keys(ratings).sort((a, b) => order(a) - order(b) || ratings[a].srot - ratings[b].srot || ratings[a].rrot - ratings[b].rrot);
   $("out").value = keys.map(k => {
     const x = ratings[k];
-    return `${x.side}#${x.num} ${x.half ? "half" : "1x"} loop ${x.loop}s G${x.G} | S E(${x.ks},${x.Ns}) r${x.srot} | R E(${x.kr},${x.Nr}) r${x.rrot} | ${x.decOn ? `dec kd${x.kd} dr${x.dr}` : "no dec"} | ${x.rating}${x.note ? " | " + x.note : ""} | ${x.bars}`;
+    return `${x.side}#${x.num} ${x.half ? "half" : "1x"} loop ${x.loop}s G${x.G} | S E(${x.ks},${x.Ns}) r${x.srot} | R E(${x.kr},${x.Nr})${x.custom ? " CUSTOM" : ""} r${x.rrot} | ${x.decOn ? `dec kd${x.kd} dr${x.dr}` : "no dec"} | ${x.rating}${x.note ? " | " + x.note : ""} | ${x.bars}`;
   }).join("\n");
   $("nrat").textContent = keys.length;
 }
@@ -341,11 +378,30 @@ function renderHead() {
   const sel = $("dr"); if (!sel.options.length) for (let i = 0; i < D_SLOTS; i++) sel.add(new Option("dr" + i, i));
   sel.value = st.dr; $("decrow").style.opacity = st.decOn ? 1 : .45;
 }
-function renderAll() { renderList(); renderHead(); renderRots(); renderPattern(); renderRate(); renderOut(); }
+function renderRestCtl() {
+  const v = V(), rn = $("rn"), rk = $("rk");
+  if (!rn.options.length) for (let n = 2; n <= 16; n++) rn.add(new Option(n, n));
+  rn.value = v.Nr;
+  rk.innerHTML = ""; for (let k = 1; k < v.Nr; k++) rk.add(new Option(k, k));
+  rk.value = v.kr;
+  $("rcustom").hidden = !v.custom;
+}
+function setRest(n, k) {
+  const b = variants[st.vi];
+  k = Math.max(1, Math.min(k, n - 1));
+  if (n === b.Nr && k === b.kr) { st.rn = st.rk = null; } else { st.rn = n; st.rk = k; }
+  const list = rotSet(V().kr, V().Nr, false);
+  if (!list.some(x => x.r === st.rrot)) st.rrot = list[0].r;
+  renderAll();
+}
+$("rn").onchange = e => setRest(+e.target.value, +$("rk").value || 1);
+$("rk").onchange = e => setRest(+$("rn").value, +e.target.value);
+$("rreset").onclick = () => setRest(variants[st.vi].Nr, variants[st.vi].kr);
+function renderAll() { renderList(); renderHead(); renderRestCtl(); renderRots(); renderPattern(); renderRate(); renderOut(); }
 
 function rate(r) {
   const v = V(), k = curKey();
-  ratings[k] = { side: v.side, num: v.num, half: v.half, ks: v.ks, Ns: v.Ns, kr: v.kr, Nr: v.Nr, kd: v.kd,
+  ratings[k] = { side: v.side, num: v.num, half: v.half, ks: v.ks, Ns: v.Ns, kr: v.kr, Nr: v.Nr, kd: v.kd, custom: !!v.custom,
     srot: st.srot, rrot: st.rrot, decOn: st.decOn, dr: st.dr, rating: r, loop: loopSec().toFixed(2), G: stepsG(loopSec(), v.half), note: $("note").value.trim(), bars: bars3(v, st.srot, st.rrot, st.decOn, st.dr) };
   saveRatings(); renderAll();
 }
