@@ -835,16 +835,18 @@ static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;
 // (t % 8 == 4), the same slot logic (slot = t / 8). (Engine 2: none of this,
 // its decimates are the rows' overlap masks.)
 static constexpr int    VESTIGE_TIMING_RHY_D_SLOTS  = 8;
-// Engine 0 (2026-10-02, builder's pick 1 + 4 + 5): decimates ON THE STUTTERS
-// instead of the off-beat grid. Each loop picks (from its rotation word, so a
-// re-roll changes it) which places of its stutter cycle are decimated, with
-// chance DEC_P_MIN (just past noon) .. DEC_P_MAX (full) per place — it repeats
-// with the stutter cycle. An event lasts from its stutter through the plain
-// steps after it, up to the next rest or stutter (or the pass end), its factor
-// from DECIM_FACTORS by the same word; it fades in / out over DECIM_FADE_MS.
-static constexpr bool   VESTIGE_TIMING_RHY_DEC_ON_STUT = true;
-static constexpr float  VESTIGE_TIMING_RHY_DEC_P_MIN   = 0.15f;
-static constexpr float  VESTIGE_TIMING_RHY_DEC_P_MAX   = 0.5f;
+// Engine 0 (2026-10-02, the builder): the decimator is a COUNTER RHYTHM, a
+// third Euclid on the RESTS' cycle (CCW E(k,8), CW E(k,10)), k = DEC_*_K_MIN ..
+// _MAX with the depth, its rotation drawn per loop (rhy_rot_ >> 8; re-roll
+// redraws it) among those landing on the fewest rests (even first). A hit on a
+// rest is skipped; an event lasts from its hit through the plain steps after
+// it, up to the next rest, stutter or decimate hit (or the pass end); its
+// factor DECIM_FACTORS by its place in the cycle; fades over DECIM_FADE_MS.
+static constexpr bool   VESTIGE_TIMING_RHY_DEC_ON_STUT = true;   // (the name stayed: true = this counter rhythm)
+static constexpr float  VESTIGE_TIMING_RHY_DEC_CCW_K_MIN = 1.f;
+static constexpr float  VESTIGE_TIMING_RHY_DEC_CCW_K_MAX = 3.f;
+static constexpr float  VESTIGE_TIMING_RHY_DEC_CW_K_MIN  = 1.f;
+static constexpr float  VESTIGE_TIMING_RHY_DEC_CW_K_MAX  = 4.f;
 static constexpr float  VESTIGE_TIMING_RHY_DECIM_FADE_MS = 15.f;   // (the layers keep VESTIGE_TIMING_MUTE_MS)
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MIN  = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MAX  = 6.f;
