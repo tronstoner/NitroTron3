@@ -236,7 +236,8 @@ class Vestige : public Module {
     // = only half speed, noon (dead zone) = only clean, CW end = only double.
     // Published as a side (-1 half / 0 / +1 double) and an amount 0..1; the audio
     // thread smooths it and swaps the speed version only while it is silent
-    // (UpdateSpeedXfade). Loop side only: freeze ignores it.
+    // (UpdateSpeedXfade). Both sides: the freeze crossfades its band streams the
+  // same way (ServiceMBFreeze).
     {
       const float c1 = k1 - 0.5f;
       const int side = (c1 < -VESTIGE_K1_DEADZONE) ? -1 : (c1 > VESTIGE_K1_DEADZONE) ? 1 : 0;
@@ -721,10 +722,10 @@ class Vestige : public Module {
           }
         }
         // Playback path per slot: speed crossfade -> [error stage] -> K5 fade.
-        //  1. K1 speed crossfade (loop side): clean and speed versions of the
-        //     same loop, equal-power. At noon it is exactly the clean sum.
+        //  1. K1 speed crossfade (both sides): clean and speed versions of the
+        //     same loop / freeze, equal-power. At noon it is exactly the clean sum.
         float pv = slot_sum[s];
-        if (PoolOf(s) == kPoolLoop && !(g_c_ == 1.f && g_sp_ == 0.f))
+        if (!(g_c_ == 1.f && g_sp_ == 0.f))
           pv = slot_sum[s] * g_c_ + slot_sp[s] * g_sp_;
         //  2. Error stage (plan §5, stages 3-5) goes HERE, on whatever speed K1
         //     selected. Signal-domain errors (CONDITION: mutes, rate reduction)
@@ -1054,6 +1055,15 @@ class Vestige : public Module {
     // VESTIGE_GUARD_SAMPLES (unchanged). Frozen grains never cross the seam, so
     // they keep the old cap — the freeze row's short guard does not bind them.
     const size_t gcap = e.frozen ? VESTIGE_GUARD_SAMPLES : SlotGuard(s, L);
+    // K1 on the freeze (frozen slots): the same crossfade as the loop side — a
+    // clean and a speed version of every band stream. A version returning from
+    // silence restarts ALL its bands at once with an instant attack, under the
+    // smoothed crossfade gain (~VESTIGE_K1_GATE_EPS). A fresh freeze keeps the
+    // pool's soft entry (e.amt) for whichever version emits first. At noon
+    // neither restart can happen: the freeze is exactly as before.
+    const bool frz_fresh = e.frozen && first_grain_[s];
+    const bool frz_rs_c  = e.frozen && !frz_fresh && ver_idle_[s][0] && g_c_ > VESTIGE_K1_GATE_EPS;
+    const bool frz_rs_sp = e.frozen && ver_idle_[s][1] && g_sp_ > VESTIGE_K1_GATE_EPS;
 
     // Per-band-count tables are indexed [nbands-1][band]: the log-spaced
     // filterbank (built in MBInit) plus the tunable glen/scan/spray rows. The band
@@ -1086,7 +1096,7 @@ class Vestige : public Module {
       // A version returning from silence emits its restart grain (instant
       // attack) the very sample its gain crosses the gate — i.e. while it is
       // still ~VESTIGE_K1_GATE_EPS — not a hop later at an audible gain.
-      if (ver_idle_[s][0] && !e.frozen && g_c_ > VESTIGE_K1_GATE_EPS) mb_timer_[s][bi] = 1;
+      if ((ver_idle_[s][0] && !e.frozen && g_c_ > VESTIGE_K1_GATE_EPS) || frz_rs_c) mb_timer_[s][bi] = 1;
       // Tape path: a stream holds at most 2 grains. When the grain length
       // changes mid-glide, the next grain waits for one to end instead of
       // being the 3rd (which a full pool would refuse = a dropout).
@@ -1111,11 +1121,12 @@ class Vestige : public Module {
         // Tape rate != 1: the clean stream reads at rho, starting exactly on
         // the (fractional) head, its grain clamped to the coverage span. At
         // rho == 1 the original path runs untouched (bit-identical).
-        if (e.frozen || g_c_ > VESTIGE_K1_GATE_EPS) {
+        // The freeze gates its clean version the same way (always on at noon).
+        if (g_c_ > VESTIGE_K1_GATE_EPS) {
           // (A stream restart after a C change always takes the stream path:
           // it needs the short matching attack.)
           if (e.frozen || (orig && !(s < VESTIGE_VOICE_SLABS && restart_[s][0]))) {
-            EmitBandGrain(s, glen, posf, coef, spray_width, e.frozen);
+            EmitBandGrain(s, glen, posf, coef, spray_width, e.frozen, 0, 1.f, frz_rs_c ? 0.f : -1.f);
           } else {
             float atk = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
             const bool rs = (s < VESTIGE_VOICE_SLABS) && restart_[s][0];
@@ -1176,6 +1187,35 @@ class Vestige : public Module {
           int hop = (int)((float)gsp / VESTIGE_MB_OVERLAP);
           if (r < 1.f && orig) hop &= ~1;          // even hop: every half-speed grain
                                                    // starts on the same .5 phase
+          if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
+          mb_timer_sp_[s][bi] = hop;
+        }
+      }
+      // ---- K1 speed version (freeze side) -----------------------------------
+      // The same band stream (band filter, scan position, spray) read at r.
+      // A grain of glen samples reads glen*r of the window: EmitBandGrain clamps
+      // its start to [0, L - glen*r]; a window shorter than glen*r shortens the
+      // grain. Its timers run like the loop side's (it emits nothing while
+      // silent, so at noon no grain and no random draw).
+      if (e.frozen) {
+        const float r = SpeedRatio();
+        size_t gsp = glen;
+        if ((float)gsp * r > (float)L) gsp = (size_t)((float)L / r);
+        if (frz_rs_sp) mb_timer_sp_[s][bi] = 1;
+        if (--mb_timer_sp_[s][bi] <= 0) {
+          if (g_sp_ > VESTIGE_K1_GATE_EPS) {
+            float span = (float)L - (float)glen - (float)scanlen; if (span < 0.f) span = 0.f;
+            const float freeze_base = span * e.pos_frac;
+            const float base = head + (freeze_base - head) * e.focus;
+            const float posf = base + mb_scan_[s][bi] * e.focus;
+            const float atk  = frz_fresh ? e.amt : (frz_rs_sp ? 0.f : 1.f);
+            EmitBandGrain(s, gsp, posf, (nb == 1) ? nullptr : mb_bank_coef_[row][bi],
+                          (float)VESTIGE_MB_SPRAY[row][bi] * e.focus, true, 1, r, atk);
+            ver_idle_[s][1] = false;
+          } else {
+            ver_idle_[s][1] = true;
+          }
+          int hop = (int)((float)gsp / VESTIGE_MB_OVERLAP);
           if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
           mb_timer_sp_[s][bi] = hop;
         }
@@ -2461,8 +2501,12 @@ class Vestige : public Module {
   // [0, L-glen] range (pinned point stays exact). frozen=false (loop/break-up): wrap
   // the loop seam so the forward head + scatter read across the loop point (the
   // wrap-guard holds the seamless head-continuation copy).
+  // ver / rate: the K1 version (0 clean, 1 speed) and its read rate — frozen
+  // only (a frozen grain reads glen*rate of the window). atk >= 0 overrides the
+  // attack scale (a version restart); -1 = the default rule below.
   void EmitBandGrain(int s, size_t glen, float posf, const float* coef,
-                     float spray_width, bool frozen) {
+                     float spray_width, bool frozen,
+                     int ver = 0, float rate = 1.f, float atk = -1.f) {
     // hard cap on concurrent grains (CPU guard for multi-voice freeze)
     const int nactive = CapCount();
     if (nactive >= VESTIGE_MB_GRAIN_CAP) { grain_cap_drops_++; return; }
@@ -2486,7 +2530,7 @@ class Vestige : public Module {
     if (rev) pos -= (float)glen;
     size_t posi;
     if (frozen) {
-      float hi = (float)L - (float)glen; if (hi < 0.f) hi = 0.f;
+      float hi = (float)L - (float)glen * rate; if (hi < 0.f) hi = 0.f;
       if (pos < 0.f) pos = 0.f; else if (pos > hi) pos = hi;
       posi = (size_t)pos + frz_base_[s];                   // (past the skipped attack)
     } else {
@@ -2503,14 +2547,14 @@ class Vestige : public Module {
     // by the pool's amt (0 on the loop side = instant, 1 on the freeze side).
     // Without this the long loop grains fade in over their full Hann rise = an
     // audible slow attack on loop start.
-    float atk_scale = first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
-    grain_ver_[g] = 0;
+    float atk_scale = (atk >= 0.f) ? atk : first_grain_[s] ? e.amt : (ver_idle_[s][0] ? 0.f : 1.f);
+    grain_ver_[g] = (uint8_t)ver;
     grain_view_[g] = -1;
     // Reverse: same [posi, posi+glen] window as forward, read backward — so the
     // wrap-guard coverage is identical. Every grain in a band shares glen, so the
     // overlap-add stays coherent on the backward-walking head.
     MarkGrainLive(g);                      // hot loop renders it from now on
-    grains_[g].Trigger(ring_[s], delay, glen, rev, 1.f, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
+    grains_[g].Trigger(ring_[s], delay, glen, rev, rate, gain_[s] * ov_comp, 1, 1.0f, atk_scale);
     first_grain_[s] = false;
     if (coef) grains_[g].SetBandFilter(coef[0], coef[1], coef[2], coef[3], coef[4]);
     // coef == nullptr → 1-band full-range grain (no filter): the old-style freeze.

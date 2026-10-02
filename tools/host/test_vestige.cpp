@@ -3452,6 +3452,96 @@ static void TestFreezeWindow() {
   Check(v.frz_base_[q.s] == (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * 48000.f), "short freeze: the attack is skipped too");
   cs.sw[0] = 0; Reset();
 }
+// K1 on the freeze side: the same octave crossfade as the loop side, per band
+// stream. Per sample: which versions sound, their rates, every frozen grain's
+// next read cell (and weighted interpolation partner) inside the slot's window
+// [frz_base, frz_base + L], and the grain cap.
+struct FrzK1Stat { int clean_max = 0, sp_max = 0, counted_max = 0; long bad_rate = 0, out_window = 0, reads = 0;
+                   uint32_t drops = 0; float peak = 0.f; };
+static size_t frz_lo[VESTIGE_SLOTS] = {}, frz_hi[VESTIGE_SLOTS] = {};   // each freeze slot's last window
+static FrzK1Stat RunFreezeK1(float secs, float want_rate) {
+  FrzK1Stat st; const uint32_t d0 = v.grain_cap_drops_;
+  blk = 1;
+  const long end = n + (long)(secs * sr);
+  while (n < end) {
+    RunFor(1.f / sr);
+    if (peak > st.peak) st.peak = peak;
+    int c = 0, sp = 0;
+    for (int g = 0; g < VESTIGE_GRAINS; g++) {
+      const GrainVoice& gv = v.grains_[g];
+      const int s = v.grain_slot_[g];
+      if (!gv.IsActive() || s < VESTIGE_FREEZE_SLOT0) continue;
+      if (v.grain_ver_[g]) { sp++; if (gv.rate_ != want_rate) st.bad_rate++; }
+      else                 { c++;  if (gv.rate_ != 1.f) st.bad_rate++; }
+      const float pos = gv.read_pos_f_; const size_t idx = (size_t)pos;
+      const size_t last = idx + ((pos - (float)idx) > 0.f ? 1 : 0);
+      // A retired slot's last grains play out (silent, its fade is 0) after
+      // its window bookkeeping is cleared: hold them to the window they had.
+      if (v.active_[s]) { frz_lo[s] = v.frz_base_[s]; frz_hi[s] = v.frz_base_[s] + v.loop_len_[s]; }
+      const size_t lo = frz_lo[s], hi = frz_hi[s];   // cell hi = the recorded overhang
+      st.reads++;
+      if (idx < lo || last > hi) st.out_window++;
+    }
+    if (c > st.clean_max) st.clean_max = c;
+    if (sp > st.sp_max) st.sp_max = sp;
+    const int cc = v.CapCount(); if (cc > st.counted_max) st.counted_max = cc;
+  }
+  Realign();
+  st.drops = v.grain_cap_drops_ - d0;
+  return st;
+}
+static void TestFreezeK1() {
+  printf("-- K1 on the freeze side (octave crossfade)\n");
+  Reset(); cs.sw[0] = 2; cs.knob[0] = 0.5f; cs.knob[4] = 0.5f; RunFor(1.5f); seen_acts = v.act_count_;
+  CapRec q{}; noise_from = n; noise_to = n + 24000; WaitActivation(3.f, &q); noise_from = noise_to = -1;   // 500 ms: the 400 ms window
+  const int s = q.s;
+  RunFor(1.0f);
+  printf("      freeze slot %d: window %zu samples (+%zu skipped)\n", s, v.loop_len_[s], v.frz_base_[s]);
+  Check(s >= VESTIGE_FREEZE_SLOT0 && v.loop_len_[s] > 0, "setup: a freeze captured");
+  const float half_travel = VESTIGE_K1_DEADZONE + (0.5f - VESTIGE_K1_DEADZONE) * 0.5f;
+  struct P { const char* name; float k1; float rate; bool mid; };
+  const P ps[] = { {"noon", 0.5f, 2.f, false}, {"full CW", 1.0f, 2.f, false}, {"CW midpoint", 0.5f + half_travel, 2.f, true},
+                   {"full CCW", 0.0f, 0.5f, false}, {"CCW midpoint", 0.5f - half_travel, 0.5f, true}, {"noon again", 0.5f, 0.5f, false} };
+  for (const P& p : ps) {
+    cs.knob[0] = p.k1; RunFor(1.5f);                  // crossfade + side swap settle, old grains gone
+    const FrzK1Stat st = RunFreezeK1(1.0f, p.rate);
+    printf("      %-12s g_c %.3f g_sp %.3f  grains clean %d speed %d (counted max %d), cap drops %u, out-of-window reads %ld/%ld, peak %.4f\n",
+           p.name, v.g_c_, v.g_sp_, st.clean_max, st.sp_max, st.counted_max, st.drops, st.out_window, st.reads, st.peak);
+    char msg[200];
+    if (p.k1 == 0.5f)
+      snprintf(msg, sizeof msg, "freeze K1 %s: clean only (no speed grains, gain 1)", p.name);
+    else if (!p.mid)
+      snprintf(msg, sizeof msg, "freeze K1 %s: only rate-%.1f speed grains, clean gain 0", p.name, p.rate);
+    else
+      snprintf(msg, sizeof msg, "freeze K1 %s: clean + rate-%.1f grains together", p.name, p.rate);
+    bool ok = st.bad_rate == 0 && st.peak > 0.005f;
+    if (p.k1 == 0.5f) ok = ok && st.sp_max == 0 && st.clean_max > 0 && v.g_c_ == 1.f && v.g_sp_ == 0.f;
+    else if (!p.mid)  ok = ok && st.clean_max == 0 && st.sp_max > 0 && v.g_c_ <= VESTIGE_K1_GATE_EPS;
+    else              ok = ok && st.clean_max > 0 && st.sp_max > 0;
+    Check(ok, msg);
+    Check(st.out_window == 0, "freeze K1: every grain reads inside its freeze window");
+    Check(st.counted_max <= VESTIGE_MB_GRAIN_CAP, "freeze K1: grain cap respected");
+  }
+  // A re-freeze inside the crossfade: two freezes x two versions x 3 bands.
+  cs.knob[0] = 0.5f + half_travel; RunFor(1.5f); seen_acts = v.act_count_;
+  { noise_from = n; noise_to = n + 24000;
+    const FrzK1Stat st = RunFreezeK1(1.5f, 2.f); noise_from = noise_to = -1;
+    printf("      re-freeze at CW midpoint: grains clean %d speed %d (counted max %d), cap drops %u, out-of-window %ld\n",
+           st.clean_max, st.sp_max, st.counted_max, st.drops, st.out_window);
+    Check(v.act_count_ != seen_acts, "setup: a re-freeze during the K1 crossfade");
+    Check(st.out_window == 0 && st.counted_max <= VESTIGE_MB_GRAIN_CAP, "re-freeze in the K1 crossfade: in-window reads, cap respected"); }
+  // A short freeze window (shorter than the low band's grain at rate 2).
+  cs.knob[0] = 1.0f; RunFor(2.0f); seen_acts = v.act_count_;
+  { CapRec q2{}; noise_from = n; noise_to = n + 6000; WaitActivation(3.f, &q2); noise_from = noise_to = -1;
+    RunFor(1.0f);
+    const FrzK1Stat st = RunFreezeK1(1.0f, 2.f);
+    printf("      short freeze (window %zu) at full CW: speed grains %d, out-of-window %ld/%ld, peak %.4f\n",
+           v.loop_len_[q2.s], st.sp_max, st.out_window, st.reads, st.peak);
+    Check(v.loop_len_[q2.s] < 2 * VESTIGE_MB_GLEN[2][0] && st.sp_max > 0 && st.clean_max == 0 && st.out_window == 0 && st.bad_rate == 0,
+          "short freeze at full CW: rate-2 grains shortened to fit the window"); }
+  cs.knob[0] = 0.5f; RunFor(1.5f);
+  cs.sw[0] = 0; Reset();
+}
 static void TestTimingSlices() {
   printf("-- stage 3: the TIMING error, mode 1: SLICE REARRANGEMENT (%d slices)\n", VESTIGE_TIMING_SLICES);
   // Level 0: nothing drawn.
@@ -3834,6 +3924,7 @@ int main() {
   else printf("-- slice / pass-memory mode: behaviour tests skipped (discovery phase)\n");
   TestK3Rhythm();
   TestFreezeWindow();
+  TestFreezeK1();
   TestK4Degrade();
   TestFadeVoiceCap();
   TestK5Repeats();

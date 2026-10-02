@@ -409,7 +409,8 @@ static constexpr bool     VESTIGE_LATE_JOIN_IN_PHASE = true;
 // an end, the two adjacent versions crossfade equal-power. Tape-style: the head
 // and the grain read rate move together (0.5 / 2), so a half-speed pass lasts
 // exactly 2 loop lengths and a double-speed one exactly 1/2 — still on the grid.
-// Loop side only (freeze ignores K1). Never touches capture or loop length.
+// Freeze side too: each band stream gets a speed version (rate 0.5 / 2), same
+// crossfade. Never touches capture or loop length.
 // ---------------------------------------------------------------------------
 static constexpr float  VESTIGE_K1_DEADZONE = 0.06f;   // ±6% around noon = only clean (same as K2's)
 static constexpr float  VESTIGE_K1_SMOOTH   = 0.003f;  // one-pole per sample on the amount (~7 ms)
