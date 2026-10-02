@@ -744,7 +744,7 @@ static constexpr int VESTIGE_TIMING_RHY_ROWS_TL_CW    = (int)(sizeof(VESTIGE_TIM
 static constexpr int VESTIGE_TIMING_RHY_ROWS_PATH_CCW = (int)(sizeof(VESTIGE_TIMING_RHY_PATH_CCW) / sizeof(VESTIGE_TIMING_RHY_PATH_CCW[0]));
 static constexpr int VESTIGE_TIMING_RHY_ROWS_PATH_CW  = (int)(sizeof(VESTIGE_TIMING_RHY_PATH_CW) / sizeof(VESTIGE_TIMING_RHY_PATH_CW[0]));
 // Which pair of interlock tables K3 mode 1 plays (engine 2).
-static constexpr int VESTIGE_TIMING_RHY_IL_SET = 1;  // 0 = timelines (rated set, b868420), 1 = intensity paths
+static constexpr int VESTIGE_TIMING_RHY_IL_SET = 0;  // 0 = timelines (rated set, b868420), 1 = intensity paths
 static_assert(VESTIGE_TIMING_RHY_IL_SET == 0 || VESTIGE_TIMING_RHY_IL_SET == 1, "VESTIGE_TIMING_RHY_IL_SET: 0 or 1");
 static constexpr const VestigeRhyRow* VESTIGE_TIMING_RHY_TABLE_CCW =
     (VESTIGE_TIMING_RHY_IL_SET == 1) ? VESTIGE_TIMING_RHY_PATH_CCW : VESTIGE_TIMING_RHY_TL_CCW;
