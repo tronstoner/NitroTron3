@@ -65,10 +65,10 @@ button.primary{background:var(--play);border-color:var(--play);color:var(--accen
 .rot .dot{position:absolute;top:5px;right:6px;width:8px;height:8px;border-radius:50%}
 .rot .odd{font-size:10px;color:var(--muted)}
 .pat{overflow:auto;max-height:360px;border:1px solid var(--line);border-radius:4px;padding:6px;background:var(--bg)}
-.bar{display:grid;grid-template-columns:34px repeat(16,minmax(16px,1fr));gap:2px;margin-bottom:2px;align-items:center}
+.bar{display:grid;grid-template-columns:52px repeat(var(--g,8),minmax(18px,1fr));gap:2px;margin-bottom:2px;align-items:center}
 .bar .bn{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
 .c{height:22px;border-radius:2px;background:var(--plain);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--muted)}
-.c.q{box-shadow:inset 2px 0 0 var(--line)}
+.c.one{box-shadow:inset 3px 0 0 var(--ink)}
 .c.s{background:var(--stut);color:var(--stut-ink)}
 .c.r{background:transparent;box-shadow:inset 0 0 0 2px var(--rest);color:var(--rest)}
 .c.d{box-shadow:inset 0 -4px 0 var(--dec)}
@@ -93,20 +93,18 @@ textarea#out{width:100%;min-height:150px;font-family:var(--mono);font-size:12px}
 <div class="wrap">
   <div class="top">
     <h1>Vestige Rotation Bench</h1>
-    <p>K3 mode 1, engine 0 as in the pedal (12 : 8 CCW, 15 : 10 CW), base pattern only: no extra stutter, no hit variation, no ratchets. Stutters always start on the 1. Set the rest rotation, listen against the beat, rate, copy the list.</p>
+    <p>K3 mode 1, engine 0 as in the pedal (12 : 8 CCW, 15 : 10 CW) on the pedal's own step grid: the loop pass is cut into G steps of about 125 ms (G = 2<sup>k</sup> or 3·2<sup>k</sup>), half time doubles the step. The loop is one bass note. Base pattern only: no extra stutter, no hit variation, no ratchets. Stutters always start on the 1 (the loop start).</p>
   </div>
 
   <div class="panel transport">
     <button class="primary" id="play">Play</button>
-    <button id="restart" title="Start the loop again from bar 1 (applies at the next loop start)">Restart on 1</button>
-    <label class="field">BPM <input type="number" id="bpm" min="60" max="200" step="1" value="120"></label>
-    <label class="field">Source
-      <select id="src"><option value="synth">Bass riff (2 bars)</option><option value="file">Loaded file</option></select>
-    </label>
+    <button id="restart" title="Start the loop again from its 1 (applies at the next loop start)">Restart on 1</button>
+    <label class="field">Loop <input type="range" id="loopsec" min="0.8" max="3" step="0.01" value="1.4" style="width:130px"> <span class="flag" id="loopval"></span></label>
+    <label class="field">Note <select id="note0"><option value="41.2">E1</option><option value="55" selected>A1</option><option value="82.41">E2</option><option value="110">A2</option></select></label>
+    <label class="field">Source <select id="src"><option value="note">One note</option><option value="file">Loaded file</option></select></label>
     <label class="field">File <input type="file" id="file" accept="audio/*"></label>
-    <label class="field">File bars <select id="fbars"><option>1</option><option selected>2</option><option>4</option></select></label>
-    <label class="field">Beat <input type="range" id="drums" min="0" max="1" step="0.01" value="0.55"></label>
-    <label class="field">Click <input type="range" id="click" min="0" max="1" step="0.01" value="0"></label>
+    <label class="field">Pulse <select id="pulse"><option value="1">loop start</option><option value="4" selected>loop quarters</option><option value="step">every step</option></select></label>
+    <label class="field">Pulse level <input type="range" id="click" min="0" max="1" step="0.01" value="0.35"></label>
     <label class="field">Wet <input type="range" id="wet" min="0" max="1" step="0.01" value="0.9"></label>
     <label class="field">Dry loop <input type="range" id="dry" min="0" max="1" step="0.01" value="0"></label>
     <label class="field"><input type="checkbox" id="decon" checked> Decimator</label>
@@ -187,6 +185,21 @@ const hit = (i, k, n, rot) => k > 0 && n > 0 && ((((i + rot) % n) * k) % n) < k;
 const gcd = (a, b) => b ? gcd(b, a % b) : a;
 const lcm = (a, b) => a / gcd(a, b) * b;
 const pat = (k, n, rot) => { let s = ""; for (let i = 0; i < n; i++) s += hit(i, k, n, rot) ? "x" : "."; return s; };
+
+// The pedal's step grid: G = 2^k or 3 x 2^k steps per pass (<= 64), the step
+// closest in ratio to 125 ms (x (pass / 2 s)^0.5 past a 2 s pass; half time x2);
+// a tie keeps the finer grid.
+function stepsG(passSec, half) {
+  const want = 0.125 * (passSec > 2 ? Math.sqrt(passSec / 2) : 1) * (half ? 2 : 1);
+  let G = 1, best = 1e30;
+  for (const base of [1, 3]) for (let g = base; g <= 64; g *= 2) {
+    const r = passSec / g / want, d = r > 1 ? r : 1 / r, tie = Math.abs(d - best) <= best * 1e-6;
+    if ((d < best && !tie) || (tie && g > G)) { best = d; G = g; }
+  }
+  return G;
+}
+const loopSec = () => (document.getElementById("src").value === "file" && fileBuf) ? fileBuf.duration : +document.getElementById("loopsec").value;
+let fileBuf = null;
 
 // The numbered list per side, the same sampling as the pedal's DIAG list.
 const variants = [];
@@ -289,18 +302,17 @@ function renderRots() {
 }
 let cellEls = [], patL = 48;
 function renderPattern() {
-  const v = V();
-  let L = lcm(lcm(v.Ns, v.Nr), 16);
-  if (st.decOn) L = lcm(L, 4 * D_SLOTS);
+  const v = V(), G = stepsG(loopSec(), v.half);
+  let L = lcm(lcm(lcm(v.Ns, v.Nr), G), st.decOn ? 4 * D_SLOTS : 1);
   patL = L;
-  const box = $("pat"); box.innerHTML = ""; cellEls = [];
-  for (let b = 0; b < L / 16; b++) {
+  const box = $("pat"); box.innerHTML = ""; box.style.setProperty("--g", G); cellEls = [];
+  for (let b = 0; b < L / G; b++) {
     const row = document.createElement("div"); row.className = "bar";
-    row.innerHTML = `<span class="bn">bar ${b + 1}</span>`;
-    for (let j = 0; j < 16; j++) {
-      const t = b * 16 + j, c = cellAt(v, t, st.srot, st.rrot), d = decAt(v, t, c, st.decOn, st.dr);
+    row.innerHTML = `<span class="bn">pass ${b + 1}</span>`;
+    for (let j = 0; j < G; j++) {
+      const t = b * G + j, c = cellAt(v, t, st.srot, st.rrot), d = decAt(v, t, c, st.decOn, st.dr);
       const e = document.createElement("span");
-      e.className = "c" + (j % 4 === 0 ? " q" : "") + (c === 1 ? " s" : c === 2 ? " r" : "") + (d ? (c === 1 ? " d" : " dp") : "");
+      e.className = "c" + (j === 0 ? " one" : "") + (c === 1 ? " s" : c === 2 ? " r" : "") + (d ? (c === 1 ? " d" : " dp") : "");
       e.textContent = glyph(c, d);
       row.appendChild(e); cellEls.push(e);
     }
@@ -317,14 +329,15 @@ function renderOut() {
   const keys = Object.keys(ratings).sort((a, b) => order(a) - order(b) || ratings[a].srot - ratings[b].srot || ratings[a].rrot - ratings[b].rrot);
   $("out").value = keys.map(k => {
     const x = ratings[k];
-    return `${x.side}#${x.num} ${x.half ? "half" : "1x"} | S E(${x.ks},${x.Ns}) r${x.srot} | R E(${x.kr},${x.Nr}) r${x.rrot} | ${x.decOn ? `dec kd${x.kd} dr${x.dr}` : "no dec"} | ${x.rating}${x.note ? " | " + x.note : ""} | ${x.bars}`;
+    return `${x.side}#${x.num} ${x.half ? "half" : "1x"} loop ${x.loop}s G${x.G} | S E(${x.ks},${x.Ns}) r${x.srot} | R E(${x.kr},${x.Nr}) r${x.rrot} | ${x.decOn ? `dec kd${x.kd} dr${x.dr}` : "no dec"} | ${x.rating}${x.note ? " | " + x.note : ""} | ${x.bars}`;
   }).join("\n");
   $("nrat").textContent = keys.length;
 }
 function renderHead() {
   const v = V();
   $("vname").textContent = `${v.side}#${v.num}`;
-  $("vmeta").textContent = `stutters E(${v.ks},${v.Ns}) · rests E(${v.kr},${v.Nr}) · decimates E(${v.kd},8) · ${v.half ? "half time" : "1x"} · ${pct(v.u0)}–${pct(v.u1)} % of the ${v.side} half`;
+  const G = stepsG(loopSec(), v.half);
+  $("vmeta").textContent = `stutters E(${v.ks},${v.Ns}) · rests E(${v.kr},${v.Nr}) · decimates E(${v.kd},8) · ${v.half ? "half time" : "1x"} · loop ${loopSec().toFixed(2)} s = ${G} steps of ${Math.round(loopSec() / G * 1000)} ms · ${pct(v.u0)}–${pct(v.u1)} % of the ${v.side} half`;
   const sel = $("dr"); if (!sel.options.length) for (let i = 0; i < D_SLOTS; i++) sel.add(new Option("dr" + i, i));
   sel.value = st.dr; $("decrow").style.opacity = st.decOn ? 1 : .45;
 }
@@ -333,7 +346,7 @@ function renderAll() { renderList(); renderHead(); renderRots(); renderPattern()
 function rate(r) {
   const v = V(), k = curKey();
   ratings[k] = { side: v.side, num: v.num, half: v.half, ks: v.ks, Ns: v.Ns, kr: v.kr, Nr: v.Nr, kd: v.kd,
-    srot: st.srot, rrot: st.rrot, decOn: st.decOn, dr: st.dr, rating: r, note: $("note").value.trim(), bars: bars3(v, st.srot, st.rrot, st.decOn, st.dr) };
+    srot: st.srot, rrot: st.rrot, decOn: st.decOn, dr: st.dr, rating: r, loop: loopSec().toFixed(2), G: stepsG(loopSec(), v.half), note: $("note").value.trim(), bars: bars3(v, st.srot, st.rrot, st.decOn, st.dr) };
   saveRatings(); renderAll();
 }
 document.querySelectorAll("#rate button[data-r]").forEach(b => b.onclick = () => rate(b.dataset.r));
@@ -366,64 +379,42 @@ document.addEventListener("keydown", e => {
 });
 
 // ---- audio ----------------------------------------------------------------
-let ctx = null, wetG, dryG, drumG, clickG, master;
-let srcBuf = null, decBufs = {}, fileBuf = null, drumBuf = null, clickHi = null, clickLo = null;
+let ctx = null, wetG, dryG, clickG, master;
+let srcBuf = null, decBufs = {}, clickHi = null, clickLo = null;
 let playing = false, timer = null, pendingRestart = false;
-let t = 0, nextStep = 0, nextBar = 0, loopStart = 0, barIdx = 0, ringQ = [];
+let t = 0, nextStep = 0, nextPass = 0, ringQ = [];
 const FADE = 0.002;
-const sixteenth = () => 60 / bpm() / 4;
-const bpm = () => {
-  if ($("src").value === "file" && fileBuf) return 60 * 4 * (+$("fbars").value) / fileBuf.duration;
-  return Math.min(200, Math.max(60, +$("bpm").value || 120));
-};
-const loopBars = () => ($("src").value === "file" && fileBuf) ? +$("fbars").value : 2;
 
 function ensureCtx() {
   if (ctx) return;
   ctx = new (window.AudioContext || window.webkitAudioContext)();
   master = ctx.createGain(); master.gain.value = 0.85; master.connect(ctx.destination);
-  wetG = ctx.createGain(); dryG = ctx.createGain(); drumG = ctx.createGain(); clickG = ctx.createGain();
-  [wetG, dryG, drumG, clickG].forEach(g => g.connect(master));
+  makeBuses();
+}
+function makeBuses() {
+  wetG = ctx.createGain(); dryG = ctx.createGain(); clickG = ctx.createGain();
+  [wetG, dryG, clickG].forEach(g => g.connect(master));
   setLevels();
 }
 function setLevels() {
   if (!ctx) return;
-  wetG.gain.value = +$("wet").value; dryG.gain.value = +$("dry").value;
-  drumG.gain.value = +$("drums").value; clickG.gain.value = +$("click").value;
+  wetG.gain.value = +$("wet").value; dryG.gain.value = +$("dry").value; clickG.gain.value = +$("click").value;
 }
-["wet", "dry", "drums", "click"].forEach(id => $(id).addEventListener("input", setLevels));
+["wet", "dry", "click"].forEach(id => $(id).addEventListener("input", setLevels));
 
-// The default source: a 2-bar bass riff (E), each 16th distinct enough that a stutter is audible.
-const RIFF = [[0,40,2],[3,40,1],[4,43,2],[6,45,2],[8,40,1],[10,47,2],[12,45,1],[13,43,1],[14,40,2],
-              [16,40,2],[19,40,1],[20,43,2],[22,48,2],[24,47,1],[26,45,2],[28,43,1],[30,38,2]];
-function synthRiff(sr, bpmv) {
-  const s16 = 60 / bpmv / 4, n = Math.round(32 * s16 * sr), out = new Float32Array(n);
-  for (const [st16, midi, len] of RIFF) {
-    const f0 = 440 * Math.pow(2, (midi - 69) / 12), i0 = Math.round(st16 * s16 * sr), dur = len * s16 * 0.92;
-    let ph = 0, lp = 0;
-    for (let i = 0; i < dur * sr && i0 + i < n; i++) {
-      const tt = i / sr;
-      ph += f0 / sr; if (ph >= 1) ph -= 1;
-      const saw = 2 * ph - 1, sq = ph < 0.5 ? 1 : -1;
-      const env = Math.min(1, tt / 0.003) * Math.exp(-tt * 5.5) * Math.min(1, (dur - tt) / 0.006);
-      const cut = 0.05 + 0.35 * Math.exp(-tt * 18);
-      lp += cut * ((0.7 * saw + 0.3 * sq) - lp);
-      out[i0 + i] += 0.55 * lp * env;
-    }
+// One plucked bass note, the whole loop long (a recorded loop of one note).
+function synthNote(sr, sec, f0) {
+  const n = Math.round(sec * sr), out = new Float32Array(n);
+  let ph = 0, lp = 0;
+  for (let i = 0; i < n; i++) {
+    const tt = i / sr;
+    ph += f0 / sr; if (ph >= 1) ph -= 1;
+    const saw = 2 * ph - 1, sq = ph < 0.5 ? 1 : -1;
+    const env = Math.min(1, tt / 0.004) * Math.exp(-tt * 1.6) * Math.min(1, (sec - tt) / 0.01);
+    const cut = 0.03 + 0.25 * Math.exp(-tt * 6);
+    lp += cut * ((0.7 * saw + 0.3 * sq) - lp);
+    out[i] = 0.7 * lp * env;
   }
-  return out;
-}
-function makeDrums(sr, bpmv) {   // one bar: kick 1 + 3, snare 2 + 4, hats on 8ths
-  const s16 = 60 / bpmv / 4, n = Math.round(16 * s16 * sr), out = new Float32Array(n);
-  const add = (st16, fn, len) => { const i0 = Math.round(st16 * s16 * sr); for (let i = 0; i < len * sr && i0 + i < n; i++) out[i0 + i] += fn(i / sr); };
-  let seed = 1; const noise = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2147483648 - 1; };
-  const kick = x => { const fq = 45 + 90 * Math.exp(-x * 30); return Math.sin(2 * Math.PI * fq * x) * Math.exp(-x * 9) * 0.9; };
-  let hp = 0, prev = 0;
-  const hat = x => { const w = noise(); hp = 0.6 * (hp + w - prev); prev = w; return hp * Math.exp(-x * 60) * 0.25; };
-  const snare = x => (noise() * 0.5 + Math.sin(2 * Math.PI * 190 * x) * 0.4) * Math.exp(-x * 22) * 0.6;
-  [0, 8].forEach(s => add(s, kick, 0.35));
-  [4, 12].forEach(s => add(s, snare, 0.25));
-  for (let s = 0; s < 16; s += 2) add(s, hat, 0.08);
   return out;
 }
 function blip(sr, hz) { const n = Math.round(0.03 * sr), o = new Float32Array(n); for (let i = 0; i < n; i++) o[i] = Math.sin(2 * Math.PI * hz * i / sr) * Math.exp(-i / sr * 120) * 0.5; return o; }
@@ -433,12 +424,12 @@ function toBuf(data, twice) {   // twice: the loop twice in a row, so a read pas
   return b;
 }
 function buildBuffers() {
-  const sr = ctx.sampleRate, bp = bpm();
+  const sr = ctx.sampleRate;
   let mono;
   if ($("src").value === "file" && fileBuf) {
     mono = new Float32Array(fileBuf.length);
     for (let c = 0; c < fileBuf.numberOfChannels; c++) { const d = fileBuf.getChannelData(c); for (let i = 0; i < d.length; i++) mono[i] += d[i] / fileBuf.numberOfChannels; }
-  } else mono = synthRiff(sr, bp);
+  } else mono = synthNote(sr, loopSec(), +$("note0").value);
   srcBuf = toBuf(mono, true);
   decBufs = {};
   for (const N of DECIM) {   // sample-and-hold N samples at 48 kHz
@@ -446,7 +437,6 @@ function buildBuffers() {
     for (let i = 0; i < o.length; i++) o[i] = mono[i - (i % hold)];
     decBufs[N] = toBuf(o, true);
   }
-  drumBuf = toBuf(makeDrums(sr, bp), false);
   clickHi = toBuf(blip(sr, 1600), false); clickLo = toBuf(blip(sr, 1000), false);
 }
 function playSeg(buf, off, when, dur, dest) {
@@ -460,55 +450,49 @@ function playSeg(buf, off, when, dur, dest) {
 }
 function playOne(buf, when, dest) { const s = ctx.createBufferSource(); s.buffer = buf; s.connect(dest); s.start(when); }
 
-// The loop pass: G steps (half time: steps of an 8th). Running step t never resets
-// while the loop plays; a stutter replays the step before (within the pass).
+// One step of the pass (G steps, pedal grid). Running step t never resets while
+// the loop plays; a stutter replays the step before (within the pass).
 function scheduleStep(when) {
-  const v = V(), stepDur = sixteenth() * (v.half ? 2 : 1);
-  const G = loopBars() * (v.half ? 8 : 16);
+  const v = V(), L = loopSec(), G = stepsG(L, v.half), stepDur = L / G;
   const i = t % G, c = cellAt(v, t, st.srot, st.rrot), d = decAt(v, t, c, st.decOn, st.dr);
-  const loopDur = srcBuf.duration / 2, stepSrc = loopDur / G;
   if (c !== 2) {
     const src = c === 1 ? (i - 1 + G) % G : i;
-    playSeg(d ? decBufs[d] : srcBuf, src * stepSrc, when, stepDur, wetG);
+    playSeg(d ? decBufs[d] : srcBuf, src * stepDur, when, stepDur, wetG);
   }
+  if ($("pulse").value === "step" && i > 0) playOne(clickLo, when, clickG);
   ringQ.push({ when, t });
   return stepDur;
 }
 function tick() {
-  const ahead = ctx.currentTime + 0.12, barDur = 16 * sixteenth();
-  for (;;) {   // bars and steps in time order (a restart moves the steps onto a bar)
-    if (Math.min(nextBar, nextStep) >= ahead) break;
-    if (nextBar <= nextStep + 1e-6) {
-      playOne(drumBuf, nextBar, drumG);
-      for (let q = 0; q < 4; q++) playOne(q === 0 ? clickHi : clickLo, nextBar + q * 4 * sixteenth(), clickG);
-      if (barIdx % loopBars() === 0) {   // a loop pass starts here
-        if (pendingRestart) { pendingRestart = false; t = 0; nextStep = nextBar; }
-        playSeg(srcBuf, 0, nextBar, loopBars() * barDur, dryG);
-      }
-      nextBar += barDur; barIdx++;
+  const ahead = ctx.currentTime + 0.12, L = loopSec();
+  for (;;) {   // passes and steps in time order (a restart moves the steps onto a pass start)
+    if (Math.min(nextPass, nextStep) >= ahead) break;
+    if (nextPass <= nextStep + 1e-6) {
+      if (pendingRestart) { pendingRestart = false; t = 0; nextStep = nextPass; }
+      const pu = $("pulse").value;
+      playOne(clickHi, nextPass, clickG);
+      if (pu === "4") for (let q = 1; q < 4; q++) playOne(clickLo, nextPass + q * L / 4, clickG);
+      playSeg(srcBuf, 0, nextPass, L, dryG);
+      nextPass += L;
       continue;
     }
     const d = scheduleStep(nextStep); nextStep += d; t++;
   }
-  $("status").textContent = `playing · ${bpm().toFixed(1)} BPM · loop ${loopBars()} bar${loopBars() > 1 ? "s" : ""}`;
+  const v = V(), G = stepsG(L, v.half);
+  $("status").textContent = `playing · loop ${L.toFixed(2)} s · ${G} steps of ${Math.round(L / G * 1000)} ms`;
 }
 function start() {
   ensureCtx(); ctx.resume();
   buildBuffers();
-  t = 0; barIdx = 0; ringQ = []; pendingRestart = false;
-  nextBar = nextStep = ctx.currentTime + 0.08;
+  t = 0; ringQ = []; pendingRestart = false;
+  nextPass = nextStep = ctx.currentTime + 0.08;
   playing = true; $("play").textContent = "Stop";
   tick(); timer = setInterval(tick, 25);
   requestAnimationFrame(drawHead);
 }
 function stop() {
   playing = false; clearInterval(timer); $("play").textContent = "Play"; $("status").textContent = "stopped";
-  if (ctx) {   // cut what is already scheduled: fresh bus gains, the old ones disconnected
-    [wetG, dryG, drumG, clickG].forEach(g => g.disconnect());
-    wetG = ctx.createGain(); dryG = ctx.createGain(); drumG = ctx.createGain(); clickG = ctx.createGain();
-    [wetG, dryG, drumG, clickG].forEach(g => g.connect(master));
-    setLevels();
-  }
+  if (ctx) { [wetG, dryG, clickG].forEach(g => g.disconnect()); makeBuses(); }   // cut what is already scheduled
   cellEls.forEach(e => e.classList.remove("now"));
 }
 function togglePlay() { playing ? stop() : start(); }
@@ -526,16 +510,19 @@ function drawHead() {
 }
 $("play").onclick = togglePlay;
 $("restart").onclick = () => { if (playing) pendingRestart = true; };
-const rebuild = () => { if (playing) { stop(); start(); } };
-$("bpm").addEventListener("change", rebuild);
+const rebuild = () => { renderAll(); if (playing) { stop(); start(); } };
+const showLoop = () => { $("loopval").textContent = `${(+$("loopsec").value).toFixed(2)} s`; };
+$("loopsec").addEventListener("input", showLoop);
+$("loopsec").addEventListener("change", rebuild);
+$("note0").addEventListener("change", rebuild);
 $("src").addEventListener("change", rebuild);
-$("fbars").addEventListener("change", rebuild);
 $("file").addEventListener("change", async e => {
   const fl = e.target.files[0]; if (!fl) return;
   ensureCtx();
   try { fileBuf = await ctx.decodeAudioData(await fl.arrayBuffer()); $("src").value = "file"; $("status").textContent = `loaded ${fl.name} (${fileBuf.duration.toFixed(2)} s)`; rebuild(); }
   catch (err) { $("status").textContent = "That file could not be decoded. Try a WAV or MP3."; }
 });
+showLoop();
 
 renderAll();
 })();
