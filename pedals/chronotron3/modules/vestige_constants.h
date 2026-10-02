@@ -431,7 +431,8 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // half (K3 mode 1, SW2 UP): the RHYTHM only, depth u = 0 just past the dead
 // zone .. 1 at full CCW, from one of two engines (VESTIGE_TIMING_RHY_ENGINE):
 //   0 POLYMETRIC (default): Euclidean stutters + rests, one step each, on the
-//     voice's running step count (it rolls across bars), rotated per loop:
+//     voice's running step count (it rolls across bars), at FIXED rotations
+//     (RHY_S_ROT / RHY_R_ROT / RHY_D_ROT below, the same for every loop):
 //     stutters: a RHY_S_CYCLE (12) step cycle, S_K_MIN .. S_K_MAX hits with the
 //     depth (E(2,12) = dotted-quarter hemiola .. E(7,12) = the bell pattern);
 //     rests: a RHY_R_CYCLE (8) step cycle, R_K_MIN .. R_K_MAX hits (E(1,8) ..
@@ -448,6 +449,15 @@ static constexpr float  VESTIGE_TIMING_RHY_S_K_MAX   = 7.f;
 static constexpr int    VESTIGE_TIMING_RHY_R_CYCLE   = 8;
 static constexpr float  VESTIGE_TIMING_RHY_R_K_MIN   = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_R_K_MAX   = 3.f;
+// Engine 0 ROTATIONS: rotation is part of the rhythm — fixed, never random; to
+// be chosen by ear per rhythm. E(k, n) rotated by rot: hit at i if
+// ((i + rot) % n * k) % n < k. S_ROT rotates the stutter cycle (0 .. S_CYCLE-1),
+// R_ROT the rest cycle (0 .. R_CYCLE-1), D_ROT the decimate slots
+// (0 .. D_SLOTS-1, also picks each slot's decimate factor). Every loop plays
+// them; engine 1 (the table) is not affected (its decimate stays per loop).
+static constexpr int    VESTIGE_TIMING_RHY_S_ROT     = 0;
+static constexpr int    VESTIGE_TIMING_RHY_R_ROT     = 0;
+static constexpr int    VESTIGE_TIMING_RHY_D_ROT     = 0;
 // Engine 1 (afro table): depth u (0 just past the dead zone .. 1 at full CCW) picks a row: the travel
 // is cut into ROWS equal zones, row = min(ROWS-1, (int)(u * ROWS)), 4 rows per
 // third. Each row = a GRID, a STUTTER pattern and a REST pattern, all indexed
@@ -500,12 +510,14 @@ static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE[] = {
 };
 static constexpr int    VESTIGE_TIMING_RHY_ROWS = (int)(sizeof(VESTIGE_TIMING_RHY_TABLE) / sizeof(VESTIGE_TIMING_RHY_TABLE[0]));
 // Both engines: one small variation with chance RHY_VAR_PROB per ~32 steps:
-// one added 1-step stutter on a free step, for that pass only.
-static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.3f;
+// one added 1-step stutter on a free step, for that pass only. Was 0.3; 0 =
+// OFF for the rhythm rating session (every pass plays exactly the base).
+static constexpr float  VESTIGE_TIMING_RHY_VAR_PROB  = 0.f;
 // Decimate colour on the rhythm: a Euclidean pattern on the 8th-note
 // off-beats, E(D_K, D_SLOTS) over 2 bars' off-beats (D_SLOTS = 8), D_K =
 // D_K_MIN just past noon .. D_K_MAX at full CCW; one step, never on a rest,
-// stacked on a stutter, rotated per loop (both engines). Engine 1 only: in
+// stacked on a stutter; rotation: engine 0 the fixed RHY_D_ROT, engine 1
+// drawn per loop. Engine 1 only: in
 // HALF-grid rows on the QUARTER off-beats instead (t % 8 == 4), the same slot
 // logic (slot = t / 8).
 static constexpr int    VESTIGE_TIMING_RHY_D_SLOTS  = 8;
