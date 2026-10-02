@@ -511,7 +511,7 @@ static constexpr int    VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW = 2;
 // ramp = (u - RAT_U0) / (1 - RAT_U0); a ratchet is a QUADRUPLE (4 retrigs in
 // its step) with chance RAT_Q_MAX x ramp, else a DOUBLE (2). Steps shorter
 // than VESTIGE_TIMING_MIN_STEP_MS per retrig fall back (4 -> 2 -> none).
-static constexpr float  VESTIGE_TIMING_RHY_RAT_U0     = 0.6f;
+static constexpr float  VESTIGE_TIMING_RHY_RAT_U0     = 0.85f;
 static constexpr float  VESTIGE_TIMING_RHY_RAT_P_MAX  = 0.75f;
 static constexpr float  VESTIGE_TIMING_RHY_RAT_Q_MAX  = 0.5f;
 // Engine 0 ROTATIONS: rotation is part of the rhythm — fixed, never random; to
