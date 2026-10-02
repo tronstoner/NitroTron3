@@ -2387,7 +2387,7 @@ class Vestige : public Module {
       // RATCHETS (top end): this stutter also retriggers 2x / 4x in its step
       // (a second hit on the same cell: the stutter sets the source, the
       // ratchet the retrig count; the render falls back below MIN_STEP).
-      if (cell[i] == 1 && ramp > 0.f && ln_nh_[s][kErrTiming] < kLineMaxHits && TimingRand() < VESTIGE_TIMING_RHY_RAT_P_MAX * ramp) {
+      if (cell[i] == 1 && ramp > 0.f && ln_nh_[s][kErrTiming] < kLineMaxHits && TimingRand() < VESTIGE_TIMING_RHY_RAT_P_MAX * powf(ramp, VESTIGE_TIMING_RHY_RAT_P_CURVE)) {
         LineHit& r = ln_hit_[s][kErrTiming][ln_nh_[s][kErrTiming]++];
         r.start = (int8_t)(seg0 + i); r.len = 1; r.age = 0; r.sub = 0;
         r.type = (int8_t)((TimingRand() < VESTIGE_TIMING_RHY_RAT_Q_MAX * ramp) ? kFigRatchet : kFigDouble);
