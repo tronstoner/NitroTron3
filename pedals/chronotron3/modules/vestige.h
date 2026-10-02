@@ -179,6 +179,10 @@ class Vestige : public Module {
     k3_amt_          = 0.f;
     target_voices_ = 1;
     frip_head_ = 0.f; frip_rec_ = 0.f;
+    // Freeze-side rhythm: its rotation words come from its own RNG.
+    FzRhyNewWords();
+    rhy_t_[kFzR] = 0; ln_rhythm_[kFzR] = true;              // (TimingCond: the rhythm's decimate fade)
+    fz_L_ = 0;                                              // the first sample starts a virtual pass
   }
 
   void Activate() override {
@@ -720,6 +724,12 @@ class Vestige : public Module {
         }
       }
       float y = 0.f;
+      // K3 mode 1 on the freeze: the virtual pass clock always runs (a new
+      // freeze joins the running rhythm); while its stage is engaged the
+      // freeze slots sum apart and pass through it (after pad + K1 + sustain).
+      FzRhyStep();
+      const bool fz_post = mute_d_[kFzR] != 0.f || mute_dt_[kFzR] != 0.f || decim_d_[kFzR] != 0.f || decim_dt_[kFzR] != 0.f;
+      float yf = 0.f;
       for (int s = 0; s < VESTIGE_SLOTS; s++) {
         // Skip fully dormant slots — no grains, silent, not fading in — so they
         // cost nothing (and no cosf/sinf). Most slots at low voice counts.
@@ -769,36 +779,8 @@ class Vestige : public Module {
         //     head advance in ServiceMBFreeze — the speed crossfade needs no
         //     restructuring for either.
         pv = PlaybackErrors(s, pv);
-        //     TIMING mode 2 sample-rate reduction: hold every decim_n_-th
-        //     sample, crossfaded in/out over VESTIGE_TIMING_MUTE_MS.
-        if (s < VESTIGE_VOICE_SLABS && (decim_d_[s] != 0.f || decim_dt_[s] != 0.f)) {
-          float& d = decim_d_[s]; const float t = decim_dt_[s];
-          const float di = decim_inc_[s];                   // (K3 mode 1: the softer rhythm fade)
-          if (d < t) { d += di; if (d > t) d = t; }
-          else if (d > t) { d -= di; if (d < t) d = t; }
-          const int ck = decim_k_[s];
-          if (decim_init_[s]) {                             // start at the signal: no bump
-            decim_init_[s] = false; decim_c_[s] = 0; decim_h_[s] = pv;
-            if (ck >= 0) { const float* c = decim_lp_[ck]; decim_z1_[s] = pv * (1.f - c[0]); decim_z2_[s] = pv * (c[2] - c[4]); }
-          }
-          if (++decim_c_[s] >= decim_n_[s]) { decim_c_[s] = 0; decim_h_[s] = pv; }
-          float yc = decim_h_[s];
-          if (ck >= 0) {                                    // post-hold 2-pole LP (TDF-II)
-            const float* c = decim_lp_[ck];
-            const float x = yc;
-            yc = c[0] * x + decim_z1_[s];
-            decim_z1_[s] = c[1] * x - c[3] * yc + decim_z2_[s];
-            decim_z2_[s] = c[2] * x - c[4] * yc;
-          }
-          pv = (d >= 1.f) ? yc : pv + (yc - pv) * d;
-        }
-        //     TIMING mode 2 rests: a linear VESTIGE_TIMING_MUTE_MS fade.
-        if (s < VESTIGE_VOICE_SLABS && (mute_d_[s] != 0.f || mute_dt_[s] != 0.f)) {
-          float& d = mute_d_[s]; const float t = mute_dt_[s];
-          if (d < t) { d += mute_inc_; if (d > t) d = t; }
-          else if (d > t) { d -= mute_inc_; if (d < t) d = t; }
-          pv *= 1.f - d;
-        }
+        //     The rest / decimate stage (CondStage).
+        if (s < VESTIGE_VOICE_SLABS) pv = CondStage(s, pv);
         //  3. K5 loop fade.
         if (s < VESTIGE_VOICE_SLABS) {                        // K5 CCW: the per-repeat level
           float& g = dec_g_[s]; const float t = dec_t_[s], st = dec_step_[s];
@@ -810,7 +792,8 @@ class Vestige : public Module {
           if (g < t) { g += st; if (g > t) g = t; } else if (g > t) { g -= st; if (g < t) g = t; }
           pv *= g;
         }
-        y += pv * fade_gain_[s];
+        if (fz_post && PoolOf(s) == kPoolFreeze) yf += pv * fade_gain_[s];
+        else                                      y  += pv * fade_gain_[s];
         // Free a retired (dying) voiced slot once its fade-out has completed.
         if (dying_[s] &&
             fade_target_[s] < 0.5f && fade_phase_[s] >= 1.f) {
@@ -818,6 +801,7 @@ class Vestige : public Module {
           loop_len_[s] = 0; gain_[s] = 0.f;
         }
       }
+      if (fz_post) y += CondStage(kFzR, yf);            // K3 mode 1: the freeze's rests + decimates
 
       // ---- Post-grain tape/BBD warble + degrade colour (K4) ---------------
       // GATED: when K4 is clean (degrade idle), the modulation (3 sinf/sample in
@@ -1988,6 +1972,11 @@ class Vestige : public Module {
   // Three rhythm lines (TIMING / CONDITION / PLAYBACK) per loop voice, each a
   // list of hits on a line of ln_cells_ cells (G steps x the passes per line).
   struct LineHit { int8_t start, len, type, sub, age; };
+  // K3 mode 1 on the FREEZE side: one extra, virtual planner index past the
+  // loop voices (its own lines, rotation words, running step count, hit
+  // variation and rest / decimate state). Loop-side loops never reach it.
+  static constexpr int kFzR = VESTIGE_VOICE_SLABS;
+  static constexpr int kRhySlots = VESTIGE_VOICE_SLABS + 1;
   static constexpr int kLineMaxHits = VESTIGE_TIMING_LINE_MAX_CELLS / 2;
   static uint64_t LineMask(int start, int len) { return ((1ull << len) - 1ull) << start; }   // len <= 4
   // Cells a new hit may not touch: every other hit plus one pause cell on each
@@ -2438,7 +2427,7 @@ class Vestige : public Module {
       const int32_t key = ((((side * 32 + RhyPolyKs(u, side)) * 32 + RhyPolyKr(u, side)) * 32 + RhyDecK(u, side)) * 2) + (RhyTempoStep(u) > 1.f ? 1 : 0);
       if (rhy_key_[s] >= 0 && rhy_key_[s] != key) {
         rhy_rot_[s] = TimingRandU(); rhy_rrot_[s] = TimingRandU();
-        if (CT3_DIAG) { rhy_act_slot_ = s; rhy_act_n_ = rhy_act_n_ + 1; }   // DIAG: a line with the new rotations
+        if (CT3_DIAG && s < VESTIGE_VOICE_SLABS) { rhy_act_slot_ = s; rhy_act_n_ = rhy_act_n_ + 1; }   // DIAG: a line with the new rotations
       }
       rhy_key_[s] = key;
     }
@@ -2657,6 +2646,76 @@ class Vestige : public Module {
     TimingPlanLayersImpl(s, rev, L, rho, el0);
     const uint32_t d = diag_clock_() - t0; if (d > diag_plan_us_) diag_plan_us_ = d;
   }
+  // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to the
+  // wanted step in output time: VESTIGE_TIMING_STEP_MS up to a loop of
+  // VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^STEP_EXP
+  // (long, ambient loops glitch slower: 8 s = 250 ms at 0.5). Shared by the
+  // loop voices and the freeze side's virtual pass.
+  int TimingStepCount(double pass_out, bool rhythm, float rl) const {
+    const double knee = (double)VESTIGE_TIMING_STEP_KNEE_MS * 0.001 * (double)sr_;
+    const double want = (double)VESTIGE_TIMING_STEP_MS * 0.001 * (double)sr_
+                      * (pass_out > knee ? pow(pass_out / knee, (double)VESTIGE_TIMING_STEP_EXP) : 1.0)
+                      * (rhythm ? (double)RhyTempoStep(rl) : 1.0);   // K3 mode 1: half / double time
+    int G = 1; double best = 1e30;
+    for (int base = 1; base <= 3; base += 2)
+      for (int g = base; g <= VESTIGE_TIMING_LAYER_MAX_STEPS; g *= 2) {
+        const double r = pass_out / (double)g / want;
+        const double d = r > 1.0 ? r : 1.0 / r;
+        const bool tie = fabs(d - best) <= best * 1e-6;       // (a tie keeps the finer grid)
+        if ((d < best && !tie) || (tie && g > G)) { best = d; G = g; }
+      }
+    return G;
+  }
+  // ---- K3 mode 1 on the FREEZE side (SW1 DOWN): rests + decimates ----------
+  // A virtual pass of T (period_, latched at its start) split into G steps by
+  // the loop side's rule; each pass is planned by the loop side's engine-0
+  // planner (TimingPlanRhythmPoly) on the virtual index kFzR, whose running
+  // step count rolls on across passes and freeze captures. Its CONDITION line
+  // (rests, decimates) drives the shared rest / decimate stage on the SUMMED
+  // freeze output (CondStage); its TIMING line (stutters, ratchets) is
+  // planned but does nothing yet. Its own RNG: the loop side's draws are
+  // untouched.
+  void FzRhyNewWords() {                                  // a new freeze: new rotation draws
+    const uint32_t keep = timing_rng_; timing_rng_ = fz_rng_;
+    rhy_rot_[kFzR] = TimingRandU(); rhy_rrot_[kFzR] = TimingRandU();
+    fz_rng_ = timing_rng_; timing_rng_ = keep;
+    rkv_next_[kFzR] = -1; rkv_t0_[kFzR] = rkv_t1_[kFzR] = 0;
+    rhy_key_[kFzR] = -1;
+  }
+  void FzRhyPlan() {
+    fz_L_ = period_ > 0 ? (uint32_t)period_ : 1u;
+    fz_el_ = 0; fz_i_ = 0; fz_G_ = 1; fz_nb_ = fz_L_;
+    for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) fz_cnd_[i] = 0;
+    if (pool_ == kPoolFreeze && rhy_level_ > 0.f) {
+      const int G = TimingStepCount((double)fz_L_, true, rhy_level_);
+      const uint32_t keep = timing_rng_; timing_rng_ = fz_rng_;
+      const uint32_t ed = timing_edits_, vr = timing_vars_;
+      TimingPlanRhythmPoly(kFzR, G, 0);
+      timing_edits_ = ed; timing_vars_ = vr;              // (loop-side diag counters)
+      fz_rng_ = timing_rng_; timing_rng_ = keep;
+      for (int h = 0; h < ln_nh_[kFzR][kErrCondition]; h++) {   // rests (1) + decimates (factor)
+        const LineHit& x = ln_hit_[kFzR][kErrCondition][h];
+        for (int i = x.start; i < x.start + x.len && i < G; i++) fz_cnd_[i] = x.sub;
+      }
+      fz_G_ = G; fz_nb_ = FzBnd(1);
+    }
+    TimingCond(kFzR, fz_cnd_[0]);
+  }
+  uint32_t FzBnd(int i) const { return (i >= fz_G_) ? fz_L_ : (uint32_t)((double)fz_L_ * (double)i / (double)fz_G_ + 0.5); }
+  // Per sample: the virtual pass clock + this step's condition.
+  void FzRhyStep() {
+    if (fz_el_ >= fz_L_) FzRhyPlan();
+    else if (fz_G_ > 1 && !(pool_ == kPoolFreeze && rhy_level_ > 0.f)) {   // off mid-pass: clean at once
+      fz_G_ = 1; fz_nb_ = fz_L_; fz_i_ = 0;
+      for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) fz_cnd_[i] = 0;
+      TimingCond(kFzR, 0);
+    }
+    while (fz_el_ >= fz_nb_ && fz_i_ + 1 < fz_G_) {
+      fz_i_++; fz_nb_ = FzBnd(fz_i_ + 1);
+      if (fz_cnd_[fz_i_] != fz_cnd_[fz_i_ - 1]) TimingCond(kFzR, fz_cnd_[fz_i_]);
+    }
+    fz_el_++;
+  }
   void TimingPlanLayersImpl(int s, bool rev, size_t L, double rho, float el0) {
     trig_cnt_[s] = 0; trig_next_[s] = 0; cur_pat_[s] = -1; cur_var_[s] = kVarNone;
     trig_L_[s] = L; trig_rev_[s] = rev; trig_start_[s] = pass_[s];
@@ -2672,18 +2731,7 @@ class Vestige : public Module {
     // wanted step in output time: VESTIGE_TIMING_STEP_MS up to a loop of
     // VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^STEP_EXP
     // (long, ambient loops glitch slower: 8 s = 250 ms at 0.5).
-    const double knee = (double)VESTIGE_TIMING_STEP_KNEE_MS * 0.001 * (double)sr_;
-    const double want = (double)VESTIGE_TIMING_STEP_MS * 0.001 * (double)sr_
-                      * (pass_out > knee ? pow(pass_out / knee, (double)VESTIGE_TIMING_STEP_EXP) : 1.0)
-                      * (rhythm ? (double)RhyTempoStep(rhy_level_) : 1.0);   // K3 mode 1: half / double time
-    int G = 1; double best = 1e30;
-    for (int base = 1; base <= 3; base += 2)
-      for (int g = base; g <= VESTIGE_TIMING_LAYER_MAX_STEPS; g *= 2) {
-        const double r = pass_out / (double)g / want;
-        const double d = r > 1.0 ? r : 1.0 / r;
-        const bool tie = fabs(d - best) <= best * 1e-6;       // (a tie keeps the finer grid)
-        if ((d < best && !tie) || (tie && g > G)) { best = d; G = g; }
-      }
+    const int G = TimingStepCount(pass_out, rhythm, rhy_level_);
     const int LP = (G >= VESTIGE_TIMING_LINE_STEPS) ? 1 : (VESTIGE_TIMING_LINE_STEPS + G - 1) / G;   // passes per line
     const int C = G * LP;
     if (ln_cells_[s] != C) { LineClear(s); ln_cells_[s] = C; ln_pass_[s] = -1; }
@@ -2855,6 +2903,42 @@ class Vestige : public Module {
         timing_inplace_++;
       }
     }
+  }
+
+  // The rest / decimate stage of planner index s (a loop voice, or kFzR on
+  // the summed freeze output).
+  float CondStage(int s, float pv) {
+    //     TIMING mode 2 sample-rate reduction: hold every decim_n_-th
+    //     sample, crossfaded in/out over VESTIGE_TIMING_MUTE_MS.
+    if ((decim_d_[s] != 0.f || decim_dt_[s] != 0.f)) {
+      float& d = decim_d_[s]; const float t = decim_dt_[s];
+      const float di = decim_inc_[s];                   // (K3 mode 1: the softer rhythm fade)
+      if (d < t) { d += di; if (d > t) d = t; }
+      else if (d > t) { d -= di; if (d < t) d = t; }
+      const int ck = decim_k_[s];
+      if (decim_init_[s]) {                             // start at the signal: no bump
+        decim_init_[s] = false; decim_c_[s] = 0; decim_h_[s] = pv;
+        if (ck >= 0) { const float* c = decim_lp_[ck]; decim_z1_[s] = pv * (1.f - c[0]); decim_z2_[s] = pv * (c[2] - c[4]); }
+      }
+      if (++decim_c_[s] >= decim_n_[s]) { decim_c_[s] = 0; decim_h_[s] = pv; }
+      float yc = decim_h_[s];
+      if (ck >= 0) {                                    // post-hold 2-pole LP (TDF-II)
+        const float* c = decim_lp_[ck];
+        const float x = yc;
+        yc = c[0] * x + decim_z1_[s];
+        decim_z1_[s] = c[1] * x - c[3] * yc + decim_z2_[s];
+        decim_z2_[s] = c[2] * x - c[4] * yc;
+      }
+      pv = (d >= 1.f) ? yc : pv + (yc - pv) * d;
+    }
+    //     TIMING mode 2 rests: a linear VESTIGE_TIMING_MUTE_MS fade.
+    if ((mute_d_[s] != 0.f || mute_dt_[s] != 0.f)) {
+      float& d = mute_d_[s]; const float t = mute_dt_[s];
+      if (d < t) { d += mute_inc_; if (d > t) d = t; }
+      else if (d > t) { d -= mute_inc_; if (d < t) d = t; }
+      pv *= 1.f - d;
+    }
+    return pv;
   }
 
   // ---- K1 speed crossfade helpers -------------------------------------------
@@ -3524,6 +3608,7 @@ class Vestige : public Module {
       dec_g_[s] = dec_t_[s] = rep_base_[s] = 1.f; dec_step_[s] = 0.f; rep_k_[s] = 0; rep_pass_[s] = pass_[s];
     } else if (PoolOf(s) == kPoolFreeze && s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS) {   // a new freeze: its own sustain from 0
       const int q = s - VESTIGE_FREEZE_SLOT0;
+      FzRhyNewWords();                                      // K3 mode 1: new rotations, the clock runs on
       sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; sus_step_[q] = 0.f; sus_x_[q] = 0.f;
       if (frz_atk_s_ > 0.f) { sus_g_[q] = sus_t_[q] = 0.f; frz_atk_x_[q] = 0.f; }   // K5 CCW: fade in first
       else frz_atk_x_[q] = 1.f;
@@ -4798,37 +4883,37 @@ class Vestige : public Module {
   bool     lrev_[VESTIGE_VOICE_SLABS]        = {false};  // a TIMING reverse span is playing: read = lrev_m_ - fwd_
   float    lrev_m_[VESTIGE_VOICE_SLABS]      = {0.f};
   bool     pm_jump_ev_[VESTIGE_VOICE_SLABS][kTimingEvents] = {};   // per event: the read jumps
-  float    mute_d_[VESTIGE_VOICE_SLABS]      = {0.f};    // rest/break depth (0 = open, 1 = silent)
-  float    mute_dt_[VESTIGE_VOICE_SLABS]     = {0.f};    // its target
-  float    decim_d_[VESTIGE_VOICE_SLABS]     = {0.f};    // sample-rate reduction mix (0 = clean)
-  float    decim_dt_[VESTIGE_VOICE_SLABS]    = {0.f};    // its target
-  float    decim_inc_[VESTIGE_VOICE_SLABS]   = {0.f};    // its fade step (set with the target; 0 until then)
+  float    mute_d_[kRhySlots]      = {0.f};    // rest/break depth (0 = open, 1 = silent)
+  float    mute_dt_[kRhySlots]     = {0.f};    // its target
+  float    decim_d_[kRhySlots]     = {0.f};    // sample-rate reduction mix (0 = clean)
+  float    decim_dt_[kRhySlots]    = {0.f};    // its target
+  float    decim_inc_[kRhySlots]   = {0.f};    // its fade step (set with the target; 0 until then)
   float    rhy_decim_inc_ = 1.f / (VESTIGE_TIMING_RHY_DECIM_FADE_MS * 0.001f * CT3_SAMPLE_RATE_HZ);
-  int      decim_n_[VESTIGE_VOICE_SLABS]     = {0};      // hold length (samples)
-  int      decim_c_[VESTIGE_VOICE_SLABS]     = {0};      // samples since the last hold
-  float    decim_h_[VESTIGE_VOICE_SLABS]     = {0.f};    // the held sample
-  float    decim_z1_[VESTIGE_VOICE_SLABS]    = {0.f};    // its low-pass state
-  float    decim_z2_[VESTIGE_VOICE_SLABS]    = {0.f};
-  int      decim_k_[VESTIGE_VOICE_SLABS]     = {0};      // its factor's table index (-1 = no LP)
-  bool     decim_init_[VESTIGE_VOICE_SLABS]  = {false};  // start the hold + LP on the next sample
+  int      decim_n_[kRhySlots]     = {0};      // hold length (samples)
+  int      decim_c_[kRhySlots]     = {0};      // samples since the last hold
+  float    decim_h_[kRhySlots]     = {0.f};    // the held sample
+  float    decim_z1_[kRhySlots]    = {0.f};    // its low-pass state
+  float    decim_z2_[kRhySlots]    = {0.f};
+  int      decim_k_[kRhySlots]     = {0};      // its factor's table index (-1 = no LP)
+  bool     decim_init_[kRhySlots]  = {false};  // start the hold + LP on the next sample
   float    decim_lp_[VESTIGE_TIMING_DECIM_N][5] = {};     // LP coefs per factor (MBSetLP)
   uint32_t timing_edits_ = 0;                             // diag: memory edits
   // Timing mode 3 (layers), per loop voice slot.
-  LineHit  ln_hit_[VESTIGE_VOICE_SLABS][kErrTypes][VESTIGE_TIMING_LINE_MAX_CELLS / 2] = {};
-  int      ln_nh_[VESTIGE_VOICE_SLABS][kErrTypes] = {};
+  LineHit  ln_hit_[kRhySlots][kErrTypes][VESTIGE_TIMING_LINE_MAX_CELLS / 2] = {};
+  int      ln_nh_[kRhySlots][kErrTypes] = {};
   int      ln_cells_[VESTIGE_VOICE_SLABS]    = {0};      // the line length the hits were placed on
   int      ln_pass_[VESTIGE_VOICE_SLABS]     = {0};      // which pass of the line plays
-  int      ln_ops_[VESTIGE_VOICE_SLABS][kErrTypes] = {};   // changes still pending for the next pass
-  bool     ln_rhythm_[VESTIGE_VOICE_SLABS]   = {};       // the lines hold the K3 CCW rhythm
-  uint32_t rhy_rot_[VESTIGE_VOICE_SLABS]     = {};       // per-loop rotation word: stutters (+ decimates, >> 8)
-  uint32_t rhy_rrot_[VESTIGE_VOICE_SLABS]    = {};       //  and rests
-  int32_t  rhy_t_[VESTIGE_VOICE_SLABS]       = {};       // running step count (the polymeter's clock)
-  int32_t  rhy_key_[VESTIGE_VOICE_SLABS]     = {};       // re-roll: the rhythm of its last pass (-1 = none yet)
-  int32_t  rkv_next_[VESTIGE_VOICE_SLABS]    = {};       // hit variation: next start (-1 = draw; set at loop start)
-  int32_t  rkv_t0_[VESTIGE_VOICE_SLABS]      = {};       //  its cycle [t0, t1) (t1 0 = none)
-  int32_t  rkv_t1_[VESTIGE_VOICE_SLABS]      = {};
-  int8_t   rkv_voice_[VESTIGE_VOICE_SLABS]   = {};       //  0 stutters, 1 rests
-  int8_t   rkv_dk_[VESTIGE_VOICE_SLABS]      = {};       //  +1 / -1 hit
+  int      ln_ops_[kRhySlots][kErrTypes] = {};   // changes still pending for the next pass
+  bool     ln_rhythm_[kRhySlots]   = {};       // the lines hold the K3 CCW rhythm
+  uint32_t rhy_rot_[kRhySlots]     = {};       // per-loop rotation word: stutters (+ decimates, >> 8)
+  uint32_t rhy_rrot_[kRhySlots]    = {};       //  and rests
+  int32_t  rhy_t_[kRhySlots]       = {};       // running step count (the polymeter's clock)
+  int32_t  rhy_key_[kRhySlots]     = {};       // re-roll: the rhythm of its last pass (-1 = none yet)
+  int32_t  rkv_next_[kRhySlots]    = {};       // hit variation: next start (-1 = draw; set at loop start)
+  int32_t  rkv_t0_[kRhySlots]      = {};       //  its cycle [t0, t1) (t1 0 = none)
+  int32_t  rkv_t1_[kRhySlots]      = {};
+  int8_t   rkv_voice_[kRhySlots]   = {};       //  0 stutters, 1 rests
+  int8_t   rkv_dk_[kRhySlots]      = {};       //  +1 / -1 hit
   volatile float rhy_level_ = 0.f;                        // K3 mode-1 rhythm depth, either half (0 = off)
   volatile int   rhy_side_  = 0;                          //  its half: kRhyCcw / kRhyCw (which table)
   int8_t   tl_src_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},   // this pass's render (diag)
@@ -4838,7 +4923,12 @@ class Vestige : public Module {
   int      sl_n_[VESTIGE_VOICE_SLABS]        = {0};      // this pass's slice count (0 = none) (diag)
   uint32_t sl_rand_mask_[VESTIGE_VOICE_SLABS] = {0};    // the steps playing a random slice this pass (diag)
   int32_t  trig_pass_[VESTIGE_VOICE_SLABS]    = {0};     // last pass seen
-  uint32_t timing_rng_ = 0x9E3779B9u;                    // own RNG: level 0 never touches VestigeRand
+  uint32_t timing_rng_ = 0x9E3779B9u;
+  // K3 mode 1 on the freeze side (FzRhyPlan / FzRhyStep).
+  uint32_t fz_rng_ = 0x85EBCA6Bu;                         // its own RNG (the loop side's stays untouched)
+  uint32_t fz_L_  = 0, fz_el_ = 0, fz_nb_ = 0;            // virtual pass length, elapsed, next step boundary
+  int      fz_G_  = 1, fz_i_  = 0;                        // its step count, current step
+  int8_t   fz_cnd_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: 0 clean, 1 rest, N decimate xN                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag
   int      last_trig_slot_ = -1; uint32_t last_trig_at_ = 0;
   uint32_t pool_full_ = 0;                               // grains lost to a full physical pool (diag)
