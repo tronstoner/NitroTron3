@@ -468,6 +468,13 @@ static constexpr float  VESTIGE_TIMING_RHY_CW_R_K_MAX = 4.f;
 // decimates) at its start, for its whole life (the state of 1d5ee13, the
 // builder's pick 2026-10-02); false = the fixed RHY_*_ROT below.
 static constexpr bool   VESTIGE_TIMING_RHY_ROT_RANDOM = true;
+// Rhythm TEMPO by depth (both halves, engine 0): the step the rhythm runs on
+// is the layers' step (VESTIGE_TIMING_STEP_MS, the loop-length scaled one)
+// x2 = HALF TIME below depth HALF_U (the first rhythms past noon), x0.5 =
+// DOUBLE TIME from depth DOUBLE_U (the top end); in between 1x. (Bounded by
+// VESTIGE_TIMING_LAYER_MAX_STEPS per pass: very long loops get less than 2x.)
+static constexpr float  VESTIGE_TIMING_RHY_HALF_U     = 0.25f;
+static constexpr float  VESTIGE_TIMING_RHY_DOUBLE_U   = 0.85f;
 // Engine 0 ROTATIONS: rotation is part of the rhythm — fixed, never random; to
 // be chosen by ear per rhythm. E(k, n) rotated by rot: hit at i if
 // ((i + rot) % n * k) % n < k. S_ROT rotates the stutter cycle (0 .. S_CYCLE-1),

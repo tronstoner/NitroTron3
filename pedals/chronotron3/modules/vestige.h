@@ -2196,6 +2196,12 @@ class Vestige : public Module {
     if (VESTIGE_TIMING_RHY_ENGINE == 2) return 0;
     return (int)(VESTIGE_TIMING_RHY_D_K_MIN + (VESTIGE_TIMING_RHY_D_K_MAX - VESTIGE_TIMING_RHY_D_K_MIN) * u + 0.5f);
   }
+  // The rhythm's step scale at depth u: 2 = half time (u < HALF_U), 0.5 =
+  // double time (u >= DOUBLE_U), else 1.
+  static float RhyTempoStep(float u) {
+    return (u < VESTIGE_TIMING_RHY_HALF_U) ? 2.f : (u >= VESTIGE_TIMING_RHY_DOUBLE_U) ? 0.5f : 1.f;
+  }
+  static const char* RhyTempoName(float u) { const float x = RhyTempoStep(u); return x > 1.f ? "half" : x < 1.f ? "double" : "1x"; }
   // Engine 0's fixed rotations, folded into their cycles.
   static_assert(VESTIGE_TIMING_RHY_S_ROT >= 0 && VESTIGE_TIMING_RHY_R_ROT >= 0 && VESTIGE_TIMING_RHY_D_ROT >= 0,
                 "rhythm rotations are >= 0");
@@ -2403,7 +2409,8 @@ class Vestige : public Module {
     // (long, ambient loops glitch slower: 8 s = 250 ms at 0.5).
     const double knee = (double)VESTIGE_TIMING_STEP_KNEE_MS * 0.001 * (double)sr_;
     const double want = (double)VESTIGE_TIMING_STEP_MS * 0.001 * (double)sr_
-                      * (pass_out > knee ? pow(pass_out / knee, (double)VESTIGE_TIMING_STEP_EXP) : 1.0);
+                      * (pass_out > knee ? pow(pass_out / knee, (double)VESTIGE_TIMING_STEP_EXP) : 1.0)
+                      * (rhythm ? (double)RhyTempoStep(rhy_level_) : 1.0);   // K3 mode 1: half / double time
     int G = 1; double best = 1e30;
     for (int base = 1; base <= 3; base += 2)
       for (int g = base; g <= VESTIGE_TIMING_LAYER_MAX_STEPS; g *= 2) {
@@ -4201,7 +4208,7 @@ class Vestige : public Module {
   // The rhythm's key at depth u > 0: engine 0 (ks, kr, kd), engine 1 (row, 0, kd), engine 2 (row, 0, 0) of side `side`.
   static void RhyKeyOf(float u, int& a, int& b, int& kd, int side = kRhyCcw) {
     a  = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyKs(u, side) : RhyRow(u, side);
-    b  = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyKr(u, side) : 0;
+    b  = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyKr(u, side) * 4 + (int)RhyTempoStep(u) : 0;   // (engine 0: + its tempo)
     kd = RhyKd(u);
   }
   // The numbered list, sampled over each half's travel: u = i / kRhyListSteps
@@ -4305,7 +4312,8 @@ class Vestige : public Module {
       const bool rnd = VESTIGE_TIMING_RHY_ENGINE == 0 && VESTIGE_TIMING_RHY_ROT_RANDOM;
       RhyRenderBars(pat, 0.5f * (e.u0 + e.u1), rnd ? 0 : kRhySRot, rnd ? 0 : kRhyRRot, rnd ? 0 : kRhyDRot, e.side);
       if (VESTIGE_TIMING_RHY_ENGINE == 0)
-        snprintf(line, n, "VS RHY LIST %s#%d ks=%d kr=%d kd=%d u=%s..%s k3=%s..%s %s", sn, e.num, e.a, e.b, e.kd, u0, u1, k0, k1, pat);
+        snprintf(line, n, "VS RHY LIST %s#%d %s ks=%d kr=%d kd=%d u=%s..%s k3=%s..%s %s", sn, e.num,
+                 RhyTempoName(0.5f * (e.u0 + e.u1)), e.a, e.b / 4, e.kd, u0, u1, k0, k1, pat);
       else if (VESTIGE_TIMING_RHY_ENGINE == 2) {
         char ly[96]; RhyLayersFmt(ly, sizeof ly, e.a, e.side);
         snprintf(line, n, "VS RHY LIST %s#%d %s k3=%s..%s %s", sn, e.num, ly, k0, k1, pat);
@@ -4349,8 +4357,8 @@ class Vestige : public Module {
       const int rr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)(rhy_rrot_[slot] % (uint32_t)Nr) : 0) : kRhyRRot;
       const int dr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)((rhy_rot_[slot] >> 8) % (uint32_t)Nd) : 0) : kRhyDRot;
       RhyRenderBars(pat, u, sr, rr, dr, side);
-      snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s E(%d,%d)r%d E(%d,%d)r%d kd=%d dr%d %s",
-               sn, num, tms, k3s, us, k.a, Ns, sr, k.b, Nr, rr, k.kd, dr, pat);
+      snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s %s E(%d,%d)r%d E(%d,%d)r%d kd=%d dr%d %s",
+               sn, num, tms, k3s, us, RhyTempoName(u), k.a, Ns, sr, k.b / 4, Nr, rr, k.kd, dr, pat);
     } else if (VESTIGE_TIMING_RHY_ENGINE == 2) {
       RhyRenderBars(pat, u, 0, 0, 0, side);
       char ly[96]; RhyLayersFmt(ly, sizeof ly, RhyRow(u, side), side);
