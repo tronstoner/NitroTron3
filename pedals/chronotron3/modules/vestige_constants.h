@@ -468,6 +468,10 @@ static constexpr float  VESTIGE_TIMING_RHY_CW_R_K_MAX = 4.f;
 // decimates) at its start, for its whole life (the state of 1d5ee13, the
 // builder's pick 2026-10-02); false = the fixed RHY_*_ROT below.
 static constexpr bool   VESTIGE_TIMING_RHY_ROT_RANDOM = true;
+// RE-ROLL: turning K3 to another rhythm (its ks / kr / kd / tempo or side)
+// makes every playing loop draw new rotations at its next pass (a performance
+// gesture; the builder, 2026-10-02).
+static constexpr bool   VESTIGE_TIMING_RHY_REROLL     = true;
 // ... and only EVEN rotations (whole 8ths) of the stutter and rest cycles: an
 // odd one (a 16th off) reads as a flam. (The decimates sit on the off-beats.)
 static constexpr bool   VESTIGE_TIMING_RHY_ROT_EVEN   = true;

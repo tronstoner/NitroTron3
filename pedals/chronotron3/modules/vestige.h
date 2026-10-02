@@ -2340,6 +2340,16 @@ class Vestige : public Module {
     uint8_t cell[VESTIGE_TIMING_LAYER_MAX_STEPS];
     const int32_t t0 = rhy_t_[s];
     const int side = rhy_side_;                            // (read once: one half per pass)
+    // RE-ROLL: another rhythm than this loop's last pass -> new rotation draws.
+    if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_REROLL) {
+      const float u = rhy_level_;
+      const int32_t key = ((((side * 32 + RhyPolyKs(u, side)) * 32 + RhyPolyKr(u, side)) * 32 + RhyKd(u)) * 2) + (RhyTempoStep(u) > 1.f ? 1 : 0);
+      if (rhy_key_[s] >= 0 && rhy_key_[s] != key) {
+        rhy_rot_[s] = TimingRandU(); rhy_rrot_[s] = TimingRandU();
+        if (CT3_DIAG) { rhy_act_slot_ = s; rhy_act_n_ = rhy_act_n_ + 1; }   // DIAG: a line with the new rotations
+      }
+      rhy_key_[s] = key;
+    }
     // Rotations: this loop's own draws (RHY_ROT_RANDOM) or the fixed constants.
     const uint32_t srot = !VESTIGE_TIMING_RHY_ROT_RANDOM ? (uint32_t)kRhySRot
                         : VESTIGE_TIMING_RHY_ROT_ON1 ? RhyOn1Rot(rhy_rot_[s], rhy_level_, side)
@@ -3363,6 +3373,7 @@ class Vestige : public Module {
       rhy_rot_[s] = TimingRandU(); rhy_rrot_[s] = TimingRandU();
       rhy_t_[s] = 0;                                        //  and its running step count
       rkv_next_[s] = -1; rkv_t0_[s] = rkv_t1_[s] = 0;         //  and no hit variation yet
+      rhy_key_[s] = -1;                                     //  and no rhythm played yet (re-roll)
       if (CT3_DIAG) { rhy_act_slot_ = s; rhy_act_n_ = rhy_act_n_ + 1; }   // DIAG: the rhythm log's newest loop
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
@@ -4615,6 +4626,7 @@ class Vestige : public Module {
   uint32_t rhy_rot_[VESTIGE_VOICE_SLABS]     = {};       // per-loop word (unused: every rotation is fixed; drawn for the RNG sequence)
   uint32_t rhy_rrot_[VESTIGE_VOICE_SLABS]    = {};       //  (unused: engine 0's rotations are fixed constants)
   int32_t  rhy_t_[VESTIGE_VOICE_SLABS]       = {};       // running step count (the polymeter's clock)
+  int32_t  rhy_key_[VESTIGE_VOICE_SLABS]     = {};       // re-roll: the rhythm of its last pass (-1 = none yet)
   int32_t  rkv_next_[VESTIGE_VOICE_SLABS]    = {};       // hit variation: next start (-1 = draw; set at loop start)
   int32_t  rkv_t0_[VESTIGE_VOICE_SLABS]      = {};       //  its cycle [t0, t1) (t1 0 = none)
   int32_t  rkv_t1_[VESTIGE_VOICE_SLABS]      = {};
