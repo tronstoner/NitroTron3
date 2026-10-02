@@ -847,6 +847,9 @@ static constexpr float  VESTIGE_TIMING_RHY_DEC_CCW_K_MIN = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_DEC_CCW_K_MAX = 3.f;
 static constexpr float  VESTIGE_TIMING_RHY_DEC_CW_K_MIN  = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_DEC_CW_K_MAX  = 4.f;
+// Its cycle: CW = the rests' 10 (the reference); CCW = 9 (odd: on 8 the
+// position-picked strength stuck at one value — no audible decimate).
+static constexpr int    VESTIGE_TIMING_RHY_DEC_CCW_CYCLE = 9;
 static constexpr float  VESTIGE_TIMING_RHY_DECIM_FADE_MS = 15.f;   // (the layers keep VESTIGE_TIMING_MUTE_MS)
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MIN  = 1.f;
 static constexpr float  VESTIGE_TIMING_RHY_D_K_MAX  = 6.f;

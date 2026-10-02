@@ -2243,15 +2243,20 @@ class Vestige : public Module {
   }
   // CW (as at 87d99e5): its rotation for the loop word w: among the rotations whose hits land on
   // the fewest rests (rests at rrot), the even ones if any reach that minimum.
+  // The decimator's cycle: CW the rests' (10), CCW DEC_CCW_CYCLE (9).
+  static int RhyDecN(int side) { return side == kRhyCw ? RhyPolyNr(side) : VESTIGE_TIMING_RHY_DEC_CCW_CYCLE; }
+  // (Both sides now; overlaps counted over lcm(decimate cycle, rest cycle).)
   static int RhyDecRotCw(uint32_t w, float u, uint32_t rrot, int side) {
-    const int kd = RhyDecK(u, side), kr = RhyPolyKr(u, side), Nr = RhyPolyNr(side);
+    const int kd = RhyDecK(u, side), kr = RhyPolyKr(u, side), Nr = RhyPolyNr(side), Nd = RhyDecN(side);
+    int g = Nd, h = Nr; while (h) { const int x = g % h; g = h; h = x; }
+    const int L = Nd / g * Nr;
     int ov[16], best = 1 << 30;
-    for (int x = 0; x < Nr && x < 16; x++) {
+    for (int x = 0; x < Nd && x < 16; x++) {
       int n = 0;
-      for (int t = 0; t < Nr; t++) n += (RhyHit(t, kd, Nr, x) && RhyHit(t, kr, Nr, (int)(rrot % (uint32_t)Nr))) ? 1 : 0;
+      for (int t = 0; t < L; t++) n += (RhyHit(t % Nd, kd, Nd, x) && RhyHit(t % Nr, kr, Nr, (int)(rrot % (uint32_t)Nr))) ? 1 : 0;
       ov[x] = n; if (n < best) best = n;
     }
-    const int nx = Nr < 16 ? Nr : 16;
+    const int nx = Nd < 16 ? Nd : 16;
     uint16_t cand = 0;
     for (int x = 0; x < nx; x += 2) if (ov[x] == best) cand |= (uint16_t)(1u << x);
     if (!cand) for (int x = 0; x < nx; x++) if (ov[x] == best) cand |= (uint16_t)(1u << x);
@@ -2261,11 +2266,11 @@ class Vestige : public Module {
     return 0;
   }
   static bool RhyDecHit(int32_t t, float u, int drot, int side) {
-    const int Nr = RhyPolyNr(side);
-    return RhyHit(RhyMod(t, Nr), RhyDecK(u, side), Nr, drot);
+    const int Nd = RhyDecN(side);
+    return RhyHit(RhyMod(t, Nd), RhyDecK(u, side), Nd, drot);
   }
   static int RhyDecFac(int32_t t, int drot, int side) {
-    return VESTIGE_TIMING_DECIM_FACTORS[(RhyMod(t, RhyPolyNr(side)) + drot) % VESTIGE_TIMING_DECIM_N];
+    return VESTIGE_TIMING_DECIM_FACTORS[(RhyMod(t, RhyDecN(side)) + drot) % VESTIGE_TIMING_DECIM_N];
   }
   // ON THE 1: the loop's stutter word r picks one of the rotations of
   // E(ks, Ns) that hit step 0 (there are ks of them).
@@ -2461,11 +2466,10 @@ class Vestige : public Module {
     if (VESTIGE_TIMING_RHY_DEC_ON_STUT) {
       // CCW: only stutters, rotation = most stutter hits. CW (as at 87d99e5):
       // any non-rest step, rotation = fewest rests.
-      const bool cw = side == kRhyCw;
-      const int drot = cw ? RhyDecRotCw(rhy_rot_[s], rhy_level_, rrot, side) : RhyDecRot(rhy_rot_[s], rhy_level_, srot, side);
+      const int drot = RhyDecRotCw(rhy_rot_[s], rhy_level_, rrot, side);   // (both sides: the CW rules)
       for (int i = 0; i < G; i++) {
         const int32_t t = t0 + i;
-        if ((cw ? cell[i] == 2 : cell[i] != 1) || !RhyDecHit(t, rhy_level_, drot, side)) continue;
+        if (cell[i] == 2 || !RhyDecHit(t, rhy_level_, drot, side)) continue;
         if (ln_nh_[s][kErrCondition] >= kLineMaxHits) break;
         int len = 1;
         while (i + len < G && cell[i + len] == 0 && !RhyDecHit(t + len, rhy_level_, drot, side)) len++;
@@ -4441,12 +4445,9 @@ class Vestige : public Module {
       bool dec;
       if (on_stut) {                                        // (drot = the counter rhythm's rotation)
         (void)dword;
-        if (side == kRhyCw) {                               // (CW as at 87d99e5)
-          if (c == 2) in_ev = false;
-          else if (RhyDecHit(t, u, drot, side)) in_ev = true;
-          else if (c == 1) in_ev = false;
-        } else if (c == 1) in_ev = RhyDecHit(t, u, drot, side);   // (CCW: only a stutter starts one)
-        else if (c == 2) in_ev = false;
+        if (c == 2) in_ev = false;                          // (both sides: the CW rules)
+        else if (RhyDecHit(t, u, drot, side)) in_ev = true;
+        else if (c == 1) in_ev = false;
         dec = in_ev;
       } else
         dec = (VESTIGE_TIMING_RHY_ENGINE == 2) ? (c == 1 && RhyDecAt(t, row, side))
@@ -4610,8 +4611,7 @@ class Vestige : public Module {
       int rr = !VESTIGE_TIMING_RHY_ROT_RANDOM ? kRhyRRot : !have ? 0
              : VESTIGE_TIMING_RHY_AUDIBLE_RESTS ? (int)RhyRestRot(rhy_rrot_[slot], u, (uint32_t)sr, side) : (int)RhyRotOf(rhy_rrot_[slot], Nr);
       if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rr = (int)RhyNoFlamRot(u, (uint32_t)sr, (uint32_t)rr, side);
-      const int dr = VESTIGE_TIMING_RHY_DEC_ON_STUT ? (side == kRhyCw ? RhyDecRotCw(have ? rhy_rot_[slot] : 0u, u, (uint32_t)rr, side)
-                                                                      : RhyDecRot(have ? rhy_rot_[slot] : 0u, u, (uint32_t)sr, side))
+      const int dr = VESTIGE_TIMING_RHY_DEC_ON_STUT ? RhyDecRotCw(have ? rhy_rot_[slot] : 0u, u, (uint32_t)rr, side)
                    : VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)((rhy_rot_[slot] >> 8) % (uint32_t)Nd) : 0) : kRhyDRot;
       RhyRenderBars(pat, u, sr, rr, dr, side, have ? rhy_rot_[slot] : 0u);
       snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s %s E(%d,%d)r%d E(%d,%d)r%d kd=%d dr%d %s",
