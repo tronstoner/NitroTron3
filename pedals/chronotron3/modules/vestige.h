@@ -2747,8 +2747,7 @@ class Vestige : public Module {
     float dec = (float)D - att;                            // the decay runs after the attack
     if (dec < att) dec = att;
     fz_att_from_ = fz_c_; fz_att_ph_ = 0.f; fz_att_inc_ = 1.f / att;
-    fz_kf_ = expf(-VESTIGE_FRZ_LPG_FAST_DIV / dec);
-    fz_ks_ = expf(-VESTIGE_FRZ_LPG_SLOW_DIV / dec);
+    fz_dx_ = 0.f; fz_dinc_ = 1.f / dec;                     // decay progress 0 -> 1 over dec
     fz_dmp_on_ = false; fz_dmp_ = 1.f;
   }
   // The low pass gate on the summed freeze output (bypassed = identity).
@@ -2761,12 +2760,16 @@ class Vestige : public Module {
     // Envelope: smoothstep attack to 1, then fast + slow exponentials; B's damping on top.
     float c;
     if (fz_att_ph_ < 1.f) {
-      fz_att_ph_ += fz_att_inc_; if (fz_att_ph_ >= 1.f) { fz_att_ph_ = 1.f; fz_ef_ = fz_es_ = 1.f; }
+      fz_att_ph_ += fz_att_inc_; if (fz_att_ph_ >= 1.f) { fz_att_ph_ = 1.f; fz_dx_ = 0.f; }
       const float p = fz_att_ph_;
       c = fz_att_from_ + (1.f - fz_att_from_) * p * p * (3.f - 2.f * p);
     } else {
-      fz_ef_ *= fz_kf_; fz_es_ *= fz_ks_;
-      c = VESTIGE_FRZ_LPG_FAST_W * fz_ef_ + (1.f - VESTIGE_FRZ_LPG_FAST_W) * fz_es_;
+      // Vactrol-like decay that spans the WHOLE decay length: a normalised
+      // exponential, 1 at the strike, exactly 0 at the end (curve K).
+      fz_dx_ += fz_dinc_; if (fz_dx_ > 1.f) fz_dx_ = 1.f;
+      constexpr float K = VESTIGE_FRZ_LPG_DECAY_K, eK = 0.04978707f;   // e^-3 (K = 3)
+      static_assert(K == 3.f, "update eK with K");
+      c = (expf(-K * fz_dx_) - eK) / (1.f - eK);
     }
     if (fz_dmp_on_) {
       fz_dmp_ -= 1.f / (VESTIGE_FRZ_LPG_DAMP_MS * 0.001f * sr_);
@@ -2780,12 +2783,14 @@ class Vestige : public Module {
     const float fc = base_hz * expf(c * logf(VESTIGE_FRZ_LPG_OPEN_HZ / base_hz));
     float a = 1.f - expf(-6.2831853f * fc / sr_);
     if (a > 1.f) a = 1.f;
-    const float g = (kB && c <= 0.f) ? 0.f : expf(0.11512925f * base_db * (1.f - c));   // ln10/20
+    // A: gain linear in dB between the base and 0 dB. B: the amplitude follows
+    // c directly (closed = silent), so the tail stays audible to its end.
+    const float g = kB ? c : expf(0.11512925f * base_db * (1.f - c));   // ln10/20
     fz_z1_ += a * (x - fz_z1_);
     fz_z2_ += a * (fz_z1_ - fz_z2_);
     const float yl = fz_z2_ * g;
     if (fz_lpg_mix_ == 0.f) {                              // fully bypassed again: idle state
-      fz_ef_ = fz_es_ = 0.f; fz_att_ph_ = 1.f; fz_c_ = 0.f; fz_dmp_on_ = false; fz_dmp_ = 1.f;
+      fz_dx_ = 1.f; fz_att_ph_ = 1.f; fz_c_ = 0.f; fz_dmp_on_ = false; fz_dmp_ = 1.f;
       return x;
     }
     return x + (yl - x) * fz_lpg_mix_;
@@ -5036,7 +5041,7 @@ class Vestige : public Module {
   int      fz_sub_n_ = 0, fz_sub_j_ = 0;                  // this step's hit count, hits done
   float    fz_lpg_mix_ = 0.f, fz_c_ = 0.f, fz_dmp_ = 1.f;  // bypass xfade, control value, damp gain
   float    fz_att_ph_ = 1.f, fz_att_inc_ = 0.f, fz_att_from_ = 0.f;
-  float    fz_ef_ = 0.f, fz_es_ = 0.f, fz_kf_ = 0.f, fz_ks_ = 0.f, fz_z1_ = 0.f, fz_z2_ = 0.f;
+  float    fz_dx_ = 1.f, fz_dinc_ = 0.f, fz_z1_ = 0.f, fz_z2_ = 0.f;   // LPG decay progress + step, filter state
   int8_t   fz_cnd_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: 0 clean, 1 rest, N decimate xN                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag
   int      last_trig_slot_ = -1; uint32_t last_trig_at_ = 0;

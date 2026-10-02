@@ -1203,9 +1203,9 @@ static constexpr float  VESTIGE_FREEZE_ATTACK_CURVE  = 1.26f;
 // FREEZE side K3 mode 1: a Buchla-292-style LOW PASS GATE on the summed freeze
 // output, struck by the rhythm's STUTTER cells (ratchets re-strike). One value
 // c (0..1) drives a 2-pole LP (two one-poles, no resonance) and the gain:
-// cutoff exponential BASE_HZ -> OPEN_HZ, gain linear-in-dB BASE_DB -> 0 dB.
-// Strike: ATTACK_MS smoothstep rise to c = 1, then a vactrol decay = sum of a
-// fast and a slow exponential (weight FAST_W) over the decay length D.
+// cutoff exponential BASE_HZ -> OPEN_HZ; gain A: linear-in-dB BASE_DB -> 0 dB,
+// B: amplitude = c. Strike: ATTACK_MS smoothstep rise to c = 1, then a decay
+// curve (DECAY_K) that spans the whole decay length D and reaches 0 at its end.
 // MODEL 0 = A (accent on a base: never closes, D = one step / ratchet count;
 // rests hard-mute as before). MODEL 1 = B (drum: c = 0 is silent, D = distance
 // to the next stutter / ratchet count; a rest damps c -> 0 over DAMP_MS).
@@ -1216,9 +1216,7 @@ static constexpr float  VESTIGE_FRZ_LPG_B_FLOOR_DB = -60.f;   // B: gain at c ->
 static constexpr float  VESTIGE_FRZ_LPG_B_BASE_HZ = 60.f;     // B: closed cutoff (c = 0)
 static constexpr float  VESTIGE_FRZ_LPG_OPEN_HZ   = 18000.f;  // c = 1
 static constexpr float  VESTIGE_FRZ_LPG_ATTACK_MS = 3.f;
-static constexpr float  VESTIGE_FRZ_LPG_FAST_W    = 0.6f;     // weight of the fast exponential
-static constexpr float  VESTIGE_FRZ_LPG_FAST_DIV  = 8.f;      // tau_fast = D / 8
-static constexpr float  VESTIGE_FRZ_LPG_SLOW_DIV  = 2.5f;     // tau_slow = D / 2.5 (c(D) ~ 0.03)
+static constexpr float  VESTIGE_FRZ_LPG_DECAY_K   = 3.f;      // decay curve over D: (e^-Kx - e^-K)/(1 - e^-K), reaches 0 at D
 static constexpr float  VESTIGE_FRZ_LPG_DAMP_MS   = 25.f;     // B: rest = hand mute
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
