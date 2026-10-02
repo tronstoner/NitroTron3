@@ -1195,6 +1195,11 @@ static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
 static constexpr float  VESTIGE_FREEZE_SUSTAIN_MAX_S = 8.f;
 static constexpr float  VESTIGE_FREEZE_SUSTAIN_MIN_S = 0.5f;
 static constexpr float  VESTIGE_FREEZE_SUSTAIN_CURVE = 3.f;   // > 1: more K5 travel on the long times
+// FREEZE side K5 CCW = also a FADE-IN for each NEW freeze (equal-power, K5 CW's
+// rise): MAX_S x u5^CURVE, 0 at the dead zone; the sustain starts after it.
+// CURVE 1.26 puts 9:00 (k5 = 0.2, u5 = 0.545) at ~0.70 s.
+static constexpr float  VESTIGE_FREEZE_ATTACK_MAX_S  = 1.5f;
+static constexpr float  VESTIGE_FREEZE_ATTACK_CURVE  = 1.26f;
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
 // volume knob and the SW2 dry gate are gone. VESTIGE_LOOP_BOOST_MAX is kept for

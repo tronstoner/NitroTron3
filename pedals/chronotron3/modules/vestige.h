@@ -134,7 +134,7 @@ class Vestige : public Module {
     frip_od_coef_ = 1.f - expf(-1.f / (VESTIGE_FRIP_OD_RAMP_S * sr_));
     steal_inc_ = 1.f / (VESTIGE_STEAL_RELEASE_S * sr_);   // fast-release step for stolen voices
     for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) { dec_g_[q] = dec_t_[q] = rep_base_[q] = 1.f; }   // K5 repeats: full level
-    for (int q = 0; q < VESTIGE_FREEZE_SLABS; q++) { sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; }  // K5 sustain: full level
+    for (int q = 0; q < VESTIGE_FREEZE_SLABS; q++) { sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; frz_atk_x_[q] = 1.f; }  // K5 sustain: full level
     release_samples_ = (uint32_t)((float)VESTIGE_AUTO_RELEASE_MS * 0.001f * sr_);  // phrase-end silence, in samples
     gate_rel_coef_   = 1.f - expf(-1.f / (VESTIGE_GATE_RELEASE_MS * 0.001f * sr_)); // gate meter fall (mode 1)
     onset_refr_len_  = (int)((float)VESTIGE_ONSET_REFRACTORY_MS * 0.001f * sr_);
@@ -321,6 +321,9 @@ class Vestige : public Module {
     sus_s_ = (c5 < 0.f && u5 > 0.f)
              ? VESTIGE_FREEZE_SUSTAIN_MAX_S * powf(VESTIGE_FREEZE_SUSTAIN_MIN_S / VESTIGE_FREEZE_SUSTAIN_MAX_S, powf(u5, VESTIGE_FREEZE_SUSTAIN_CURVE))
              : 0.f;
+    // Freeze side: K5 CCW = also a FADE-IN for each new freeze, ATTACK_MAX_S x
+    // u5^ATTACK_CURVE (0 at noon / CW); the sustain starts once it completes.
+    frz_atk_s_ = (c5 < 0.f && u5 > 0.f) ? VESTIGE_FREEZE_ATTACK_MAX_S * powf(u5, VESTIGE_FREEZE_ATTACK_CURVE) : 0.f;
     float atk_s = fade_u * VESTIGE_FADE_ATTACK_MAX_S;
     float rel_s = fade_u * VESTIGE_FADE_RELEASE_MAX_S;
     // Floor at a short declick so K5 hard-CCW is "instant" but not a 1-sample
@@ -3522,6 +3525,8 @@ class Vestige : public Module {
     } else if (PoolOf(s) == kPoolFreeze && s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS) {   // a new freeze: its own sustain from 0
       const int q = s - VESTIGE_FREEZE_SLOT0;
       sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; sus_step_[q] = 0.f; sus_x_[q] = 0.f;
+      if (frz_atk_s_ > 0.f) { sus_g_[q] = sus_t_[q] = 0.f; frz_atk_x_[q] = 0.f; }   // K5 CCW: fade in first
+      else frz_atk_x_[q] = 1.f;
     }
     StartFadeIn(s);                     // swells in over K5; first grain instant
     ResumeFromMute();                   // record END unpauses the retained loops (stage-0 behaviour)
@@ -3998,6 +4003,16 @@ class Vestige : public Module {
     for (int q = 0; q < VESTIGE_FREEZE_SLABS; q++) {
       const int s = VESTIGE_FREEZE_SLOT0 + q;
       if (!active_[s]) continue;
+      if (frz_atk_x_[q] < 1.f) {                             // FADE-IN first, sustain held at x = 0
+        // Rate from the CURRENT attack time, so a K5 move keeps it continuous;
+        // at noon / CW (time 0) it finishes over the short declick ramp.
+        float A = frz_atk_s_ * sr_; if (A < ramp) A = ramp;
+        if (!held_) { frz_atk_x_[q] += (float)n / A; if (frz_atk_x_[q] > 1.f) frz_atk_x_[q] = 1.f; }
+        const float t = sus_base_[q] * sqrtf(GrainHannRise(frz_atk_x_[q]));   // = sin(0.5*pi*x), K5 CW's rise
+        sus_x_[q] = 0.f;
+        sus_t_[q] = t; sus_step_[q] = fabsf(sus_g_[q] - t) / (float)(n > 0 ? n : 1);
+        continue;
+      }
       if (T <= 0.f) {                                        // noon / CW: hold the level
         sus_base_[q] = sus_g_[q]; sus_t_[q] = sus_g_[q]; sus_step_[q] = 0.f; sus_x_[q] = 0.f; continue;
       }
@@ -4293,6 +4308,8 @@ class Vestige : public Module {
   float      sus_step_[VESTIGE_FREEZE_SLABS] = {};     // its ramp step per sample
   float      sus_base_[VESTIGE_FREEZE_SLABS] = {};     // level the sustain started from
   float      sus_x_[VESTIGE_FREEZE_SLABS] = {};        // sustain progress 0..1
+  volatile float frz_atk_s_ = 0.f;                     // K5 CCW freeze fade-in time (s), 0 = off
+  float      frz_atk_x_[VESTIGE_FREEZE_SLABS] = {};    // per freeze fade-in progress 0..1 (1 = done)
   uint32_t   age_[VESTIGE_SLOTS]      = {0};
   float      gain_[VESTIGE_SLOTS]     = {0.f};
   bool       first_grain_[VESTIGE_SLOTS] = {false};  // next grain skips its fade-in
