@@ -125,6 +125,7 @@ class Vestige : public Module {
     warble_base_ = VESTIGE_WARBLE_BASE_MS * 0.001f * sr_;
     warble_int_  = 0.f;
     mute_inc_    = 1.f / (VESTIGE_TIMING_MUTE_MS * 0.001f * sr_);   // timing mode 2 rest fade step
+    rhy_decim_inc_ = 1.f / (VESTIGE_TIMING_RHY_DECIM_FADE_MS * 0.001f * sr_);   // K3 mode 1 decimate fade step
     for (int k = 0; k < VESTIGE_TIMING_DECIM_N; k++) {                // DECIMATE post-hold low-passes
       float fc = VESTIGE_TIMING_DECIM_LP_MULT * 0.5f * sr_ / (float)VESTIGE_TIMING_DECIM_FACTORS[k];
       if (fc > 0.45f * sr_) fc = 0.45f * sr_;
@@ -758,8 +759,9 @@ class Vestige : public Module {
         //     sample, crossfaded in/out over VESTIGE_TIMING_MUTE_MS.
         if (s < VESTIGE_VOICE_SLABS && (decim_d_[s] != 0.f || decim_dt_[s] != 0.f)) {
           float& d = decim_d_[s]; const float t = decim_dt_[s];
-          if (d < t) { d += mute_inc_; if (d > t) d = t; }
-          else if (d > t) { d -= mute_inc_; if (d < t) d = t; }
+          const float di = decim_inc_[s];                   // (K3 mode 1: the softer rhythm fade)
+          if (d < t) { d += di; if (d > t) d = t; }
+          else if (d > t) { d -= di; if (d < t) d = t; }
           const int ck = decim_k_[s];
           if (decim_init_[s]) {                             // start at the signal: no bump
             decim_init_[s] = false; decim_c_[s] = 0; decim_h_[s] = pv;
@@ -1825,6 +1827,7 @@ class Vestige : public Module {
   // A step's condition: 0 clean, 1 silent, N >= 2 sample-rate reduced (hold N).
   void TimingCond(int s, int c) {
     mute_dt_[s] = (c == 1) ? 1.f : 0.f;
+    decim_inc_[s] = (VESTIGE_TIMING_RHY_DEC_ON_STUT && VESTIGE_TIMING_RHY_ENGINE == 0 && ln_rhythm_[s]) ? rhy_decim_inc_ : mute_inc_;
     if (c >= 2) {
       if (decim_d_[s] == 0.f) decim_init_[s] = true;       // fresh: hold + filter start on the signal
       decim_n_[s] = c; decim_dt_[s] = 1.f; decim_k_[s] = -1;
@@ -2210,6 +2213,15 @@ class Vestige : public Module {
     if (!VESTIGE_TIMING_RHY_ROT_EVEN) return r % (uint32_t)n;
     return 2u * (r % (uint32_t)((n + 1) / 2));
   }
+  // DECIMATE ON THE STUTTERS: is place j of the stutter cycle decimated for
+  // the loop word w at depth u (chance DEC_P_MIN .. DEC_P_MAX), and its factor.
+  static bool RhyDecPick(uint32_t w, int j, float u, int& fac) {
+    uint32_t h = w ^ ((uint32_t)(j + 1) * 0x9E3779B9u);
+    h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+    const float p = VESTIGE_TIMING_RHY_DEC_P_MIN + (VESTIGE_TIMING_RHY_DEC_P_MAX - VESTIGE_TIMING_RHY_DEC_P_MIN) * u;
+    fac = VESTIGE_TIMING_DECIM_FACTORS[(h >> 16) % (uint32_t)VESTIGE_TIMING_DECIM_N];
+    return (float)(h & 0xFFFFu) * (1.f / 65536.f) < p;
+  }
   // ON THE 1: the loop's stutter word r picks one of the rotations of
   // E(ks, Ns) that hit step 0 (there are ks of them).
   static uint32_t RhyOn1Rot(uint32_t r, float u, int side) {
@@ -2397,6 +2409,23 @@ class Vestige : public Module {
         r.type = (int8_t)((TimingRand() < VESTIGE_TIMING_RHY_RAT_Q_MAX * ramp) ? kFigRatchet : kFigDouble);
       }
     }
+    // DECIMATE colour (RHY_DEC_ON_STUT): on the stutters — the loop picks the
+    // places of its stutter cycle (RhyDecPick), an event runs from its stutter
+    // through the plain steps after it (up to the next rest / stutter / the
+    // pass end). Else the old off-beat Euclid below.
+    if (VESTIGE_TIMING_RHY_DEC_ON_STUT) {
+      const int Ns = RhyPolyNs(side);
+      for (int i = 0; i < G; i++) {
+        if (cell[i] != 1) continue;
+        int fac = 0;
+        if (!RhyDecPick(rhy_rot_[s], RhyMod(t0 + i, Ns), rhy_level_, fac)) continue;
+        if (ln_nh_[s][kErrCondition] >= kLineMaxHits) break;
+        int len = 1; while (i + len < G && cell[i + len] == 0) len++;
+        LineHit& x = ln_hit_[s][kErrCondition][ln_nh_[s][kErrCondition]++];
+        x.start = (int8_t)(seg0 + i); x.len = (int8_t)len; x.age = 0; x.type = (int8_t)kFigDecimate;
+        x.sub = (int8_t)fac;
+      }
+    } else
     // DECIMATE colour: its own Euclidean pattern on the 8th-note OFF-BEATS
     // (running steps t = 2 mod 4): E(k, RHY_D_SLOTS) over those slots, k =
     // D_K_MIN .. D_K_MAX with the depth, at the loop's drawn rotation (fixed
@@ -4350,15 +4379,26 @@ class Vestige : public Module {
   // drot is used, its patterns carry their own fixed rotations; engine 2:
   // none, its decimates are the row's overlap mask).
   // side: which K3 half's table (engine 2; engines 0 + 1: kRhyCcw only).
-  static void RhyRenderBars(char* out, float u, int srot, int rrot, int drot, int side = kRhyCcw) {
+  // dword: engine 0 with RHY_DEC_ON_STUT, the loop's word that picks its
+  // decimated stutters (an event: D on the stutter, d on the plain steps after).
+  static void RhyRenderBars(char* out, float u, int srot, int rrot, int drot, int side = kRhyCcw, uint32_t dword = 0) {
     const int Nd = VESTIGE_TIMING_RHY_D_SLOTS, kd = RhyKd(u), row = RhyRow(u, side);
     const bool half = (VESTIGE_TIMING_RHY_ENGINE != 0) && RhyTab(side)[row].grid == kRhyGridHalf;
     const int per = half ? 8 : 4;                           // the decimate's off-beat period
+    const bool on_stut = VESTIGE_TIMING_RHY_ENGINE == 0 && VESTIGE_TIMING_RHY_DEC_ON_STUT;
+    bool in_ev = false;                                     // (on_stut: inside a decimate event)
     int o = 0; out[o++] = '|';
     for (int t = 0; t < 48; t++) {
       const int c = (VESTIGE_TIMING_RHY_ENGINE == 0) ? RhyPolyBase(t, u, (uint32_t)srot, (uint32_t)rrot, side) : RhyTableBase(t, u, side);
-      const bool dec = (VESTIGE_TIMING_RHY_ENGINE == 2) ? (c == 1 && RhyDecAt(t, row, side))
-                     : c != 2 && t % per == per / 2 && RhyHit((t / per) % Nd, kd, Nd, RhyMod(drot, Nd));
+      bool dec;
+      if (on_stut) {
+        int fac = 0;
+        if (c == 1) in_ev = RhyDecPick(dword, RhyMod(t, RhyPolyNs(side)), u, fac);
+        else if (c == 2) in_ev = false;
+        dec = in_ev;
+      } else
+        dec = (VESTIGE_TIMING_RHY_ENGINE == 2) ? (c == 1 && RhyDecAt(t, row, side))
+            : c != 2 && t % per == per / 2 && RhyHit((t / per) % Nd, kd, Nd, RhyMod(drot, Nd));
       out[o++] = (c == 2) ? '_' : dec ? (c == 1 ? 'D' : 'd') : (c == 1 ? 's' : '-');
       if (t % 16 == 15) out[o++] = '|';
     }
@@ -4518,7 +4558,7 @@ class Vestige : public Module {
              : VESTIGE_TIMING_RHY_AUDIBLE_RESTS ? (int)RhyRestRot(rhy_rrot_[slot], u, (uint32_t)sr, side) : (int)RhyRotOf(rhy_rrot_[slot], Nr);
       if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rr = (int)RhyNoFlamRot(u, (uint32_t)sr, (uint32_t)rr, side);
       const int dr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)((rhy_rot_[slot] >> 8) % (uint32_t)Nd) : 0) : kRhyDRot;
-      RhyRenderBars(pat, u, sr, rr, dr, side);
+      RhyRenderBars(pat, u, sr, rr, dr, side, have ? rhy_rot_[slot] : 0u);
       snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s %s E(%d,%d)r%d E(%d,%d)r%d kd=%d dr%d %s",
                sn, num, tms, k3s, us, RhyTempoName(u), k.a, Ns, sr, k.b / 4, Nr, rr, k.kd, dr, pat);
     } else if (VESTIGE_TIMING_RHY_ENGINE == 2) {
@@ -4613,6 +4653,8 @@ class Vestige : public Module {
   float    mute_dt_[VESTIGE_VOICE_SLABS]     = {0.f};    // its target
   float    decim_d_[VESTIGE_VOICE_SLABS]     = {0.f};    // sample-rate reduction mix (0 = clean)
   float    decim_dt_[VESTIGE_VOICE_SLABS]    = {0.f};    // its target
+  float    decim_inc_[VESTIGE_VOICE_SLABS]   = {0.f};    // its fade step (set with the target; 0 until then)
+  float    rhy_decim_inc_ = 1.f / (VESTIGE_TIMING_RHY_DECIM_FADE_MS * 0.001f * CT3_SAMPLE_RATE_HZ);
   int      decim_n_[VESTIGE_VOICE_SLABS]     = {0};      // hold length (samples)
   int      decim_c_[VESTIGE_VOICE_SLABS]     = {0};      // samples since the last hold
   float    decim_h_[VESTIGE_VOICE_SLABS]     = {0.f};    // the held sample
