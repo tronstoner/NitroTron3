@@ -561,39 +561,33 @@ static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE_INTERLOCK[] = {
   {kRhyGrid1x, RhyStr("x...x.x...x.x..."), RhyStr("........x......."), RhyStr("x...x.......x..."), {{"shiko", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
   /* #3  a=son_3-2 ducking b=E(2,8), decimates = the 2 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x...x.x..."), RhyStr("....x...x......."), RhyStr("x...........x..."), {{"son_3-2", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #4  a=son_2-3 ducking b=E(2,8), decimates = the 2 overlaps */
-  {kRhyGrid1x, RhyStr("..x.x...x..x..x."), RhyStr("x...........x..."), RhyStr("....x...x......."), {{"son_2-3", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #5  a=rumba_3-2 ducking b=E(2,8), decimates = the 2 overlaps */
+  /* #4  a=rumba_3-2 ducking b=E(2,8), decimates = the 2 overlaps */
   {kRhyGrid1x, RhyStr("x..x...x..x.x..."), RhyStr("....x...x......."), RhyStr("x...........x..."), {{"rumba_3-2", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #6  a=rumba_2-3 ducking b=E(2,8), decimates = the 2 overlaps */
-  {kRhyGrid1x, RhyStr("..x.x...x..x...x"), RhyStr("x...........x..."), RhyStr("....x...x......."), {{"rumba_2-3", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #7  a=bossa ducking b=E(2,8), decimates = the 1 overlaps */
+  /* #5  a=bossa ducking b=E(2,8), decimates = the 1 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x...x..x.."), RhyStr("....x...x...x..."), RhyStr("x..............."), {{"bossa", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #8  a=gahu ducking b=E(2,8), decimates = the 1 overlaps */
+  /* #6  a=gahu ducking b=E(2,8), decimates = the 1 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x...x...x."), RhyStr("....x...x...x..."), RhyStr("x..............."), {{"gahu", 5, 16, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #9  a=E(4,12) ducking b=E(2,8), decimates = the 2 overlaps */
+  /* #7  a=E(4,12) ducking b=E(2,8), decimates = the 2 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x..x.."), RhyStr("....x...x.......x...x..."), RhyStr("x...........x..........."), {{"E(4,12)", 4, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #10 a=tresillo ducking b=E(2,8), decimates = the 1 overlaps */
+  /* #8  a=tresillo ducking b=E(2,8), decimates = the 1 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x."), RhyStr("....x..."), RhyStr("x......."), {{"tresillo", 3, 8, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #11 a=E(5,12) ducking b=E(2,8), decimates = the 4 overlaps */
-  {kRhyGrid1x, RhyStr("x..x.x..x.x."), RhyStr("....x...........x......."), RhyStr("x.......x...x.......x..."), {{"E(5,12)", 5, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #12 a=bell_5 ducking b=E(2,8), decimates = the 4 overlaps */
+  /* #9  a=bell_5 ducking b=E(2,8), decimates = the 4 overlaps */
   {kRhyGrid1x, RhyStr("x.x.x..x.x.."), RhyStr("........x...........x..."), RhyStr("x...x.......x...x......."), {{"bell_5", 5, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #13 a=E(4,12) ducking b=E(3,8), decimates = the 3 overlaps */
+  /* #10 a=E(4,12) ducking b=E(3,8), decimates = the 3 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x..x.."), RhyStr("........x..x..x.x..x..x."), RhyStr("x..x..x................."), {{"E(4,12)", 4, 12, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
-  /* #14 a=tresillo ducking b=E(4,12), decimates = the 3 overlaps */
+  /* #11 a=tresillo ducking b=E(4,12), decimates = the 3 overlaps */
   {kRhyGrid1x, RhyStr("x..x..x."), RhyStr(".........x..x..x..x..x.."), RhyStr("x..x..x................."), {{"tresillo", 3, 8, 0}, kRhyPrDuck, {"E(4,12)", 4, 12, 0}}},
-  /* #15 a=E(5,12) ducking b=E(3,8), decimates = the 4 overlaps */
+  /* #12 a=E(5,12) ducking b=E(3,8), decimates = the 4 overlaps */
   {kRhyGrid1x, RhyStr("x..x.x..x.x."), RhyStr("......x....x..x.x..x...."), RhyStr("x..x....x.............x."), {{"E(5,12)", 5, 12, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
-  /* #16 a=E(7,12) ducking b=E(2,8), decimates = the 4 overlaps */
+  /* #13 a=E(7,12) ducking b=E(2,8), decimates = the 4 overlaps */
   {kRhyGrid1x, RhyStr("x.x.x.xx.x.x"), RhyStr("........x...........x..."), RhyStr("x...x.......x...x......."), {{"E(7,12)", 7, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #17 a=bell_7 ducking b=E(2,8), decimates = the 4 overlaps */
+  /* #14 a=bell_7 ducking b=E(2,8), decimates = the 4 overlaps */
   {kRhyGrid1x, RhyStr("x.x.xx.x.x.x"), RhyStr("........x...........x..."), RhyStr("x...x.......x...x......."), {{"bell_7", 7, 12, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #18 a=bell_7 ducking b=E(3,8), decimates = the 5 overlaps */
+  /* #15 a=bell_7 ducking b=E(3,8), decimates = the 5 overlaps */
   {kRhyGrid1x, RhyStr("x.x.xx.x.x.x"), RhyStr("...x..x.x.............x."), RhyStr("x..........x..x.x..x...."), {{"bell_7", 7, 12, 0}, kRhyPrDuck, {"E(3,8)", 3, 8, 0}}},
-  /* #19 a=cinquillo ducking b=E(2,8), decimates = the 1 overlaps */
+  /* #16 a=cinquillo ducking b=E(2,8), decimates = the 1 overlaps */
   {kRhyGrid1x, RhyStr("x.xx.xx."), RhyStr("....x..."), RhyStr("x......."), {{"cinquillo", 5, 8, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
-  /* #20 a=cinquillo ducking b=E(4,12), decimates = the 5 overlaps */
+  /* #17 a=cinquillo ducking b=E(4,12), decimates = the 5 overlaps */
   {kRhyGrid1x, RhyStr("x.xx.xx."), RhyStr(".........x..x..x........"), RhyStr("x..x..x...........x..x.."), {{"cinquillo", 5, 8, 0}, kRhyPrDuck, {"E(4,12)", 4, 12, 0}}},
   // END GENERATED INTERLOCK ROWS
   // -> full CCW
