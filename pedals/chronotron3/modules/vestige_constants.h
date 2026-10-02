@@ -1003,7 +1003,7 @@ static constexpr float  VESTIGE_TIMING_RATCHET_FROM = 0.5f;
 // Nyquist (48 kHz / N / 2), which takes off the fizzy steps. N drawn per
 // figure from the table. Fades in/out over VESTIGE_TIMING_MUTE_MS.
 static constexpr int    VESTIGE_TIMING_DECIM_N = 4;
-static constexpr int    VESTIGE_TIMING_DECIM_FACTORS[VESTIGE_TIMING_DECIM_N] = {6, 8, 12, 16};   // 8, 6, 4, 3 kHz
+static constexpr int    VESTIGE_TIMING_DECIM_FACTORS[VESTIGE_TIMING_DECIM_N] = {24, 8, 12, 16};   // 2, 6, 4, 3 kHz (2 kHz replaced the inaudible 8 kHz in its slot, 2026-10-02)
 static constexpr float  VESTIGE_TIMING_DECIM_LP_MULT = 0.75f;    // lower = darker, higher = harsher
 // Where figures land: steps in the back half of the pass weigh this much vs 1
 // for the front half (a fill leads into the one).
