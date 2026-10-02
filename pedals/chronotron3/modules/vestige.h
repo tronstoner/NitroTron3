@@ -728,7 +728,8 @@ class Vestige : public Module {
       // freeze capture restarts it: the downbeat); while its stage is engaged the
       // freeze slots sum apart and pass through it (after pad + K1 + sustain).
       FzRhyStep();
-      const bool fz_post = mute_d_[kFzR] != 0.f || mute_dt_[kFzR] != 0.f || decim_d_[kFzR] != 0.f || decim_dt_[kFzR] != 0.f;
+      const bool fz_post = mute_d_[kFzR] != 0.f || mute_dt_[kFzR] != 0.f || decim_d_[kFzR] != 0.f || decim_dt_[kFzR] != 0.f
+                        || fz_lpg_on_ || fz_lpg_mix_ != 0.f;
       float yf = 0.f;
       for (int s = 0; s < VESTIGE_SLOTS; s++) {
         // Skip fully dormant slots — no grains, silent, not fading in — so they
@@ -801,7 +802,7 @@ class Vestige : public Module {
           loop_len_[s] = 0; gain_[s] = 0.f;
         }
       }
-      if (fz_post) y += CondStage(kFzR, yf);            // K3 mode 1: the freeze's rests + decimates
+      if (fz_post) y += CondStage(kFzR, FzLpg(yf));     // K3 mode 1: the freeze's LPG -> decimates -> rests
 
       // ---- Post-grain tape/BBD warble + degrade colour (K4) ---------------
       // GATED: when K4 is clean (degrade idle), the modulation (3 sinf/sample in
@@ -2685,7 +2686,8 @@ class Vestige : public Module {
   void FzRhyPlan() {
     fz_L_ = period_ > 0 ? (uint32_t)period_ : 1u;
     fz_el_ = 0; fz_i_ = 0; fz_G_ = 1; fz_nb_ = fz_L_;
-    for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) fz_cnd_[i] = 0;
+    for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) { fz_cnd_[i] = 0; fz_stk_[i] = 0; fz_rst_[i] = 0; }
+    fz_lpg_on_ = rhy_level_ > 0.f;                        // the LPG engages / bypasses at the pass start
     if (rhy_level_ > 0.f) {                               // (as a loop: the depth at the pass start)
       const int G = TimingStepCount((double)fz_L_, true, rhy_level_);
       const uint32_t keep = timing_rng_; timing_rng_ = fz_rng_;
@@ -2697,9 +2699,96 @@ class Vestige : public Module {
         const LineHit& x = ln_hit_[kFzR][kErrCondition][h];
         for (int i = x.start; i < x.start + x.len && i < G; i++) fz_cnd_[i] = x.sub;
       }
+      // LPG strikes: per stutter step its hit count (ratchets 2x / 4x, with
+      // the loop side's MIN_STEP fallback 4 -> 2 -> 1).
+      const double st = (double)fz_L_ / (double)G;
+      const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+      const int8_t r2 = (st / 2.0 >= min_step) ? 2 : 1;
+      const int8_t r4 = (st / 4.0 >= min_step) ? 4 : r2;
+      for (int h = 0; h < ln_nh_[kFzR][kErrTiming]; h++) {
+        const LineHit& x = ln_hit_[kFzR][kErrTiming][h];
+        if (x.start < 0 || x.start >= G) continue;
+        int8_t n = (x.type == kFigRatchet) ? r4 : (x.type == kFigDouble) ? r2 : 1;
+        if (n > fz_stk_[x.start]) fz_stk_[x.start] = n;
+      }
+      if (VESTIGE_FRZ_LPG_MODEL == 1)                     // B: a rest damps the LPG instead of muting
+        for (int i = 0; i < G; i++) if (fz_cnd_[i] == 1) { fz_cnd_[i] = 0; fz_rst_[i] = 1; }
       fz_G_ = G; fz_nb_ = FzBnd(1);
     }
     TimingCond(kFzR, fz_cnd_[0]);
+    FzStepEvent(0);
+  }
+  // LPG events at the start of step i: a rest (B: damp), a stutter (strike).
+  void FzStepEvent(int i) {
+    if (!fz_lpg_on_) { fz_sub_n_ = 0; return; }
+    if (fz_rst_[i]) fz_dmp_on_ = true;
+    fz_sub_n_ = fz_stk_[i]; fz_sub_j_ = 0;
+    if (fz_sub_n_ > 0) FzSubStrike();
+  }
+  // One (sub-)hit of the current step: its decay length D, then strike.
+  void FzSubStrike() {
+    const int i = fz_i_;
+    const uint32_t b0 = FzBnd(i);
+    double D;
+    if (VESTIGE_FRZ_LPG_MODEL == 1) {                     // B: to the next stutter (wrap: this pass's first)
+      int j = i + 1;
+      while (j < fz_G_ && !fz_stk_[j]) j++;
+      if (j < fz_G_) D = (double)FzBnd(j) - (double)b0;
+      else {
+        int j0 = 0; while (j0 < fz_G_ && !fz_stk_[j0]) j0++;   // (finds i at the latest)
+        D = (double)fz_L_ - (double)b0 + (double)FzBnd(j0);
+      }
+    } else {
+      D = (double)FzBnd(i + 1) - (double)b0;               // A: one step
+    }
+    D /= (double)fz_sub_n_;
+    fz_sub_j_++;
+    const float att = VESTIGE_FRZ_LPG_ATTACK_MS * 0.001f * sr_;
+    float dec = (float)D - att;                            // the decay runs after the attack
+    if (dec < att) dec = att;
+    fz_att_from_ = fz_c_; fz_att_ph_ = 0.f; fz_att_inc_ = 1.f / att;
+    fz_kf_ = expf(-VESTIGE_FRZ_LPG_FAST_DIV / dec);
+    fz_ks_ = expf(-VESTIGE_FRZ_LPG_SLOW_DIV / dec);
+    fz_dmp_on_ = false; fz_dmp_ = 1.f;
+  }
+  // The low pass gate on the summed freeze output (bypassed = identity).
+  float FzLpg(float x) {
+    if (!fz_lpg_on_ && fz_lpg_mix_ == 0.f) { fz_z1_ = fz_z2_ = x; return x; }
+    if (fz_lpg_mix_ == 0.f) fz_z1_ = fz_z2_ = x;           // engaging: the filter starts at the signal
+    const float tm = fz_lpg_on_ ? 1.f : 0.f;               // engage / bypass crossfade (mute_inc_ rate)
+    if (fz_lpg_mix_ < tm) { fz_lpg_mix_ += mute_inc_; if (fz_lpg_mix_ > tm) fz_lpg_mix_ = tm; }
+    else if (fz_lpg_mix_ > tm) { fz_lpg_mix_ -= mute_inc_; if (fz_lpg_mix_ < tm) fz_lpg_mix_ = tm; }
+    // Envelope: smoothstep attack to 1, then fast + slow exponentials; B's damping on top.
+    float c;
+    if (fz_att_ph_ < 1.f) {
+      fz_att_ph_ += fz_att_inc_; if (fz_att_ph_ >= 1.f) { fz_att_ph_ = 1.f; fz_ef_ = fz_es_ = 1.f; }
+      const float p = fz_att_ph_;
+      c = fz_att_from_ + (1.f - fz_att_from_) * p * p * (3.f - 2.f * p);
+    } else {
+      fz_ef_ *= fz_kf_; fz_es_ *= fz_ks_;
+      c = VESTIGE_FRZ_LPG_FAST_W * fz_ef_ + (1.f - VESTIGE_FRZ_LPG_FAST_W) * fz_es_;
+    }
+    if (fz_dmp_on_) {
+      fz_dmp_ -= 1.f / (VESTIGE_FRZ_LPG_DAMP_MS * 0.001f * sr_);
+      if (fz_dmp_ < 0.f) fz_dmp_ = 0.f;
+      c *= fz_dmp_;
+    }
+    fz_c_ = c;
+    constexpr bool kB = VESTIGE_FRZ_LPG_MODEL == 1;
+    constexpr float base_hz = kB ? VESTIGE_FRZ_LPG_B_BASE_HZ : VESTIGE_FRZ_LPG_BASE_HZ;
+    constexpr float base_db = kB ? VESTIGE_FRZ_LPG_B_FLOOR_DB : VESTIGE_FRZ_LPG_BASE_DB;
+    const float fc = base_hz * expf(c * logf(VESTIGE_FRZ_LPG_OPEN_HZ / base_hz));
+    float a = 1.f - expf(-6.2831853f * fc / sr_);
+    if (a > 1.f) a = 1.f;
+    const float g = (kB && c <= 0.f) ? 0.f : expf(0.11512925f * base_db * (1.f - c));   // ln10/20
+    fz_z1_ += a * (x - fz_z1_);
+    fz_z2_ += a * (fz_z1_ - fz_z2_);
+    const float yl = fz_z2_ * g;
+    if (fz_lpg_mix_ == 0.f) {                              // fully bypassed again: idle state
+      fz_ef_ = fz_es_ = 0.f; fz_att_ph_ = 1.f; fz_c_ = 0.f; fz_dmp_on_ = false; fz_dmp_ = 1.f;
+      return x;
+    }
+    return x + (yl - x) * fz_lpg_mix_;
   }
   uint32_t FzBnd(int i) const { return (i >= fz_G_) ? fz_L_ : (uint32_t)((double)fz_L_ * (double)i / (double)fz_G_ + 0.5); }
   // Per sample: the virtual pass clock + this step's condition. Like a loop
@@ -2718,6 +2807,11 @@ class Vestige : public Module {
     while (fz_el_ >= fz_nb_ && fz_i_ + 1 < fz_G_) {
       fz_i_++; fz_nb_ = FzBnd(fz_i_ + 1);
       if (fz_cnd_[fz_i_] != fz_cnd_[fz_i_ - 1]) TimingCond(kFzR, fz_cnd_[fz_i_]);
+      FzStepEvent(fz_i_);
+    }
+    if (fz_sub_j_ < fz_sub_n_) {                           // ratchet sub-hits re-strike
+      const uint32_t b0 = FzBnd(fz_i_);
+      if (fz_el_ >= b0 + (uint32_t)((double)(FzBnd(fz_i_ + 1) - b0) * fz_sub_j_ / fz_sub_n_)) FzSubStrike();
     }
     fz_el_++;
   }
@@ -4936,6 +5030,13 @@ class Vestige : public Module {
   uint32_t fz_rng_ = 0x85EBCA6Bu;                         // its own RNG (the loop side's stays untouched)
   uint32_t fz_L_  = 0, fz_el_ = 0, fz_nb_ = 0;            // virtual pass length, elapsed, next step boundary
   int      fz_G_  = 1, fz_i_  = 0;                        // its step count, current step
+  int8_t   fz_stk_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: LPG strikes (0, 1, 2, 4)
+  int8_t   fz_rst_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: B rest (damp)
+  bool     fz_lpg_on_ = false, fz_dmp_on_ = false;        // LPG engaged (this pass); B damping
+  int      fz_sub_n_ = 0, fz_sub_j_ = 0;                  // this step's hit count, hits done
+  float    fz_lpg_mix_ = 0.f, fz_c_ = 0.f, fz_dmp_ = 1.f;  // bypass xfade, control value, damp gain
+  float    fz_att_ph_ = 1.f, fz_att_inc_ = 0.f, fz_att_from_ = 0.f;
+  float    fz_ef_ = 0.f, fz_es_ = 0.f, fz_kf_ = 0.f, fz_ks_ = 0.f, fz_z1_ = 0.f, fz_z2_ = 0.f;
   int8_t   fz_cnd_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: 0 clean, 1 rest, N decimate xN                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag
   int      last_trig_slot_ = -1; uint32_t last_trig_at_ = 0;
