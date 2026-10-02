@@ -319,7 +319,7 @@ class Vestige : public Module {
     // Freeze side: K5 CCW = SUSTAIN TIME (s), log taper SUSTAIN_MAX_S just past
     // the dead zone -> SUSTAIN_MIN_S at full CCW; 0 = off (noon / CW).
     sus_s_ = (c5 < 0.f && u5 > 0.f)
-             ? VESTIGE_FREEZE_SUSTAIN_MAX_S * powf(VESTIGE_FREEZE_SUSTAIN_MIN_S / VESTIGE_FREEZE_SUSTAIN_MAX_S, u5)
+             ? VESTIGE_FREEZE_SUSTAIN_MAX_S * powf(VESTIGE_FREEZE_SUSTAIN_MIN_S / VESTIGE_FREEZE_SUSTAIN_MAX_S, powf(u5, VESTIGE_FREEZE_SUSTAIN_CURVE))
              : 0.f;
     float atk_s = fade_u * VESTIGE_FADE_ATTACK_MAX_S;
     float rel_s = fade_u * VESTIGE_FADE_RELEASE_MAX_S;

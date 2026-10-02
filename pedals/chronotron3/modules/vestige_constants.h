@@ -1194,6 +1194,7 @@ static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
 // with the repeat dB curve above, ending silent, then retires.
 static constexpr float  VESTIGE_FREEZE_SUSTAIN_MAX_S = 8.f;
 static constexpr float  VESTIGE_FREEZE_SUSTAIN_MIN_S = 0.5f;
+static constexpr float  VESTIGE_FREEZE_SUSTAIN_CURVE = 3.f;   // > 1: more K5 travel on the long times
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
 // volume knob and the SW2 dry gate are gone. VESTIGE_LOOP_BOOST_MAX is kept for
