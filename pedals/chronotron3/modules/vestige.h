@@ -745,8 +745,12 @@ class Vestige : public Module {
         // Playback path per slot: speed crossfade -> [error stage] -> K5 fade.
         //  1. K1 speed crossfade (both sides): clean and speed versions of the
         //     same loop / freeze, equal-power. At noon it is exactly the clean sum.
+        //     Freeze side: the pad (all band streams) stays at full level; K1
+        //     only sets the level of its one added speed layer.
         float pv = slot_sum[s];
-        if (!(g_c_ == 1.f && g_sp_ == 0.f))
+        if (eng_[PoolOf(s)].frozen) {
+          if (g_sp_ != 0.f) pv = slot_sum[s] + slot_sp[s] * g_sp_;
+        } else if (!(g_c_ == 1.f && g_sp_ == 0.f))
           pv = slot_sum[s] * g_c_ + slot_sp[s] * g_sp_;
         //  2. Error stage (plan §5, stages 3-5) goes HERE, on whatever speed K1
         //     selected. Signal-domain errors (CONDITION: mutes, rate reduction)
@@ -1144,7 +1148,7 @@ class Vestige : public Module {
         // the (fractional) head, its grain clamped to the coverage span. At
         // rho == 1 the original path runs untouched (bit-identical).
         // The freeze gates its clean version the same way (always on at noon).
-        if (g_c_ > VESTIGE_K1_GATE_EPS) {
+        if (e.frozen || g_c_ > VESTIGE_K1_GATE_EPS) {   // freeze pad: always on (K1 adds a layer)
           // (A stream restart after a C change always takes the stream path:
           // it needs the short matching attack.)
           if (e.frozen || (orig && !(s < VESTIGE_VOICE_SLABS && restart_[s][0]))) {
@@ -1213,34 +1217,43 @@ class Vestige : public Module {
           mb_timer_sp_[s][bi] = hop;
         }
       }
-      // ---- K1 speed version (freeze side) -----------------------------------
-      // The same band stream (band filter, scan position, spray) read at r.
-      // A grain of glen samples reads glen*r of the window: EmitBandGrain clamps
-      // its start to [0, L - glen*r]; a window shorter than glen*r shortens the
-      // grain. Its timers run like the loop side's (it emits nothing while
-      // silent, so at noon no grain and no random draw).
-      if (e.frozen) {
-        const float r = SpeedRatio();
-        size_t gsp = glen;
-        if ((float)gsp * r > (float)L) gsp = (size_t)((float)L / r);
-        if (frz_rs_sp) mb_timer_sp_[s][bi] = 1;
-        if (--mb_timer_sp_[s][bi] <= 0) {
-          if (g_sp_ > VESTIGE_K1_GATE_EPS) {
-            float span = (float)L - (float)glen - (float)scanlen; if (span < 0.f) span = 0.f;
-            const float freeze_base = span * e.pos_frac;
-            const float base = head + (freeze_base - head) * e.focus;
-            const float posf = base + mb_scan_[s][bi] * e.focus;
-            const float atk  = frz_fresh ? e.amt : (frz_rs_sp ? 0.f : 1.f);
-            EmitBandGrain(s, gsp, posf, (nb == 1) ? nullptr : mb_bank_coef_[row][bi],
-                          (float)VESTIGE_MB_SPRAY[row][bi] * e.focus, true, 1, r, atk);
-            ver_idle_[s][1] = false;
-          } else {
-            ver_idle_[s][1] = true;
-          }
-          int hop = (int)((float)gsp / VESTIGE_MB_OVERLAP);
-          if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
-          mb_timer_sp_[s][bi] = hop;
+    }
+    // ---- K1 speed layer (freeze side): ONE extra stream per frozen slot -----
+    // The original (unfiltered) freeze window read at r, ADDED on top of the
+    // pad; K1's amount is only its level (g_sp_). Window / position logic as
+    // the band grains, with the MID band's glen, scan and spray row values.
+    // A grain of glen samples reads glen*r of the window: EmitBandGrain clamps
+    // its start to [0, L - glen*r]; a window shorter than glen*r shortens the
+    // grain. Its timer (mb_timer_sp_[s][0]) emits nothing while silent, so at
+    // noon no grain and no random draw.
+    if (e.frozen) {
+      const int    mi = nb / 2;
+      const float  r  = SpeedRatio();
+      size_t glen = (size_t)((float)VESTIGE_MB_GLEN[row][mi] * e.gscale);
+      if (glen > L) glen = L;
+      if (glen > gcap) glen = gcap;
+      if (glen < VESTIGE_GRAIN_MIN_LEN) glen = (L < VESTIGE_GRAIN_MIN_LEN) ? L : VESTIGE_GRAIN_MIN_LEN;
+      size_t maxscan = (L > glen + 1) ? (L - glen - 1) : 1;
+      size_t scanlen = VESTIGE_MB_SCAN[row][mi]; if (scanlen > maxscan) scanlen = maxscan; if (scanlen < 1) scanlen = 1;
+      size_t gsp = glen;
+      if ((float)gsp * r > (float)L) gsp = (size_t)((float)L / r);
+      if (frz_rs_sp) mb_timer_sp_[s][0] = 1;
+      if (--mb_timer_sp_[s][0] <= 0) {
+        if (g_sp_ > VESTIGE_K1_GATE_EPS) {
+          float span = (float)L - (float)glen - (float)scanlen; if (span < 0.f) span = 0.f;
+          const float freeze_base = span * e.pos_frac;
+          const float base = head + (freeze_base - head) * e.focus;
+          const float posf = base + mb_scan_[s][mi] * e.focus;
+          const float atk  = frz_fresh ? e.amt : (frz_rs_sp ? 0.f : 1.f);
+          EmitBandGrain(s, gsp, posf, nullptr,
+                        (float)VESTIGE_MB_SPRAY[row][mi] * e.focus, true, 1, r, atk);
+          ver_idle_[s][1] = false;
+        } else {
+          ver_idle_[s][1] = true;
         }
+        int hop = (int)((float)gsp / VESTIGE_MB_OVERLAP);
+        if (hop < (int)VESTIGE_MIN_INTERVAL) hop = (int)VESTIGE_MIN_INTERVAL;
+        mb_timer_sp_[s][0] = hop;
       }
     }
   }

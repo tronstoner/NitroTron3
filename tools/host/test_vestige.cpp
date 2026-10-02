@@ -4950,11 +4950,12 @@ static void TestFreezeWindow() {
     Check(v.frz_base_[q.s] == want && v.loop_len_[q.s] >= keep, "short freeze: the attack is skipped as far as MIN_KEEP of tone allows"); }
   cs.sw[0] = 0; Reset();
 }
-// K1 on the freeze side: the same octave crossfade as the loop side, per band
-// stream. Per sample: which versions sound, their rates, every frozen grain's
+// K1 on the freeze side: the pad (all band streams) stays as it is and K1 adds
+// ONE unfiltered speed-layer stream per frozen slot at r, at K1's level.
+// Per sample: which versions sound, their rates, layer grains unfiltered, every frozen grain's
 // next read cell (and weighted interpolation partner) inside the slot's window
 // [frz_base, frz_base + L], and the grain cap.
-struct FrzK1Stat { int clean_max = 0, sp_max = 0, counted_max = 0; long bad_rate = 0, out_window = 0, reads = 0;
+struct FrzK1Stat { int clean_max = 0, sp_max = 0, counted_max = 0; long bad_rate = 0, out_window = 0, reads = 0, sp_filtered = 0;
                    uint32_t drops = 0; float peak = 0.f; };
 static size_t frz_lo[VESTIGE_SLOTS] = {}, frz_hi[VESTIGE_SLOTS] = {};   // each freeze slot's last window
 static FrzK1Stat RunFreezeK1(float secs, float want_rate) {
@@ -4969,7 +4970,7 @@ static FrzK1Stat RunFreezeK1(float secs, float want_rate) {
       const GrainVoice& gv = v.grains_[g];
       const int s = v.grain_slot_[g];
       if (!gv.IsActive() || s < VESTIGE_FREEZE_SLOT0) continue;
-      if (v.grain_ver_[g]) { sp++; if (gv.rate_ != want_rate) st.bad_rate++; }
+      if (v.grain_ver_[g]) { sp++; if (gv.rate_ != want_rate) st.bad_rate++; if (gv.filt_on_) st.sp_filtered++; }
       else                 { c++;  if (gv.rate_ != 1.f) st.bad_rate++; }
       const float pos = gv.read_pos_f_; const size_t idx = (size_t)pos;
       const size_t last = idx + ((pos - (float)idx) > 0.f ? 1 : 0);
@@ -4989,7 +4990,7 @@ static FrzK1Stat RunFreezeK1(float secs, float want_rate) {
   return st;
 }
 static void TestFreezeK1() {
-  printf("-- K1 on the freeze side (octave crossfade)\n");
+  printf("-- K1 on the freeze side (pad + one speed layer)\n");
   Reset(); cs.sw[0] = 2; cs.knob[0] = 0.5f; cs.knob[4] = 0.5f; RunFor(1.5f); seen_acts = v.act_count_;
   CapRec q{}; noise_from = n; noise_to = n + 24000; WaitActivation(3.f, &q); noise_from = noise_to = -1;   // 500 ms: the 400 ms window
   const int s = q.s;
@@ -5000,27 +5001,33 @@ static void TestFreezeK1() {
   struct P { const char* name; float k1; float rate; bool mid; };
   const P ps[] = { {"noon", 0.5f, 2.f, false}, {"full CW", 1.0f, 2.f, false}, {"CW midpoint", 0.5f + half_travel, 2.f, true},
                    {"full CCW", 0.0f, 0.5f, false}, {"CCW midpoint", 0.5f - half_travel, 0.5f, true}, {"noon again", 0.5f, 0.5f, false} };
+  int pad_noon = -1;
   for (const P& p : ps) {
     cs.knob[0] = p.k1; RunFor(1.5f);                  // crossfade + side swap settle, old grains gone
     const FrzK1Stat st = RunFreezeK1(1.0f, p.rate);
+    if (pad_noon < 0) pad_noon = st.clean_max;
     printf("      %-12s g_c %.3f g_sp %.3f  grains clean %d speed %d (counted max %d), cap drops %u, out-of-window reads %ld/%ld, peak %.4f\n",
            p.name, v.g_c_, v.g_sp_, st.clean_max, st.sp_max, st.counted_max, st.drops, st.out_window, st.reads, st.peak);
     char msg[200];
     if (p.k1 == 0.5f)
-      snprintf(msg, sizeof msg, "freeze K1 %s: clean only (no speed grains, gain 1)", p.name);
-    else if (!p.mid)
-      snprintf(msg, sizeof msg, "freeze K1 %s: only rate-%.1f speed grains, clean gain 0", p.name, p.rate);
+      snprintf(msg, sizeof msg, "freeze K1 %s: pad only (no layer grains)", p.name);
     else
-      snprintf(msg, sizeof msg, "freeze K1 %s: clean + rate-%.1f grains together", p.name, p.rate);
-    bool ok = st.bad_rate == 0 && st.peak > 0.005f;
-    if (p.k1 == 0.5f) ok = ok && st.sp_max == 0 && st.clean_max > 0 && v.g_c_ == 1.f && v.g_sp_ == 0.f;
-    else if (!p.mid)  ok = ok && st.clean_max == 0 && st.sp_max > 0 && v.g_c_ <= VESTIGE_K1_GATE_EPS;
-    else              ok = ok && st.clean_max > 0 && st.sp_max > 0;
+      snprintf(msg, sizeof msg, "freeze K1 %s: full pad (grains as at noon) + ONE unfiltered rate-%.1f layer stream", p.name, p.rate);
+    bool ok = st.bad_rate == 0 && st.peak > 0.005f && st.clean_max == pad_noon && st.clean_max > 0;
+    if (p.k1 == 0.5f) ok = ok && st.sp_max == 0 && v.g_sp_ == 0.f;
+    else              ok = ok && st.sp_max >= 1 && st.sp_max <= 2 && st.sp_filtered == 0;   // overlap 2: <= 2 grains per stream
     Check(ok, msg);
     Check(st.out_window == 0, "freeze K1: every grain reads inside its freeze window");
     Check(st.counted_max <= VESTIGE_MB_GRAIN_CAP, "freeze K1: grain cap respected");
   }
-  // A re-freeze inside the crossfade: two freezes x two versions x 3 bands.
+  // Pad level: frozen slots mix pad x 1 + layer x g_sp (the pad never takes g_c).
+  { cs.knob[0] = 1.0f; RunFor(1.5f);
+    float pad = 0.f, lay = 0.f;
+    for (int g = 0; g < VESTIGE_GRAINS; g++) if (v.grains_[g].IsActive() && v.grain_slot_[g] == s) (v.grain_ver_[g] ? lay : pad) += 1.f;
+    printf("      full CW: g_c %.3f (unused on the freeze), pad grains %.0f, layer grains %.0f\n", v.g_c_, pad, lay);
+    Check(v.eng_[v.PoolOf(s)].frozen && v.g_c_ <= VESTIGE_K1_GATE_EPS && pad > 0.f && lay > 0.f,
+          "freeze K1 full CW: the pad keeps emitting although g_c is 0 (pad not crossfaded)"); }
+  // A re-freeze inside the crossfade: two freezes x (3-band pad + 1 layer).
   cs.knob[0] = 0.5f + half_travel; RunFor(1.5f); seen_acts = v.act_count_;
   { noise_from = n; noise_to = n + 24000;
     const FrzK1Stat st = RunFreezeK1(1.5f, 2.f); noise_from = noise_to = -1;
@@ -5035,8 +5042,8 @@ static void TestFreezeK1() {
     const FrzK1Stat st = RunFreezeK1(1.0f, 2.f);
     printf("      short freeze (window %zu) at full CW: speed grains %d, out-of-window %ld/%ld, peak %.4f\n",
            v.loop_len_[q2.s], st.sp_max, st.out_window, st.reads, st.peak);
-    Check(v.loop_len_[q2.s] < 2 * VESTIGE_MB_GLEN[2][0] && st.sp_max > 0 && st.clean_max == 0 && st.out_window == 0 && st.bad_rate == 0,
-          "short freeze at full CW: rate-2 grains shortened to fit the window"); }
+    Check(v.loop_len_[q2.s] < 2 * VESTIGE_MB_GLEN[2][0] && st.sp_max > 0 && st.clean_max > 0 && st.out_window == 0 && st.bad_rate == 0,
+          "short freeze at full CW: pad + rate-2 layer grains, layer fits the window"); }
   cs.knob[0] = 0.5f; RunFor(1.5f);
   cs.sw[0] = 0; Reset();
 }
