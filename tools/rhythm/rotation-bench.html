@@ -1,0 +1,542 @@
+<title>Vestige Rotation Bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@400;600;800&family=Chivo+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --bg:#f1f2ee; --panel:#fbfbf8; --ink:#1b1f1d; --muted:#646c67; --line:#d6dad3;
+  --plain:#e4e7e1; --stut:#c27507; --stut-ink:#fff; --rest:#2e3945; --dec:#0f8a7e; --accent:#2a4fa0; --accent-ink:#fff;
+  --great:#1d7d3c; --good:#5d9b2f; --ok:#9a8f2c; --weird:#8a4fb0; --bad:#b8352a;
+  --play:#2a4fa0;
+  --sans:"Chivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Chivo Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#121513; --panel:#1a1e1c; --ink:#e5e8e3; --muted:#8e9791; --line:#2b312e;
+    --plain:#242a27; --stut:#efa232; --stut-ink:#1b1206; --rest:#6f8296; --dec:#35c3b3; --accent:#7f9cf0; --accent-ink:#0d1324;
+    --great:#4cc26f; --good:#93c95b; --ok:#cfc25a; --weird:#b98ad8; --bad:#ef6a5c; --play:#7f9cf0;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#121513; --panel:#1a1e1c; --ink:#e5e8e3; --muted:#8e9791; --line:#2b312e;
+  --plain:#242a27; --stut:#efa232; --stut-ink:#1b1206; --rest:#6f8296; --dec:#35c3b3; --accent:#7f9cf0; --accent-ink:#0d1324;
+  --great:#4cc26f; --good:#93c95b; --ok:#cfc25a; --weird:#b98ad8; --bad:#ef6a5c; --play:#7f9cf0;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;padding:16px 16px 40px}
+h1{font-size:20px;font-weight:800;margin:0;letter-spacing:.01em;text-wrap:balance}
+h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:0 0 8px}
+.wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.top{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
+.top p{margin:0;color:var(--muted);max-width:70ch}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px}
+.transport{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.field{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+.field input[type=number]{width:64px}
+input,select,button,textarea{font:inherit;color:var(--ink)}
+input[type=number],select,textarea,input[type=text]{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:4px 6px}
+input[type=range]{width:90px;accent-color:var(--accent)}
+button{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button.primary{background:var(--play);border-color:var(--play);color:var(--accent-ink);font-weight:600;min-width:88px}
+.grid2{display:grid;grid-template-columns:260px 1fr;gap:14px;align-items:start}
+@media (max-width:820px){.grid2{grid-template-columns:1fr}}
+.vlist{display:flex;flex-direction:column;gap:2px;max-height:560px;overflow:auto}
+.vrow{display:grid;grid-template-columns:62px 1fr auto;gap:6px;align-items:center;text-align:left;padding:5px 8px;border-radius:4px;border:1px solid transparent;background:none;font-family:var(--mono);font-size:12.5px}
+.vrow:hover{border-color:var(--line)}
+.vrow.sel{background:var(--accent);color:var(--accent-ink)}
+.vrow .cnt{font-size:11px;opacity:.75}
+.vrow .tp{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;opacity:.8}
+.side-h{font-family:var(--sans);font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:8px 8px 2px}
+.main{display:flex;flex-direction:column;gap:14px}
+.vhead{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline}
+.vhead .name{font-size:22px;font-weight:800;font-family:var(--mono)}
+.vhead .meta{color:var(--muted);font-family:var(--mono);font-size:13px}
+.rots{display:flex;flex-wrap:wrap;gap:6px}
+.rot{display:flex;flex-direction:column;gap:4px;align-items:flex-start;padding:6px 8px;font-family:var(--mono);font-size:12px;position:relative}
+.rot.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.rot .mini{display:flex;gap:1px}
+.rot .mini i{display:block;width:6px;height:10px;background:var(--plain);border-radius:1px}
+.rot .mini i.s{background:var(--stut)} .rot .mini i.r{background:var(--rest)}
+.rot .dot{position:absolute;top:5px;right:6px;width:8px;height:8px;border-radius:50%}
+.rot .odd{font-size:10px;color:var(--muted)}
+.pat{overflow:auto;max-height:360px;border:1px solid var(--line);border-radius:4px;padding:6px;background:var(--bg)}
+.bar{display:grid;grid-template-columns:34px repeat(16,minmax(16px,1fr));gap:2px;margin-bottom:2px;align-items:center}
+.bar .bn{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+.c{height:22px;border-radius:2px;background:var(--plain);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--muted)}
+.c.q{box-shadow:inset 2px 0 0 var(--line)}
+.c.s{background:var(--stut);color:var(--stut-ink)}
+.c.r{background:transparent;box-shadow:inset 0 0 0 2px var(--rest);color:var(--rest)}
+.c.d{box-shadow:inset 0 -4px 0 var(--dec)}
+.c.dp{background:color-mix(in srgb,var(--dec) 35%,var(--plain));color:var(--ink)}
+.c.now{outline:2px solid var(--ink);outline-offset:0}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--muted);font-size:12px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend b{display:inline-block;width:14px;height:12px;border-radius:2px;background:var(--plain)}
+.rate{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.rate button{font-weight:600}
+.rate button[data-r] {border-left:4px solid var(--muted)}
+.rate button.cur{outline:2px solid var(--ink)}
+.note{flex:1 1 220px;min-width:0}
+.k{font-family:var(--mono);font-size:11px;color:var(--muted)}
+textarea#out{width:100%;min-height:150px;font-family:var(--mono);font-size:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.hint{color:var(--muted);font-size:12.5px;margin:0}
+.flag{font-family:var(--mono);font-size:12px;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <h1>Vestige Rotation Bench</h1>
+    <p>K3 mode 1, engine 0 as in the pedal (12 : 8 CCW, 15 : 10 CW), base pattern only: no extra stutter, no hit variation, no ratchets. Stutters always start on the 1. Set the rest rotation, listen against the beat, rate, copy the list.</p>
+  </div>
+
+  <div class="panel transport">
+    <button class="primary" id="play">Play</button>
+    <button id="restart" title="Start the loop again from bar 1 (applies at the next loop start)">Restart on 1</button>
+    <label class="field">BPM <input type="number" id="bpm" min="60" max="200" step="1" value="120"></label>
+    <label class="field">Source
+      <select id="src"><option value="synth">Bass riff (2 bars)</option><option value="file">Loaded file</option></select>
+    </label>
+    <label class="field">File <input type="file" id="file" accept="audio/*"></label>
+    <label class="field">File bars <select id="fbars"><option>1</option><option selected>2</option><option>4</option></select></label>
+    <label class="field">Beat <input type="range" id="drums" min="0" max="1" step="0.01" value="0.55"></label>
+    <label class="field">Click <input type="range" id="click" min="0" max="1" step="0.01" value="0"></label>
+    <label class="field">Wet <input type="range" id="wet" min="0" max="1" step="0.01" value="0.9"></label>
+    <label class="field">Dry loop <input type="range" id="dry" min="0" max="1" step="0.01" value="0"></label>
+    <label class="field"><input type="checkbox" id="decon" checked> Decimator</label>
+    <span class="flag" id="status">stopped</span>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>Rhythms (as the pedal numbers them)</h2>
+      <div class="vlist" id="vlist"></div>
+    </div>
+
+    <div class="main">
+      <div class="panel" style="display:flex;flex-direction:column;gap:12px">
+        <div class="vhead">
+          <span class="name" id="vname">CCW#1</span>
+          <span class="meta" id="vmeta"></span>
+        </div>
+        <div>
+          <h2>Stutter rotation (on the 1) <span class="k">↑ ↓</span></h2>
+          <div class="rots" id="srots"></div>
+        </div>
+        <div>
+          <h2>Rest rotation <span class="k">← →</span></h2>
+          <div class="rots" id="rrots"></div>
+        </div>
+        <div class="row" id="decrow">
+          <h2 style="margin:0">Decimator rotation</h2>
+          <select id="dr"></select>
+          <span class="hint">off-beat 8ths, factor by slot (8 / 6 / 4 / 3 kHz)</span>
+        </div>
+        <div class="pat" id="pat"></div>
+        <div class="legend">
+          <span><b style="background:var(--stut)"></b>s stutter (replays the step before)</span>
+          <span><b style="background:transparent;box-shadow:inset 0 0 0 2px var(--rest)"></b>_ rest</span>
+          <span><b style="box-shadow:inset 0 -4px 0 var(--dec)"></b>D decimate on a stutter</span>
+          <span><b style="background:color-mix(in srgb,var(--dec) 35%,var(--plain))"></b>d decimate on a plain step</span>
+          <span><b></b>- plain</span>
+        </div>
+      </div>
+
+      <div class="panel" style="display:flex;flex-direction:column;gap:10px">
+        <h2>Rate this combination <span class="k">keys 1–5</span></h2>
+        <div class="rate" id="rate">
+          <button data-r="great" style="border-left-color:var(--great)">1 great</button>
+          <button data-r="good" style="border-left-color:var(--good)">2 good</button>
+          <button data-r="ok" style="border-left-color:var(--ok)">3 ok</button>
+          <button data-r="weird" style="border-left-color:var(--weird)">4 weird</button>
+          <button data-r="bad" style="border-left-color:var(--bad)">5 bad</button>
+          <button id="clear">clear</button>
+          <input type="text" id="note" class="note" placeholder="note (optional), saved with the rating">
+        </div>
+        <p class="hint">Space = play / stop · [ ] = previous / next rhythm. A rating saves in this browser; copy the list below into the chat.</p>
+      </div>
+
+      <div class="panel" style="display:flex;flex-direction:column;gap:8px">
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">Ratings (<span id="nrat">0</span>)</h2>
+          <div class="row"><button id="copy">Copy list</button><button id="wipe">Clear all…</button><span class="flag" id="copymsg"></span></div>
+        </div>
+        <textarea id="out" readonly></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+// ---- the pedal's engine 0 (vestige.h / vestige_constants.h, 2026-10-02) ----
+const SIDES = {
+  CCW: { Ns: 12, ks: [2, 7], Nr: 8,  kr: [1, 3] },
+  CW:  { Ns: 15, ks: [2, 8], Nr: 10, kr: [1, 4] },
+};
+const KD = [1, 6], D_SLOTS = 8, DECIM = [6, 8, 12, 16], HALF_U = 0.25, LIST_STEPS = 4096;
+const f = Math.fround;
+const kOf = (mn, mx, u) => Math.floor(f(f(f(mn) + f(f(mx - mn) * f(u))) + 0.5));   // (int)(min + (max-min)*u + 0.5f)
+const hit = (i, k, n, rot) => k > 0 && n > 0 && ((((i + rot) % n) * k) % n) < k;
+const gcd = (a, b) => b ? gcd(b, a % b) : a;
+const lcm = (a, b) => a / gcd(a, b) * b;
+const pat = (k, n, rot) => { let s = ""; for (let i = 0; i < n; i++) s += hit(i, k, n, rot) ? "x" : "."; return s; };
+
+// The numbered list per side, the same sampling as the pedal's DIAG list.
+const variants = [];
+for (const side of ["CCW", "CW"]) {
+  const S = SIDES[side]; let num = 0, last = null;
+  for (let i = 1; i <= LIST_STEPS; i++) {
+    const u = i / LIST_STEPS;
+    const ks = kOf(S.ks[0], S.ks[1], u), kr = kOf(S.kr[0], S.kr[1], u), kd = kOf(KD[0], KD[1], u);
+    const half = u < HALF_U;
+    if (last && last.ks === ks && last.kr === kr && last.kd === kd && last.half === half) { last.u1 = u; continue; }
+    last = { side, num: ++num, ks, kr, kd, half, Ns: S.Ns, Nr: S.Nr, u0: (i - 1) / LIST_STEPS, u1: u };
+    variants.push(last);
+  }
+}
+// Distinct rotations: stutters only those with a hit on step 0 (the 1).
+function rotSet(k, n, on1) {
+  const seen = new Set(), out = [];
+  for (let r = 0; r < n; r++) {
+    const p = pat(k, n, r);
+    if (on1 && p[0] !== "x") continue;
+    if (seen.has(p)) continue;
+    seen.add(p); out.push({ r, p });
+  }
+  return out;
+}
+
+// ---- state ------------------------------------------------------------
+const st = { vi: 0, srot: 0, rrot: 0, dr: 0, decOn: true };
+let ratings = {};
+try { ratings = JSON.parse(localStorage.getItem("vrb.ratings") || "{}") || {}; } catch (e) { ratings = {}; }
+const saveRatings = () => { try { localStorage.setItem("vrb.ratings", JSON.stringify(ratings)); } catch (e) {} };
+const V = () => variants[st.vi];
+const keyOf = (v, s, r, dOn, dr) => `${v.side}#${v.num}|s${s}|r${r}|${dOn ? "d" + dr : "nodec"}`;
+const curKey = () => keyOf(V(), st.srot, st.rrot, st.decOn, st.dr);
+
+// The cell at running step t: 1 stutter, 2 rest, 0 plain (a stutter wins where both land).
+function cellAt(v, t, srot, rrot) {
+  if (hit(t % v.Ns, v.ks, v.Ns, srot)) return 1;
+  if (hit(t % v.Nr, v.kr, v.Nr, rrot)) return 2;
+  return 0;
+}
+// The decimate factor at t (0 = none): off-beat 8ths (t % 4 == 2), never on a rest.
+function decAt(v, t, c, dOn, dr) {
+  if (!dOn || t % 4 !== 2 || c === 2) return 0;
+  const q = Math.floor(t / 4) % D_SLOTS;
+  return hit(q, v.kd, D_SLOTS, dr) ? DECIM[(q + dr) % DECIM.length] : 0;
+}
+const glyph = (c, d) => c === 2 ? "_" : d ? (c === 1 ? "D" : "d") : (c === 1 ? "s" : "-");
+function bars3(v, s, r, dOn, dr) {
+  let o = "|";
+  for (let t = 0; t < 48; t++) { const c = cellAt(v, t, s, r); o += glyph(c, decAt(v, t, c, dOn, dr)); if (t % 16 === 15) o += "|"; }
+  return o;
+}
+
+// ---- UI -----------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const RCOL = { great: "var(--great)", good: "var(--good)", ok: "var(--ok)", weird: "var(--weird)", bad: "var(--bad)" };
+const pct = x => Math.round(x * 100);
+
+function renderList() {
+  const el = $("vlist"); el.innerHTML = ""; let side = null;
+  variants.forEach((v, i) => {
+    if (v.side !== side) { side = v.side; const h = document.createElement("div"); h.className = "side-h"; h.textContent = side === "CCW" ? "CCW · traditional 12 : 8" : "CW · odd 15 : 10"; el.appendChild(h); }
+    const n = Object.keys(ratings).filter(k => k.startsWith(`${v.side}#${v.num}|`)).length;
+    const b = document.createElement("button");
+    b.className = "vrow" + (i === st.vi ? " sel" : "");
+    b.innerHTML = `<span>${v.side}#${v.num}</span><span>E(${v.ks},${v.Ns}) E(${v.kr},${v.Nr}) <span class="tp">${v.half ? "half" : ""}</span></span><span class="cnt">${n ? n + "★" : ""}</span>`;
+    b.onclick = () => selectVariant(i);
+    el.appendChild(b);
+  });
+}
+function selectVariant(i) {
+  st.vi = (i + variants.length) % variants.length;
+  const v = V();
+  st.srot = rotSet(v.ks, v.Ns, true)[0].r;
+  st.rrot = rotSet(v.kr, v.Nr, false)[0].r;
+  if (playing) pendingRestart = true;   // a new rhythm starts on the 1 of the next loop
+  renderAll();
+}
+function renderRots() {
+  const v = V();
+  const mk = (box, list, cur, cls, onPick, isRest) => {
+    box.innerHTML = "";
+    list.forEach(({ r, p }) => {
+      const b = document.createElement("button");
+      b.className = "rot" + (r === cur ? " sel" : "");
+      const mini = [...p].map(ch => `<i class="${ch === "x" ? cls : ""}"></i>`).join("");
+      let dot = "";
+      if (isRest) {
+        const rt = ratings[keyOf(v, st.srot, r, st.decOn, st.dr)];
+        if (rt) dot = `<span class="dot" style="background:${RCOL[rt.rating]}"></span>`;
+      }
+      b.innerHTML = `${dot}<span>r${r}${r % 2 ? ' <span class="odd">odd</span>' : ""}</span><span class="mini">${mini}</span>`;
+      b.onclick = () => onPick(r);
+      box.appendChild(b);
+    });
+  };
+  mk($("srots"), rotSet(v.ks, v.Ns, true), st.srot, "s", r => { st.srot = r; renderAll(); }, false);
+  mk($("rrots"), rotSet(v.kr, v.Nr, false), st.rrot, "r", r => { st.rrot = r; renderAll(); }, true);
+}
+let cellEls = [], patL = 48;
+function renderPattern() {
+  const v = V();
+  let L = lcm(lcm(v.Ns, v.Nr), 16);
+  if (st.decOn) L = lcm(L, 4 * D_SLOTS);
+  patL = L;
+  const box = $("pat"); box.innerHTML = ""; cellEls = [];
+  for (let b = 0; b < L / 16; b++) {
+    const row = document.createElement("div"); row.className = "bar";
+    row.innerHTML = `<span class="bn">bar ${b + 1}</span>`;
+    for (let j = 0; j < 16; j++) {
+      const t = b * 16 + j, c = cellAt(v, t, st.srot, st.rrot), d = decAt(v, t, c, st.decOn, st.dr);
+      const e = document.createElement("span");
+      e.className = "c" + (j % 4 === 0 ? " q" : "") + (c === 1 ? " s" : c === 2 ? " r" : "") + (d ? (c === 1 ? " d" : " dp") : "");
+      e.textContent = glyph(c, d);
+      row.appendChild(e); cellEls.push(e);
+    }
+    box.appendChild(row);
+  }
+}
+function renderRate() {
+  const r = ratings[curKey()];
+  document.querySelectorAll("#rate button[data-r]").forEach(b => b.classList.toggle("cur", !!r && r.rating === b.dataset.r));
+  $("note").value = r ? (r.note || "") : "";
+}
+function renderOut() {
+  const order = k => { const v = variants.find(x => k.startsWith(`${x.side}#${x.num}|`)); return v ? variants.indexOf(v) : 999; };
+  const keys = Object.keys(ratings).sort((a, b) => order(a) - order(b) || ratings[a].srot - ratings[b].srot || ratings[a].rrot - ratings[b].rrot);
+  $("out").value = keys.map(k => {
+    const x = ratings[k];
+    return `${x.side}#${x.num} ${x.half ? "half" : "1x"} | S E(${x.ks},${x.Ns}) r${x.srot} | R E(${x.kr},${x.Nr}) r${x.rrot} | ${x.decOn ? `dec kd${x.kd} dr${x.dr}` : "no dec"} | ${x.rating}${x.note ? " | " + x.note : ""} | ${x.bars}`;
+  }).join("\n");
+  $("nrat").textContent = keys.length;
+}
+function renderHead() {
+  const v = V();
+  $("vname").textContent = `${v.side}#${v.num}`;
+  $("vmeta").textContent = `stutters E(${v.ks},${v.Ns}) · rests E(${v.kr},${v.Nr}) · decimates E(${v.kd},8) · ${v.half ? "half time" : "1x"} · ${pct(v.u0)}–${pct(v.u1)} % of the ${v.side} half`;
+  const sel = $("dr"); if (!sel.options.length) for (let i = 0; i < D_SLOTS; i++) sel.add(new Option("dr" + i, i));
+  sel.value = st.dr; $("decrow").style.opacity = st.decOn ? 1 : .45;
+}
+function renderAll() { renderList(); renderHead(); renderRots(); renderPattern(); renderRate(); renderOut(); }
+
+function rate(r) {
+  const v = V(), k = curKey();
+  ratings[k] = { side: v.side, num: v.num, half: v.half, ks: v.ks, Ns: v.Ns, kr: v.kr, Nr: v.Nr, kd: v.kd,
+    srot: st.srot, rrot: st.rrot, decOn: st.decOn, dr: st.dr, rating: r, note: $("note").value.trim(), bars: bars3(v, st.srot, st.rrot, st.decOn, st.dr) };
+  saveRatings(); renderAll();
+}
+document.querySelectorAll("#rate button[data-r]").forEach(b => b.onclick = () => rate(b.dataset.r));
+$("clear").onclick = () => { delete ratings[curKey()]; saveRatings(); renderAll(); };
+$("note").addEventListener("change", () => { const r = ratings[curKey()]; if (r) { r.note = $("note").value.trim(); saveRatings(); renderOut(); } });
+$("copy").onclick = () => {
+  const txt = $("out").value;
+  const done = m => { $("copymsg").textContent = m; setTimeout(() => $("copymsg").textContent = "", 2500); };
+  navigator.clipboard.writeText(txt).then(() => done("Copied"), () => { $("out").select(); done("Selected: press Cmd/Ctrl+C"); });
+};
+let wipeArm = false;
+$("wipe").onclick = () => {
+  if (!wipeArm) { wipeArm = true; $("wipe").textContent = "Click again to clear all"; setTimeout(() => { wipeArm = false; $("wipe").textContent = "Clear all…"; }, 3000); return; }
+  ratings = {}; saveRatings(); wipeArm = false; $("wipe").textContent = "Clear all…"; renderAll();
+};
+$("dr").onchange = e => { st.dr = +e.target.value; renderAll(); };
+$("decon").onchange = e => { st.decOn = e.target.checked; renderAll(); };
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type === "text") return;
+  if (e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+  const v = V();
+  const step = (list, cur, d) => { const i = list.findIndex(x => x.r === cur); return list[(i + d + list.length) % list.length].r; };
+  if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  else if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); st.rrot = step(rotSet(v.kr, v.Nr, false), st.rrot, e.key === "ArrowRight" ? 1 : -1); renderAll(); }
+  else if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); st.srot = step(rotSet(v.ks, v.Ns, true), st.srot, e.key === "ArrowDown" ? 1 : -1); renderAll(); }
+  else if (e.key === "[") selectVariant(st.vi - 1);
+  else if (e.key === "]") selectVariant(st.vi + 1);
+  else if ("12345".includes(e.key) && e.key.length === 1) rate(["great", "good", "ok", "weird", "bad"][+e.key - 1]);
+});
+
+// ---- audio ----------------------------------------------------------------
+let ctx = null, wetG, dryG, drumG, clickG, master;
+let srcBuf = null, decBufs = {}, fileBuf = null, drumBuf = null, clickHi = null, clickLo = null;
+let playing = false, timer = null, pendingRestart = false;
+let t = 0, nextStep = 0, nextBar = 0, loopStart = 0, barIdx = 0, ringQ = [];
+const FADE = 0.002;
+const sixteenth = () => 60 / bpm() / 4;
+const bpm = () => {
+  if ($("src").value === "file" && fileBuf) return 60 * 4 * (+$("fbars").value) / fileBuf.duration;
+  return Math.min(200, Math.max(60, +$("bpm").value || 120));
+};
+const loopBars = () => ($("src").value === "file" && fileBuf) ? +$("fbars").value : 2;
+
+function ensureCtx() {
+  if (ctx) return;
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  master = ctx.createGain(); master.gain.value = 0.85; master.connect(ctx.destination);
+  wetG = ctx.createGain(); dryG = ctx.createGain(); drumG = ctx.createGain(); clickG = ctx.createGain();
+  [wetG, dryG, drumG, clickG].forEach(g => g.connect(master));
+  setLevels();
+}
+function setLevels() {
+  if (!ctx) return;
+  wetG.gain.value = +$("wet").value; dryG.gain.value = +$("dry").value;
+  drumG.gain.value = +$("drums").value; clickG.gain.value = +$("click").value;
+}
+["wet", "dry", "drums", "click"].forEach(id => $(id).addEventListener("input", setLevels));
+
+// The default source: a 2-bar bass riff (E), each 16th distinct enough that a stutter is audible.
+const RIFF = [[0,40,2],[3,40,1],[4,43,2],[6,45,2],[8,40,1],[10,47,2],[12,45,1],[13,43,1],[14,40,2],
+              [16,40,2],[19,40,1],[20,43,2],[22,48,2],[24,47,1],[26,45,2],[28,43,1],[30,38,2]];
+function synthRiff(sr, bpmv) {
+  const s16 = 60 / bpmv / 4, n = Math.round(32 * s16 * sr), out = new Float32Array(n);
+  for (const [st16, midi, len] of RIFF) {
+    const f0 = 440 * Math.pow(2, (midi - 69) / 12), i0 = Math.round(st16 * s16 * sr), dur = len * s16 * 0.92;
+    let ph = 0, lp = 0;
+    for (let i = 0; i < dur * sr && i0 + i < n; i++) {
+      const tt = i / sr;
+      ph += f0 / sr; if (ph >= 1) ph -= 1;
+      const saw = 2 * ph - 1, sq = ph < 0.5 ? 1 : -1;
+      const env = Math.min(1, tt / 0.003) * Math.exp(-tt * 5.5) * Math.min(1, (dur - tt) / 0.006);
+      const cut = 0.05 + 0.35 * Math.exp(-tt * 18);
+      lp += cut * ((0.7 * saw + 0.3 * sq) - lp);
+      out[i0 + i] += 0.55 * lp * env;
+    }
+  }
+  return out;
+}
+function makeDrums(sr, bpmv) {   // one bar: kick 1 + 3, snare 2 + 4, hats on 8ths
+  const s16 = 60 / bpmv / 4, n = Math.round(16 * s16 * sr), out = new Float32Array(n);
+  const add = (st16, fn, len) => { const i0 = Math.round(st16 * s16 * sr); for (let i = 0; i < len * sr && i0 + i < n; i++) out[i0 + i] += fn(i / sr); };
+  let seed = 1; const noise = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2147483648 - 1; };
+  const kick = x => { const fq = 45 + 90 * Math.exp(-x * 30); return Math.sin(2 * Math.PI * fq * x) * Math.exp(-x * 9) * 0.9; };
+  let hp = 0, prev = 0;
+  const hat = x => { const w = noise(); hp = 0.6 * (hp + w - prev); prev = w; return hp * Math.exp(-x * 60) * 0.25; };
+  const snare = x => (noise() * 0.5 + Math.sin(2 * Math.PI * 190 * x) * 0.4) * Math.exp(-x * 22) * 0.6;
+  [0, 8].forEach(s => add(s, kick, 0.35));
+  [4, 12].forEach(s => add(s, snare, 0.25));
+  for (let s = 0; s < 16; s += 2) add(s, hat, 0.08);
+  return out;
+}
+function blip(sr, hz) { const n = Math.round(0.03 * sr), o = new Float32Array(n); for (let i = 0; i < n; i++) o[i] = Math.sin(2 * Math.PI * hz * i / sr) * Math.exp(-i / sr * 120) * 0.5; return o; }
+function toBuf(data, twice) {   // twice: the loop twice in a row, so a read past the end runs on into the next pass
+  const n = data.length, b = ctx.createBuffer(1, twice ? 2 * n : n, ctx.sampleRate), ch = b.getChannelData(0);
+  ch.set(data); if (twice) ch.set(data, n);
+  return b;
+}
+function buildBuffers() {
+  const sr = ctx.sampleRate, bp = bpm();
+  let mono;
+  if ($("src").value === "file" && fileBuf) {
+    mono = new Float32Array(fileBuf.length);
+    for (let c = 0; c < fileBuf.numberOfChannels; c++) { const d = fileBuf.getChannelData(c); for (let i = 0; i < d.length; i++) mono[i] += d[i] / fileBuf.numberOfChannels; }
+  } else mono = synthRiff(sr, bp);
+  srcBuf = toBuf(mono, true);
+  decBufs = {};
+  for (const N of DECIM) {   // sample-and-hold N samples at 48 kHz
+    const hold = Math.max(1, Math.round(N * sr / 48000)), o = new Float32Array(mono.length);
+    for (let i = 0; i < o.length; i++) o[i] = mono[i - (i % hold)];
+    decBufs[N] = toBuf(o, true);
+  }
+  drumBuf = toBuf(makeDrums(sr, bp), false);
+  clickHi = toBuf(blip(sr, 1600), false); clickLo = toBuf(blip(sr, 1000), false);
+}
+function playSeg(buf, off, when, dur, dest) {
+  const s = ctx.createBufferSource(), g = ctx.createGain();
+  s.buffer = buf; s.connect(g); g.connect(dest);
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(1, when + FADE);
+  g.gain.setValueAtTime(1, when + dur);
+  g.gain.linearRampToValueAtTime(0, when + dur + FADE);
+  s.start(when, off, dur + FADE + 0.002);
+}
+function playOne(buf, when, dest) { const s = ctx.createBufferSource(); s.buffer = buf; s.connect(dest); s.start(when); }
+
+// The loop pass: G steps (half time: steps of an 8th). Running step t never resets
+// while the loop plays; a stutter replays the step before (within the pass).
+function scheduleStep(when) {
+  const v = V(), stepDur = sixteenth() * (v.half ? 2 : 1);
+  const G = loopBars() * (v.half ? 8 : 16);
+  const i = t % G, c = cellAt(v, t, st.srot, st.rrot), d = decAt(v, t, c, st.decOn, st.dr);
+  const loopDur = srcBuf.duration / 2, stepSrc = loopDur / G;
+  if (c !== 2) {
+    const src = c === 1 ? (i - 1 + G) % G : i;
+    playSeg(d ? decBufs[d] : srcBuf, src * stepSrc, when, stepDur, wetG);
+  }
+  ringQ.push({ when, t });
+  return stepDur;
+}
+function tick() {
+  const ahead = ctx.currentTime + 0.12, barDur = 16 * sixteenth();
+  for (;;) {   // bars and steps in time order (a restart moves the steps onto a bar)
+    if (Math.min(nextBar, nextStep) >= ahead) break;
+    if (nextBar <= nextStep + 1e-6) {
+      playOne(drumBuf, nextBar, drumG);
+      for (let q = 0; q < 4; q++) playOne(q === 0 ? clickHi : clickLo, nextBar + q * 4 * sixteenth(), clickG);
+      if (barIdx % loopBars() === 0) {   // a loop pass starts here
+        if (pendingRestart) { pendingRestart = false; t = 0; nextStep = nextBar; }
+        playSeg(srcBuf, 0, nextBar, loopBars() * barDur, dryG);
+      }
+      nextBar += barDur; barIdx++;
+      continue;
+    }
+    const d = scheduleStep(nextStep); nextStep += d; t++;
+  }
+  $("status").textContent = `playing · ${bpm().toFixed(1)} BPM · loop ${loopBars()} bar${loopBars() > 1 ? "s" : ""}`;
+}
+function start() {
+  ensureCtx(); ctx.resume();
+  buildBuffers();
+  t = 0; barIdx = 0; ringQ = []; pendingRestart = false;
+  nextBar = nextStep = ctx.currentTime + 0.08;
+  playing = true; $("play").textContent = "Stop";
+  tick(); timer = setInterval(tick, 25);
+  requestAnimationFrame(drawHead);
+}
+function stop() {
+  playing = false; clearInterval(timer); $("play").textContent = "Play"; $("status").textContent = "stopped";
+  if (ctx) {   // cut what is already scheduled: fresh bus gains, the old ones disconnected
+    [wetG, dryG, drumG, clickG].forEach(g => g.disconnect());
+    wetG = ctx.createGain(); dryG = ctx.createGain(); drumG = ctx.createGain(); clickG = ctx.createGain();
+    [wetG, dryG, drumG, clickG].forEach(g => g.connect(master));
+    setLevels();
+  }
+  cellEls.forEach(e => e.classList.remove("now"));
+}
+function togglePlay() { playing ? stop() : start(); }
+let lastNow = null;
+function drawHead() {
+  if (!playing) return;
+  const now = ctx.currentTime; let cur = null;
+  while (ringQ.length && ringQ[0].when <= now) cur = ringQ.shift();
+  if (cur) {
+    if (lastNow) lastNow.classList.remove("now");
+    const e = cellEls[cur.t % patL];
+    if (e) { e.classList.add("now"); lastNow = e; const box = $("pat"), r = e.parentElement; if (r.offsetTop < box.scrollTop || r.offsetTop > box.scrollTop + box.clientHeight - 30) box.scrollTop = r.offsetTop - 20; }
+  }
+  requestAnimationFrame(drawHead);
+}
+$("play").onclick = togglePlay;
+$("restart").onclick = () => { if (playing) pendingRestart = true; };
+const rebuild = () => { if (playing) { stop(); start(); } };
+$("bpm").addEventListener("change", rebuild);
+$("src").addEventListener("change", rebuild);
+$("fbars").addEventListener("change", rebuild);
+$("file").addEventListener("change", async e => {
+  const fl = e.target.files[0]; if (!fl) return;
+  ensureCtx();
+  try { fileBuf = await ctx.decodeAudioData(await fl.arrayBuffer()); $("src").value = "file"; $("status").textContent = `loaded ${fl.name} (${fileBuf.duration.toFixed(2)} s)`; rebuild(); }
+  catch (err) { $("status").textContent = "That file could not be decoded. Try a WAV or MP3."; }
+});
+
+renderAll();
+})();
+</script>
