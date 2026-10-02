@@ -467,7 +467,7 @@ static constexpr float  VESTIGE_TIMING_RHY_CW_R_K_MAX = 4.f;
 // Engine 0: true = every loop draws its OWN rotations (stutters, rests,
 // decimates) at its start, for its whole life (the state of 1d5ee13, the
 // builder's pick 2026-10-02); false = the fixed RHY_*_ROT below.
-static constexpr bool   VESTIGE_TIMING_RHY_ROT_RANDOM = true;
+static constexpr bool   VESTIGE_TIMING_RHY_ROT_RANDOM = false;   // TEST build: rotation off (all 0)
 // ... and only EVEN rotations (whole 8ths) of the stutter and rest cycles: an
 // odd one (a 16th off) reads as a flam. (The decimates sit on the off-beats.)
 static constexpr bool   VESTIGE_TIMING_RHY_ROT_EVEN   = true;
