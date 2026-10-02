@@ -2202,6 +2202,32 @@ class Vestige : public Module {
     return (u < VESTIGE_TIMING_RHY_HALF_U) ? 2.f : (u >= VESTIGE_TIMING_RHY_DOUBLE_U) ? 0.5f : 1.f;
   }
   static const char* RhyTempoName(float u) { const float x = RhyTempoStep(u); return x > 1.f ? "half" : x < 1.f ? "double" : "1x"; }
+  // A loop's drawn rotation word r on an n-step cycle: 0 .. n-1, or with
+  // RHY_ROT_EVEN only the even ones (0, 2, 4, ...).
+  static uint32_t RhyRotOf(uint32_t r, int n) {
+    if (!VESTIGE_TIMING_RHY_ROT_EVEN) return r % (uint32_t)n;
+    return 2u * (r % (uint32_t)((n + 1) / 2));
+  }
+  // NO FLAMS: from the drawn rest rotation rrot on, the first allowed one
+  // (RhyRotOf's set) whose rests never sit one step from a stutter over the
+  // whole lcm(Ns, Nr) period (else the fewest such rests); srot already folded.
+  static uint32_t RhyNoFlamRot(float u, uint32_t srot, uint32_t rrot, int side) {
+    const int ks = RhyPolyKs(u, side), kr = RhyPolyKr(u, side), Ns = RhyPolyNs(side), Nr = RhyPolyNr(side);
+    const int step = VESTIGE_TIMING_RHY_ROT_EVEN ? 2 : 1, nc = (Nr + step - 1) / step;
+    int g = Ns, h = Nr; while (h) { const int x = g % h; g = h; h = x; }
+    const int L = Ns / g * Nr;
+    auto S = [&](int t) { return RhyHit(((t % Ns) + Ns) % Ns, ks, Ns, (int)(srot % (uint32_t)Ns)); };
+    const int j0 = (int)(rrot / (uint32_t)step) % nc;
+    uint32_t best = rrot; int best_n = 1 << 30;
+    for (int j = 0; j < nc; j++) {
+      const int r = ((j0 + j) % nc) * step;
+      int n = 0;
+      for (int t = 0; t < L && n < best_n; t++)
+        if (RhyHit(t % Nr, kr, Nr, r) && !S(t) && (S(t - 1) || S(t + 1))) n++;
+      if (n < best_n) { best_n = n; best = (uint32_t)r; if (n == 0) break; }
+    }
+    return best;
+  }
   // Engine 0's fixed rotations, folded into their cycles.
   static_assert(VESTIGE_TIMING_RHY_S_ROT >= 0 && VESTIGE_TIMING_RHY_R_ROT >= 0 && VESTIGE_TIMING_RHY_D_ROT >= 0,
                 "rhythm rotations are >= 0");
@@ -2222,8 +2248,9 @@ class Vestige : public Module {
     const int32_t t0 = rhy_t_[s];
     const int side = rhy_side_;                            // (read once: one half per pass)
     // Rotations: this loop's own draws (RHY_ROT_RANDOM) or the fixed constants.
-    const uint32_t srot = VESTIGE_TIMING_RHY_ROT_RANDOM ? rhy_rot_[s] : (uint32_t)kRhySRot;
-    const uint32_t rrot = VESTIGE_TIMING_RHY_ROT_RANDOM ? rhy_rrot_[s] : (uint32_t)kRhyRRot;
+    const uint32_t srot = VESTIGE_TIMING_RHY_ROT_RANDOM ? RhyRotOf(rhy_rot_[s], RhyPolyNs(side)) : (uint32_t)kRhySRot;
+    uint32_t rrot = VESTIGE_TIMING_RHY_ROT_RANDOM ? RhyRotOf(rhy_rrot_[s], RhyPolyNr(side)) : (uint32_t)kRhyRRot;
+    if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rrot = RhyNoFlamRot(rhy_level_, srot, rrot, side);
     for (int i = 0; i < G; i++) cell[i] = (uint8_t)RhyPolyBase(t0 + i, rhy_level_, srot, rrot, side);
     rhy_t_[s] = t0 + G;                                    // runs on across passes
     if (TimingRand() < VESTIGE_TIMING_RHY_VAR_PROB * (float)G / 32.f) {
@@ -4353,8 +4380,9 @@ class Vestige : public Module {
     if (VESTIGE_TIMING_RHY_ENGINE == 0) {
       const bool have = slot >= 0 && slot < VESTIGE_VOICE_SLABS;
       const int Ns = RhyPolyNs(side), Nr = RhyPolyNr(side), Nd = VESTIGE_TIMING_RHY_D_SLOTS;
-      const int sr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)(rhy_rot_[slot] % (uint32_t)Ns) : 0) : kRhySRot;
-      const int rr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)(rhy_rrot_[slot] % (uint32_t)Nr) : 0) : kRhyRRot;
+      const int sr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)RhyRotOf(rhy_rot_[slot], Ns) : 0) : kRhySRot;
+      int rr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)RhyRotOf(rhy_rrot_[slot], Nr) : 0) : kRhyRRot;
+      if (VESTIGE_TIMING_RHY_ROT_RANDOM && VESTIGE_TIMING_RHY_NO_FLAM) rr = (int)RhyNoFlamRot(u, (uint32_t)sr, (uint32_t)rr, side);
       const int dr = VESTIGE_TIMING_RHY_ROT_RANDOM ? (have ? (int)((rhy_rot_[slot] >> 8) % (uint32_t)Nd) : 0) : kRhyDRot;
       RhyRenderBars(pat, u, sr, rr, dr, side);
       snprintf(line, sizeof line, "VS RHY %s#%d t=%u k3=%s u=%s %s E(%d,%d)r%d E(%d,%d)r%d kd=%d dr%d %s",

@@ -468,6 +468,13 @@ static constexpr float  VESTIGE_TIMING_RHY_CW_R_K_MAX = 4.f;
 // decimates) at its start, for its whole life (the state of 1d5ee13, the
 // builder's pick 2026-10-02); false = the fixed RHY_*_ROT below.
 static constexpr bool   VESTIGE_TIMING_RHY_ROT_RANDOM = true;
+// ... and only EVEN rotations (whole 8ths) of the stutter and rest cycles: an
+// odd one (a 16th off) reads as a flam. (The decimates sit on the off-beats.)
+static constexpr bool   VESTIGE_TIMING_RHY_ROT_EVEN   = true;
+// ... and NO FLAMS: of the allowed rest rotations, starting at the loop's own
+// draw, the first with no rest right next to (one step from) a stutter
+// (else the one with the fewest such neighbours), per pass at the depth.
+static constexpr bool   VESTIGE_TIMING_RHY_NO_FLAM    = true;
 // Rhythm TEMPO by depth (both halves, engine 0): the step the rhythm runs on
 // is the layers' step (VESTIGE_TIMING_STEP_MS, the loop-length scaled one)
 // x2 = HALF TIME below depth HALF_U (the first rhythms past noon), x0.5 =
