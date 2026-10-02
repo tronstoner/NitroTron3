@@ -57,8 +57,10 @@ Found on the way (not controls, but worth deciding):
   follow mode stays; tape vs stretch still to be decided by testing). If SW2
   is reassigned later: likely degrade textures and/or glitch modes; a unified
   engine overlapping sprawl is a longer-term dream.
-- **Agreed: K1** (the same octave blend as the loop side), **K2** (SIZE +
-  reverse), **K5** (SUSTAIN on the CCW half).
+- **Agreed: K1** (an octave layer for the freeze pad) and **K5** (SUSTAIN on
+  the CCW half). **K2: NOT on the freeze** (revised 2026-10-02): the freeze
+  window is a constant; K2 / tap only set the tempo, which matters on the
+  freeze for the K3 glitches (their virtual pass = T).
 - Open: the freeze tail-trim / attack-skip fixes (they touch capture).
 
 ## A. Proposal (original, for reference): the omitted controls on the freeze
