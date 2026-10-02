@@ -3631,10 +3631,6 @@ static const char* const kInterlockLines[] = {
   /* #18 */ "D-s_ss_s_s-Ds-D-Ds-D-s_sD-s_ss_s_s-Ds-D-Ds-D-s_s",
   /* #19 */ "D-ss_ss-D-ss_ss-D-ss_ss-D-ss_ss-D-ss_ss-D-ss_ss-",
   /* #20 */ "D-sD-sD-s_ss_ss_s-Ds-Ds-D-sD-sD-s_ss_ss_s-Ds-Ds-",
-  /* #21 */ "D_s-s_-s-s_-s_D_D__D_s-_D_s-s_-s-s_-s_D_D__D_s-_",
-  /* #22 */ "D__D_s-_D_s-s_-s-s_-s_D_D__D_s-_D_s-s_-s-s_-s_D_",
-  /* #23 */ "D__s-_s_-s__D__s-_s_-s__D__s-_s_-s__D__s-_s_-s__",
-  /* #24 */ "D__s-_s_-_s_D___D__s-_s_-_s_D___D__s-_s_-_s_D___",
   // END GENERATED INTERLOCK LINES
 };
 static constexpr int kInterlockLinesN = (int)(sizeof kInterlockLines / sizeof kInterlockLines[0]);

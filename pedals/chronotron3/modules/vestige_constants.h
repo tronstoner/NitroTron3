@@ -595,14 +595,6 @@ static constexpr VestigeRhyRow VESTIGE_TIMING_RHY_TABLE_INTERLOCK[] = {
   {kRhyGrid1x, RhyStr("x.xx.xx."), RhyStr("....x..."), RhyStr("x......."), {{"cinquillo", 5, 8, 0}, kRhyPrDuck, {"E(2,8)", 2, 8, 0}}},
   /* #20 a=cinquillo ducking b=E(4,12), decimates = the 5 overlaps */
   {kRhyGrid1x, RhyStr("x.xx.xx."), RhyStr(".........x..x..x........"), RhyStr("x..x..x...........x..x.."), {{"cinquillo", 5, 8, 0}, kRhyPrDuck, {"E(4,12)", 4, 12, 0}}},
-  /* #21 a=bell_5 negative space b=E(3,8), decimates = the 4 overlaps */
-  {kRhyGrid1x, RhyStr("x.x.x..x.x.."), RhyStr(".x...x....x..x.x.xx.x..x"), RhyStr("x.............x.x..x...."), {{"bell_5", 5, 12, 0}, kRhyPrNeg, {"E(3,8)", 3, 8, 0}}},
-  /* #22 a=E(5,12) negative space b=E(3,8), decimates = the 4 overlaps */
-  {kRhyGrid1x, RhyStr("x..x.x..x.x."), RhyStr(".xx.x..x.x...x....x..x.x"), RhyStr("x..x....x.............x."), {{"E(5,12)", 5, 12, 0}, kRhyPrNeg, {"E(3,8)", 3, 8, 0}}},
-  /* #23 a=E(4,12) negative space b=E(2,8), decimates = the 2 overlaps */
-  {kRhyGrid1x, RhyStr("x..x..x..x.."), RhyStr(".xx..x.x..xx.xx..x.x..xx"), RhyStr("x...........x..........."), {{"E(4,12)", 4, 12, 0}, kRhyPrNeg, {"E(2,8)", 2, 8, 0}}},
-  /* #24 a=son_3-2 negative space b=E(2,8), decimates = the 2 overlaps */
-  {kRhyGrid1x, RhyStr("x..x..x...x.x..."), RhyStr(".xx..x.x.x.x.xxx"), RhyStr("x...........x..."), {{"son_3-2", 5, 16, 0}, kRhyPrNeg, {"E(2,8)", 2, 8, 0}}},
   // END GENERATED INTERLOCK ROWS
   // -> full CCW
 };
