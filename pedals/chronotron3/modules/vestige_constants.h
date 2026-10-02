@@ -430,11 +430,13 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 // together (timing mode 3: TIMING / CONDITION / PLAYBACK). Noon
 // (+-VESTIGE_K3_DEADZONE): no errors. K3 mode 1 (SW2 UP): the RHYTHM only,
 // depth u = 0 just past the dead zone .. 1 at that half's end; the CCW half
-// from one of three engines (VESTIGE_TIMING_RHY_ENGINE), the CW half from
-// engine 2's CW table (engines 0 + 1: CW clean):
+// from one of three engines (VESTIGE_TIMING_RHY_ENGINE; engine 0 = the
+// default), the CW half from engine 0's CW cycles or engine 2's CW table
+// (engine 1: CW clean):
 //   0 POLYMETRIC: Euclidean stutters + rests, one step each, on the
-//     voice's running step count (it rolls across bars), at FIXED rotations
-//     (RHY_S_ROT / RHY_R_ROT / RHY_D_ROT below, the same for every loop):
+//     voice's running step count (it rolls across bars), at rotations drawn
+//     PER LOOP under rules (RHY_ROT_RANDOM / _ON1 / AUDIBLE_RESTS below; with
+//     ROT_RANDOM false the fixed RHY_S_ROT / R_ROT / D_ROT):
 //     stutters: a RHY_S_CYCLE (12) step cycle, S_K_MIN .. S_K_MAX hits with the
 //     depth (E(2,12) = dotted-quarter hemiola .. E(7,12) = the bell pattern);
 //     rests: a RHY_R_CYCLE (8) step cycle, R_K_MIN .. R_K_MAX hits (E(1,8) ..
@@ -516,8 +518,8 @@ static constexpr float  VESTIGE_TIMING_RHY_RAT_U0     = 0.6f;
 static constexpr float  VESTIGE_TIMING_RHY_RAT_P_MAX  = 0.5f;
 static constexpr float  VESTIGE_TIMING_RHY_RAT_P_CURVE = 2.f;
 static constexpr float  VESTIGE_TIMING_RHY_RAT_Q_MAX  = 0.5f;
-// Engine 0 ROTATIONS: rotation is part of the rhythm — fixed, never random; to
-// be chosen by ear per rhythm. E(k, n) rotated by rot: hit at i if
+// Engine 0 FIXED ROTATIONS — used only with RHY_ROT_RANDOM false (the default
+// draws them per loop, above). E(k, n) rotated by rot: hit at i if
 // ((i + rot) % n * k) % n < k. S_ROT rotates the stutter cycle (0 .. S_CYCLE-1),
 // R_ROT the rest cycle (0 .. R_CYCLE-1), D_ROT the decimate slots
 // (0 .. D_SLOTS-1, also picks each slot's decimate factor). Every loop plays

@@ -215,9 +215,8 @@ class Vestige : public Module {
     // ---- K3, bipolar: noon clean; each half per SW2's K3 mode ----------------
     // Within VESTIGE_K3_DEADZONE of noon: no errors. Mode 1 (SW2 UP): the
     // RHYTHM line (stutters + rests, see TimingPlanRhythm) at depth 0 -> 1 over
-    // either half: CCW = the traditional table (engine
-    // VESTIGE_TIMING_RHY_ENGINE), CW = engine 2's academic odd-cycle table
-    // (VESTIGE_TIMING_RHY_TABLE_CW; engines 0 + 1: CW clean). Mode 2 (SW2
+    // either half (engine VESTIGE_TIMING_RHY_ENGINE; engine 0: CCW 12 : 8, CW
+    // 15 : 10; engine 2: its two tables; engine 1: CW clean). Mode 2 (SW2
     // MIDDLE) CW half: the three layers (TIMING / CONDITION / PLAYBACK)
     // together at level 0 -> 1 over the half.
     {
@@ -2160,7 +2159,8 @@ class Vestige : public Module {
   // (stutters) and CONDITION (rests, decimates) lines, so the render stacks
   // them as usual; all share the one-added-stutter variation; engines 0 + 1
   // share the off-beat decimate colour, engine 2's decimates are its rows'
-  // OVERLAP masks (dec). Every rotation is fixed — never random.
+  // OVERLAP masks (dec). Engine 0's rotations are drawn per loop under rules
+  // (stutter on the 1, audible rests; RHY_ROT_RANDOM), the tables' are fixed.
   // Engine 2 has two tables, one per K3 half (rhy_side_: kRhyCcw traditional,
   // kRhyCw academic); they share the planner and the running step count.
   void TimingPlanRhythm(int s, int G, int seg0) {
@@ -2316,7 +2316,8 @@ class Vestige : public Module {
         return ks + dd >= 1 && ks + dd <= Ns - 1 && RhyHit(0, ks + dd, Ns, (int)(srot % (uint32_t)Ns));
       };
       auto rest_ok = [&](int dd) {
-        if (kr + dd < 1 || kr + dd > Nr - 1) return false;
+        const int kr_min = (side == kRhyCcw && RhyTempoStep(rhy_level_) > 1.f) ? VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW : 1;
+        if (kr + dd < kr_min || kr + dd > Nr - 1) return false;   // (CCW half time: never below E(2,8))
         const int base = RhyKVarAudible(rkv_t0_[s], rkv_t1_[s], srot, rrot, side, 0);
         const int a = RhyKVarAudible(rkv_t0_[s], rkv_t1_[s], srot, rrot, side, dd);
         return a >= 1 && a >= base - (dd < 0 ? 1 : 0);
@@ -2338,6 +2339,7 @@ class Vestige : public Module {
   static constexpr int8_t kRkvNone = 99;                  // hit variation: drawn, but nothing fits
   void TimingPlanRhythmPoly(int s, int G, int seg0) {
     uint8_t cell[VESTIGE_TIMING_LAYER_MAX_STEPS];
+    bool base_rest_[VESTIGE_TIMING_LAYER_MAX_STEPS];        // the base (no variation) rests of this pass
     const int32_t t0 = rhy_t_[s];
     const int side = rhy_side_;                            // (read once: one half per pass)
     // RE-ROLL: another rhythm than this loop's last pass -> new rotation draws.
@@ -2363,16 +2365,18 @@ class Vestige : public Module {
       int dks = 0, dkr = 0;
       if (VESTIGE_TIMING_RHY_KVAR) RhyKVarAt(s, t, side, srot, rrot, dks, dkr);
       int c = RhyPolyBase(t, rhy_level_, srot, rrot, side, dks, dkr);
+      const bool base_rest = RhyPolyBase(t, rhy_level_, srot, rrot, side) == 2;
       // A stutter variation never lands on a rest (rests are never swallowed).
-      if (dks != 0 && c == 1 && RhyPolyBase(t, rhy_level_, srot, rrot, side) == 2) c = 2;
+      if (dks != 0 && c == 1 && base_rest) c = 2;
       cell[i] = (uint8_t)c;
+      base_rest_[i] = base_rest;
     }
     rhy_t_[s] = t0 + G;                                    // runs on across passes
     if (TimingRand() < VESTIGE_TIMING_RHY_VAR_PROB * (float)G / 32.f) {
       int hits[VESTIGE_TIMING_LAYER_MAX_STEPS], nh = 0, frees[VESTIGE_TIMING_LAYER_MAX_STEPS], nf = 0;
-      for (int i = 0; i < G; i++) { if (cell[i]) hits[nh++] = i; else frees[nf++] = i; }
+      for (int i = 0; i < G; i++) { if (cell[i]) hits[nh++] = i; else if (!base_rest_[i]) frees[nf++] = i; }
       (void)hits; (void)nh;
-      if (nf > 0) cell[frees[TimingPick(nf)]] = 1;         // a variation = one added stutter
+      if (nf > 0) cell[frees[TimingPick(nf)]] = 1;         // a variation = one added stutter (never on a base rest)
       timing_vars_++;
     }
     ln_nh_[s][kErrTiming] = ln_nh_[s][kErrCondition] = ln_nh_[s][kErrPlayback] = 0;
@@ -2395,7 +2399,8 @@ class Vestige : public Module {
     }
     // DECIMATE colour: its own Euclidean pattern on the 8th-note OFF-BEATS
     // (running steps t = 2 mod 4): E(k, RHY_D_SLOTS) over those slots, k =
-    // D_K_MIN .. D_K_MAX with the depth, at the fixed RHY_D_ROT; one step each,
+    // D_K_MIN .. D_K_MAX with the depth, at the loop's drawn rotation (fixed
+    // RHY_D_ROT with ROT_RANDOM off); one step each,
     // stacked on a stutter, never on a rest; its factor fixed per slot.
     {
       const int kd = (int)(VESTIGE_TIMING_RHY_D_K_MIN + (VESTIGE_TIMING_RHY_D_K_MAX - VESTIGE_TIMING_RHY_D_K_MIN) * rhy_level_ + 0.5f);
@@ -3366,10 +3371,9 @@ class Vestige : public Module {
       play_len_[s] = L; cur_view_[s] = -1; rc_building_[s] = rc_ready_[s] = false; rc_want_[s] = L;
       trig_off_[s] = 0.f; trig_cnt_[s] = trig_next_[s] = 0; cur_pat_[s] = -1; trig_pass_[s] = pass_[s];   // (pass_ set just above)
       rot_seed_[s] = TimingRandU();                         // this loop's rotation, for its whole life
-      // K3 CCW: per-loop words, UNUSED by every engine (rotation is part of
-      // the rhythm: fixed RHY_*_ROT / the tables, never random). Still drawn
-      // so the random sequence of everything else (CW glitch layers,
-      // variations) stays exactly as it was.
+      // K3 mode 1: this loop's rotation words (engine 0 with RHY_ROT_RANDOM:
+      // stutters / decimates from rhy_rot_, rests from rhy_rrot_; redrawn on
+      // a re-roll).
       rhy_rot_[s] = TimingRandU(); rhy_rrot_[s] = TimingRandU();
       rhy_t_[s] = 0;                                        //  and its running step count
       rkv_next_[s] = -1; rkv_t0_[s] = rkv_t1_[s] = 0;         //  and no hit variation yet
@@ -4625,8 +4629,8 @@ class Vestige : public Module {
   int      ln_pass_[VESTIGE_VOICE_SLABS]     = {0};      // which pass of the line plays
   int      ln_ops_[VESTIGE_VOICE_SLABS][kErrTypes] = {};   // changes still pending for the next pass
   bool     ln_rhythm_[VESTIGE_VOICE_SLABS]   = {};       // the lines hold the K3 CCW rhythm
-  uint32_t rhy_rot_[VESTIGE_VOICE_SLABS]     = {};       // per-loop word (unused: every rotation is fixed; drawn for the RNG sequence)
-  uint32_t rhy_rrot_[VESTIGE_VOICE_SLABS]    = {};       //  (unused: engine 0's rotations are fixed constants)
+  uint32_t rhy_rot_[VESTIGE_VOICE_SLABS]     = {};       // per-loop rotation word: stutters (+ decimates, >> 8)
+  uint32_t rhy_rrot_[VESTIGE_VOICE_SLABS]    = {};       //  and rests
   int32_t  rhy_t_[VESTIGE_VOICE_SLABS]       = {};       // running step count (the polymeter's clock)
   int32_t  rhy_key_[VESTIGE_VOICE_SLABS]     = {};       // re-roll: the rhythm of its last pass (-1 = none yet)
   int32_t  rkv_next_[VESTIGE_VOICE_SLABS]    = {};       // hit variation: next start (-1 = draw; set at loop start)
