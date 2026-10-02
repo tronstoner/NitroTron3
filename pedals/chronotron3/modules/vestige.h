@@ -725,7 +725,7 @@ class Vestige : public Module {
       }
       float y = 0.f;
       // K3 mode 1 on the freeze: the virtual pass clock always runs (a new
-      // freeze joins the running rhythm); while its stage is engaged the
+      // freeze capture restarts it: the downbeat); while its stage is engaged the
       // freeze slots sum apart and pass through it (after pad + K1 + sustain).
       FzRhyStep();
       const bool fz_post = mute_d_[kFzR] != 0.f || mute_dt_[kFzR] != 0.f || decim_d_[kFzR] != 0.f || decim_dt_[kFzR] != 0.f;
@@ -2667,10 +2667,10 @@ class Vestige : public Module {
     return G;
   }
   // ---- K3 mode 1 on the FREEZE side (SW1 DOWN): rests + decimates ----------
-  // A virtual pass of T (period_, latched at its start) split into G steps by
-  // the loop side's rule; each pass is planned by the loop side's engine-0
-  // planner (TimingPlanRhythmPoly) on the virtual index kFzR, whose running
-  // step count rolls on across passes and freeze captures. Its CONDITION line
+  // A virtual pass of T (period_, followed at once as a fraction) split into
+  // G steps by the loop side's rule; each pass is planned by the loop side's
+  // engine-0 planner (TimingPlanRhythmPoly) on the virtual index kFzR, whose
+  // running step count rolls on across passes; a freeze capture restarts it. Its CONDITION line
   // (rests, decimates) drives the shared rest / decimate stage on the SUMMED
   // freeze output (CondStage); its TIMING line (stutters, ratchets) is
   // planned but does nothing yet. Its own RNG: the loop side's draws are
@@ -2686,7 +2686,7 @@ class Vestige : public Module {
     fz_L_ = period_ > 0 ? (uint32_t)period_ : 1u;
     fz_el_ = 0; fz_i_ = 0; fz_G_ = 1; fz_nb_ = fz_L_;
     for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) fz_cnd_[i] = 0;
-    if (pool_ == kPoolFreeze && rhy_level_ > 0.f) {
+    if (rhy_level_ > 0.f) {                               // (as a loop: the depth at the pass start)
       const int G = TimingStepCount((double)fz_L_, true, rhy_level_);
       const uint32_t keep = timing_rng_; timing_rng_ = fz_rng_;
       const uint32_t ed = timing_edits_, vr = timing_vars_;
@@ -2702,13 +2702,18 @@ class Vestige : public Module {
     TimingCond(kFzR, fz_cnd_[0]);
   }
   uint32_t FzBnd(int i) const { return (i >= fz_G_) ? fz_L_ : (uint32_t)((double)fz_L_ * (double)i / (double)fz_G_ + 0.5); }
-  // Per sample: the virtual pass clock + this step's condition.
+  // Per sample: the virtual pass clock + this step's condition. Like a loop
+  // voice: K3 on / off (and the depth) take effect at the next pass start; a
+  // T change (K2 / tap) at once — the pass keeps its position as a fraction
+  // and runs on at the new length, its steps re-placed (stretch follow).
   void FzRhyStep() {
     if (fz_el_ >= fz_L_) FzRhyPlan();
-    else if (fz_G_ > 1 && !(pool_ == kPoolFreeze && rhy_level_ > 0.f)) {   // off mid-pass: clean at once
-      fz_G_ = 1; fz_nb_ = fz_L_; fz_i_ = 0;
-      for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) fz_cnd_[i] = 0;
-      TimingCond(kFzR, 0);
+    else {
+      const uint32_t T = period_ > 0 ? (uint32_t)period_ : 1u;
+      if (T != fz_L_) {
+        fz_el_ = (uint32_t)((double)fz_el_ * (double)T / (double)fz_L_ + 0.5);
+        fz_L_ = T; fz_nb_ = FzBnd(fz_i_ + 1);
+      }
     }
     while (fz_el_ >= fz_nb_ && fz_i_ + 1 < fz_G_) {
       fz_i_++; fz_nb_ = FzBnd(fz_i_ + 1);
@@ -3439,6 +3444,10 @@ class Vestige : public Module {
     // Speculative guard for the ceiling: a capture that runs to T then starts
     // on time even in reverse. Re-based if the end turns out shorter.
     GuardJob(s, cap_ceil_);
+    if (!loop) {                        // K3 mode 1 on the freeze: a capture is the downbeat —
+      FzRhyNewWords();                  //  new rotations, step count 0, a new virtual pass
+      rhy_t_[kFzR] = 0; fz_el_ = 0; fz_L_ = 0;   //  (planned on the next FzRhyStep)
+    }
     recording_ = true;
     arm_slot_  = -1;                    // consumed; the control thread reserves the next
   }
@@ -3608,7 +3617,6 @@ class Vestige : public Module {
       dec_g_[s] = dec_t_[s] = rep_base_[s] = 1.f; dec_step_[s] = 0.f; rep_k_[s] = 0; rep_pass_[s] = pass_[s];
     } else if (PoolOf(s) == kPoolFreeze && s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS) {   // a new freeze: its own sustain from 0
       const int q = s - VESTIGE_FREEZE_SLOT0;
-      FzRhyNewWords();                                      // K3 mode 1: new rotations, the clock runs on
       sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; sus_step_[q] = 0.f; sus_x_[q] = 0.f;
       if (frz_atk_s_ > 0.f) { sus_g_[q] = sus_t_[q] = 0.f; frz_atk_x_[q] = 0.f; }   // K5 CCW: fade in first
       else frz_atk_x_[q] = 1.f;
