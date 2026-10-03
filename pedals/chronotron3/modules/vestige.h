@@ -2749,7 +2749,13 @@ class Vestige : public Module {
     float dec = (float)D - att;                            // the decay runs after the attack
     if (dec < att) dec = att;
     fz_att_from_ = fz_c_; fz_att_ph_ = 0.f; fz_att_inc_ = 1.f / att;
-    fz_dx_ = 0.f; fz_dinc_ = 1.f / dec;                     // decay progress 0 -> 1 over dec
+    fz_dx_ = 0.f; fz_dinc_ = 1.f / dec;                     // decay progress 0 -> 1 over dec (B)
+    // A: ASR — fully open for GATE x D (from the strike), then RELEASE_MS to
+    // the base; ratchets divide both by their count (D already is).
+    fz_t_ = 0.f;
+    fz_gate_s_ = VESTIGE_FRZ_LPG_ASR_GATE * (float)D - att;
+    if (fz_gate_s_ < 0.f) fz_gate_s_ = 0.f;
+    fz_rel_s_ = VESTIGE_FRZ_LPG_ASR_RELEASE_MS * 0.001f * sr_ / (float)fz_sub_n_;
     fz_dmp_on_ = false; fz_dmp_ = 1.f;
   }
   // The low pass gate on the summed freeze output (bypassed = identity).
@@ -2768,11 +2774,18 @@ class Vestige : public Module {
     } else {
       // Vactrol-like decay that spans the WHOLE decay length: a normalised
       // exponential, 1 at the strike, exactly 0 at the end (curve K).
+      if (VESTIGE_FRZ_LPG_MODEL == 0) {                    // A: attack - sustain - release
+        const float t = fz_t_; fz_t_ += 1.f;
+        if (t < fz_gate_s_) c = 1.f;
+        else { float r = (t - fz_gate_s_) / fz_rel_s_; if (r > 1.f) r = 1.f; c = 1.f - r * r * (3.f - 2.f * r); }
+        goto lpg_env_done;
+      }
       fz_dx_ += fz_dinc_; if (fz_dx_ > 1.f) fz_dx_ = 1.f;
       constexpr float K = VESTIGE_FRZ_LPG_DECAY_K, eK = 0.04978707f;   // e^-3 (K = 3)
       static_assert(K == 3.f, "update eK with K");
       c = (expf(-K * fz_dx_) - eK) / (1.f - eK);
     }
+  lpg_env_done:
     if (fz_dmp_on_) {
       fz_dmp_ -= 1.f / (VESTIGE_FRZ_LPG_DAMP_MS * 0.001f * sr_);
       if (fz_dmp_ < 0.f) fz_dmp_ = 0.f;
@@ -5043,6 +5056,7 @@ class Vestige : public Module {
   int      fz_sub_n_ = 0, fz_sub_j_ = 0;                  // this step's hit count, hits done
   float    fz_lpg_mix_ = 0.f, fz_c_ = 0.f, fz_dmp_ = 1.f;  // bypass xfade, control value, damp gain
   float    fz_att_ph_ = 1.f, fz_att_inc_ = 0.f, fz_att_from_ = 0.f;
+  float    fz_t_ = 1e9f, fz_gate_s_ = 0.f, fz_rel_s_ = 1.f;   // A (ASR): time since attack, sustain + release lengths
   float    fz_dx_ = 1.f, fz_dinc_ = 0.f, fz_z1_ = 0.f, fz_z2_ = 0.f;   // LPG decay progress + step, filter state
   int8_t   fz_cnd_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: 0 clean, 1 rest, N decimate xN                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag

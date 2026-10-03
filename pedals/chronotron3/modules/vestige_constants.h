@@ -1216,7 +1216,12 @@ static constexpr float  VESTIGE_FRZ_LPG_B_FLOOR_DB = -60.f;   // B: gain at c ->
 static constexpr float  VESTIGE_FRZ_LPG_B_BASE_HZ = 60.f;     // B: closed cutoff (c = 0)
 static constexpr float  VESTIGE_FRZ_LPG_OPEN_HZ   = 18000.f;  // c = 1
 static constexpr float  VESTIGE_FRZ_LPG_ATTACK_MS = 3.f;
-static constexpr float  VESTIGE_FRZ_LPG_DECAY_K   = 3.f;      // decay curve over D: (e^-Kx - e^-K)/(1 - e^-K), reaches 0 at D
+static constexpr float  VESTIGE_FRZ_LPG_DECAY_K   = 3.f;   // (model B's decay)
+// Model A = ATTACK - SUSTAIN - RELEASE (2026-10-03, the builder): fully open
+// for ASR_GATE x the stutters' average spacing (from the strike), then
+// ASR_RELEASE_MS (smoothstep) back to the base. Ratchets divide both.
+static constexpr float  VESTIGE_FRZ_LPG_ASR_GATE       = 0.6f;
+static constexpr float  VESTIGE_FRZ_LPG_ASR_RELEASE_MS = 150.f;      // decay curve over D: (e^-Kx - e^-K)/(1 - e^-K), reaches 0 at D
 static constexpr float  VESTIGE_FRZ_LPG_DAMP_MS   = 25.f;     // B: rest = hand mute
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
