@@ -1225,8 +1225,8 @@ static constexpr float  VESTIGE_FRZ_LPG_ASR_GATE    = 0.35f;
 static constexpr float  VESTIGE_FRZ_LPG_ASR_RELEASE = 0.25f;
 // ... with a percussive DECAY (cubic) over ASR_DECAY x the interval from fully
 // open down to the sustain level ASR_SUSTAIN (held to the gate end).
-static constexpr float  VESTIGE_FRZ_LPG_ASR_DECAY   = 0.15f;
-static constexpr float  VESTIGE_FRZ_LPG_ASR_SUSTAIN = 0.6f;      // decay curve over D: (e^-Kx - e^-K)/(1 - e^-K), reaches 0 at D
+static constexpr float  VESTIGE_FRZ_LPG_ASR_DECAY   = 0.3f;
+static constexpr float  VESTIGE_FRZ_LPG_ASR_SUSTAIN = 0.8f;      // decay curve over D: (e^-Kx - e^-K)/(1 - e^-K), reaches 0 at D
 static constexpr float  VESTIGE_FRZ_LPG_DAMP_MS   = 25.f;     // B: rest = hand mute
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
