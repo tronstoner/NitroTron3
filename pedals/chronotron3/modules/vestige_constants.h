@@ -103,6 +103,12 @@ static constexpr size_t VESTIGE_MIN_LOOP_SAMPLES = 240; // 5 ms shortest capture
 // knob and the added direction half.)
 // ---------------------------------------------------------------------------
 static constexpr float  VESTIGE_K2_DEADZONE = 0.06f;   // ±6% around noon: shortest length, forward
+// FREE-RUN zone at both ends of K2 (remapped value: k2 <= ZONE or >= 1 - ZONE;
+// RemapKnob saturates at 0 / 1, so both ends are reachable). A capture that
+// STARTS in the zone is not quantised: Q = its raw length (>= T_MIN, since Q
+// becomes T and later captures quantise down to T/8), ceiling = the full
+// buffer (T_MAX), and T is then SET to Q. Direction unchanged (CCW = reverse).
+static constexpr float  VESTIGE_K2_FREE_ZONE = 0.02f;
 
 // ---------------------------------------------------------------------------
 // T — THE MASTER PERIOD (rework stage 1, plan §4.3). K2's magnitude (above) or

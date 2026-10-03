@@ -522,6 +522,7 @@ class Vestige : public Module {
     // Voice management, once per block, audio thread only (see Controls):
     // leaving MIDDLE retires the older loops oldest-first over K5, and the
     // age-ramp gains follow the live set.
+    FreeRelease();                                  // K2 free-run pins (no-op unless a free T was set)
     if (!fripp_mode_) { EvictToTarget(); UpdateVoicedGains(); UpdateTapeTargets(); }
     UpdateRepeats();
     UpdateSustain(size);
@@ -1279,7 +1280,8 @@ class Vestige : public Module {
     const int fm = follow_mode_;
     if ((fm != kFollowTape && fm != kFollowStretch) || div_[s] < 0) return 1.0;
     const size_t M  = loop_len_[s];
-    const size_t Lt = GridQuantize::Boundary(div_[s], period_);
+    const size_t Lt = (s < VESTIGE_VOICE_SLABS && pin_len_[s]) ? pin_len_[s]   // K2 free-run pin
+                                                               : GridQuantize::Boundary(div_[s], period_);
     if (Lt == 0 || Lt == M) return 1.0;                     // unchanged T: exactly 1
     double r = (double)M / (double)Lt;
     if (fm == kFollowTape) {                                 // no folding: exactly M / Lt
@@ -1313,7 +1315,8 @@ class Vestige : public Module {
   size_t PlayLen(int s) const { return (s < VESTIGE_VOICE_SLABS) ? play_len_[s] : loop_len_[s]; }
   size_t RecutTarget(int s) const {
     if (follow_mode_ != kFollowRecut || div_[s] < 0) return loop_len_[s];
-    const size_t Lt = GridQuantize::Boundary(div_[s], period_);
+    const size_t Lt = (s < VESTIGE_VOICE_SLABS && pin_len_[s]) ? pin_len_[s]   // K2 free-run pin
+                                                               : GridQuantize::Boundary(div_[s], period_);
     return (Lt == 0) ? loop_len_[s] : Lt;
   }
   bool ViewBusy(int s, int v) const {
@@ -2691,6 +2694,7 @@ class Vestige : public Module {
   // follows T like a stretch-following loop. Before any measured freeze has
   // played (fz_pdiv_ < 0) the pass is T and the rhythm stays clean.
   uint32_t FzPassLen() const {
+    if (fz_ppin_ > 0) return (uint32_t)fz_ppin_;          // K2 free-run pin
     const size_t T = period_ > 0 ? period_ : 1u;
     const size_t L = (fz_pdiv_ >= 0) ? GridQuantize::Boundary(fz_pdiv_, T) : T;
     return L > 0 ? (uint32_t)L : 1u;
@@ -2702,6 +2706,7 @@ class Vestige : public Module {
     FzRhyNewWords();
     rhy_t_[kFzR] = 0;
     fz_pdiv_ = fz_sdiv_[s];
+    fz_ppin_ = pins_held_ ? fz_spin_[s] : 0;              // K2 free-run: a free / pinned freeze keeps its pass
     FzRhyPlan((now - cap_start_[s]) % FzPassLen());
   }
   // Plan a pass; el0 > 0 joins it mid-way (the hits behind it are skipped).
@@ -3618,6 +3623,16 @@ class Vestige : public Module {
     const bool loop = (PoolOf(s) == kPoolLoop);
     cap_T_[s]  = loop ? period_ : 0;    // T latched at the START: K2 / a tap cannot move this grid
     cap_ceil_  = loop ? period_ : max_loop_len_;
+    // K2 FREE-RUN zone, latched at the start: no grid, the ceiling is the full
+    // buffer (the freeze phrase: see below). A new capture follows T (no pin).
+    const bool fr = k2_free_;
+    if (loop) {
+      cap_free_ = fr;
+      if (fr) cap_ceil_ = VESTIGE_T_MAX_SAMPLES;
+      if (s < VESTIGE_VOICE_SLABS) pin_len_[s] = 0;
+    } else {
+      fz_spin_[s] = 0;
+    }
     age_[s]    = ++age_counter_;        // capture order = voice age
     led_anchor_[pool_] = now;           // the capture start is the "one" (LED1)
     led_slot_[pool_]   = s;             // ...and once it plays, its own loop time
@@ -3632,7 +3647,8 @@ class Vestige : public Module {
       // (FzVirtMeasure); its tail becomes the freeze (FzVirtEnd).
       gfill_base_[s] = 0; gfill_k_[s] = gfill_end_[s] = 0; gfill_src_[s] = 0; gready_[s] = 0;
       fz_vslot_ = s; fz_vw_ = 0;
-      fz_vidx_ = 0; fz_vT_ = period_;
+      fz_vidx_ = 0; fz_vT_ = fr ? VESTIGE_T_MAX_SAMPLES : period_;   // free: ceiling = the full buffer
+      fz_vfree_ = fr;
       fz_vsil_run_ = 0; fz_vsil_onset_ = 0; fz_vlast_loud_ = 0;
       fz_vrec_ = true;
     }
@@ -3678,8 +3694,17 @@ class Vestige : public Module {
   void FzVirtEnd(size_t raw, uint32_t now) {
     const int s = fz_vslot_;
     const size_t D = fz_vidx_;                              // samples recorded into the ring
-    const size_t Q = GridQuantize::Quantize(raw, fz_vT_);
-    fz_sdiv_[s] = GridQuantize::IndexOf(Q, fz_vT_);
+    size_t Q;
+    if (fz_vfree_) {
+      // FREE-RUN: the raw phrase length is the pass and the new T (1/1 of it).
+      Q = FreeLen(raw);
+      fz_sdiv_[s] = 0;
+      FreeSet(-1, Q);
+      fz_spin_[s] = Q;
+    } else {
+      Q = GridQuantize::Quantize(raw, fz_vT_);
+      fz_sdiv_[s] = GridQuantize::IndexOf(Q, fz_vT_);
+    }
     size_t end = (raw < VESTIGE_MIN_LOOP_SAMPLES) ? VESTIGE_MIN_LOOP_SAMPLES : raw;
     const size_t skip = (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * sr_);
     const size_t keep = (size_t)(VESTIGE_FREEZE_MIN_KEEP_MS * 0.001f * sr_);
@@ -3720,7 +3745,15 @@ class Vestige : public Module {
       return;
     }
     size_t Q;
-    Q = GridQuantize::Quantize(raw, cap_T_[s]);             // nearest division, up or down
+    if (cap_free_) {
+      // FREE-RUN: no grid. Q = the raw length; it becomes T (the loop is 1/1
+      // of it: cap_T_ = Q, so IsrActivate derives division 0).
+      Q = FreeLen(raw);
+      cap_T_[s] = Q;
+      FreeSet(s, Q);
+    } else {
+      Q = GridQuantize::Quantize(raw, cap_T_[s]);           // nearest division, up or down
+    }
     cap_raw_[s] = raw;
     cap_decide_at_[s] = now;           // diagnostics / host test: when the end was known
     if (CT3_DIAG) DiagPush(GateDiag{'E', diag_end_, (uint8_t)rearm_block_, now, env_, env_gate_,
@@ -4007,7 +4040,75 @@ class Vestige : public Module {
     // a knob that does not move gives exactly the same T as before.
     if (!k2f_seeded_) { k2f_ = k2; k2f_seeded_ = true; }
     if (fabsf(k2 - k2f_) > VESTIGE_K2_FOLLOW_DB) k2f_ = k2;
-    period_ = (tap_period_ > 0) ? tap_period_ : KnobPeriod(k2f_);
+    // FREE-RUN zone. K2 positions inside the zone count as ONE position (its
+    // edge), so wiggling inside it is no move. A free capture's T (posted by
+    // the ISR) is adopted here — it replaces a tapped T (last gesture wins) —
+    // and holds, also after K2 leaves the zone, until K2 moves on beyond
+    // VESTIGE_K2_FOLLOW_DB from where it was at the adoption, or a tap.
+    k2_free_ = (k2 >= 1.f - VESTIGE_K2_FREE_ZONE || k2 <= VESTIGE_K2_FREE_ZONE);
+    const float k2c = VestigeClamp(k2, VESTIGE_K2_FREE_ZONE, 1.f - VESTIGE_K2_FREE_ZONE);
+    if (tap_period_ > 0) free_period_ = 0;            // a tap (or a tap still standing) wins over an older free T
+    const uint32_t post = free_post_seq_;
+    if (post != free_seen_seq_) {
+      free_seen_seq_ = post;
+      free_period_ = free_post_Q_;
+      free_k2_ref_ = k2c;
+      tap_period_  = 0;
+    } else if (free_period_ > 0 && fabsf(k2c - free_k2_ref_) > VESTIGE_K2_FOLLOW_DB) {
+      free_period_ = 0;                               // K2 moved on: the knob sets T again
+    }
+    period_ = (tap_period_ > 0) ? tap_period_ : (free_period_ > 0) ? free_period_ : KnobPeriod(k2f_);
+    __asm__ __volatile__("" ::: "memory");            // period_ is stored before the flags the ISR reads
+    free_in_force_ = (tap_period_ == 0 && free_period_ > 0);
+    free_ack_seq_  = free_seen_seq_;                  // after period_: the ISR may now release on !free_in_force_
+  }
+
+  // ---- K2 FREE-RUN: the free length, the T it sets, the pins (audio thread) --
+  // A free capture's length: raw, kept inside [T_MIN, T_MAX] — it becomes T,
+  // and a later capture quantises down to T/8, which the T_MIN static_asserts
+  // keep playable (grain floor, full seam crossfade).
+  static size_t FreeLen(size_t raw) {
+    if (raw < VESTIGE_T_MIN_SAMPLES) return VESTIGE_T_MIN_SAMPLES;
+    if (raw > VESTIGE_T_MAX_SAMPLES) return VESTIGE_T_MAX_SAMPLES;
+    return raw;
+  }
+  // The length a loop-side loop is heading for at T_now (what TapeTarget /
+  // RecutTarget follow). A pending loop has no division yet: derived the way
+  // IsrActivate will.
+  size_t FollowLen(int q) const {
+    const bool pend = pend_[q];
+    const size_t M = pend ? cap_len_[q] : loop_len_[q];
+    const int d = pend ? GridQuantize::IndexOf(cap_len_[q], cap_T_[q]) : div_[q];
+    const size_t Lt = (d >= 0) ? GridQuantize::Boundary(d, period_) : 0;
+    return (Lt == 0) ? M : Lt;
+  }
+  // A free capture decided at length Q (slot sn: loop side; -1: freeze side).
+  // Every other loop keeps EXACTLY the length it has: pinned at its current
+  // target (already-pinned loops keep their pin). The new loop is pinned at Q
+  // until T = Q is adopted (then Boundary(0, T) == Q anyway). Then T is posted.
+  void FreeSet(int sn, size_t Q) {
+    for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) {
+      if (q == sn || !(active_[q] || pend_[q]) || pin_len_[q] != 0) continue;
+      pin_len_[q] = FollowLen(q);
+    }
+    if (sn >= 0 && sn < VESTIGE_VOICE_SLABS) pin_len_[sn] = Q;
+    // Freeze side: the running pass, and freezes decided but not yet playing.
+    if (fz_ppin_ == 0) fz_ppin_ = FzPassLen();
+    for (int q = PoolLo(kPoolFreeze); q < PoolHi(kPoolFreeze); q++)
+      if (pend_[q] && fz_spin_[q] == 0 && fz_sdiv_[q] >= 0) fz_spin_[q] = GridQuantize::Boundary(fz_sdiv_[q], period_);
+    pins_held_ = true;
+    free_post_Q_ = Q;
+    free_post_seq_ = free_post_seq_ + 1;
+  }
+  // Block start: once T is no longer a free T (the control thread adopted the
+  // last post and then K2 moved on / a tap), every pin releases: all loops
+  // follow T_now by their division again (the free loops as 1/1).
+  void FreeRelease() {
+    if (!pins_held_ || free_ack_seq_ != free_post_seq_ || free_in_force_) return;
+    for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) pin_len_[q] = 0;
+    for (int q = 0; q < VESTIGE_SLOTS; q++) fz_spin_[q] = 0;
+    fz_ppin_ = 0;
+    pins_held_ = false;
   }
 
   // Slot ranges. OWN = every slot backed by that side's slab (incl. the
@@ -4522,16 +4623,21 @@ class Vestige : public Module {
     if (period_ > 0) {
       const uint32_t width = (uint32_t)((float)VESTIGE_LED1_FLASH_MS * 0.001f * sr_);
       const int ls = led_slot_[pool_];
+      bool flash;
       if (pool_ == kPoolLoop && !recording_ &&
           ls >= 0 && active_[ls] && !dying_[ls] && div_[ls] >= 0) {
         // A following loop's "one" is no longer A + k*T once it has changed
         // speed: flash on its own loop time instead (integer beats of T).
-        led1.Set(beat_frac_[ls] < (float)width / (float)period_ ? 1.f : 0.f);
+        flash = beat_frac_[ls] < (float)width / (float)period_;
       } else {
         const uint32_t el = sample_clock_ - led_anchor_[pool_];
         const uint32_t ph = el % (uint32_t)period_;
-        led1.Set(ph < width ? 1.f : 0.f);
+        flash = ph < width;
       }
+      // K2 in the FREE-RUN zone: INVERTED — constantly on, the tempo flashes
+      // dark (same timing / width).
+      if (k2_free_) flash = !flash;
+      led1.Set(flash ? 1.f : 0.f);
     } else {
       led1.Set(0.f);
     }
@@ -5247,4 +5353,31 @@ class Vestige : public Module {
   // LED1 anchor per side = that side's most recent capture start (sample_clock_
   // value), or the tap / engage / switch-in while that side holds nothing.
   uint32_t led_anchor_[2] = {0, 0};
+
+  // ---- K2 FREE-RUN zone (VESTIGE_K2_FREE_ZONE) -----------------------------
+  // Control -> ISR: K2 is in the zone now; the ISR latches it per capture at
+  // its start (cap_free_ loop side, fz_vfree_ freeze phrase).
+  volatile bool k2_free_ = false;
+  bool     cap_free_ = false;            // ISR: the running loop-side capture is free
+  bool     fz_vfree_ = false;            // ISR: the running freeze phrase is free
+  // ISR -> control: a free capture decided; T is to become free_post_Q_.
+  // The control thread adopts it (free_period_) and acks with the same seq.
+  volatile size_t   free_post_Q_   = 0;
+  volatile uint32_t free_post_seq_ = 0;  // ISR writes
+  volatile uint32_t free_ack_seq_  = 0;  // control writes, after period_ / free_in_force_
+  uint32_t free_seen_seq_ = 0;           // control: last seq adopted
+  size_t   free_period_   = 0;           // control: the free T (0 = none); tap > free > knob
+  float    free_k2_ref_   = 0.f;         // control: zone-collapsed K2 at the adoption
+  volatile bool free_in_force_ = false;  // control: period_ IS the free T right now
+  // ISR: loops PINNED at a fixed target length (0 = follow T as always). Set
+  // at a free decide for every other loop-side loop (playing or pending), at
+  // its current target; the free loop is pinned at its own Q until T = Q is
+  // adopted. All pins release once T is no longer a free T (K2 moved on / a
+  // tap) — from then on every loop follows T_now by its division again.
+  size_t   pin_len_[VESTIGE_VOICE_SLABS] = {0};
+  bool     pins_held_ = false;
+  // Freeze side: the running pass pinned (0 = follows T) and, per freeze slot,
+  // the pin its pass takes when it starts while pins are held.
+  size_t   fz_ppin_ = 0;
+  size_t   fz_spin_[VESTIGE_SLOTS] = {0};
 };
