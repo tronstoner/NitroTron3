@@ -2752,10 +2752,21 @@ class Vestige : public Module {
     fz_dx_ = 0.f; fz_dinc_ = 1.f / dec;                     // decay progress 0 -> 1 over dec (B)
     // A: ASR — fully open for GATE x D (from the strike), then RELEASE_MS to
     // the base; ratchets divide both by their count (D already is).
+    // A: the interval to the NEXT hit — the next stutter step (wrapping to
+    // this pass's first), divided by the ratchet count (a sub-hit's spacing).
+    double In;
+    {
+      int j = i + 1;
+      while (j < fz_G_ && !fz_stk_[j]) j++;
+      if (j < fz_G_) In = (double)FzBnd(j) - (double)b0;
+      else { int j0 = 0; while (j0 < fz_G_ && !fz_stk_[j0]) j0++; In = (double)fz_L_ - (double)b0 + (double)FzBnd(j0); }
+      In /= (double)fz_sub_n_;
+    }
     fz_t_ = 0.f;
-    fz_gate_s_ = VESTIGE_FRZ_LPG_ASR_GATE * (float)D - att;
+    fz_gate_s_ = VESTIGE_FRZ_LPG_ASR_GATE * (float)In - att;
     if (fz_gate_s_ < 0.f) fz_gate_s_ = 0.f;
-    fz_rel_s_ = VESTIGE_FRZ_LPG_ASR_RELEASE_MS * 0.001f * sr_ / (float)fz_sub_n_;
+    fz_rel_s_ = VESTIGE_FRZ_LPG_ASR_RELEASE * (float)In;
+    if (fz_rel_s_ < 1.f) fz_rel_s_ = 1.f;
     fz_dmp_on_ = false; fz_dmp_ = 1.f;
   }
   // The low pass gate on the summed freeze output (bypassed = identity).
