@@ -2808,9 +2808,14 @@ class Vestige : public Module {
       if (fz_dmp_ < 0.f) fz_dmp_ = 0.f;
       c *= fz_dmp_;
     }
-    fz_c_ = c;
     constexpr bool kB = VESTIGE_FRZ_LPG_MODEL == 1;
-    constexpr float base_hz = kB ? VESTIGE_FRZ_LPG_B_BASE_HZ : VESTIGE_FRZ_LPG_BASE_HZ;
+    // A: a REST closes the gate to the rest cutoff (its 5 ms mute fade, rd 0..1);
+    // its level drop is CondStage's partial mute (REST_DB).
+    const float rd = kB ? 0.f : mute_d_[kFzR];
+    c *= 1.f - rd;
+    fz_c_ = c;
+    const float base_hz = kB ? VESTIGE_FRZ_LPG_B_BASE_HZ
+                        : VESTIGE_FRZ_LPG_BASE_HZ * expf(rd * logf(VESTIGE_FRZ_REST_HZ / VESTIGE_FRZ_LPG_BASE_HZ));
     constexpr float base_db = kB ? VESTIGE_FRZ_LPG_B_FLOOR_DB : VESTIGE_FRZ_LPG_BASE_DB;
     const float fc = base_hz * expf(c * logf(VESTIGE_FRZ_LPG_OPEN_HZ / base_hz));
     float a = 1.f - expf(-6.2831853f * fc / sr_);
@@ -3043,6 +3048,8 @@ class Vestige : public Module {
 
   // The rest / decimate stage of planner index s (a loop voice, or kFzR on
   // the summed freeze output).
+  static constexpr float kFzRestGain = 0.50118723f;          // 10^(VESTIGE_FRZ_REST_DB / 20), REST_DB = -6
+  static_assert(VESTIGE_FRZ_REST_DB == -6.f, "update kFzRestGain with VESTIGE_FRZ_REST_DB");
   float CondStage(int s, float pv) {
     //     TIMING mode 2 sample-rate reduction: hold every decim_n_-th
     //     sample, crossfaded in/out over VESTIGE_TIMING_MUTE_MS.
@@ -3072,7 +3079,8 @@ class Vestige : public Module {
       float& d = mute_d_[s]; const float t = mute_dt_[s];
       if (d < t) { d += mute_inc_; if (d > t) d = t; }
       else if (d > t) { d -= mute_inc_; if (d < t) d = t; }
-      pv *= 1.f - d;
+      // (The freeze's rests only drop to REST_DB — never silent; model A.)
+      pv *= (s == kFzR && VESTIGE_FRZ_LPG_MODEL == 0) ? 1.f - d * (1.f - kFzRestGain) : 1.f - d;
     }
     return pv;
   }

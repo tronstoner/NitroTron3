@@ -1227,7 +1227,10 @@ static constexpr float  VESTIGE_FRZ_LPG_ASR_RELEASE = 0.25f;
 // open down to the sustain level ASR_SUSTAIN (held to the gate end).
 static constexpr float  VESTIGE_FRZ_LPG_ASR_DECAY   = 0.3f;
 static constexpr float  VESTIGE_FRZ_LPG_ASR_SUSTAIN = 0.8f;
-static constexpr float  VESTIGE_FRZ_LPG_DAMP_MS   = 25.f;     // B: rest = hand mute
+static constexpr float  VESTIGE_FRZ_LPG_DAMP_MS   = 25.f;
+// Freeze rests (model A) are never silent: -6 dB and the gate closed to 600 Hz.
+static constexpr float  VESTIGE_FRZ_REST_DB = -6.f;
+static constexpr float  VESTIGE_FRZ_REST_HZ = 600.f;     // B: rest = hand mute
 // Output routing: RETIRED. K6 is now the shell's equal-power dry/wet mix (like
 // mnemonic and sprawl) and vestige no longer owns its output — the looper
 // volume knob and the SW2 dry gate are gone. VESTIGE_LOOP_BOOST_MAX is kept for
