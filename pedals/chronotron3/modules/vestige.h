@@ -2766,6 +2766,8 @@ class Vestige : public Module {
     fz_gate_s_ = VESTIGE_FRZ_LPG_ASR_GATE * (float)In - att;
     if (fz_gate_s_ < 0.f) fz_gate_s_ = 0.f;
     fz_rel_s_ = VESTIGE_FRZ_LPG_ASR_RELEASE * (float)In;
+    fz_dec_s_ = VESTIGE_FRZ_LPG_ASR_DECAY * (float)In;
+    if (fz_dec_s_ < 1.f) fz_dec_s_ = 1.f;
     if (fz_rel_s_ < 1.f) fz_rel_s_ = 1.f;
     fz_dmp_on_ = false; fz_dmp_ = 1.f;
   }
@@ -2787,8 +2789,12 @@ class Vestige : public Module {
       // exponential, 1 at the strike, exactly 0 at the end (curve K).
       if (VESTIGE_FRZ_LPG_MODEL == 0) {                    // A: attack - sustain - release
         const float t = fz_t_; fz_t_ += 1.f;
-        if (t < fz_gate_s_) c = 1.f;
-        else { float r = (t - fz_gate_s_) / fz_rel_s_; if (r > 1.f) r = 1.f; c = 1.f - r * r * (3.f - 2.f * r); }
+        constexpr float S = VESTIGE_FRZ_LPG_ASR_SUSTAIN;
+        float top;                                         // percussive decay 1 -> S, then hold S
+        if (t < fz_dec_s_) { const float q = 1.f - t / fz_dec_s_; top = S + (1.f - S) * q * q * q; }
+        else top = S;
+        if (t < fz_gate_s_) c = top;
+        else { float r = (t - fz_gate_s_) / fz_rel_s_; if (r > 1.f) r = 1.f; c = top * (1.f - r * r * (3.f - 2.f * r)); }
         goto lpg_env_done;
       }
       fz_dx_ += fz_dinc_; if (fz_dx_ > 1.f) fz_dx_ = 1.f;
@@ -5067,7 +5073,7 @@ class Vestige : public Module {
   int      fz_sub_n_ = 0, fz_sub_j_ = 0;                  // this step's hit count, hits done
   float    fz_lpg_mix_ = 0.f, fz_c_ = 0.f, fz_dmp_ = 1.f;  // bypass xfade, control value, damp gain
   float    fz_att_ph_ = 1.f, fz_att_inc_ = 0.f, fz_att_from_ = 0.f;
-  float    fz_t_ = 1e9f, fz_gate_s_ = 0.f, fz_rel_s_ = 1.f;   // A (ASR): time since attack, sustain + release lengths
+  float    fz_t_ = 1e9f, fz_gate_s_ = 0.f, fz_rel_s_ = 1.f, fz_dec_s_ = 1.f;   // A (ASR): time since attack, sustain + release lengths
   float    fz_dx_ = 1.f, fz_dinc_ = 0.f, fz_z1_ = 0.f, fz_z2_ = 0.f;   // LPG decay progress + step, filter state
   int8_t   fz_cnd_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: 0 clean, 1 rest, N decimate xN                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag
