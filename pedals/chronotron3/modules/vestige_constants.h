@@ -180,7 +180,15 @@ static constexpr float  VESTIGE_FREEZE_MIN_KEEP_MS    = 120.f;
 // VESTIGE_SEAM_XFADE_MAX samples past the loop end before the commit), which
 // also covers the index-L read. So the guard is exactly the overhang.
 static constexpr size_t VESTIGE_FREEZE_GUARD = VESTIGE_SEAM_XFADE_MAX;                   // 240
-static constexpr size_t VESTIGE_FREEZE_CAP   = VESTIGE_FREEZE_SAMPLES + VESTIGE_FREEZE_GUARD; // 19440 per slot
+// The freeze window is the phrase's TAIL: the row is recorded as a ring for
+// the whole phrase and the window (ending where the sound stopped) is cut
+// from it once the phrase end is known — up to the gate's fall + the 80 ms
+// release later. The ring must still hold the window then: this margin is
+// that lateness (beyond it the window's head is clipped to what survives).
+static constexpr float  VESTIGE_FREEZE_RING_MARGIN_MS = 500.f;
+static constexpr size_t VESTIGE_FREEZE_RING_MARGIN = (size_t)(VESTIGE_FREEZE_RING_MARGIN_MS * 0.001f * VESTIGE_SR); // 24000
+static constexpr size_t VESTIGE_FREEZE_CAP   = VESTIGE_FREEZE_SAMPLES + VESTIGE_FREEZE_RING_MARGIN
+                                             + VESTIGE_FREEZE_GUARD;                   // 43440 per slot
 
 // ---------------------------------------------------------------------------
 // Multiband granular freeze (K3 CW freeze region) — the EHX-style evolving freeze

@@ -68,9 +68,9 @@
 // SDRAM storage — one row per slot. File scope (single TU) is safe here.
 // Loop-side row:   [0 .. loop_len)       = captured loop
 //                  [loop_len .. +GUARD)  = copy of the loop head (wrap-guard)
-// Freeze-side row: [0 .. loop_len)       = captured fragment (<= 400 ms)
-//                  [loop_len .. +240)    = recorded seam overhang (see
-//                                          VESTIGE_FREEZE_GUARD)
+// Freeze-side row: a RING, recorded for the whole phrase (FzVirtMeasure);
+//                  the window [frz_base_, +loop_len) (mod the row) is the
+//                  phrase's tail, cut from it at the phrase end (FzVirtEnd)
 // The two arrays are distinct allocations; a row's neighbour in SDRAM is
 // arbitrary data (the next row, or whatever the linker placed next), so every
 // write is bounded by the row's own capacity (cap_[s]) and every grain reads
@@ -183,7 +183,7 @@ class Vestige : public Module {
     FzRhyNewWords();
     rhy_t_[kFzR] = 0; ln_rhythm_[kFzR] = true;              // (TimingCond: the rhythm's decimate fade)
     fz_L_ = 0;                                              // the first sample starts a virtual pass
-    fz_vrec_ = false; fz_vdiv_ = -1; fz_pdiv_ = -1;          // no virtual loop length yet: the pass = T
+    fz_vrec_ = false; fz_pdiv_ = -1;                        // no measured freeze yet: the pass = T, clean
   }
 
   void Activate() override {
@@ -726,7 +726,7 @@ class Vestige : public Module {
       }
       float y = 0.f;
       // K3 mode 1 on the freeze: the virtual pass clock always runs (a new
-      // freeze capture restarts it: the downbeat); while its stage is engaged the
+      // freeze's activation restarts it, in phase with its onset); while its stage is engaged the
       // freeze slots sum apart and pass through it (after pad + K1 + sustain).
       FzRhyStep();
       const bool fz_post = mute_d_[kFzR] != 0.f || mute_dt_[kFzR] != 0.f || decim_d_[kFzR] != 0.f || decim_dt_[kFzR] != 0.f
@@ -2669,11 +2669,12 @@ class Vestige : public Module {
     return G;
   }
   // ---- K3 mode 1 on the FREEZE side (SW1 DOWN): rests + decimates ----------
-  // A virtual pass (FzPassLen: T, then the capture's virtual loop length;
+  // A virtual pass (FzPassLen: the playing freeze's virtual loop length,
   // followed at once as a fraction on a T change) split into
   // G steps by the loop side's rule; each pass is planned by the loop side's
   // engine-0 planner (TimingPlanRhythmPoly) on the virtual index kFzR, whose
-  // running step count rolls on across passes; a freeze capture restarts it. Its CONDITION line
+  // running step count rolls on across passes; a freeze's activation restarts
+  // it in phase with its onset (FzRhyStart). Its CONDITION line
   // (rests, decimates) drives the shared rest / decimate stage on the SUMMED
   // freeze output (CondStage); its TIMING line (stutters, ratchets) is
   // planned but does nothing yet. Its own RNG: the loop side's draws are
@@ -2685,23 +2686,31 @@ class Vestige : public Module {
     rkv_next_[kFzR] = -1; rkv_t0_[kFzR] = rkv_t1_[kFzR] = 0;
     rhy_key_[kFzR] = -1;
   }
-  // The virtual pass length: T until the freeze capture's virtual loop
-  // length is measured, then Boundary(d, T_now) — it keeps its division and
-  // follows T like a stretch-following loop. fz_pdiv_ = the division the
-  // running pass was planned with (a measurement that ends mid-pass applies
-  // from the next pass).
+  // The virtual pass length: Boundary(d, T_now), d = the division of the
+  // freeze that started playing last (FzRhyStart) — it keeps its division and
+  // follows T like a stretch-following loop. Before any measured freeze has
+  // played (fz_pdiv_ < 0) the pass is T and the rhythm stays clean.
   uint32_t FzPassLen() const {
     const size_t T = period_ > 0 ? period_ : 1u;
     const size_t L = (fz_pdiv_ >= 0) ? GridQuantize::Boundary(fz_pdiv_, T) : T;
     return L > 0 ? (uint32_t)L : 1u;
   }
-  void FzRhyPlan() {
-    fz_pdiv_ = fz_vdiv_;
+  // A new freeze started playing at `now`: new rotation draws, step count 0,
+  // and its pass (its own division) joined in phase with its onset — the
+  // onset is the downbeat, as a loop's el0 join (no T-first pass).
+  void FzRhyStart(int s, uint32_t now) {
+    FzRhyNewWords();
+    rhy_t_[kFzR] = 0;
+    fz_pdiv_ = fz_sdiv_[s];
+    FzRhyPlan((now - cap_start_[s]) % FzPassLen());
+  }
+  // Plan a pass; el0 > 0 joins it mid-way (the hits behind it are skipped).
+  void FzRhyPlan(uint32_t el0 = 0) {
     fz_L_ = FzPassLen();
     fz_el_ = 0; fz_i_ = 0; fz_G_ = 1; fz_nb_ = fz_L_;
     for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) { fz_cnd_[i] = 0; fz_stk_[i] = 0; fz_rst_[i] = 0; }
-    fz_lpg_on_ = rhy_level_ > 0.f;                        // the LPG engages / bypasses at the pass start
-    if (rhy_level_ > 0.f) {                               // (as a loop: the depth at the pass start)
+    fz_lpg_on_ = rhy_level_ > 0.f && fz_pdiv_ >= 0;       // the LPG engages / bypasses at the pass start
+    if (fz_lpg_on_) {                                     // (as a loop: the depth at the pass start)
       const int G = TimingStepCount((double)fz_L_, true, rhy_level_);
       const uint32_t keep = timing_rng_; timing_rng_ = fz_rng_;
       const uint32_t ed = timing_edits_, vr = timing_vars_;
@@ -2728,8 +2737,13 @@ class Vestige : public Module {
         for (int i = 0; i < G; i++) if (fz_cnd_[i] == 1) { fz_cnd_[i] = 0; fz_rst_[i] = 1; }
       fz_G_ = G; fz_nb_ = FzBnd(1);
     }
-    TimingCond(kFzR, fz_cnd_[0]);
-    FzStepEvent(0);
+    if (el0 >= fz_L_) el0 = 0;
+    int i = 0;
+    while (i + 1 < fz_G_ && el0 >= FzBnd(i + 1)) i++;
+    fz_el_ = el0; fz_i_ = i; fz_nb_ = FzBnd(i + 1);
+    TimingCond(kFzR, fz_cnd_[i]);
+    if (el0 == FzBnd(i)) FzStepEvent(i);
+    else { fz_sub_n_ = 0; fz_sub_j_ = 0; }                // joined inside step i: its strike is behind
   }
   // LPG events at the start of step i: a rest (B: damp), a stutter (strike).
   void FzStepEvent(int i) {
@@ -3231,7 +3245,8 @@ class Vestige : public Module {
     if (frozen) {
       float hi = (float)L - (float)glen * rate; if (hi < 0.f) hi = 0.f;
       if (pos < 0.f) pos = 0.f; else if (pos > hi) pos = hi;
-      posi = (size_t)pos + frz_base_[s];                   // (past the skipped attack)
+      posi = (size_t)pos + frz_base_[s];                   // the window in the ring (wraps)
+      if (posi >= ring_[s].GetLength()) posi -= ring_[s].GetLength();
     } else {
       pos = fmodf(pos, (float)L); if (pos < 0.f) pos += (float)L;
       posi = (size_t)pos;
@@ -3517,10 +3532,16 @@ class Vestige : public Module {
     }
     if (recording_) {
       const int s = rec_slot_;
+      // Freeze: the row is written as a ring by the phrase measurement
+      // (FzVirtMeasure); this machine only counts and decides ITS end (the
+      // 400 ms ceiling / silence / request), which ends recording_ at once.
+      const bool fz = (PoolOf(s) == kPoolFreeze);
       float* m = slab_[s];
       const size_t r = rec_idx_;
-      const size_t E = cap_len_[s];
-      if (r < cap_[s]) {                          // bounded by the row, always
+      const size_t E = fz ? 0 : cap_len_[s];
+      if (fz) {
+        rec_idx_ = r + 1;
+      } else if (r < cap_[s]) {                   // bounded by the row, always
         if (E > 0 && r >= E) {
           // Seam overhang, crossfaded into the head as it is recorded:
           // guard[E+k] = overhang*cos + head*sin (WriteGuard's curve).
@@ -3569,9 +3590,14 @@ class Vestige : public Module {
           sil_run_ = 0;
         }
       }
-      if (cap_len_[s] > 0 && rec_idx_ >= rec_stop_) recording_ = false;   // body + overhang done
+      if (!fz && cap_len_[s] > 0 && rec_idx_ >= rec_stop_) recording_ = false;   // body + overhang done
     }
-    if (fz_vrec_) FzVirtMeasure(g, close);
+    // Freeze phrase measurement. Hold engaged mid-phrase ends it here, with
+    // the length so far (as hold ends a loop capture: keep it, quantised).
+    if (fz_vrec_) {
+      if (!cap_allow_) FzVirtEnd(fz_vidx_, now);
+      else             FzVirtMeasure(x, g, close, now);
+    }
     if (npend_ > 0) IsrActivations(now);
     IsrFillGuards();
   }
@@ -3580,7 +3606,7 @@ class Vestige : public Module {
     if (CT3_DIAG) DiagPush(GateDiag{'S', diag_why_, (uint8_t)PoolOf(s), now, env_, env_gate_,
                                     auto_thresh_, auto_thresh_ * VESTIGE_AUTO_HYST, (uint32_t)period_, 0u});
     diag_why_ = '?';
-    if (fz_vrec_) FzVirtEnd(fz_vidx_);  // a new capture onset ends the virtual measurement: length so far
+    if (fz_vrec_) FzVirtEnd(fz_vidx_, now);   // a new capture onset ends the phrase measurement: length so far
     KillSlotGrains(s);                  // zombie grains from the slot's last life (audio thread owns grains)
     rec_slot_  = s;
     rec_idx_   = 0;
@@ -3597,60 +3623,104 @@ class Vestige : public Module {
     led_slot_[pool_]   = s;             // ...and once it plays, its own loop time
     // Speculative guard for the ceiling: a capture that runs to T then starts
     // on time even in reverse. Re-based if the end turns out shorter.
-    GuardJob(s, cap_ceil_);
-    if (!loop) {                        // K3 mode 1 on the freeze: a capture is the downbeat —
-      FzRhyNewWords();                  //  new rotations, step count 0, a new virtual pass
-      rhy_t_[kFzR] = 0; fz_el_ = 0; fz_L_ = 0;   //  (planned on the next FzRhyStep)
-      // ...and its virtual loop length is measured from here, as a loop-side
-      // capture would be (FzVirtMeasure); until it ends the pass = T.
-      fz_vrec_ = true; fz_vidx_ = 0; fz_vT_ = period_;
+    if (loop) {
+      GuardJob(s, cap_ceil_);
+    } else {
+      // Freeze: no guard job (a frozen grain never crosses the seam; the job
+      // would write into the ring). The phrase is measured from this onset,
+      // as a loop-side capture would be, while the row records it as a ring
+      // (FzVirtMeasure); its tail becomes the freeze (FzVirtEnd).
+      gfill_base_[s] = 0; gfill_k_[s] = gfill_end_[s] = 0; gfill_src_[s] = 0; gready_[s] = 0;
+      fz_vslot_ = s; fz_vw_ = 0;
+      fz_vidx_ = 0; fz_vT_ = period_;
       fz_vsil_run_ = 0; fz_vsil_onset_ = 0; fz_vlast_loud_ = 0;
-      fz_vdiv_ = -1;
+      fz_vrec_ = true;
     }
     recording_ = true;
     arm_slot_  = -1;                    // consumed; the control thread reserves the next
   }
 
-  // Freeze side: the VIRTUAL loop length of a freeze capture. Runs per sample
-  // from the freeze capture's onset, past its own 400 ms window, with the loop
-  // side's phrase-end rules (IsrCapture): the ceiling T latched at the onset
-  // (fz_vT_; the fast meter's 'c' case included) or VESTIGE_AUTO_RELEASE_MS of
-  // silence (raw = where the sound stopped). Parallel state only: it records
-  // nothing and never touches the capture machine (rearm, slots, meters).
-  void FzVirtMeasure(float g, float close) {
+  // Freeze side: the PHRASE of a freeze capture. Runs per sample from the
+  // freeze capture's onset, past the capture machine's own 400 ms, with the
+  // loop side's phrase-end rules (IsrCapture): the ceiling T latched at the
+  // onset (fz_vT_; the fast meter's 'c' case included) or
+  // VESTIGE_AUTO_RELEASE_MS of silence (raw = where the sound stopped); a new
+  // capture onset (IsrStart) or hold ends it with the length so far. The
+  // slot's row records the phrase as a ring (index i at i mod cap_). It never
+  // touches the capture machine (rearm, meters, recording_).
+  void FzVirtMeasure(float x, float g, float close, uint32_t now) {
+    const int s = fz_vslot_;
+    slab_[s][fz_vw_] = x;
+    if (++fz_vw_ >= cap_[s]) fz_vw_ = 0;
     const size_t r = fz_vidx_;
     fz_vidx_ = r + 1;
     if (env_ >= close) fz_vlast_loud_ = r;
     if (fz_vidx_ >= fz_vT_) {
       const bool ended = (VESTIGE_GATE_ENV_MODE != 0) && env_ < close && fz_vlast_loud_ + 1 < fz_vidx_;
-      FzVirtEnd(ended ? fz_vlast_loud_ + 1 : fz_vidx_);
+      FzVirtEnd(ended ? fz_vlast_loud_ + 1 : fz_vidx_, now);
     } else if (g < close) {
       if (fz_vsil_run_ == 0) fz_vsil_onset_ = r;
       if (++fz_vsil_run_ >= release_samples_)
-        FzVirtEnd((VESTIGE_GATE_ENV_MODE == 0) ? fz_vsil_onset_ : fz_vlast_loud_ + 1);
+        FzVirtEnd((VESTIGE_GATE_ENV_MODE == 0) ? fz_vsil_onset_ : fz_vlast_loud_ + 1, now);
     } else {
       fz_vsil_run_ = 0;
     }
   }
-  // Measurement ended: quantised and indexed exactly as IsrDecide / IsrActivate
-  // do on the loop side. The division applies from the next virtual pass.
-  void FzVirtEnd(size_t raw) {
-    fz_vrec_ = false;
+  // The phrase ended at sample `now`; raw = its length (where the sound
+  // stopped). Q / division exactly as IsrDecide / IsrActivate do on the loop
+  // side. The freeze window is the phrase's TAIL: the last
+  // min(VESTIGE_FREEZE_SAMPLES, raw) samples ending at raw, but never inside
+  // the attack the old rules skip from the onset (VESTIGE_FREEZE_ATTACK_SKIP_MS,
+  // less when under VESTIGE_FREEZE_MIN_KEEP_MS would remain) — so a phrase
+  // shorter than window + skip keeps exactly the old onset rules. It starts
+  // playing where a loop of length Q would: at its "one" (onset + Q), or now,
+  // in phase, when the end is known later (VESTIGE_LATE_JOIN_IN_PHASE).
+  void FzVirtEnd(size_t raw, uint32_t now) {
+    const int s = fz_vslot_;
+    const size_t D = fz_vidx_;                              // samples recorded into the ring
     const size_t Q = GridQuantize::Quantize(raw, fz_vT_);
-    fz_vdiv_ = GridQuantize::IndexOf(Q, fz_vT_);
+    fz_sdiv_[s] = GridQuantize::IndexOf(Q, fz_vT_);
+    size_t end = (raw < VESTIGE_MIN_LOOP_SAMPLES) ? VESTIGE_MIN_LOOP_SAMPLES : raw;
+    const size_t skip = (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * sr_);
+    const size_t keep = (size_t)(VESTIGE_FREEZE_MIN_KEEP_MS * 0.001f * sr_);
+    const size_t base = (end > keep) ? (end - keep < skip ? end - keep : skip) : 0;
+    size_t start = (end > VESTIGE_FREEZE_SAMPLES && end - VESTIGE_FREEZE_SAMPLES > base)
+                   ? end - VESTIGE_FREEZE_SAMPLES : base;
+    const size_t cap = cap_[s];
+    if (D > cap && start < D - cap) start = D - cap;        // overwritten by the ring: clip the head
+    if (start + VESTIGE_MIN_LOOP_SAMPLES > end) {           // (beyond the margin: the newest audio)
+      end = D;
+      start = (D > VESTIGE_FREEZE_SAMPLES) ? D - VESTIGE_FREEZE_SAMPLES : 0;
+    }
+    frz_base_[s] = start % cap;                             // the window's ring offset (EmitBandGrain)
+    cap_len_[s]  = end - start;
+    cap_raw_[s]  = raw;
+    cap_decide_at_[s] = now;                                // diagnostics / host test: when the end was known
+    const uint32_t el = now - cap_start_[s];
+    uint32_t at;
+    if (el <= Q)                         at = cap_start_[s] + (uint32_t)Q;   // on time: its "one"
+    else if (VESTIGE_LATE_JOIN_IN_PHASE) at = now;                          // late: now, in phase
+    else                                 at = cap_start_[s] + (uint32_t)(((el + Q - 1) / Q) * Q);   // next "one"
+    act_at_[s] = at;
+    pend_[s]   = true;                  // (before fz_vrec_ drops: FindFreeSlot never sees it free)
+    npend_++;
+    fz_vrec_ = false;
   }
 
   // The end is known at sample `now`: raw = captured length before quantising.
   void IsrDecide(int s, size_t raw, uint32_t now) {
     const bool loop = (PoolOf(s) == kPoolLoop);
-    size_t Q;
-    if (loop) {
-      Q = GridQuantize::Quantize(raw, cap_T_[s]);           // nearest division, up or down
-    } else {
-      Q = raw;
-      if (Q < VESTIGE_MIN_LOOP_SAMPLES) Q = VESTIGE_MIN_LOOP_SAMPLES;
-      if (Q > cap_ceil_)                Q = cap_ceil_;
+    if (!loop) {
+      // Freeze: only the capture MACHINE ends here (re-arm, LED2); the freeze
+      // itself is cut and scheduled at the phrase end (FzVirtEnd).
+      if (CT3_DIAG) DiagPush(GateDiag{'E', diag_end_, (uint8_t)rearm_block_, now, env_, env_gate_,
+                                      0.f, 0.f, (uint32_t)raw, (uint32_t)raw});
+      diag_end_ = '?';
+      recording_ = false;
+      return;
     }
+    size_t Q;
+    Q = GridQuantize::Quantize(raw, cap_T_[s]);             // nearest division, up or down
     cap_raw_[s] = raw;
     cap_decide_at_[s] = now;           // diagnostics / host test: when the end was known
     if (CT3_DIAG) DiagPush(GateDiag{'E', diag_end_, (uint8_t)rearm_block_, now, env_, env_gate_,
@@ -3676,12 +3746,10 @@ class Vestige : public Module {
     //   - end decided after start+Q (every round-down, and a round-up closer
     //     than the 80 ms release to its boundary): either join NOW, in phase
     //     (VESTIGE_LATE_JOIN_IN_PHASE), or wait for the next "one".
-    // Freeze has no grid: it plays as soon as its fragment exists.
+    // (Freeze: the same entry rule, applied at its phrase end — FzVirtEnd.)
     const uint32_t el = now - cap_start_[s];                // this sample is `el` after the start
     uint32_t at;
-    if (!loop) {
-      at = (el >= Q) ? now : cap_start_[s] + (uint32_t)Q;
-    } else if (el <= Q) {
+    if (el <= Q) {
       at = cap_start_[s] + (uint32_t)Q;                      // on time: the loop's "one"
     } else if (VESTIGE_LATE_JOIN_IN_PHASE) {
       at = now;                                              // late: join in phase, now
@@ -3726,17 +3794,10 @@ class Vestige : public Module {
   // happens here in one place, at the same sample.
   void IsrActivate(int s, uint32_t now) {
     pend_[s] = false; npend_--;
-    size_t L = cap_len_[s];
-    // Freeze: skip the pick attack — the window starts VESTIGE_FREEZE_ATTACK_SKIP_MS
-    // in (less when that would leave under VESTIGE_FREEZE_MIN_KEEP_MS of tone).
-    size_t base = 0;
-    if (PoolOf(s) == kPoolFreeze) {
-      const size_t skip = (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * sr_);
-      const size_t keep = (size_t)(VESTIGE_FREEZE_MIN_KEEP_MS * 0.001f * sr_);
-      base = (L > keep) ? (L - keep < skip ? L - keep : skip) : 0;
-      L -= base;
-    }
-    frz_base_[s] = base;
+    const size_t L = cap_len_[s];
+    // Freeze: the window was cut at the phrase end (FzVirtEnd): L = its
+    // length, frz_base_ = its offset in the ring (the attack skip included).
+    if (PoolOf(s) != kPoolFreeze) frz_base_[s] = 0;
     loop_len_[s] = L;
     play_pos_[s] = 0;
     timer_[s]    = 0;
@@ -3808,6 +3869,7 @@ class Vestige : public Module {
       sus_g_[q] = sus_t_[q] = sus_base_[q] = 1.f; sus_step_[q] = 0.f; sus_x_[q] = 0.f;
       if (frz_atk_s_ > 0.f) { sus_g_[q] = sus_t_[q] = 0.f; frz_atk_x_[q] = 0.f; }   // K5 CCW: fade in first
       else frz_atk_x_[q] = 1.f;
+      FzRhyStart(s, now);               // K3 mode 1: its rhythm, in phase with its onset
     }
     StartFadeIn(s);                     // swells in over K5; first grain instant
     ResumeFromMute();                   // record END unpauses the retained loops (stage-0 behaviour)
@@ -3823,6 +3885,7 @@ class Vestige : public Module {
 
   void IsrDrop() {
     recording_   = false;
+    fz_vrec_     = false;               // a freeze phrase in flight is dropped too (never plays)
     sil_run_     = 0;
     rearm_block_ = false;               // a fresh engage / side listens immediately
     for (int s = 0; s < VESTIGE_SLOTS; s++) {
@@ -3931,7 +3994,7 @@ class Vestige : public Module {
             // LED1 flashes from the tap itself (the down-press that closed the
             // interval). Once a capture exists, a tap changes only the period:
             // the beat stays on the capture's own start.
-            if (!PoolHasContent(pool_) && !recording_ && npend_ == 0)
+            if (!PoolHasContent(pool_) && !recording_ && npend_ == 0 && !fz_vrec_)
               led_anchor_[pool_] = sample_clock_ - (uint32_t)((float)press * 0.001f * sr_);
           }
         }
@@ -4148,8 +4211,9 @@ class Vestige : public Module {
   // recorded into and not already reserved for the next capture.
   int FindFreeSlot() const {
     const int rs = recording_ ? rec_slot_ : -1;
+    const int ms = fz_vrec_ ? fz_vslot_ : -1;   // a freeze phrase still recording its ring
     for (int v = PoolLo(pool_); v < PoolHi(pool_); v++)
-      if (!active_[v] && !dying_[v] && !pend_[v] && v != rs && v != arm_slot_) return v;
+      if (!active_[v] && !dying_[v] && !pend_[v] && v != rs && v != ms && v != arm_slot_) return v;
     return -1;
   }
   // Retire a voice gracefully: keep it sounding but fade it out over K5, then
@@ -5123,13 +5187,17 @@ class Vestige : public Module {
   // K3 mode 1 on the freeze side (FzRhyPlan / FzRhyStep).
   uint32_t fz_rng_ = 0x85EBCA6Bu;                         // its own RNG (the loop side's stays untouched)
   uint32_t fz_L_  = 0, fz_el_ = 0, fz_nb_ = 0;            // virtual pass length, elapsed, next step boundary
-  // Its virtual loop length (FzVirtMeasure): measuring, samples since the
-  // freeze onset, T latched there, silence run / onset, last loud index;
-  // the measured division (-1: none yet, the pass = T) and the running pass's.
-  bool     fz_vrec_ = false;
+  // The freeze phrase (FzVirtMeasure): measuring, its slot, ring write index,
+  // samples since the freeze onset, T latched there, silence run / onset, last
+  // loud index; per slot the measured division, and the running pass's
+  // division (-1: no measured freeze has played yet: the pass = T, clean).
+  volatile bool fz_vrec_ = false;
+  int      fz_vslot_ = VESTIGE_FREEZE_SLOT0;
+  size_t   fz_vw_ = 0;
   size_t   fz_vidx_ = 0, fz_vT_ = 0, fz_vsil_onset_ = 0, fz_vlast_loud_ = 0;
   uint32_t fz_vsil_run_ = 0;
-  int      fz_vdiv_ = -1, fz_pdiv_ = -1;
+  int      fz_sdiv_[VESTIGE_SLOTS] = {};
+  int      fz_pdiv_ = -1;
   int      fz_G_  = 1, fz_i_  = 0;                        // its step count, current step
   int8_t   fz_stk_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: LPG strikes (0, 1, 2, 4)
   int8_t   fz_rst_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: B rest (damp)
