@@ -1211,7 +1211,7 @@ static constexpr float  VESTIGE_FREEZE_ATTACK_CURVE  = 1.26f;
 // to the next stutter / ratchet count; a rest damps c -> 0 over DAMP_MS).
 static constexpr int    VESTIGE_FRZ_LPG_MODEL     = 0;
 static constexpr float  VESTIGE_FRZ_LPG_BASE_DB   = 0.f;      // A: rest level (c = 0)
-static constexpr float  VESTIGE_FRZ_LPG_BASE_HZ   = 600.f;    // A: rest cutoff (c = 0)
+static constexpr float  VESTIGE_FRZ_LPG_BASE_HZ   = 1000.f;    // A: rest cutoff (c = 0)
 static constexpr float  VESTIGE_FRZ_LPG_B_FLOOR_DB = -60.f;   // B: gain at c -> 0+ (c = 0 exactly: silent)
 static constexpr float  VESTIGE_FRZ_LPG_B_BASE_HZ = 60.f;     // B: closed cutoff (c = 0)
 static constexpr float  VESTIGE_FRZ_LPG_OPEN_HZ   = 18000.f;  // c = 1
