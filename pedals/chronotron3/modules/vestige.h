@@ -2739,7 +2739,9 @@ class Vestige : public Module {
         D = (double)fz_L_ - (double)b0 + (double)FzBnd(j0);
       }
     } else {
-      D = (double)FzBnd(i + 1) - (double)b0;               // A: one step
+      // A: the stutters' average spacing (cycle / hits) in steps.
+      const int side = rhy_side_, ks = RhyPolyKs(rhy_level_, side);
+      D = ((double)FzBnd(i + 1) - (double)b0) * (double)RhyPolyNs(side) / (double)(ks > 0 ? ks : 1);
     }
     D /= (double)fz_sub_n_;
     fz_sub_j_++;
