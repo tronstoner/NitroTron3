@@ -1038,7 +1038,7 @@ class Vestige : public Module {
   // -------------------------------------------------------------------------
   void ServiceMBFreeze(int s) {
     size_t L = PlayLen(s);   // == loop_len_ unless C re-cut has changed it
-    if (!active_[s] || L < VESTIGE_GRAIN_MIN_LEN) return;
+    if (!active_[s] || L < MuteLen(s)) return;
 
     // Forward read head (clean-loop / break-up anchor). Frip advances its own head
     // per-sample in AdvanceFripHead; voiced slots advance here (once per sample).
@@ -1281,7 +1281,7 @@ class Vestige : public Module {
     if ((fm != kFollowTape && fm != kFollowStretch) || div_[s] < 0) return 1.0;
     const size_t M  = loop_len_[s];
     const size_t Lt = (s < VESTIGE_VOICE_SLABS && pin_len_[s]) ? pin_len_[s]   // K2 free-run pin
-                                                               : GridQuantize::Boundary(div_[s], period_);
+                                                               : LoopBoundary(div_[s], period_);
     if (Lt == 0 || Lt == M) return 1.0;                     // unchanged T: exactly 1
     double r = (double)M / (double)Lt;
     if (fm == kFollowTape) {                                 // no folding: exactly M / Lt
@@ -1316,7 +1316,7 @@ class Vestige : public Module {
   size_t RecutTarget(int s) const {
     if (follow_mode_ != kFollowRecut || div_[s] < 0) return loop_len_[s];
     const size_t Lt = (s < VESTIGE_VOICE_SLABS && pin_len_[s]) ? pin_len_[s]   // K2 free-run pin
-                                                               : GridQuantize::Boundary(div_[s], period_);
+                                                               : LoopBoundary(div_[s], period_);
     return (Lt == 0) ? loop_len_[s] : Lt;
   }
   bool ViewBusy(int s, int v) const {
@@ -2696,7 +2696,7 @@ class Vestige : public Module {
   uint32_t FzPassLen() const {
     if (fz_ppin_ > 0) return (uint32_t)fz_ppin_;          // K2 free-run pin
     const size_t T = period_ > 0 ? period_ : 1u;
-    const size_t L = (fz_pdiv_ >= 0) ? GridQuantize::Boundary(fz_pdiv_, T) : T;
+    const size_t L = (fz_pdiv_ >= 0) ? LoopBoundary(fz_pdiv_, T) : LoopFloor(T);
     return L > 0 ? (uint32_t)L : 1u;
   }
   // A new freeze started playing at `now`: new rotation draws, step count 0,
@@ -3423,7 +3423,7 @@ class Vestige : public Module {
   // silently while FS2 is off — and LED1's anchor for that side stays true.
   void AdvanceParkedHeads(int s) {
     size_t L = PlayLen(s);
-    if (L < VESTIGE_GRAIN_MIN_LEN) return;
+    if (L < MuteLen(s)) return;
     const PoolEngine& e = eng_[PoolOf(s)];
     const double rho = SmoothTape(s);
     AdvanceHead(s, e.rev && GuardReady(s), rho);
@@ -3704,6 +3704,7 @@ class Vestige : public Module {
     } else {
       Q = GridQuantize::Quantize(raw, fz_vT_);
       fz_sdiv_[s] = GridQuantize::IndexOf(Q, fz_vT_);
+      Q = LoopFloor(Q);                                     // the loop floor (division kept)
     }
     size_t end = (raw < VESTIGE_MIN_LOOP_SAMPLES) ? VESTIGE_MIN_LOOP_SAMPLES : raw;
     const size_t skip = (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * sr_);
@@ -3750,9 +3751,12 @@ class Vestige : public Module {
       // of it: cap_T_ = Q, so IsrActivate derives division 0).
       Q = FreeLen(raw);
       cap_T_[s] = Q;
+      cap_div_[s] = 0;
       FreeSet(s, Q);
     } else {
       Q = GridQuantize::Quantize(raw, cap_T_[s]);           // nearest division, up or down
+      cap_div_[s] = GridQuantize::IndexOf(Q, cap_T_[s]);    // its division, before the floor
+      Q = LoopFloor(Q);                                     // the loop floor: extended, like a round-up
     }
     cap_raw_[s] = raw;
     cap_decide_at_[s] = now;           // diagnostics / host test: when the end was known
@@ -3852,7 +3856,7 @@ class Vestige : public Module {
     ver_idle_[s][0] = ver_idle_[s][1] = true;   // whichever version emits first: instant attack
     // Follow-T bookkeeping. The capture was quantised against the T latched at
     // its start; from here on it keeps its DIVISION and follows T_now.
-    div_[s] = loop ? GridQuantize::IndexOf(L, cap_T_[s]) : -1;
+    div_[s] = loop ? cap_div_[s] : -1;                      // the division IsrDecide quantised to
     if (div_[s] >= 0) {
       const double frac = (double)GridQuantize::kDivNum[div_[s]] / (double)GridQuantize::kDivDen[div_[s]];
       beat_k_[s] = frac / (double)L;                        // beats of T per material sample
@@ -4064,9 +4068,8 @@ class Vestige : public Module {
   }
 
   // ---- K2 FREE-RUN: the free length, the T it sets, the pins (audio thread) --
-  // A free capture's length: raw, kept inside [T_MIN, T_MAX] — it becomes T,
-  // and a later capture quantises down to T/8, which the T_MIN static_asserts
-  // keep playable (grain floor, full seam crossfade).
+  // A free capture's length: raw, kept inside [T_MIN, T_MAX] — it becomes T
+  // (T_MIN >= VESTIGE_LOOP_MIN_LEN: the loop floor).
   static size_t FreeLen(size_t raw) {
     if (raw < VESTIGE_T_MIN_SAMPLES) return VESTIGE_T_MIN_SAMPLES;
     if (raw > VESTIGE_T_MAX_SAMPLES) return VESTIGE_T_MAX_SAMPLES;
@@ -4078,8 +4081,8 @@ class Vestige : public Module {
   size_t FollowLen(int q) const {
     const bool pend = pend_[q];
     const size_t M = pend ? cap_len_[q] : loop_len_[q];
-    const int d = pend ? GridQuantize::IndexOf(cap_len_[q], cap_T_[q]) : div_[q];
-    const size_t Lt = (d >= 0) ? GridQuantize::Boundary(d, period_) : 0;
+    const int d = pend ? cap_div_[q] : div_[q];
+    const size_t Lt = (d >= 0) ? LoopBoundary(d, period_) : 0;
     return (Lt == 0) ? M : Lt;
   }
   // A free capture decided at length Q (slot sn: loop side; -1: freeze side).
@@ -4095,7 +4098,7 @@ class Vestige : public Module {
     // Freeze side: the running pass, and freezes decided but not yet playing.
     if (fz_ppin_ == 0) fz_ppin_ = FzPassLen();
     for (int q = PoolLo(kPoolFreeze); q < PoolHi(kPoolFreeze); q++)
-      if (pend_[q] && fz_spin_[q] == 0 && fz_sdiv_[q] >= 0) fz_spin_[q] = GridQuantize::Boundary(fz_sdiv_[q], period_);
+      if (pend_[q] && fz_spin_[q] == 0 && fz_sdiv_[q] >= 0) fz_spin_[q] = LoopBoundary(fz_sdiv_[q], period_);
     pins_held_ = true;
     free_post_Q_ = Q;
     free_post_seq_ = free_post_seq_ + 1;
@@ -4189,6 +4192,17 @@ class Vestige : public Module {
     fade_from_[s]   = fade_gain_[s];
     fade_phase_[s]  = 0.f;
   }
+
+  // Loop floor (VESTIGE_LOOP_MIN_LEN): every loop length decided or followed.
+  static size_t LoopFloor(size_t L) { return (L < VESTIGE_LOOP_MIN_LEN) ? VESTIGE_LOOP_MIN_LEN : L; }
+  // Boundary(d, T), floored (0 stays 0: no division).
+  static size_t LoopBoundary(int d, size_t T) {
+    const size_t b = GridQuantize::Boundary(d, T);
+    return (b == 0) ? 0 : LoopFloor(b);
+  }
+  // Below this a slot emits nothing: the loop floor on the loop side, the
+  // grain floor on the freeze side (unchanged).
+  static size_t MuteLen(int s) { return (PoolOf(s) == kPoolLoop) ? VESTIGE_LOOP_MIN_LEN : VESTIGE_GRAIN_MIN_LEN; }
 
   // Minimal seam crossfade length (samples), scaled down for tiny loops.
   static size_t SeamXfadeLen(size_t L) {
@@ -4882,6 +4896,7 @@ class Vestige : public Module {
   uint32_t release_samples_ = (uint32_t)(VESTIGE_AUTO_RELEASE_MS * 48);  // set from sr_ in Init
   uint32_t cap_start_[VESTIGE_SLOTS] = {0};   // capture start sample = its grid's "one"
   size_t   cap_T_[VESTIGE_SLOTS]     = {0};   // T latched at that start (loop side)
+  int      cap_div_[VESTIGE_SLOTS]   = {0};   // division the capture quantised to (loop side; IsrDecide)
   size_t   cap_raw_[VESTIGE_SLOTS]   = {0};   // raw length before quantising (diagnostics)
   size_t   cap_len_[VESTIGE_SLOTS]   = {0};   // decided (quantised) length; 0 = not yet
   bool     pend_[VESTIGE_SLOTS]      = {false}; // decided, waiting for its grid point

@@ -93,7 +93,7 @@ static constexpr size_t VESTIGE_MIN_LOOP_SAMPLES = 240; // 5 ms shortest capture
 // noon sets T, which on the loop side is the ceiling on capture length:
 // recording auto-stops and playback begins the moment T is reached. Log taper
 // so the short end has usable resolution.
-//   noon = VESTIGE_T_MIN_SAMPLES (100 ms — see the T block for why)
+//   noon = VESTIGE_T_MIN_SAMPLES (5 ms — see the T block)
 //   full CCW / full CW = VESTIGE_T_MAX_SAMPLES (8 s)
 // An FS1 tap overrides the magnitude until K2 moves (see T block).
 // Sign selects playback direction: past the CCW dead zone the loop plays in
@@ -106,7 +106,7 @@ static constexpr float  VESTIGE_K2_DEADZONE = 0.06f;   // ±6% around noon: shor
 // FREE-RUN zone at both ends of K2 (remapped value: k2 <= ZONE or >= 1 - ZONE;
 // RemapKnob saturates at 0 / 1, so both ends are reachable). A capture that
 // STARTS in the zone is not quantised: Q = its raw length (>= T_MIN, since Q
-// becomes T and later captures quantise down to T/8), ceiling = the full
+// becomes T), ceiling = the full
 // buffer (T_MAX), and T is then SET to Q. Direction unchanged (CCW = reverse).
 static constexpr float  VESTIGE_K2_FREE_ZONE = 0.02f;
 
@@ -117,25 +117,27 @@ static constexpr float  VESTIGE_K2_FREE_ZONE = 0.02f;
 // anchors its own grid at its own start (stage 2), and LED1 flashes T from the
 // most recent capture start.
 //
-// Range. Hard floor: stage 2 can quantise a capture down to T/8, and a loop
-// shorter than VESTIGE_GRAIN_MIN_LEN (256) is muted by the grain engine, so
-// T >= 8*256 = 2048 samples (42.7 ms). Chosen floor: 100 ms (4800 samples):
-//   - T/8 = 600 samples keeps the FULL 240-sample seam crossfade on the shortest
-//     loop (SeamXfadeLen shrinks it to L/2 below 480 samples, i.e. T < 80 ms);
-//   - 100 ms is sprawl's tap floor (SPRAWL_TAP_MIN_MS) — the same FS1 gesture on
-//     the same pedal accepts the same range;
-//   - it is a period (600 BPM quarter / 150 BPM bar-of-16ths), not a click.
-// Ceiling: the 8 s loop buffer. K2 noon = T_MIN (was one grain, 5.3 ms, as a
-// length test); full CCW / CW = T_MAX, log taper between.
+// Range: 5 ms .. 8 s (was 100 ms .. 8 s). Below T = 8 * VESTIGE_LOOP_MIN_LEN
+// (40 ms) the short divisions fall under the loop floor and are extended to it
+// (VESTIGE_LOOP_MIN_LEN, below). The tap's valid interval range follows T_MIN.
+// Ceiling: the 8 s loop buffer. K2 noon = T_MIN; full CCW / CW = T_MAX, log
+// taper between (KnobPeriod: the same formula, so the taper shifts with T_MIN).
 // ---------------------------------------------------------------------------
-static constexpr uint32_t VESTIGE_T_MIN_MS      = 100;
-static constexpr size_t   VESTIGE_T_MIN_SAMPLES = (size_t)(VESTIGE_T_MIN_MS * 48);   // 4800 @48k
+static constexpr uint32_t VESTIGE_T_MIN_MS      = 5;
+static constexpr size_t   VESTIGE_T_MIN_SAMPLES = (size_t)(VESTIGE_T_MIN_MS * 48);   // 240 @48k
 static constexpr size_t   VESTIGE_T_MAX_SAMPLES = VESTIGE_LOOP_MAX_SAMPLES;          // 384000 = 8 s
 static constexpr uint32_t VESTIGE_T_MAX_MS      = (uint32_t)(VESTIGE_LOOP_SECONDS * 1000.f); // 8000
-static_assert(VESTIGE_T_MIN_SAMPLES / 8 >= VESTIGE_GRAIN_MIN_LEN,
-              "T/8 must stay a playable loop (>= VESTIGE_GRAIN_MIN_LEN)");
-static_assert(VESTIGE_T_MIN_SAMPLES / 8 >= 2 * VESTIGE_SEAM_XFADE_MAX,
-              "T/8 must keep the full seam crossfade");
+// LOOP FLOOR (loop side): no loop is shorter than this, wherever a loop length
+// is decided or followed — a quantised capture whose Boundary(d, T) falls below
+// it is extended to it (its division d is kept), the free-run length and every
+// follow-T target (Boundary(d, T_now)) are floored at it, and so is the freeze
+// rhythm pass (FzPassLen). It is also the loop side's mute threshold (a loop
+// slot shorter than this emits nothing); the freeze side keeps
+// VESTIGE_GRAIN_MIN_LEN. The seam crossfade shrinks to L/2 on short loops
+// (SeamXfadeLen).
+static constexpr size_t   VESTIGE_LOOP_MIN_LEN  = 240;                               // 5 ms
+static_assert(VESTIGE_T_MIN_SAMPLES >= VESTIGE_LOOP_MIN_LEN, "T_MIN must be a playable loop (>= VESTIGE_LOOP_MIN_LEN)");
+static_assert(VESTIGE_LOOP_MIN_LEN >= 2, "a loop needs a seam crossfade of at least one sample (L/2)");
 // FS1 tap tempo — sprawl's arbitration, exactly: the interval between two
 // DOWN-presses IS T; a press released before TAP_RELEASE is a tap (longer = no-op,
 // chain untouched); intervals outside [T_MIN, T_MAX] are ignored (and start a

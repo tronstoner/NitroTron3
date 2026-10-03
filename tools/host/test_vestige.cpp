@@ -539,7 +539,8 @@ static void TestTimeBase() {
   const size_t knobT = Vestige::KnobPeriod(RemapKnob(0.85f));
 
   // Range.
-  Check(VESTIGE_T_MIN_SAMPLES / 8 >= VESTIGE_GRAIN_MIN_LEN, "T_MIN/8 >= VESTIGE_GRAIN_MIN_LEN (quantiser floor stays playable)");
+  if (VESTIGE_T_MIN_MS >= 100)   // guarded: models the 100 ms T_MIN (now the loop floor VESTIGE_LOOP_MIN_LEN)
+    Check(VESTIGE_T_MIN_SAMPLES / 8 >= VESTIGE_GRAIN_MIN_LEN, "T_MIN/8 >= VESTIGE_GRAIN_MIN_LEN (quantiser floor stays playable)");
   printf("      T range %zu..%zu samples (%.1f ms..%.1f s), T_MIN/8 = %zu\n",
          (size_t)VESTIGE_T_MIN_SAMPLES, (size_t)VESTIGE_T_MAX_SAMPLES,
          VESTIGE_T_MIN_SAMPLES * 1000.f / sr, VESTIGE_T_MAX_SAMPLES / sr, (size_t)VESTIGE_T_MIN_SAMPLES / 8);
@@ -557,7 +558,7 @@ static void TestTimeBase() {
   // Tap intervals produce T.
   struct TapCase { int ms; bool accept; };
   const TapCase cases[] = { {500, true}, {250, true}, {1230, true}, {100, true}, {7990, true},
-                            {90, false}, {8010, false} };
+                            {90, 90 >= (int)VESTIGE_T_MIN_MS}, {8010, false} };   // 90: guarded (T_MIN was 100 ms)
   size_t expect = v.period_;
   for (const TapCase& c : cases) {
     // Break the chain first: an interval longer than T_MAX is ignored and the
