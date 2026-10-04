@@ -474,30 +474,33 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 //     VESTIGE_TIMING_RHY_TABLE_CW, each at its own half's depth; which pair
 //     (timelines / intensity paths) = VESTIGE_TIMING_RHY_IL_SET (below).
 static constexpr float  VESTIGE_K3_DEADZONE          = 0.04f;
-// K3 mode 2 (SW2 MIDDLE): one engine, the three layers (TIMING / CONDITION /
-// PLAYBACK), each a line of hits rendered + stacked the same way on both
-// halves (TimingPlanLayersImpl, FzPlanLayers); the halves differ only in their
-// parameters. CW params: VESTIGE_TIMING_LINE_* / W_* (seeded lines, changed
-// per block). CCW params (below): each layer's line is one pass long and
-// starts empty (a new loop / freeze, or entering the CCW half: its first pass
-// clean); per pass, each layer independently gets new hits at one rate, by the
-// CCW depth u over the levels [1 every CCW_SLOW_PASSES[0] passes, ..., 1 every
-// CCW_SLOW_PASSES[n-1], then 1, 2, ..., G per pass] (G = the step count),
-// level = round(u x (levels - 1)); the same rate on all three layers. A hit:
-// its event uniform within its layer (TIMING: stutter / repeat / double /
-// ratchet / retrig; CONDITION: rest / decimate, factor uniform from
-// DECIM_FACTORS; PLAYBACK: reverse), length uniform CCW_LEN_MIN..MAX steps
-// (clipped at the pass end), first step an uncovered step of that layer if
-// any (uniform), else any step. It overwrites what it covers in its own layer
-// (an older hit keeps its other steps, as hits of their own); other layers
-// stack. Each hit lives CCW_LIFE_MIN..MAX passes (uniform; its creation pass
-// included; counted in the passes planned with the CCW half on), then goes.
-static constexpr int    VESTIGE_TIMING_CCW_SLOW_N = 3;
-static constexpr int    VESTIGE_TIMING_CCW_SLOW_PASSES[VESTIGE_TIMING_CCW_SLOW_N] = {4, 3, 2};
-static constexpr int    VESTIGE_TIMING_CCW_LEN_MIN  = 1;    // hit length, steps (uniform)
-static constexpr int    VESTIGE_TIMING_CCW_LEN_MAX  = 4;
-static constexpr int    VESTIGE_TIMING_CCW_LIFE_MIN = 6;    // lifespan, passes (uniform)
-static constexpr int    VESTIGE_TIMING_CCW_LIFE_MAX = 10;
+// K3 mode 2 (SW2 MIDDLE) CCW half = DEGRADE: per loop (and per freeze, on the
+// freeze side's virtual pass) mutations ACCUMULATE pass by pass and stay. A
+// mutation gives one step of the pass a random event, uniform over (stutter,
+// repeat, double, ratchet, retrig, reverse, rest) over 1 + its next steps:
+// length uniform DEGRADE_LEN_MIN..MAX steps, clipped at the pass end, rendered
+// like a CW layer hit of that length. A non-rest event carries the DECIMATE
+// quality with probability DEGRADE_DECIM_P_MIN + DEGRADE_DECIM_P_SPAN x u
+// (factor uniform from DECIM_FACTORS): decimated over exactly its steps, on
+// top of its timing render (freeze: on top of the LPG mapping); it lives and
+// dies with the event. Its first step: an unmutated
+// step if any (uniform), else any step; the steps it covers are overwritten
+// (an older event keeps the rest of its steps). Each mutation lives a random
+// DEGRADE_LIFE_MIN..MAX passes (its creation pass included; counted in the
+// passes its loop / the freeze's virtual pass plans with degrade on), then its
+// steps play clean again. The rate, by the
+// CCW depth u over the levels [1 every DEGRADE_SLOW_PASSES[0] passes, ...,
+// 1 every DEGRADE_SLOW_PASSES[n-1], then 1, 2, ..., G per pass] (per loop: G =
+// its step count), level = round(u x (levels - 1)). A new loop / freeze starts
+// clean.
+static constexpr int    VESTIGE_DEGRADE_SLOW_N = 3;
+static constexpr int    VESTIGE_DEGRADE_SLOW_PASSES[VESTIGE_DEGRADE_SLOW_N] = {4, 3, 2};
+static constexpr int    VESTIGE_DEGRADE_LEN_MIN  = 1;    // event length, steps (uniform)
+static constexpr int    VESTIGE_DEGRADE_LEN_MAX  = 4;
+static constexpr int    VESTIGE_DEGRADE_LIFE_MIN = 6;    // lifespan, passes (uniform)
+static constexpr int    VESTIGE_DEGRADE_LIFE_MAX = 10;
+static constexpr float  VESTIGE_DEGRADE_DECIM_P_MIN  = 0.10f;   // decimate chance at u -> 0
+static constexpr float  VESTIGE_DEGRADE_DECIM_P_SPAN = 0.40f;   //  + this x u (0.50 at full CCW)
 static constexpr int    VESTIGE_TIMING_RHY_ENGINE    = 0;   // 0 polymetric · 1 afro table · 2 interlock table
 static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
 static constexpr float  VESTIGE_TIMING_RHY_S_K_MIN   = 2.f;
