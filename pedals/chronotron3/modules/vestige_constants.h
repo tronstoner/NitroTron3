@@ -1217,7 +1217,11 @@ static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
 // with the repeat dB curve above, ending silent, then retires.
 static constexpr float  VESTIGE_FREEZE_SUSTAIN_MAX_S = 8.f;
 static constexpr float  VESTIGE_FREEZE_SUSTAIN_MIN_S = 0.5f;
-static constexpr float  VESTIGE_FREEZE_SUSTAIN_CURVE = 3.f;   // > 1: more K5 travel on the long times
+static constexpr float  VESTIGE_FREEZE_SUSTAIN_CURVE = 1.5f;   // (was 3: long times took too much travel)
+// The freeze's own decay (no longer the loop repeats' curve): dB = FLOOR_DB ·
+// x^DECAY over the sustain time — blooming (slow first, then steeper), DECAY > 1.
+static constexpr float  VESTIGE_FREEZE_SUSTAIN_FLOOR_DB = -60.f;
+static constexpr float  VESTIGE_FREEZE_SUSTAIN_DECAY    = 1.4f;   // > 1: more K5 travel on the long times
 // FREEZE side K5 CCW = also a FADE-IN for each NEW freeze (equal-power, K5 CW's
 // rise): MAX_S x u5^CURVE, 0 at the dead zone; the sustain starts after it.
 // CURVE 1.26 puts 9:00 (k5 = 0.2, u5 = 0.545) at ~0.70 s.

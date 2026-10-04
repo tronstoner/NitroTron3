@@ -4383,7 +4383,7 @@ class Vestige : public Module {
       if (!held_) { sus_x_[q] += (float)n / (T * sr_); if (sus_x_[q] > 1.f) sus_x_[q] = 1.f; }
       const float x = sus_x_[q];
       const float rem = (1.f - x) * T * sr_;                  // output samples left
-      float t = sus_base_[q] * powf(10.f, VESTIGE_REPEAT_FLOOR_DB * powf(x, VESTIGE_REPEAT_CURVE) / 20.f);
+      float t = sus_base_[q] * powf(10.f, VESTIGE_FREEZE_SUSTAIN_FLOOR_DB * powf(x, VESTIGE_FREEZE_SUSTAIN_DECAY) / 20.f);
       if (rem < ramp) t *= rem / ramp;
       sus_t_[q] = t; sus_step_[q] = fabsf(sus_g_[q] - t) / (float)(n > 0 ? n : 1);
     }
