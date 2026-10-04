@@ -1106,9 +1106,9 @@ static constexpr float  VESTIGE_TIMING_LINE_HITS_A  = 0.5f;
 static constexpr float  VESTIGE_TIMING_LINE_HITS_B  = 7.5f;     // L = 1: 8 hits per 16 steps = the full pulse
 static constexpr float  VESTIGE_TIMING_LINE_FILL_A  = 0.1f;
 static constexpr float  VESTIGE_TIMING_LINE_FILL_B  = 0.5f;
-static constexpr float  VESTIGE_TIMING_LINE_OPS_B   = 6.f;
+static constexpr float  VESTIGE_TIMING_LINE_OPS_B   = 2.f; 
 static constexpr float  VESTIGE_TIMING_LINE_RAND_FROM = 0.67f;
-static constexpr int    VESTIGE_TIMING_LINE_LIFE    = 3;
+static constexpr int    VESTIGE_TIMING_LINE_LIFE    = 6;
 static constexpr int    VESTIGE_TIMING_LAYER_MAX_STEPS = 64;    // G bound (steps per pass)
 static constexpr int    VESTIGE_TIMING_LINE_MAX_CELLS  = 64;    // line bound (64-bit cell masks)
 static_assert(VESTIGE_TIMING_LINE_STEPS <= VESTIGE_TIMING_LINE_MAX_CELLS, "line too long");
