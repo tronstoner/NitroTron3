@@ -196,11 +196,12 @@ static uint64_t HashLoopSide()   { return Hash(&vestige_slab[0][0], sizeof(vesti
 static uint64_t HashFreezeSide() { return Hash(&vestige_freeze_slab[0][0], sizeof(vestige_freeze_slab) / sizeof(float)); }
 static bool AllZero(const float* p, size_t count) { for (size_t i = 0; i < count; i++) if (p[i] != 0.f) return false; return true; }
 // Zero crossings per second over a slot's captured loop — identifies which
-// steady tone a slot was recorded from.
+// steady tone a slot was recorded from. A freeze slot's window sits in its
+// row as a ring at frz_base_ (the phrase's tail).
 static float SlotHz(int s) {
-  const float* m = v.slab_[s]; const size_t L = v.loop_len_[s];
+  const float* m = v.slab_[s]; const size_t L = v.loop_len_[s], b = v.frz_base_[s], cap = v.cap_[s];
   int zc = 0;
-  for (size_t i = 1; i < L; i++) if ((m[i - 1] < 0.f) != (m[i] < 0.f)) zc++;
+  for (size_t i = 1; i < L; i++) if ((m[(b + i - 1) % cap] < 0.f) != (m[(b + i) % cap] < 0.f)) zc++;
   return (L > 1) ? 0.5f * (float)zc * sr / (float)L : 0.f;
 }
 static void Engage()   { if (!v.engaged_) Tap(); }
@@ -459,20 +460,16 @@ static void TestBufferSeparation() {
   cs.sw[0] = 2; sustain_hz = 330.f; RunFor(0.02f);
   Check(!HasIn(Vestige::kPoolLoop), "in-flight loop capture dropped (never committed)");
   Check(!v.recording_ || Vestige::PoolOf(v.rec_slot_) == Vestige::kPoolFreeze, "any new capture records into a freeze-side slot");
-  RunFor(0.45f);                                   // B capture hits the 400 ms ceiling
-  int nb = 0, na = 0;
-  for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++) {
-    if (!v.active_[s]) continue;                  // incl. dying: a crossed-over slot would be fading here
-    const float hz = SlotHz(s);
-    printf("      freeze slot %d: %zu samples, %.1f Hz%s\n", s, v.loop_len_[s], hz, v.dying_[s] ? " (dying)" : "");
-    if (fabsf(hz - 330.f) < 15.f) nb++; else na++;
-  }
-  // SKIPPED (freeze = phrase tail, 2026-10-03): encodes the old freeze timing
-  // (a freeze active 400 ms after its onset); it now starts at its phrase end.
-  (void)nb; (void)na;
-  printf("skip  freeze side holds only audio played AFTER the switch (old freeze timing)\n");
-  RunFor(0.6f);
+  RunFor(1.05f);                                   // B phrase runs on (the freeze = its tail, at its end)
   sustain_input = false; play_input = false; sustain_hz = 110.f; RunFor(0.3f);
+  { int nb = 0, na = 0;
+    for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++) {
+      if (!v.active_[s]) continue;                // incl. dying: a crossed-over slot would be fading here
+      const float hz = SlotHz(s);
+      printf("      freeze slot %d: %zu samples, %.1f Hz%s\n", s, v.loop_len_[s], hz, v.dying_[s] ? " (dying)" : "");
+      if (fabsf(hz - 330.f) < 15.f) nb++; else na++;
+    }
+    Check(nb >= 1 && na == 0, "freeze side holds only audio played AFTER the switch (its phrase's tail)"); }
   bool frz_only = true;
   for (int s = 0; s < VESTIGE_FREEZE_SLOT0; s++) if (v.active_[s]) frz_only = false;
   Check(frz_only && HasIn(Vestige::kPoolFreeze), "after the switch only the freeze side holds content");
@@ -488,16 +485,18 @@ static void TestBufferSeparation() {
   play_input = false; sustain_input = false; RunFor(0.5f);
   printf("      freeze capture: furthest index %zu, row capacity %zu, ceiling %zu\n",
          frz_rec_max, (size_t)VESTIGE_FREEZE_CAP, (size_t)VESTIGE_FREEZE_SAMPLES);
-  size_t fl = 0, fb = 0;
-  for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++)
-    if (v.active_[s] && !v.dying_[s]) { fl = v.loop_len_[s]; fb = v.frz_base_[s]; }
-  // SKIPPED (freeze = phrase tail, 2026-10-03): these three encode the old
-  // freeze capture (window = the first 400 ms from the onset, recorded on
-  // through the overhang); the window is now cut from the phrase's tail.
-  (void)fl; (void)fb;
-  printf("skip  sustained freeze capture reached the 400 ms ceiling (old freeze timing)\n");
-  printf("skip  ceiling capture committed at exactly 400 ms (old freeze timing)\n");
-  printf("skip  freeze window skips the attack from the onset (old freeze timing)\n");
+  // The freeze = the phrase's tail: the capture machine stops at its 400 ms
+  // ceiling, the phrase runs on to where the sound stopped (~1.5 s; K2 is in
+  // the free zone here, so its ceiling is the full 8 s), and the window is
+  // its last 400 ms, cut from the ring.
+  { const int s = v.last_act_slot_;
+    const size_t raw = v.cap_raw_[s];
+    printf("      sustained freeze: phrase %zu samples (%.2f s), window %zu @%zu (want @%zu)\n",
+           raw, raw / sr, v.loop_len_[s], v.frz_base_[s], (raw - VESTIGE_FREEZE_SAMPLES) % v.cap_[s]);
+    Check(s >= VESTIGE_FREEZE_SLOT0 && raw > (size_t)(1.4f * sr) && raw < (size_t)(1.6f * sr),
+          "sustained freeze: the phrase is measured past the 400 ms capture machine, to where the sound stopped");
+    Check(v.loop_len_[s] == VESTIGE_FREEZE_SAMPLES && v.frz_base_[s] == (raw - VESTIGE_FREEZE_SAMPLES) % v.cap_[s],
+          "sustained freeze: the window = the phrase's last 400 ms"); }
   Check(frz_rec_max <= VESTIGE_FREEZE_CAP, "freeze capture never indexed past its row");
   Check(rec_overrun == 0, "no capture ever indexed past its scratch row (whole run)");
 }
@@ -539,8 +538,8 @@ static void TestTimeBase() {
   const size_t knobT = v.tgrid_.KnobPeriod(RemapKnob(0.85f));
 
   // Range.
-  if (VESTIGE_T_MIN_MS >= 100)   // guarded: models the 100 ms T_MIN (now the loop floor VESTIGE_LOOP_MIN_LEN)
-    Check(VESTIGE_T_MIN_SAMPLES / 8 >= VESTIGE_GRAIN_MIN_LEN, "T_MIN/8 >= VESTIGE_GRAIN_MIN_LEN (quantiser floor stays playable)");
+  Check(VESTIGE_T_MIN_SAMPLES == VESTIGE_LOOP_MIN_LEN && VESTIGE_T_MIN_MS == 5,
+        "T_MIN = 5 ms = the loop floor (240 samples): the shortest T is a playable loop; shorter divisions are extended to it");
   printf("      T range %zu..%zu samples (%.1f ms..%.1f s), T_MIN/8 = %zu\n",
          (size_t)VESTIGE_T_MIN_SAMPLES, (size_t)VESTIGE_T_MAX_SAMPLES,
          VESTIGE_T_MIN_SAMPLES * 1000.f / sr, VESTIGE_T_MAX_SAMPLES / sr, (size_t)VESTIGE_T_MIN_SAMPLES / 8);
@@ -558,7 +557,7 @@ static void TestTimeBase() {
   // Tap intervals produce T.
   struct TapCase { int ms; bool accept; };
   const TapCase cases[] = { {500, true}, {250, true}, {1230, true}, {100, true}, {7990, true},
-                            {90, 90 >= (int)VESTIGE_T_MIN_MS}, {8010, false} };   // 90: guarded (T_MIN was 100 ms)
+                            {90, true}, {8010, false} };   // (the 5 ms .. 8 s edges: test_dynquapoteg)
   size_t expect = v.tgrid_.T();
   for (const TapCase& c : cases) {
     // Break the chain first: an interval longer than T_MAX is ignored and the
@@ -3257,9 +3256,10 @@ static void TestTimingLayers() {
     const LayerStats st = LayerRun(K3Cw(k3), 2000, 12);
     printf("      K3 %.2f, 2 s: %ld / %ld steps match their map, %ld / %ld rests silent, audit bad %ld, bad lines %ld\n",
            k3, st.good, st.steps, st.silent_ok, st.silent, audit_bad, st.bad_lines);
-    char m[160]; snprintf(m, sizeof m, "K3 %.2f: every step = its source step (direction, ratchet) at c > 0.95; rests silent; no read outside the guard", k3);
-    // (discovery: the mode-2 top zone has no rests at full, so "some rests" is only expected below it)
-    Check(st.steps > 60 && st.good == st.steps && (k3 >= 1.f || st.silent > 0) && st.silent_ok == st.silent && audit_bad == 0, m);
+    char m[200]; snprintf(m, sizeof m, "K3 %.2f: every step = its source step (direction, ratchet) at c > 0.95; rests silent%s; no read outside the guard",
+                          k3, k3 >= 1.f ? " (none at full: top zone)" : "");
+    // (the mode-2 top zone: no rests at all at full K3, some below it)
+    Check(st.steps > 60 && st.good == st.steps && (k3 >= 1.f ? st.silent == 0 : st.silent > 0) && st.silent_ok == st.silent && audit_bad == 0, m);
     snprintf(m, sizeof m, "K3 %.2f: hit lines keep their rules (1..%d steps, a pause apart) and evolve (places / types)", k3, VESTIGE_TIMING_SPAN_MAX);
     Check(st.bad_lines == 0 && st.changed, m);
     if (k3 < 1.f) Check(st.first_pass_events == 0, "K3 up from 0: the first pass plays clean (the lines are built during it)");
@@ -3594,7 +3594,7 @@ static RhySimPass RhySimPlan(Vestige& q, int s, int G) {
     if (l == 0 && x.type == Vestige::kFigStutter) { if (o.cell[i] != '-') o.bad = true; o.cell[i] = 's'; }
     else if (l == 0 && (x.type == Vestige::kFigDouble || x.type == Vestige::kFigRatchet)) {
       if (o.rat[i]) o.bad = true;
-      o.rat[i] = (x.type == Vestige::kFigRatchet) ? 4 : 2;
+      o.rat[i] = (x.type == Vestige::kFigRatchet) ? x.sub : 2;   // (graded 2 / 3 / 4)
     }
     else if (l == 1 && x.type == Vestige::kFigRest) { if (o.cell[i] != '-') o.bad = true; o.cell[i] = '_'; }
     else if (is_dec) { dec.push_back(i); dlen.push_back(x.len); dsub.push_back(x.sub); }
@@ -3912,7 +3912,8 @@ static void TestK3RhythmPoly() {
       const int Ns = RhyNs(c.side), Nr = RhyNr(c.side);
       const double pr = R.stut ? (double)R.rat / (double)R.stut : 0.0, pq = R.rat ? (double)R.quad / (double)R.rat : 0.0;
       const double ramp = Vestige::RhyRatRamp(c.u);
-      const double want_p = VESTIGE_TIMING_RHY_RAT_P_MAX * pow(ramp, VESTIGE_TIMING_RHY_RAT_P_CURVE), want_q = 1.0;   // (graded 2 / 3 / 4 now, all kFigRatchet: the old x4 share is not checked — discovery)
+      // x4 share: graded 2 / 3 / 4 by the ramp's thirds (TestMode1GradedRatchets): a third from 2/3 on, none below.
+      const double want_p = VESTIGE_TIMING_RHY_RAT_P_MAX * pow(ramp, VESTIGE_TIMING_RHY_RAT_P_CURVE), want_q = (ramp >= 2.0 / 3.0) ? 1.0 / 3.0 : 0.0;
       printf("      %-3s u=%.2f E(%d,%d) vs E(%d,%d): base %5.1f%% of %ld steps, on-1 bad %ld/%ld, unexplained runs %ld/%ld, varied S %ld R %ld (min gap %ld), "
              "ratchets %ld/%ld = %.3f (want %.3f), x4 %.2f (want %.2f)\n",
              sn[c.side], (double)c.u, Vestige::RhyPolyKs(c.u, c.side), Ns, Vestige::RhyPolyKr(c.u, c.side), Nr,
@@ -3932,8 +3933,8 @@ static void TestK3RhythmPoly() {
       if (R.gap_min < 3L * std::min(Ns, Nr)) gap_ok = false;
       tot_vs += R.var_s; tot_vr += R.var_r;
       if (c.u <= VESTIGE_TIMING_RHY_RAT_U0 && R.rat != 0) rat_low = false;
-      if (c.u > VESTIGE_TIMING_RHY_RAT_U0 && c.u < 0.9f && !(R.rat > 0 && pr < 0.2 && fabs(pr - want_p) < 0.05)) rat_mid = false;
-      if (c.u == 1.f && !(fabs(pr - want_p) < 0.06)) rat_top = false;   // (x4 share: graded now, not checked)
+      if (c.u > VESTIGE_TIMING_RHY_RAT_U0 && c.u < 0.9f && !(R.rat > 0 && pr < 0.2 && fabs(pr - want_p) < 0.05 && R.quad == 0)) rat_mid = false;
+      if (c.u == 1.f && !(fabs(pr - want_p) < 0.06 && fabs(pq - want_q) < 0.1)) rat_top = false;
     }
     Check(all_ok, "planner: only one-step stutters + rests + decimates (+ ratchets on stutters), one per step, inside the pass");
     Check(words_ok, "planner: a loop's rotation words stay fixed while the rhythm does not change");
@@ -3979,8 +3980,8 @@ static void TestK3RhythmPoly() {
       Check(VESTIGE_TIMING_RHY_DECIM_FADE_MS == 15.f && fabsf(a - want_r) < 1e-7f && fabsf(b - want_m) < 1e-7f && fabsf(v.rhy_decim_inc_ - want_r) < 1e-7f,
             "decimate fade: K3 rhythm decimates fade over RHY_DECIM_FADE_MS (15 ms), the mode-2 layers over MUTE_MS"); }
     Check(rat_low, "ratchets: none up to depth 0.6");
-    Check(rat_mid, "ratchets: rare just past 0.6 (p = 0.5 x ramp^2: 0.125 at depth 0.8)");
-    Check(rat_top, "ratchets: at full depth half the stutters ratchet (p 0.5)"); }
+    Check(rat_mid, "ratchets: rare just past 0.6 (p = 0.5 x ramp^2: 0.125 at depth 0.8), no x4 below two thirds of the ramp");
+    Check(rat_top, "ratchets: at full depth half the stutters ratchet (p 0.5), a third of those x4"); }
   // (7) The hit variation's scheduler: the 4th / 5th run of its voice.
   { RhyKvRes K;
     for (int side = kRhyCcw; side <= kRhyCw; side++)
@@ -5404,6 +5405,699 @@ static void TestTimingSlices() {
   Unhold();
 }
 
+// ===========================================================================
+// LOCK-IN 2026-10-04 (the builder: "lock it in"): the vestige features settled
+// on 2026-10-03 / 04 — K2 free-run + loop floor on the module, the freeze as
+// the phrase's tail, the 2-freeze voice limit, the freeze sustain (K5 CCW),
+// K3 modes 1 / 2 on the freeze (LPG model A, rests, ratchet sub-strikes, the
+// layer / degrade event mapping), the K3 mode-2 engine (CW layers, CCW
+// degrade pool, top zone) and the graded ratchets. The block itself
+// (dynquapoteg.h: K2 taper, free-run handshake, floor, tap ranges) is in
+// test_dynquapoteg.cpp.
+// ---------------------------------------------------------------------------
+// The module's grid uses vestige_constants.h (the block test builds the same).
+static void TestGridConfig() {
+  printf("-- lock-in: the module's time grid config\n");
+  const DynquapotegConfig& c = v.tgrid_.cfg_;
+  Check(c.t_min == VESTIGE_T_MIN_SAMPLES && c.t_max == VESTIGE_T_MAX_SAMPLES && c.loop_floor == VESTIGE_LOOP_MIN_LEN &&
+        c.knob_seg1 == VESTIGE_K2_SEG1 && c.knob_seg2 == VESTIGE_K2_SEG2 && c.knob_t1 == 4800 && c.knob_t2 == 96000 &&
+        c.free_zone == VESTIGE_K2_FREE_ZONE && c.t_min_ms == 5 && c.t_max_ms == 8000 && c.loop_floor == 240,
+        "vestige's grid: T 5 ms .. 8 s, K2 sections 100 ms / 2 s at 15 % / 80 %, free zone 2 %, loop floor 240");
+}
+// Fraction of 10 ms ticks LED1 is lit over secs.
+static float Led1Lit(float secs) {
+  int on = 0, tot = 0;
+  for (int i = 0; i < (int)(secs * 100.f); i++) { RunFor(0.01f); tot++; if (led1.v > 0.5f) on++; }
+  return tot ? (float)on / (float)tot : 0.f;
+}
+// K2 FREE-RUN on the loop side: a capture started in the outer 2 % is not
+// quantised, its played length becomes T, every other loop keeps the length
+// it had, LED1 is inverted in the zone; K2 moving on hands T back to the knob
+// (pins released, loops follow by their division again).
+static void TestFreeRunLoop() {
+  printf("-- lock-in: K2 free-run zone (loop side)\n");
+  const int fcfg = v.follow_mode_cfg_; v.follow_mode_cfg_ = -1;    // the firmware's follow (stretch)
+  Reset(); cs.sw[0] = 1; cs.knob[0] = 0.5f; cs.knob[4] = 0.5f;
+  cs.knob[1] = 0.80f; RunFor(0.05f); cs.knob[1] = 0.85f; RunFor(0.3f);   // (a stale tap / free T: the knob moved)
+  const size_t T0 = v.tgrid_.T();
+  Check(T0 == v.tgrid_.KnobPeriod(RemapKnob(0.85f)) && !v.tgrid_.InFreeZone(), "setup: the knob sets T, not in the free zone");
+  seen_acts = v.act_count_;
+  CapRec a{}; noise_from = n; noise_to = n + 14400; const bool ga = WaitActivation(3.f, &a); noise_from = noise_to = -1;
+  const int sa = a.s; const size_t La = ga ? v.loop_len_[sa] : 0; const int dA = ga ? v.div_[sa] : -1;
+  RunFor(0.5f);
+  cs.knob[1] = 1.0f; RunFor(0.1f);                                 // into the CW free zone
+  const size_t Tz = v.tgrid_.T(), La1 = v.FollowLen(sa);
+  Check(ga && dA >= 0 && v.tgrid_.InFreeZone() && La1 == v.tgrid_.LoopBoundary(dA, Tz),
+        "setup: loop A quantised, K2 in the free zone (A follows the zone's T by its division)");
+  seen_acts = v.act_count_;
+  CapRec b{}; noise_from = n; noise_to = n + 33600; const bool gb = WaitActivation(4.f, &b); noise_from = noise_to = -1;
+  const int sb = b.s;
+  RunFor(0.05f);
+  printf("      A: %zu (div %d) -> %zu in the zone | free capture B: raw %zu, played %zu, div %d, T now %zu, A pinned at %zu\n",
+         La, dA, La1, gb ? v.cap_raw_[sb] : 0, gb ? v.loop_len_[sb] : 0, gb ? v.div_[sb] : -9, v.tgrid_.T(), v.pin_len_[sa]);
+  Check(gb && sb != sa && v.loop_len_[sb] == v.cap_raw_[sb] && v.div_[sb] == 0 && v.cap_raw_[sb] > 30000,
+        "free-run capture: not quantised (played length = the raw length, division 1/1 of itself)");
+  Check(gb && v.tgrid_.T() == v.loop_len_[sb], "free-run capture: its length becomes T");
+  Check(v.pin_len_[sa] == La1 && v.tgrid_.FollowTarget(v.div_[sa], v.pin_len_[sa]) == La1,
+        "free-run capture: the other loop keeps exactly the length it had (pinned)");
+  const long pa = PassLength(sa, 2.5f * (float)La1 / sr + 0.5f), pb = PassLength(sb, 2.5f * (float)v.loop_len_[sb] / sr + 0.5f);
+  printf("      played passes: A %ld (want %zu), B %ld (want %zu)\n", pa, La1, pb, v.loop_len_[sb]);
+  Check(labs(pa - (long)La1) <= 2 && labs(pb - (long)v.loop_len_[sb]) <= 2, "free-run: both loops play those lengths (passes measured)");
+  const float lit_zone = Led1Lit(2.0f);
+  cs.knob[1] = 0.85f; RunFor(0.1f);                                // K2 moves on: the knob sets T again
+  bool pins0 = true; for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) if (v.pin_len_[q]) pins0 = false;
+  Check(v.tgrid_.T() == T0 && pins0 && v.FollowLen(sa) == v.tgrid_.LoopBoundary(dA, T0) && v.FollowLen(sb) == T0,
+        "free-run: K2 moved on -> T from the knob, pins released, loops follow by their division (B as 1/1)");
+  const float lit_out = Led1Lit(2.0f);
+  printf("      LED1 lit: %.0f %% of ticks in the zone, %.0f %% outside\n", 100.f * lit_zone, 100.f * lit_out);
+  Check(lit_zone > 0.80f && lit_zone < 0.99f && lit_out > 0.01f && lit_out < 0.15f,
+        "LED1 inverted in the free zone (lit, the tempo flashes dark), normal outside");
+  v.follow_mode_cfg_ = fcfg; cs.sw[0] = 0; Reset();
+}
+// Loop floor on the module: a capture whose nearest division of T is under
+// 240 samples plays 240, its division kept; it follows T by that division.
+static void TestLoopFloorModule() {
+  printf("-- lock-in: loop floor (240 samples)\n");
+  Reset(); cs.sw[0] = 0; cs.knob[4] = 0.5f; cs.knob[0] = 0.5f;
+  cs.knob[1] = 0.80f; RunFor(0.05f); cs.knob[1] = 0.85f; RunFor(0.05f);
+  v.tgrid_.tap_period_ = 960; RunFor(0.05f);                      // T = 20 ms (set directly; the tap rule: test_dynquapoteg)
+  v.thresh_cfg_ = 0.025f; RunFor(0.3f);                            // a less sensitive gate: a 1 ms burst = a ~3 ms phrase
+  seen_acts = v.act_count_;
+  CapRec r{}; noise_from = n + 7; noise_to = noise_from + 48; const bool ok = WaitActivation(1.f, &r); noise_from = noise_to = -1;
+  const size_t Qm = GridQuantize::Quantize(r.raw, 960); const int dm = GridQuantize::IndexOf(Qm, 960);
+  printf("      T 960: raw %zu -> nearest division %zu (index %d) -> played %zu, division %d\n", r.raw, Qm, dm, ok ? v.loop_len_[r.s] : 0, ok ? v.div_[r.s] : -9);
+  Check(ok && r.T == 960 && Qm < VESTIGE_LOOP_MIN_LEN, "setup: a capture whose nearest division of T is under the floor");
+  Check(ok && v.loop_len_[r.s] == VESTIGE_LOOP_MIN_LEN && v.div_[r.s] == dm, "loop floor: played at 240 samples, its division kept");
+  v.tgrid_.tap_period_ = 4000; RunFor(0.05f);
+  Check(ok && v.FollowLen(r.s) == std::max((size_t)VESTIGE_LOOP_MIN_LEN, GridQuantize::Boundary(dm, 4000)),
+        "loop floor: the floored loop follows T by its division (Boundary(d, T), floored)");
+  v.tgrid_.tap_period_ = 0; SetK4Thresh(0.1f); Reset();
+}
+// ---- the freeze as the phrase's tail ------------------------------------------
+// A freeze capture is measured like a loop capture (release / T ceiling,
+// quantised to T latched at the onset); the freeze window is the last 400 ms
+// of the sound; it starts at onset + Q (on time) or at the end, in phase
+// (late); its rhythm pass = its division of T, in phase from the onset.
+static void TestFreezePhrase() {
+  printf("-- lock-in: the freeze = the phrase's tail\n");
+  Reset(); cs.knob[0] = 0.5f; cs.knob[4] = 0.5f; cs.sw[0] = 2; RunFor(1.0f);
+  v.tgrid_.tap_period_ = 192000; RunFor(0.05f);                   // T = 4 s (set directly)
+  Check(v.tgrid_.T() == 192000, "setup: T = 4 s on the freeze side");
+  struct Case { long burst; bool on_time; const char* name; } cases[] = {
+    {84000, true,  "1.75 s phrase (rounds up to 1/2 T, end known before it)"},
+    {72000, false, "1.5 s phrase (rounds down to 1/3 T, end known after it)"} };
+  for (const Case& c : cases) {
+    seen_acts = v.act_count_;
+    const long b0 = n + 5, b1 = b0 + c.burst;
+    noise_from = b0; noise_to = b1;
+    CapRec r{}; const bool ok = WaitActivation(c.burst / sr + 3.f, &r);
+    noise_from = noise_to = -1;
+    const int s = r.s;
+    if (!ok || s < VESTIGE_FREEZE_SLOT0) { Check(false, c.name); continue; }
+    const size_t raw = v.cap_raw_[s], Qm = GridQuantize::Quantize(raw, 192000);
+    const int dm = GridQuantize::IndexOf(Qm, 192000);
+    const long A = r.A, el = r.dec - A;
+    const bool on_time = el <= (long)Qm;
+    const long want_act = on_time ? A + (long)Qm : r.dec;
+    // The window: the last 400 ms before where the sound stopped (raw), from the ring.
+    const size_t cap = v.cap_[s], L = v.loop_len_[s], base = v.frz_base_[s];
+    long bad = 0;
+    for (size_t j = 0; j < L; j++) {
+      const long k = A + (long)raw - (long)VESTIGE_FREEZE_SAMPLES + (long)j;
+      const float want = (k >= b0 && k < b1) ? 0.25f * Noise(k) : 0.f;
+      if (v.slab_[s][(base + j) % cap] != want) bad++;
+    }
+    const long tail = (long)raw - (b1 - A);
+    printf("      %s: raw %zu (sound end + %ld), Q %zu (div %d, slot %d), decided A+%ld, plays A+%ld (want A+%ld), window %zu @%zu, mismatches %ld\n",
+           c.name, raw, tail, Qm, dm, v.fz_sdiv_[s], el, r.act - A, want_act - A, L, base, bad);
+    Check(on_time == c.on_time, "setup: the phrase end is known before / after its Q as intended");
+    Check(v.fz_sdiv_[s] == dm && tail >= 0 && tail < 1000,
+          "freeze phrase measured like a loop capture: raw = where the sound stopped, Q = the nearest division of T");
+    Check(r.act == want_act, c.on_time ? "freeze starts on its \"one\": onset + Q" : "freeze end known late: starts at once, in phase");
+    Check(L == VESTIGE_FREEZE_SAMPLES && base == ((size_t)raw - VESTIGE_FREEZE_SAMPLES) % cap && bad == 0,
+          "freeze window = the last 400 ms of the sound (bit-identical, cut from the ring)");
+    RunFor(0.37f);
+    Check(v.fz_pdiv_ == dm && v.fz_L_ == (uint32_t)Qm && (long)(v.fz_el_ % v.fz_L_) == (n - A) % (long)Qm,
+          "freeze rhythm pass = its division of T, in phase from the onset");
+    RunFor(0.8f);
+  }
+  v.tgrid_.tap_period_ = 0; cs.sw[0] = 0; Reset();
+}
+// At most 2 freezes sound at once (live, fading or stolen): with a long K5
+// fade the previous freeze is still fading out when a third comes; the third
+// steals the oldest (6 ms release) and starts once it is silent.
+static void TestFreezeVoiceLimit() {
+  printf("-- lock-in: freeze voice limit (2, steal the oldest)\n");
+  Reset(); cs.knob[0] = 0.5f; cs.sw[0] = 2; RunFor(1.0f);
+  cs.knob[4] = K5Fade(1.f); RunFor(0.05f);                        // K5 CW: 6 s fades
+  v.tgrid_.tap_period_ = 48000; RunFor(0.05f);
+  seen_acts = v.act_count_;
+  struct Act { int s; long at, dec; };
+  std::vector<Act> acts; int maxc = 0; bool stolen_seen = false;
+  const long t0 = n;
+  const long end = n + (long)(3.6f * sr);
+  while (n < end) {
+    const long rel = n - t0;
+    noise_from = noise_to = -1;
+    for (int k = 0; k < 3; k++) if (rel < (long)(k * 0.8f * sr) + 14400 && rel >= (long)(k * 0.8f * sr) - 48) {
+      noise_from = t0 + (long)(k * 0.8f * sr); noise_to = noise_from + 14400; }
+    RunFor(48.f / sr);
+    int c = 0; for (int s = VESTIGE_FREEZE_SLOT0; s < VESTIGE_FREEZE_SLOT0 + VESTIGE_FREEZE_SLABS; s++) if (v.active_[s]) c++;
+    if (c > maxc) maxc = c;
+    if (acts.size() == 2 && v.stolen_[acts[0].s]) stolen_seen = true;
+    if (v.act_count_ != seen_acts) { seen_acts = v.act_count_; const int s = v.last_act_slot_; acts.push_back({s, (long)v.last_act_at_, (long)v.cap_decide_at_[s]}); }
+  }
+  noise_from = noise_to = -1;
+  printf("      %zu freezes; at most %d sounding", acts.size(), maxc);
+  if (acts.size() == 3) printf("; the third decided A+%ld, started %ld samples later; the oldest %s, %s",
+                               acts[2].dec - t0, acts[2].at - acts[2].dec, stolen_seen ? "stolen (fast release)" : "not stolen",
+                               v.active_[acts[0].s] ? "still active" : "freed");
+  printf("\n");
+  Check(acts.size() == 3 && maxc <= 2, "freeze voice limit: never more than 2 freezes sounding");
+  // Not asserted: whether the second freeze keeps its K5 fade-out. Today the
+  // activation retry (every sample while 2 still sound) steals it as well, one
+  // sample after the oldest, so only the third is left (reported 2026-10-04,
+  // not locked in).
+  printf("      after the third: second freeze %s\n", acts.size() == 3 ? (v.active_[acts[1].s] ? "still fading out" : "gone (stolen too)") : "-");
+  Check(acts.size() == 3 && stolen_seen && !v.active_[acts[0].s] && v.active_[acts[2].s],
+        "a third freeze steals the oldest (fast release) and plays");
+  Check(acts.size() == 3 && acts[2].at - acts[2].dec >= 200 && acts[2].at - acts[2].dec <= 600,
+        "the third starts once the stolen one is silent (~6 ms release)");
+  v.tgrid_.tap_period_ = 0; cs.knob[4] = 0.5f; cs.sw[0] = 0; Reset();
+}
+// K5 CCW on the freeze = sustain time: 12 s just past the dead zone .. 1 s at
+// full CCW, log taper with exponent 1.5; level dB = -60 x^1.4 over it (x =
+// elapsed / sustain), silent and retired at its end; no fade-in.
+static float K5Ccw(float u) {
+  const float r = 0.5f - VESTIGE_K5_DEADZONE - u * (0.5f - VESTIGE_K5_DEADZONE);
+  return r * (KNOB_MAX - KNOB_MIN) + KNOB_MIN;
+}
+static void TestFreezeSustain() {
+  printf("-- lock-in: freeze sustain (K5 CCW)\n");
+  Reset(); cs.knob[0] = 0.5f; cs.sw[0] = 2; RunFor(1.0f);
+  bool map_ok = true, atk_ok = true;
+  for (float u : {0.001f, 0.25f, 0.5f, 0.75f, 1.f}) {
+    cs.knob[4] = K5Ccw(u); RunFor(0.02f);
+    const float want = 12.f * powf(1.f / 12.f, powf(u, 1.5f));
+    printf("      K5 CCW u %.3f: sustain %.2f s (want %.2f)\n", u, v.sus_s_, want);
+    if (fabsf(v.sus_s_ - want) > 0.01f * want + 0.01f) map_ok = false;
+    if (v.frz_atk_s_ != 0.f) atk_ok = false;
+  }
+  cs.knob[4] = 0.5f; RunFor(0.02f);
+  Check(map_ok && v.sus_s_ == 0.f, "sustain time: 12 s just past the dead zone .. 1 s full CCW, 12 x (1/12)^(u^1.5); none at noon");
+  Check(atk_ok, "no K5 fade-in on a new freeze");
+  // The decay at full CCW (1 s).
+  cs.knob[4] = 0.f; v.tgrid_.tap_period_ = 48000; RunFor(0.1f);
+  seen_acts = v.act_count_;
+  CapRec r{}; noise_from = n; noise_to = n + 14400; const bool ok = WaitActivation(2.f, &r); noise_from = noise_to = -1;
+  const int s = r.s, q = s - VESTIGE_FREEZE_SLOT0;
+  float g_first = -1.f, fade10 = -1.f, worst_db = 0.f, worst_x = 0.f; long last_active = -1; bool atk1 = true;
+  int pts = 0;
+  const long end = n + (long)(1.3f * sr);
+  while (ok && n < end) {
+    RunFor(48.f / sr);
+    if (!v.active_[s]) continue;
+    last_active = n;
+    const double el = (double)(n - r.act) / sr;
+    if (g_first < 0.f) g_first = v.sus_g_[q];
+    if (fade10 < 0.f && el >= 0.01) fade10 = v.fade_gain_[s];
+    if (v.frz_atk_x_[q] != 1.f) atk1 = false;
+    const float x = v.sus_x_[q];
+    if (fabs(x - el) > 2.5 * 48.0 / sr) worst_x = std::max(worst_x, (float)fabs(x - el));
+    if (x > 0.02f && x < 0.97f) {
+      const float db = 20.f * log10f(v.sus_t_[q]), want = -60.f * powf(x, 1.4f);
+      worst_db = std::max(worst_db, fabsf(db - want)); pts++;
+    }
+  }
+  const double life = (double)(last_active - r.act) / sr;
+  printf("      1 s sustain: first block level %.4f, fade gain at 10 ms %.3f, %d points, worst dB error %.3f, progress error %.5f, retired after %.3f s\n",
+         g_first, fade10, pts, worst_db, worst_x, life);
+  Check(ok && g_first > 0.99f && fade10 > 0.99f && atk1, "a new freeze starts at full level at once (no fade-in)");
+  Check(ok && pts > 500 && worst_db < 0.05f && worst_x == 0.f, "sustain decay: dB = -60 x^1.4, x = elapsed / sustain time");
+  Check(ok && life > 0.98 && life < 1.01 && !v.active_[s], "sustain end: silent and retired at the sustain time");
+  v.tgrid_.tap_period_ = 0; cs.knob[4] = 0.5f; cs.sw[0] = 0; Reset();
+}
+// ---- K3 on the freeze: a second module instance, no audio ---------------------
+// The freeze's virtual pass, LPG and condition stage driven per sample like
+// Process() does (block tick, pass clock, LPG -> rests / decimates), on a DC
+// input. Not Init()ed (Init would wipe the shared slabs): only what these
+// paths read is set up.
+static Vestige& FzSim() {
+  static Vestige* p = nullptr;
+  if (!p) {
+    p = new Vestige; Vestige& q = *p;
+    q.sr_ = sr; q.tgrid_.Init(Vestige::GridConfig(), sr);
+    for (int k = 0; k < VESTIGE_TIMING_DECIM_N; k++) {
+      float fc = VESTIGE_TIMING_DECIM_LP_MULT * 0.5f * sr / (float)VESTIGE_TIMING_DECIM_FACTORS[k];
+      if (fc > 0.45f * sr) fc = 0.45f * sr;
+      q.MBSetLP(q.decim_lp_[k], fc);
+    }
+    q.ln_rhythm_[Vestige::kFzR] = true;
+  }
+  return *p;
+}
+static void FzSimStart(Vestige& q, size_t T, float rhy, float err, float dg) {
+  const int R = Vestige::kFzR;
+  q.tgrid_.period_ = T; q.fz_pdiv_ = 0; q.fz_ppin_ = 0;
+  q.rhy_level_ = rhy; q.rhy_side_ = kRhyCcw;
+  for (int l = 0; l < 3; l++) q.err_level_[l] = err;
+  q.dg_level_ = dg;
+  q.fz_lpg_mix_ = 0.f; q.fz_lpg_on_ = false; q.fz_c_ = 0.f; q.fz_rg_on_ = false; q.fz_att_ph_ = 1.f; q.fz_t_ = 1e9f;
+  q.fz_dmp_on_ = false; q.fz_dmp_ = 1.f; q.fz_z1_ = q.fz_z2_ = 0.f; q.fz_fm_ = 0; q.fz_sub_n_ = q.fz_sub_j_ = 0;
+  q.mute_d_[R] = q.mute_dt_[R] = 0.f; q.decim_d_[R] = q.decim_dt_[R] = 0.f;
+  q.LineClear(R); q.FzRhyNewWords(); q.rhy_t_[R] = 0; q.DgClear(R, true);
+  q.fz_L_ = 0; q.fz_el_ = 0;                                       // the first sample plans a pass (el0 = 0)
+}
+static float FzSimStep(Vestige& q, long i, float x) {
+  if (i % 48 == 0) q.TimingLayerTick();
+  q.FzRhyStep();
+  return q.CondStage(Vestige::kFzR, q.FzLpg(x));
+}
+// LPG model A: c after the k-th call since a strike (attack from c0, then
+// decay -> sustain, gate, release), In = the interval to the next hit.
+static float LpgModelA(long k, float c0, double In) {
+  const double att = VESTIGE_FRZ_LPG_ATTACK_MS * 0.001 * sr;
+  auto sm = [](double p) { return p * p * (3.0 - 2.0 * p); };
+  if (k <= (long)att) return (float)(c0 + (1.0 - c0) * sm((double)k / att));
+  const double t = (double)(k - (long)att - 1), S = VESTIGE_FRZ_LPG_ASR_SUSTAIN;
+  const double D = std::max(1.0, VESTIGE_FRZ_LPG_ASR_DECAY * In);
+  const double gate = std::max(0.0, VESTIGE_FRZ_LPG_ASR_GATE * In - att), rel = std::max(1.0, VESTIGE_FRZ_LPG_ASR_RELEASE * In);
+  const double top = (t < D) ? S + (1.0 - S) * pow(1.0 - t / D, 3.0) : S;
+  if (t < gate) return (float)top;
+  const double r = std::min(1.0, (t - gate) / rel);
+  return (float)(top * (1.0 - sm(r)));
+}
+static double LpgCutoff(Vestige& q) {     // the LPG's current cutoff (Hz): one step from a zeroed filter
+  const float z1 = q.fz_z1_, z2 = q.fz_z2_;
+  q.fz_z1_ = q.fz_z2_ = 0.f; q.FzLpg(1.f);
+  const double a = q.fz_z1_;
+  q.fz_z1_ = z1; q.fz_z2_ = z2;
+  return -log(1.0 - a) * sr / (2.0 * M_PI);
+}
+static int RatFitM(int k, double st) {    // the ratchet fallback: the largest count whose sub-steps are >= MIN_STEP
+  const double ms = VESTIGE_TIMING_MIN_STEP_MS * 0.001 * sr;
+  for (int c = k; c > 1; c--) if (st / c >= ms) return c;
+  return 1;
+}
+static void TestFreezeK3Mode1() {
+  printf("-- lock-in: K3 mode 1 on the freeze (LPG model A, rests, ratchet sub-strikes)\n");
+  Vestige& q = FzSim(); const int R = Vestige::kFzR;
+  const size_t T = 96000;
+  FzSimStart(q, T, 0.95f, 0.f, 0.f);
+  const int P = 24;
+  std::vector<float> c, y; std::vector<long> strikes; c.reserve(P * T); y.reserve(P * T);
+  struct Pass { long t0; int G; uint32_t L; int8_t stk[64], cnd[64]; };
+  std::vector<Pass> ps;
+  for (long i = 0; i < (long)(P * T); i++) {
+    const float out = FzSimStep(q, i, 1.f);
+    const bool struck = q.fz_att_ph_ == q.fz_att_inc_;            // (a strike this sample: FzLpg took the attack's first step)
+    if (q.fz_el_ == 1) { Pass p; p.t0 = i; p.G = q.fz_G_; p.L = q.fz_L_; memcpy(p.stk, q.fz_stk_, 64); memcpy(p.cnd, q.fz_cnd_, 64); ps.push_back(p); }
+    if (struck) strikes.push_back(i);
+    c.push_back(q.fz_c_); y.push_back(out);
+  }
+  long want_n = 0, miss = 0, extra = 0, rat_steps = 0, rat_bad = 0, rests = 0;
+  long curve_n = 0; float curve_err = 0.f; long rest_lvl_bad = 0, open_lvl_bad = 0, rest_pts = 0, open_pts = 0;
+  std::vector<long> want;
+  for (size_t pi = 0; pi + 1 < ps.size(); pi++) {
+    const Pass& p = ps[pi];
+    auto bnd = [&](int k) { return (k >= p.G) ? (long)p.L : (long)((double)p.L * k / p.G + 0.5); };
+    const double st = (double)p.L / p.G;
+    for (int k = 0; k < p.G; k++) {
+      const int n_ = p.stk[k];
+      if (n_ > 1) { rat_steps++; if (n_ < 2 || n_ > 4 || n_ != RatFitM(n_, st)) rat_bad++; }
+      for (int j = 0; j < n_; j++) want.push_back(p.t0 + bnd(k) + (long)((double)(bnd(k + 1) - bnd(k)) * j / n_));
+      // The level: rests -6 dB (past their 5 ms fade), elsewhere unity (DC in, base 0 dB, no decimate on DC).
+      const bool prev_rest = k > 0 && p.cnd[k - 1] == 1;
+      for (long t = p.t0 + bnd(k) + 300; t < p.t0 + bnd(k + 1); t += 97) {
+        if (p.cnd[k] == 1) { rest_pts++; if (fabsf(y[t] - 0.50118723f) > 1e-3f) rest_lvl_bad++; }
+        else if (!prev_rest) { open_pts++; if (fabsf(y[t] - 1.f) > 1e-3f) open_lvl_bad++; }
+      }
+      if (p.cnd[k] == 1) rests++;
+      // The ASR curve of a single strike whose next hit is in this pass, no rest from the step before it to the next hit.
+      if (n_ != 1) continue;
+      int nx = k + 1; while (nx < p.G && !p.stk[nx]) nx++;
+      if (nx >= p.G) continue;
+      bool clean = true; for (int m = std::max(0, k - 1); m <= nx; m++) if (p.cnd[m] == 1) clean = false;
+      if (!clean) continue;
+      const long s0 = p.t0 + bnd(k);
+      const double In = (double)(bnd(nx) - bnd(k));
+      const float c0 = s0 > 0 ? c[s0 - 1] : 0.f;
+      for (long t = s0; t < p.t0 + bnd(nx); t++) curve_err = std::max(curve_err, fabsf(c[t] - LpgModelA(t - s0 + 1, c0, In)));   // (FzLpg's call 1 = the strike sample)
+      curve_n++;
+    }
+  }
+  want_n = (long)want.size();
+  { const long lim = ps.empty() ? 0 : ps.back().t0;
+    std::vector<long> got; for (long s : strikes) if (s < lim) got.push_back(s);
+    std::sort(want.begin(), want.end());
+    size_t a = 0, b = 0;
+    while (a < want.size() || b < got.size()) {
+      if (b >= got.size() || (a < want.size() && want[a] < got[b])) { miss++; a++; }
+      else if (a >= want.size() || got[b] < want[a]) { extra++; b++; }
+      else { a++; b++; }
+    } }
+  printf("      %zu passes: %ld strikes expected, %ld missing, %ld extra; %ld ratchet steps (%ld bad); %ld ASR curves, worst error %.4f; rest steps %ld\n",
+         ps.size(), want_n, miss, extra, rat_steps, rat_bad, curve_n, curve_err, rests);
+  Check(want_n > 100 && miss == 0 && extra == 0, "LPG strikes: one per stutter step at its start, a ratchet's n sub-strikes at its n even sub-steps");
+  Check(rat_steps > 5 && rat_bad == 0, "ratchet sub-strikes: 2 / 3 / 4 (the graded count, MIN_STEP fallback)");
+  Check(curve_n > 30 && curve_err < 0.02f,
+        "LPG model A: 3 ms attack, cubic decay to 0.8 over 30 % of the interval to the next hit, open to 35 %, release over 25 %, then the base");
+  Check(rests > 5 && rest_pts > 100 && rest_lvl_bad == 0 && open_pts > 100 && open_lvl_bad == 0,
+        "freeze rests: -6 dB (never silent); elsewhere the LPG keeps the level (base 0 dB)");
+  // Cutoffs: the base (c = 0) 1000 Hz; inside a rest the gate closes to 600 Hz.
+  double f_base = -1, f_rest = -1;
+  for (long i = (long)(P * T); i < (long)((P + 8) * T) && (f_base < 0 || f_rest < 0); i++) {
+    FzSimStep(q, i, 1.f);
+    const int k = q.fz_i_;
+    if (f_rest < 0 && q.fz_cnd_[k] == 1 && q.mute_d_[R] == 1.f) f_rest = LpgCutoff(q);
+    else if (f_base < 0 && q.fz_cnd_[k] == 0 && q.mute_d_[R] == 0.f && q.fz_c_ == 0.f && q.fz_lpg_mix_ == 1.f) f_base = LpgCutoff(q);
+  }
+  printf("      LPG cutoff at c = 0: %.1f Hz; inside a rest: %.1f Hz\n", f_base, f_rest);
+  Check(fabs(f_base - VESTIGE_FRZ_LPG_BASE_HZ) < 5.0 && fabs(f_rest - VESTIGE_FRZ_REST_HZ) < 5.0,
+        "LPG: base cutoff 1000 Hz, a rest closes the gate to 600 Hz");
+}
+// K3 mode 2 on the freeze: per pass, the LPG events = the CW lines' hits /
+// the degrade events, mapped: stutter / retrig a strike on their first step,
+// repeat a strike every step, ratchet its graded count every step, reverse a
+// reversed gate over its steps (no strikes inside), rest / decimate the
+// condition; degrade's decimate quality on top. The first pass is clean.
+struct FzMap { int8_t stk[64] = {}, rvn[64] = {}, cnd[64] = {}; };
+static void FzMapEvent(FzMap& m, int i, int type, int sub, bool first, int rvn, double st) {
+  int n_ = 0;
+  if (type == Vestige::kFigStutter || type == Vestige::kFigRetrig) n_ = first ? 1 : 0;
+  else if (type == Vestige::kFigRepeat) n_ = 1;
+  else if (type == Vestige::kFigRatchet) n_ = RatFitM(sub, st);
+  else if (type == Vestige::kFigReverse) { if (first) m.rvn[i] = (int8_t)rvn; }
+  else if (type == Vestige::kFigRest || type == Vestige::kFigDecimate) m.cnd[i] = (int8_t)sub;
+  if (n_ > m.stk[i]) m.stk[i] = (int8_t)n_;
+}
+static void FzMapNoStrikeInReverse(FzMap& m, int G) {
+  for (int i = 0; i < G; i++) if (m.rvn[i] > 0) for (int j = i; j < i + m.rvn[i] && j < G; j++) m.stk[j] = 0;
+}
+static void TestFreezeK3Mode2() {
+  printf("-- lock-in: K3 mode 2 on the freeze (CW layers / CCW degrade -> LPG events)\n");
+  Vestige& q = FzSim(); const int R = Vestige::kFzR;
+  const size_t T = 96000;
+  for (int half = 0; half < 2; half++) {
+    const bool cw = half == 0;
+    FzSimStart(q, T, 0.f, cw ? 0.5f : 0.f, cw ? 0.f : 0.5f);
+    long passes = 0, bad = 0, first_events = -1, speed = 0, rg_pts = 0, rg_bad = 0; unsigned types = 0;
+    float md_prev = 0.f;
+    for (long i = 0; i < 40L * (long)T; i++) {
+      FzSimStep(q, i, 1.f);
+      const bool md0 = md_prev == 0.f && q.mute_d_[R] == 0.f; md_prev = q.mute_d_[R];   // (FzLpg read the previous sample's)
+      if (q.fz_rg_on_ && md0) {                  // the reverse gate: c rises linearly over its steps
+        const double b0 = (double)q.FzBnd(q.fz_rg_i0_), b1 = (double)q.FzBnd(q.fz_rg_i1_);
+        const double want = std::min(1.0, std::max(0.0, ((double)q.fz_el_ - b0) / (b1 - b0)));
+        rg_pts++; if (fabs(q.fz_c_ - want) > 1e-3) rg_bad++;
+      }
+      if (q.fz_el_ != 1) continue;
+      const int G = q.fz_G_; const double st = (double)q.fz_L_ / G;
+      FzMap m;
+      if (cw) {
+        const int seg0 = q.ln_pass_[R] * G;
+        for (int l = 0; l < 3; l++) for (int h = 0; h < q.ln_nh_[R][l]; h++) {
+          const auto& x = q.ln_hit_[R][l][h];
+          const int a = std::max(0, x.start - seg0), b = std::min(G, x.start + x.len - seg0);
+          for (int k = a; k < b; k++) FzMapEvent(m, k, x.type, x.sub, k == a, b - a, st);
+          if (a < b) types |= 1u << x.type;
+        }
+      } else {
+        const uint64_t mk = q.dg_mask_[R];
+        for (int k = 0; k < G; k++) {
+          if (!((mk >> k) & 1ull)) continue;
+          auto same = [&](int j) { return j > 0 && ((mk >> (j - 1)) & 1ull) && q.dg_id_[R][j - 1] == q.dg_id_[R][j]; };
+          const bool first = !same(k);
+          int rn = 1; if (first) while (k + rn < G && same(k + rn)) rn++;
+          FzMapEvent(m, k, q.dg_ty_[R][k], q.dg_sub_[R][k], first, rn, st);
+          if (q.dg_dec_[R][k]) { m.cnd[k] = q.dg_dec_[R][k]; types |= 1u << Vestige::kFigDecimate; }
+          types |= 1u << q.dg_ty_[R][k];
+        }
+      }
+      FzMapNoStrikeInReverse(m, G);
+      long ev = 0;
+      for (int k = 0; k < G; k++) {
+        if (m.stk[k] != q.fz_stk_[k] || m.rvn[k] != q.fz_rvn_[k] || m.cnd[k] != q.fz_cnd_[k]) bad++;
+        if (q.fz_spd_[k] > 1) speed++;
+        ev += q.fz_stk_[k] + q.fz_rvn_[k] + q.fz_cnd_[k];
+      }
+      if (passes == 0) first_events = ev;
+      passes++;
+    }
+    const unsigned want_types = (1u << Vestige::kFigStutter) | (1u << Vestige::kFigRepeat) | (1u << Vestige::kFigRatchet) |
+                                (1u << Vestige::kFigRetrig) | (1u << Vestige::kFigReverse) | (1u << Vestige::kFigRest) | (1u << Vestige::kFigDecimate);
+    printf("      %s: %ld passes, %ld steps off the mapping, first pass events %ld, types 0x%x (want 0x%x), speed steps %ld, reverse-gate samples %ld (%ld off the ramp)\n",
+           cw ? "CW layers" : "CCW degrade", passes, bad, first_events, types, want_types, speed, rg_pts, rg_bad);
+    Check(passes >= 39 && bad == 0 && types == want_types && speed == 0,
+          cw ? "freeze, mode 2 CW: every pass's LPG events = the three lines' hits, mapped (no speed events)"
+             : "freeze, mode 2 CCW: every pass's LPG events = the degrade events, mapped, decimate quality on top (no speed events)");
+    Check(first_events == 0, cw ? "freeze, mode 2 CW: the first pass is clean (lines seeded during it)" : "freeze, mode 2 CCW: a new freeze's first pass is clean");
+    Check(rg_pts > 1000 && rg_bad == 0, "freeze, mode 2: a reverse is a reversed gate (c rises linearly over its steps)");
+  }
+}
+// ---- K3 mode 2 engine (planner functions on a second instance) -----------------
+static void TestK3Mode2Engine() {
+  printf("-- lock-in: K3 mode 2 engine (CW layers, CCW degrade, top zone)\n");
+  Vestige& q = FzSim();
+  // CW: types per layer, graded ratchets, no speed.
+  { struct Lv { float g; std::vector<int> subs; } lvs[] = { {0.2f, {2}}, {0.5f, {2, 3}}, {0.8f, {2, 3, 4}} };
+    bool ok = true, sp = false; std::string line;
+    for (const Lv& L : lvs) {
+      for (int l = 0; l < 3; l++) q.err_level_[l] = L.g;
+      int cnt[16] = {}, sc[8] = {}; const int N = 6000;
+      for (int k = 0; k < N; k++) { int8_t sub; const int t = q.LineDrawType(Vestige::kErrTiming, &sub); cnt[t]++; if (t == Vestige::kFigRatchet) sc[sub & 7]++; }
+      if (cnt[Vestige::kFigSpeed]) sp = true;
+      for (int t : {Vestige::kFigStutter, Vestige::kFigRepeat, Vestige::kFigRatchet, Vestige::kFigRetrig})
+        if (fabs(cnt[t] / (double)N - 0.25) > 0.03) ok = false;
+      int rat = cnt[Vestige::kFigRatchet], subs_seen = 0;
+      for (int s = 0; s < 8; s++) if (sc[s]) {
+        if (std::find(L.subs.begin(), L.subs.end(), s) == L.subs.end()) ok = false;
+        subs_seen++; if (fabs(sc[s] / (double)rat - 1.0 / L.subs.size()) > 0.06) ok = false; }
+      if (subs_seen != (int)L.subs.size()) ok = false;
+      char b[96]; snprintf(b, sizeof b, "g %.1f: ratchet x2 %d x3 %d x4 %d  ", L.g, sc[2], sc[3], sc[4]); line += b;
+    }
+    printf("      CW TIMING draws: %s\n", line.c_str());
+    Check(ok && !sp, "mode 2 CW TIMING layer: stutter / repeat / ratchet / retrig (1/4 each), no speed; ratchets graded 2 | 2-3 | 2-3-4 by level thirds"); }
+  { auto rest_share = [&](float lv) { for (int l = 0; l < 3; l++) q.err_level_[l] = lv; int r = 0; const int N = 6000;
+                                      for (int k = 0; k < N; k++) { int8_t sub; if (q.LineDrawType(Vestige::kErrCondition, &sub) == Vestige::kFigRest) r++; }
+                                      return r / (double)N; };
+    const double r5 = rest_share(0.5f), r875 = rest_share(0.875f), r1 = rest_share(1.f);
+    printf("      CW CONDITION rest share: level 0.5 %.3f, 0.875 %.3f, 1.0 %.3f\n", r5, r875, r1);
+    Check(fabs(r5 - 0.5) < 0.03 && fabs(r875 - 1.0 / 3.0) < 0.03 && r1 == 0.0,
+          "mode 2 CW CONDITION layer: rest / decimate; top zone: the rest weight x (1 - z), no new rests at full"); }
+  Check(Vestige::LineOps(0.f) == 1 && Vestige::LineOps(0.25f) == 2 && Vestige::LineOps(0.5f) == 2 && Vestige::LineOps(0.75f) == 3 &&
+        Vestige::LineOps(0.875f) == 6 && Vestige::LineOps(1.f) == 8,
+        "mode 2 CW changes per pass: 1 + round(2 x level); top zone ramps 3 -> 8");
+  Check(Vestige::LineLife(0.5f) == 6 && Vestige::LineLife(0.75f) == 6 && Vestige::LineLife(0.76f) == 2 && Vestige::LineLife(1.f) == 2,
+        "mode 2 CW hit content life: 6 plays; 2 in the top zone");
+  Check(Vestige::LineSpanMax(0.5f) == 4 && Vestige::LineSpanMax(0.75f) == 4 && Vestige::LineSpanMax(0.875f) == 3 && Vestige::LineSpanMax(1.f) == 1,
+        "mode 2 CW hit length: up to 4 steps; top zone ramps the max to 1 at full");
+  Check(q.TimingStepCount(96000.0, false, 0.f, 0.75f) == 16 && q.TimingStepCount(96000.0, false, 0.f, 0.76f) == 32 &&
+        q.TimingStepCount(96000.0, false, 0.f, 1.f) == 32 && q.TimingStepCount(24000.0, false, 0.f, 0.f) == 4 &&
+        q.TimingStepCount(24000.0, false, 0.f, 1.f) == 8 && q.TimingStepCount(96000.0, true, 0.9f, 0.f) == 16,
+        "mode 2 top zone (from 0.75): double-speed step grid (2 s: 16 -> 32, 500 ms: 4 -> 8); mode 1 unaffected");
+  // CW top zone: every change a random hit anywhere; after a while every hit is 1 step, the line rules hold.
+  { const int s = 1, l = Vestige::kErrTiming;
+    q.LineClear(s); q.ln_cells_[s] = 32;
+    for (int k = 0; k < 3; k++) q.err_level_[k] = 0.5f;
+    for (int c0 : {0, 8, 16, 24}) q.LineAdd(s, l, c0, 1.f, 4);   // four 4-step hits
+    int longest0 = 0; for (int h = 0; h < q.ln_nh_[s][l]; h++) longest0 = std::max(longest0, (int)q.ln_hit_[s][l][h].len);
+    const int nh0 = q.ln_nh_[s][l];
+    for (int k = 0; k < 3; k++) q.err_level_[k] = 1.f;
+    bool rules = true, odd = false;
+    for (int p = 0; p < 40; p++) {
+      q.LineMutate(s, l, 1.f, Vestige::LineOps(1.f));
+      for (int h = 0; h < q.ln_nh_[s][l]; h++) {
+        const auto& x = q.ln_hit_[s][l][h];
+        if (x.start & 1) odd = true;
+        if (q.LineFits(s, l, x.start, x.len, h) == false) rules = false;
+      }
+    }
+    int longest = 0; for (int h = 0; h < q.ln_nh_[s][l]; h++) longest = std::max(longest, (int)q.ln_hit_[s][l][h].len);
+    printf("      CW top zone: %d hits (longest %d) -> after 40 x 8 changes %d hits, longest %d, off-pulse starts %s\n",
+           nh0, longest0, q.ln_nh_[s][l], longest, odd ? "yes" : "no");
+    Check(longest0 > 1 && longest == 1 && odd && rules && q.ln_nh_[s][l] == nh0,
+          "mode 2 CW top zone at full: changes are random hits anywhere (off the pulse too), all 1 step, line rules kept");
+    q.LineClear(s); }
+  // CCW degrade.
+  struct Ev { int ty, sub, dec, st, len, life; };
+  // Runs `passes` DgMutate passes at depth u on G steps (slot s, not fresh);
+  // returns every new event (at its creation) and checks unmutated-first.
+  auto run = [&](int s, int G, float u, int passes, std::vector<Ev>& evs, long* first_bad, std::vector<int>* per_pass = nullptr,
+                 std::vector<std::pair<uint16_t, int>>* lives = nullptr) {
+    q.DgClear(s, false);
+    std::map<uint16_t, int> alive, lastlf;                       // id -> passes seen in the mask, passes left at the last
+    for (int p = 0; p < passes; p++) {
+      uint64_t F = (G >= 64 ? ~0ull : ((1ull << G) - 1ull));
+      if (q.dg_G_[s] == G) for (int i = 0; i < G; i++) if (((q.dg_mask_[s] >> i) & 1ull) && q.dg_lf_[s][i] > 1) F &= ~(1ull << i);
+      const uint16_t id0 = q.dg_nid_[s];
+      q.DgMutate(s, G, u);
+      const uint16_t id1 = q.dg_nid_[s];
+      int nnew = 0;
+      for (uint16_t id = id0 + 1; id != (uint16_t)(id1 + 1); id++) {
+        nnew++;
+        int st = -1; for (int i = 0; i < G; i++) if (((q.dg_mask_[s] >> i) & 1ull) && q.dg_id_[s][i] == id) { st = q.dg_st_[s][i]; break; }
+        if (st < 0) continue;                                      // fully overwritten in its own pass: start unknown here
+        const int i = st;
+        if (q.dg_id_[s][i] != id) continue;                        // its first step overwritten: skip
+        evs.push_back({q.dg_ty_[s][i], q.dg_sub_[s][i], q.dg_dec_[s][i], st, q.dg_ln_[s][i], q.dg_lf_[s][i]});
+        // Unmutated first: checked exactly for the pass's first new event (the
+        // later ones' free set depends on events a later one may have covered).
+        if (id == (uint16_t)(id0 + 1) && F && !((F >> st) & 1ull)) (*first_bad)++;
+      }
+      if (per_pass) per_pass->push_back(nnew);
+      if (lives) {
+        std::map<uint16_t, int> now;
+        for (int i = 0; i < G; i++) if ((q.dg_mask_[s] >> i) & 1ull) now[q.dg_id_[s][i]] = q.dg_lf_[s][i];
+        // Gone with 1 pass left at its last showing = expired (its count is its
+        // life); gone earlier = all its steps overwritten by newer events (-1).
+        for (auto it = alive.begin(); it != alive.end();) {
+          if (!now.count(it->first)) { lives->push_back({it->first, lastlf[it->first] == 1 ? it->second : -1}); lastlf.erase(it->first); it = alive.erase(it); } else ++it;
+        }
+        for (auto& kv : now) { alive[kv.first]++; lastlf[kv.first] = kv.second; }
+      }
+    }
+  };
+  { // The pool, lengths, decimate quality at u = 0.5 (G 16).
+    std::vector<Ev> evs; long fb = 0;
+    run(0, 16, 0.5f, 400, evs, &fb);
+    int cnt[16] = {}; long nonrest = 0, dec = 0, rest_bad = 0, len_bad = 0, fac_bad = 0, rat_bad = 0; int lens[5] = {}, rlens[3] = {};
+    for (const Ev& e : evs) {
+      cnt[e.ty]++;
+      if (e.ty == Vestige::kFigRest) { if (e.sub != 1 || e.dec != 0) rest_bad++; if (e.len < 1 || e.len > 2) len_bad++; else if (e.st <= 14) rlens[e.len]++; }
+      else {
+        nonrest++; if (e.dec) dec++;
+        if (e.len < 1 || e.len > 4) len_bad++; else if (e.st <= 12) lens[e.len]++;
+        if (e.dec && std::find(std::begin(VESTIGE_TIMING_DECIM_FACTORS), std::end(VESTIGE_TIMING_DECIM_FACTORS), e.dec) == std::end(VESTIGE_TIMING_DECIM_FACTORS)) fac_bad++;
+        if (e.ty == Vestige::kFigRatchet && (e.sub < 2 || e.sub > 3)) rat_bad++;
+      }
+    }
+    const double N = (double)evs.size();
+    bool pool = cnt[Vestige::kFigSpeed] == 0 && cnt[Vestige::kFigDouble] == 0 && cnt[Vestige::kFigDecimate] == 0 && cnt[Vestige::kFigClean] == 0;
+    for (int t : {Vestige::kFigStutter, Vestige::kFigRepeat, Vestige::kFigRatchet, Vestige::kFigRetrig, Vestige::kFigReverse, Vestige::kFigRest})
+      if (fabs(cnt[t] / N - 1.0 / 6.0) > 0.03) pool = false;
+    const double ln = lens[1] + lens[2] + lens[3] + lens[4], rl = rlens[1] + rlens[2];
+    bool uni = ln > 400 && rl > 100; for (int k = 1; k <= 4; k++) if (fabs(lens[k] / ln - 0.25) > 0.05) uni = false;
+    if (fabs(rlens[1] / rl - 0.5) > 0.08) uni = false;
+    printf("      CCW u 0.5: %zu events: stutter %d repeat %d ratchet %d retrig %d reverse %d rest %d speed %d; decimated %.3f of non-rests; lengths %d/%d/%d/%d, rests %d/%d\n",
+           evs.size(), cnt[Vestige::kFigStutter], cnt[Vestige::kFigRepeat], cnt[Vestige::kFigRatchet], cnt[Vestige::kFigRetrig],
+           cnt[Vestige::kFigReverse], cnt[Vestige::kFigRest], cnt[Vestige::kFigSpeed], dec / (double)nonrest, lens[1], lens[2], lens[3], lens[4], rlens[1], rlens[2]);
+    Check(N > 1500 && pool, "mode 2 CCW: one pool of 6 events (stutter, repeat, ratchet, retrig, reverse, rest), uniform, no speed");
+    Check(rest_bad == 0 && len_bad == 0 && uni, "mode 2 CCW: event lengths 1..4 steps (uniform), rests 1..2");
+    Check(fabs(dec / (double)nonrest - 0.30) < 0.04 && fac_bad == 0 && rat_bad == 0,
+          "mode 2 CCW: decimate = a quality of a non-rest event (chance 0.10 + 0.40 u, a DECIM factor); ratchets graded by u");
+    Check(fb == 0, "mode 2 CCW: a new event starts on an unmutated step while there is one"); }
+  { // Decimate chance + ratchet grading across the depth; the event's steps all carry it.
+    bool ok = true; std::string ln;
+    for (float u : {0.1f, 0.7f}) {
+      std::vector<Ev> evs; long fb = 0; run(1, 16, u, u < 0.5f ? 3000 : 300, evs, &fb);
+      long nr = 0, d = 0; int rs[8] = {};
+      for (const Ev& e : evs) if (e.ty != Vestige::kFigRest) { nr++; if (e.dec) d++; if (e.ty == Vestige::kFigRatchet) rs[e.sub & 7]++; }
+      const double want = 0.10 + 0.40 * u;
+      if (nr < 200 || fabs(d / (double)nr - want) > 0.05) ok = false;
+      if (u < 1.f / 3.f && (rs[3] || rs[4] || !rs[2])) ok = false;
+      if (u >= 2.f / 3.f && (!rs[2] || !rs[3] || !rs[4])) ok = false;
+      if (fb) ok = false;
+      char b[96]; snprintf(b, sizeof b, "u %.1f: decimated %.3f (want %.2f), ratchets x2 %d x3 %d x4 %d  ", u, d / (double)nr, want, rs[2], rs[3], rs[4]); ln += b;
+    }
+    printf("      CCW %s\n", ln.c_str());
+    Check(ok, "mode 2 CCW: decimate chance 0.10 -> 0.50 with depth; ratchets 2 | 2-3 | 2-3-4 by depth thirds"); }
+  { // An event's decimate spans exactly its steps; it lives `life` passes (u = 0: no overwrites on 64 steps).
+    std::vector<Ev> evs; long fb = 0; std::vector<std::pair<uint16_t, int>> lives;
+    q.dg_nid_[2] = 0;
+    run(2, 64, 0.f, 400, evs, &fb, nullptr, &lives);
+    std::map<uint16_t, int> life_of;                               // id -> drawn life (ids are sequential from 1)
+    for (size_t k = 0; k < evs.size(); k++) life_of[(uint16_t)(k + 1)] = evs[k].life;
+    long lbad = 0, lmin = 99, lmax = 0, expired = 0, overwritten = 0;
+    for (const Ev& e : evs) { lmin = std::min(lmin, (long)e.life); lmax = std::max(lmax, (long)e.life); }
+    for (auto& pr : lives) {
+      if (pr.second < 0) { overwritten++; continue; }
+      expired++; if (!life_of.count(pr.first) || pr.second != life_of[pr.first]) lbad++;
+    }
+    printf("      CCW u 0: %zu events, lives %ld..%ld; %ld expired (%ld after other than their life), %ld covered by newer events\n",
+           evs.size(), lmin, lmax, expired, lbad, overwritten);
+    Check(evs.size() == 100 && fb == 0, "mode 2 CCW rate at u = 0: one new event every 4 passes (unmutated steps first)");
+    Check(expired > 80 && lbad == 0, "mode 2 CCW: an event plays exactly its life in passes (incl. its creation pass), then its steps play clean"); }
+  { // Rate levels + lifespan by depth (G 16: levels every 4 / 3 / 2 passes, then 1 .. 16 per pass).
+    struct R { float u; int per48; int lmin, lmax; } rs[] = {
+      {0.f, 12, 24, 32}, {1.f / 18.f, 16, -1, -1}, {2.f / 18.f, 24, -1, -1}, {3.f / 18.f, 48, -1, -1},
+      {10.f / 18.f, 8 * 48, -1, -1}, {0.5f, -1, 15, 21}, {0.75f, -1, 11, 16}, {0.875f, -1, 6, 10}, {1.f, 16 * 48, 2, 4} };
+    bool rate_ok = true, life_ok = true;
+    for (const R& r : rs) {
+      std::vector<Ev> evs; long fb = 0; std::vector<int> pp;
+      run(3, 16, r.u, 48, evs, &fb, &pp);
+      int tot = 0; for (int x : pp) tot += x;
+      int lo = 99, hi = 0; std::vector<Ev> e2; long fb2 = 0;
+      if (r.lmin >= 0) { run(4, 16, r.u, 400, e2, &fb2); for (const Ev& e : e2) { lo = std::min(lo, e.life); hi = std::max(hi, e.life); } }
+      printf("      CCW u %.3f: %d new events in 48 passes (want %d), lives %d..%d (want %d..%d)\n", r.u, tot, r.per48, r.lmin >= 0 ? lo : -1, r.lmin >= 0 ? hi : -1, r.lmin, r.lmax);
+      if (r.per48 >= 0 && tot != r.per48) rate_ok = false;
+      if (r.lmin >= 0 && (lo != r.lmin || hi != r.lmax)) life_ok = false;
+    }
+    Check(rate_ok, "mode 2 CCW rate by depth: 1 every 4 / 3 / 2 passes, then 1, 2, .. G per pass (level = round(u x (levels - 1)))");
+    Check(life_ok, "mode 2 CCW lifespan by depth: 24..32 passes just past noon toward 6..10 (linear); top zone -> 2..4 at full"); }
+  { // Top zone at full: no rests, every event 1 step; half way (z 0.5): rests halved, max length 3.
+    std::vector<Ev> e1, e5; long fb = 0;
+    run(5, 16, 1.f, 60, e1, &fb); run(5, 16, 0.875f, 300, e5, &fb);
+    int r1 = 0, l1 = 0, r5 = 0, lmax5 = 0, rlmax5 = 0;
+    for (const Ev& e : e1) { if (e.ty == Vestige::kFigRest) r1++; l1 = std::max(l1, e.len); }
+    for (const Ev& e : e5) { if (e.ty == Vestige::kFigRest) { r5++; rlmax5 = std::max(rlmax5, e.len); } else lmax5 = std::max(lmax5, e.len); }
+    printf("      CCW top zone: full: %zu events, %d rests, longest %d | z 0.5: rests %.3f (want %.3f), longest %d, rest longest %d\n",
+           e1.size(), r1, l1, r5 / (double)e5.size(), 1.0 / 12.0, lmax5, rlmax5);
+    Check(e1.size() > 500 && r1 == 0 && l1 == 1, "mode 2 CCW top zone at full: no rests, every event 1 step");
+    Check(fabs(r5 / (double)e5.size() - 1.0 / 12.0) < 0.03 && lmax5 == 3 && rlmax5 == 2,
+          "mode 2 CCW top zone half way: rests redrawn with chance z, max length 4 -> 3 (rests 2)"); }
+  { // A new loop / freeze: its first pass is clean.
+    q.DgClear(0, true); const uint16_t id0 = q.dg_nid_[0]; q.DgMutate(0, 16, 1.f);
+    const bool clean = q.dg_mask_[0] == 0 && q.dg_nid_[0] == id0;
+    q.DgMutate(0, 16, 1.f);
+    Check(clean && q.dg_mask_[0] != 0, "mode 2 CCW: the activation pass plays clean, mutations from the next pass on"); }
+  for (int l = 0; l < 3; l++) q.err_level_[l] = 0.f;
+}
+// K3 mode 1 ratchets: the retrig count graded by the ratchet ramp (depth
+// 0.6 -> 1): 2 below a third, 2-3 below two thirds, then 2-3-4 (equal).
+static void TestMode1GradedRatchets() {
+  printf("-- lock-in: K3 mode 1 graded ratchets\n");
+  Vestige& q = RhySim(); const int s = 0, G = 16;
+  bool ok = true; std::string ln;
+  for (float u : {0.7f, 0.8f, 0.95f, 1.f}) {
+    q.rhy_side_ = kRhyCcw; q.rhy_level_ = u;
+    int sc[8] = {}, tot = 0;
+    for (int lp = 0; lp < 100; lp++) {
+      RhySimNewLoop(q, s);
+      for (int p = 0; p < 20; p++) {
+        q.TimingPlanRhythmPoly(s, G, 0);
+        for (int h = 0; h < q.ln_nh_[s][Vestige::kErrTiming]; h++) {
+          const auto& x = q.ln_hit_[s][Vestige::kErrTiming][h];
+          if (x.type == Vestige::kFigRatchet) { sc[x.sub & 7]++; tot++; }
+          if (x.type == Vestige::kFigDouble || x.type == Vestige::kFigSpeed) ok = false;
+        }
+      }
+    }
+    const float g = Vestige::RhyRatRamp(u);
+    const int nk = (g >= 2.f / 3.f) ? 3 : (g >= 1.f / 3.f) ? 2 : 1;
+    for (int k = 2; k < 8; k++) {
+      const bool allowed = k < 2 + nk;
+      if (!allowed && sc[k]) ok = false;
+      if (allowed && (tot < 100 || fabs(sc[k] / (double)tot - 1.0 / nk) > 0.07)) ok = false;
+    }
+    char b[96]; snprintf(b, sizeof b, "u %.2f (ramp %.2f): x2 %d x3 %d x4 %d  ", u, g, sc[2], sc[3], sc[4]); ln += b;
+  }
+  printf("      %s\n", ln.c_str());
+  Check(ok, "mode 1 ratchets graded on the ramp: x2 | x2-x3 | x2-x3-x4 (equal chance) by thirds; no double / speed");
+}
+static void TestLockIn() {
+  TestGridConfig();
+  TestFreeRunLoop();
+  TestLoopFloorModule();
+  TestFreezePhrase();
+  TestFreezeVoiceLimit();
+  TestFreezeSustain();
+  TestFreezeK3Mode1();
+  TestFreezeK3Mode2();
+  TestK3Mode2Engine();
+  TestMode1GradedRatchets();
+}
+
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.sw[2] = 0;
@@ -5443,6 +6137,7 @@ int main() {
   TestFadeVoiceCap();
   TestK5Repeats();
   TestFollowRecut();
+  TestLockIn();
 
   printf("max |wet| over run %.4f, non-finite/huge samples %d, rec overruns %ld\n", maxabs, bad, rec_overrun);
   Check(bad == 0, "no non-finite / >10 samples");
@@ -5467,10 +6162,11 @@ int main() {
     Check(v.err_level_[0] == 0.f && v.err_level_[1] == 0.f && v.err_level_[2] == 0.f && fabsf(v.rhy_level_ - 0.5f) < 1e-4f && v.rhy_side_ == kRhyCcw,
           "K3 mode 1 CCW half: the rhythm only, CCW table (layers off)");
     cs.sw[1] = 1; RunFor(0.1f);
-    Check(v.rhy_level_ == 0.f && v.err_level_[0] == 0.f, "K3 mode 2 CCW half: clean until built");
+    Check(v.rhy_level_ == 0.f && v.err_level_[0] == 0.f && fabsf(v.dg_level_ - 0.5f) < 1e-4f,
+          "K3 mode 2 CCW half: DEGRADE at the half's depth (layers + rhythm off)");
     cs.sw[1] = 0;
     cs.knob[2] = 0.5f; RunFor(0.1f);
-    Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f, "K3 noon: all off");
+    Check(v.err_level_[0] == 0.f && v.rhy_level_ == 0.f && v.dg_level_ == 0.f, "K3 noon: all off");
     cs.sw[1] = 0; }
   // LED2 = effect state: off dark, on solid, recording rapid flicker, held +
   // on blink (VESTIGE_BLINK_HELD_ON half-period), held + bypassed slow blink

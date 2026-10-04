@@ -24,6 +24,15 @@ else
 fi
 
 echo
+echo "== test_dynquapoteg (time grid block: K2 taper, free-run, loop floor, tap ranges)"
+if g++ -O2 -std=c++17 -I src/core/blocks -I pedals/chronotron3/modules -o /tmp/ct3_dynq tools/host/test_dynquapoteg.cpp \
+   && /tmp/ct3_dynq; then
+  echo "PASS  test_dynquapoteg"
+else
+  echo "FAIL  test_dynquapoteg"; fail=1
+fi
+
+echo
 echo "== sprawl_harness (real Sprawl module, stubbed hardware, ${SECS}s per scenario)"
 if g++ -O2 -std=c++17 -DCT3_DIAG_BUILD \
      -I tools/host/stub -I pedals/chronotron3 -I pedals/chronotron3/modules \
