@@ -2136,13 +2136,22 @@ class Vestige : public Module {
       while (x.len < VESTIGE_TIMING_SPAN_MAX && TimingRand() < fill && x.start + x.len + 1 <= limit) x.len++;
     }
   }
-  static int LineOps(float level) { return 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * level + 0.5f); }
+  // K3 mode 2 top zone (vestige_constants.h): z 0..1 above VESTIGE_M2_TOP_FROM, 0 below.
+  static float M2TopZ(float u) { return (u > VESTIGE_M2_TOP_FROM) ? (u - VESTIGE_M2_TOP_FROM) / (1.f - VESTIGE_M2_TOP_FROM) : 0.f; }
+  static int LineOps(float level) {
+    const int ops = 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * level + 0.5f);
+    if (!(level > VESTIGE_M2_TOP_FROM)) return ops;
+    const int o0 = 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * VESTIGE_M2_TOP_FROM + 0.5f);   // the value at FROM
+    return (int)((float)o0 + (float)(VESTIGE_M2_TOP_OPS - o0) * M2TopZ(level) + 0.5f);
+  }
+  static int LineLife(float level) { return (level > VESTIGE_M2_TOP_FROM) ? VESTIGE_M2_TOP_LIFE : VESTIGE_TIMING_LINE_LIFE; }
   // `ops` changes to layer l's line (see vestige_constants.h).
   void LineMutate(int s, int l, float level, int ops) {
     const int C = ln_cells_[s];
     const float fill = VESTIGE_TIMING_LINE_FILL_A + VESTIGE_TIMING_LINE_FILL_B * level;
     float rnd = (level - VESTIGE_TIMING_LINE_RAND_FROM) / (1.f - VESTIGE_TIMING_LINE_RAND_FROM);
     if (rnd < 0.f) rnd = 0.f;
+    if (level > VESTIGE_M2_TOP_FROM) rnd = 1.f;                 // top zone: every change a random hit anywhere
     for (int o = 0; o < ops; o++) {
       int& nh = ln_nh_[s][l];
       const int tgt = LineDrawTarget(s, level);
@@ -2230,8 +2239,18 @@ class Vestige : public Module {
       int len = VESTIGE_DEGRADE_LEN_MIN + TimingPick(lmx - VESTIGE_DEGRADE_LEN_MIN + 1);
       if (len > G - i) len = G - i;                        // clipped at the pass end
       // Lifespan by depth: LIFE_LOW_* just past noon .. LIFE_* at full CCW.
-      const int lmin = (int)(VESTIGE_DEGRADE_LIFE_LOW_MIN + (VESTIGE_DEGRADE_LIFE_MIN - VESTIGE_DEGRADE_LIFE_LOW_MIN) * u + 0.5f);
-      const int lmax = (int)(VESTIGE_DEGRADE_LIFE_LOW_MAX + (VESTIGE_DEGRADE_LIFE_MAX - VESTIGE_DEGRADE_LIFE_LOW_MAX) * u + 0.5f);
+      // Top zone (u > M2_TOP_FROM): from the value at FROM to TOP_CCW_LIFE_* at z = 1.
+      int lmin, lmax;
+      if (u > VESTIGE_M2_TOP_FROM) {
+        const float z = M2TopZ(u), f = VESTIGE_M2_TOP_FROM;
+        const float a0 = VESTIGE_DEGRADE_LIFE_LOW_MIN + (VESTIGE_DEGRADE_LIFE_MIN - VESTIGE_DEGRADE_LIFE_LOW_MIN) * f;
+        const float b0 = VESTIGE_DEGRADE_LIFE_LOW_MAX + (VESTIGE_DEGRADE_LIFE_MAX - VESTIGE_DEGRADE_LIFE_LOW_MAX) * f;
+        lmin = (int)(a0 + ((float)VESTIGE_M2_TOP_CCW_LIFE_MIN - a0) * z + 0.5f);
+        lmax = (int)(b0 + ((float)VESTIGE_M2_TOP_CCW_LIFE_MAX - b0) * z + 0.5f);
+      } else {
+        lmin = (int)(VESTIGE_DEGRADE_LIFE_LOW_MIN + (VESTIGE_DEGRADE_LIFE_MIN - VESTIGE_DEGRADE_LIFE_LOW_MIN) * u + 0.5f);
+        lmax = (int)(VESTIGE_DEGRADE_LIFE_LOW_MAX + (VESTIGE_DEGRADE_LIFE_MAX - VESTIGE_DEGRADE_LIFE_LOW_MAX) * u + 0.5f);
+      }
       const int8_t life = (int8_t)(lmin + TimingPick(lmax - lmin + 1));
       const uint16_t id = ++dg_nid_[s];
       for (int j = i; j < i + len; j++) {                  // overwrites the steps it covers
@@ -2771,8 +2790,12 @@ class Vestige : public Module {
   // STEP_EXP). K3 mode 1 hooks its tempo on the wanted step: half time below
   // RHY_HALF_U (RhyTempoStep). Shared by the loop voices and the freeze side's
   // virtual pass.
-  int TimingStepCount(double pass_out, bool rhythm, float rl) const {
-    return tgrid_.StepCount(pass_out, rhythm ? (double)RhyTempoStep(rl) : 1.0);
+  // m2u: the K3 mode-2 depth of this pass (either half; 0 otherwise): above
+  // VESTIGE_M2_TOP_FROM the wanted step x VESTIGE_M2_TOP_STEP_SCALE.
+  int TimingStepCount(double pass_out, bool rhythm, float rl, float m2u = 0.f) const {
+    const double sc = rhythm ? (double)RhyTempoStep(rl)
+                    : (m2u > VESTIGE_M2_TOP_FROM) ? (double)VESTIGE_M2_TOP_STEP_SCALE : 1.0;
+    return tgrid_.StepCount(pass_out, sc);
   }
   // ---- K3 mode 1 on the FREEZE side (SW1 DOWN): rests + decimates ----------
   // A virtual pass (FzPassLen: the playing freeze's virtual loop length,
@@ -2861,7 +2884,7 @@ class Vestige : public Module {
       ln_ops_[s][l] = LineOps(lv);                          // this pass's changes, one per block (TimingLayerTick)
       for (int h = 0; h < ln_nh_[s][l]; h++) {
         LineHit& x = ln_hit_[s][l][h];
-        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= VESTIGE_TIMING_LINE_LIFE) LineRetype(l, x);
+        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= LineLife(lv)) LineRetype(l, x);
       }
     }
     const double st = FzStepLen(G);
@@ -2931,7 +2954,8 @@ class Vestige : public Module {
         for (int i = 0; i < G; i++) if (fz_cnd_[i] == 1) { fz_cnd_[i] = 0; fz_rst_[i] = 1; }
       fz_G_ = G; fz_nb_ = FzBnd(1);
     } else if (fz_lpg_on_) {                              // mode 2: the CW layers / degrade
-      const int G = TimingStepCount((double)fz_L_, false, 0.f);   // (the loop side's non-rhythm step)
+      const int G = TimingStepCount((double)fz_L_, false, 0.f,      // (the loop side's non-rhythm step)
+                                    fm == 2 ? err_level_[kErrTiming] : dg_level_);
       const uint32_t keep = timing_rng_; timing_rng_ = fz_rng_;
       if (fm == 2) FzPlanLayers(G); else FzPlanDegrade(G);
       fz_rng_ = timing_rng_; timing_rng_ = keep;
@@ -3134,7 +3158,8 @@ class Vestige : public Module {
     // wanted step in output time: VESTIGE_TIMING_STEP_MS up to a loop of
     // VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^STEP_EXP
     // (long, ambient loops glitch slower: 8 s = 250 ms at 0.5).
-    const int G = TimingStepCount(pass_out, rhythm, rhy_level_);
+    const float m2u = rhythm ? 0.f : fmaxf(err_level_[kErrTiming], dgl);   // K3 mode-2 depth (top zone)
+    const int G = TimingStepCount(pass_out, rhythm, rhy_level_, m2u);
     const int LP = (G >= VESTIGE_TIMING_LINE_STEPS) ? 1 : (VESTIGE_TIMING_LINE_STEPS + G - 1) / G;   // passes per line
     const int C = G * LP;
     if (ln_cells_[s] != C) { LineClear(s); ln_cells_[s] = C; ln_pass_[s] = -1; }
@@ -3152,7 +3177,7 @@ class Vestige : public Module {
       ln_ops_[s][l] = LineOps(lv);                          // this pass's changes, one per block (TimingLayerTick)
       for (int h = 0; h < ln_nh_[s][l]; h++) {               // a hit in this pass plays once more
         LineHit& x = ln_hit_[s][l][h];
-        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= VESTIGE_TIMING_LINE_LIFE) LineRetype(l, x);
+        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= LineLife(lv)) LineRetype(l, x);
       }
       timing_edits_++;
     }

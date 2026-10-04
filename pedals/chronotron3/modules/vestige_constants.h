@@ -1125,6 +1125,22 @@ static constexpr float  VESTIGE_TIMING_LINE_RAND_FROM = 0.67f;
 static constexpr int    VESTIGE_TIMING_LINE_LIFE    = 6;
 static constexpr int    VESTIGE_TIMING_LAYER_MAX_STEPS = 64;    // G bound (steps per pass)
 static constexpr int    VESTIGE_TIMING_LINE_MAX_CELLS  = 64;    // line bound (64-bit cell masks)
+// K3 mode 2 TOP ZONE (both halves, loop + freeze): from each half's depth
+// u > VESTIGE_M2_TOP_FROM, z = (u - FROM) / (1 - FROM) (0..1). Below it
+// nothing changes.
+//   1. both halves: the wanted step x STEP_SCALE (0.5 = double speed; G is
+//      still the closest 2^k / 3 x 2^k, bounded by LAYER_MAX_STEPS)
+//   2. CW: changes per pass ramp linearly from LineOps(FROM) to TOP_OPS at
+//      z = 1 (rounded); hit content life TOP_LIFE; every change is a random
+//      hit anywhere (the RAND path at chance 1)
+//   3. CCW: degrade lifespan ramps linearly from its value at FROM to
+//      TOP_CCW_LIFE_MIN .. _MAX at z = 1 (rounded)
+static constexpr float  VESTIGE_M2_TOP_FROM          = 0.75f;
+static constexpr float  VESTIGE_M2_TOP_STEP_SCALE    = 0.5f;
+static constexpr int    VESTIGE_M2_TOP_OPS           = 8;
+static constexpr int    VESTIGE_M2_TOP_LIFE          = 2;
+static constexpr int    VESTIGE_M2_TOP_CCW_LIFE_MIN  = 2;
+static constexpr int    VESTIGE_M2_TOP_CCW_LIFE_MAX  = 4;
 static_assert(VESTIGE_TIMING_LINE_STEPS <= VESTIGE_TIMING_LINE_MAX_CELLS, "line too long");
 // Type weights per layer — EDITABLE. 0 = that type is off; a layer whose
 // weights are all 0 is off.
