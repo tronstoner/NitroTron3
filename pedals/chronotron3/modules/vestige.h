@@ -3049,7 +3049,9 @@ class Vestige : public Module {
       while (j < fz_G_ && !fz_stk_[j]) j++;
       if (j < fz_G_) In = (double)FzBnd(j) - (double)b0;
       else { int j0 = 0; while (j0 < fz_G_ && !fz_stk_[j0]) j0++; In = (double)fz_L_ - (double)b0 + (double)FzBnd(j0); }
-      In /= (double)fz_sub_n_;
+      // A ratchet: its sub-hits' own spacing (the step / count), not the
+      // distance to the next stutter divided — they would overlap otherwise.
+      if (fz_sub_n_ > 1) In = ((double)FzBnd(i + 1) - (double)b0) / (double)fz_sub_n_;
     }
     fz_t_ = 0.f;
     fz_gate_s_ = VESTIGE_FRZ_LPG_ASR_GATE * (float)In - att;
@@ -4101,13 +4103,16 @@ class Vestige : public Module {
       // (live / fading / stolen), steal the oldest not-yet-stolen one (fast
       // VESTIGE_STEAL_RELEASE_S release) and start this one once it is silent.
       if (PoolOf(s) == kPoolFreeze) {
-        int n = 0, oldest = -1; uint32_t best = 0xFFFFFFFFu;
+        int n = 0, oldest = -1; bool any_stolen = false; uint32_t best = 0xFFFFFFFFu;
         for (int v = PoolLo(kPoolFreeze); v < PoolHi(kPoolFreeze); v++) {
           if (!active_[v]) continue;
           n++;
-          if (!stolen_[v] && age_[v] < best) { best = age_[v]; oldest = v; }
+          if (stolen_[v]) any_stolen = true;
+          else if (age_[v] < best) { best = age_[v]; oldest = v; }
         }
-        if (n >= 2) { StealVoice(oldest); continue; }   // retry next sample
+        // One steal at a time: while a stolen freeze is still fading, wait
+        // (retrying every sample) instead of stealing the next one too.
+        if (n >= 2) { if (!any_stolen && oldest >= 0) StealVoice(oldest); continue; }
       }
       IsrActivate(s, now);
     }
