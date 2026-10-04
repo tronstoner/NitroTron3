@@ -474,6 +474,18 @@ static constexpr float  VESTIGE_K1_GATE_EPS = 1e-3f;   // a version quieter than
 //     VESTIGE_TIMING_RHY_TABLE_CW, each at its own half's depth; which pair
 //     (timelines / intensity paths) = VESTIGE_TIMING_RHY_IL_SET (below).
 static constexpr float  VESTIGE_K3_DEADZONE          = 0.04f;
+// K3 mode 2 (SW2 MIDDLE) CCW half = DEGRADE: per loop (and per freeze, on the
+// freeze side's virtual pass) mutations ACCUMULATE pass by pass and stay. A
+// mutation gives one step of the pass a random event, uniform over the CW
+// layers' event set (stutter, repeat, double, ratchet, retrig, reverse, rest,
+// decimate; decimate factor uniform from DECIM_FACTORS); first only unmutated
+// steps, once all G steps are mutated any step (overwritten). The rate, by the
+// CCW depth u over the levels [1 every DEGRADE_SLOW_PASSES[0] passes, ...,
+// 1 every DEGRADE_SLOW_PASSES[n-1], then 1, 2, ..., G per pass] (per loop: G =
+// its step count), level = round(u x (levels - 1)). A new loop / freeze starts
+// clean.
+static constexpr int    VESTIGE_DEGRADE_SLOW_N = 3;
+static constexpr int    VESTIGE_DEGRADE_SLOW_PASSES[VESTIGE_DEGRADE_SLOW_N] = {4, 3, 2};
 static constexpr int    VESTIGE_TIMING_RHY_ENGINE    = 0;   // 0 polymetric · 1 afro table · 2 interlock table
 static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
 static constexpr float  VESTIGE_TIMING_RHY_S_K_MIN   = 2.f;
