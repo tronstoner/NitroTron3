@@ -1135,7 +1135,7 @@ static constexpr float  VESTIGE_TIMING_W_RETRIG  = 1.f;         // the hit plays
 // SPEED: for the hit's span the voice reads its material at k x (k graded
 // 2 / 3 / 4) from the span start, pitch up with it (tape), then returns to the
 // timeline in phase at the span end. Freeze: the pad's grains read at k x.
-static constexpr float  VESTIGE_TIMING_W_SPEED   = 1.f;
+static constexpr float  VESTIGE_TIMING_W_SPEED   = 0.f;   // OFF (2026-10-04, builder: not in modes 1/2; maybe SW2 DOWN later)
 static constexpr float  VESTIGE_TIMING_W_REST    = 1.f;         // CONDITION
 static constexpr float  VESTIGE_TIMING_W_DECIM   = 1.f;
 static constexpr float  VESTIGE_TIMING_W_REVERSE = 1.f;         // PLAYBACK

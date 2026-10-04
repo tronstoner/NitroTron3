@@ -2211,7 +2211,8 @@ class Vestige : public Module {
       dg_pc_[s] = 0; k = 1;
     } else { dg_pc_[s] = 0; k = li - NS + 1; }
     const uint64_t all = (G >= 64) ? ~0ull : ((1ull << G) - 1ull);
-    static const int8_t ty[7] = {kFigStutter, kFigRepeat, kFigRatchet, kFigRetrig, kFigReverse, kFigRest, kFigSpeed};
+    // (kFigSpeed parked out of the pool 2026-10-04 — the speed event stays in the code for SW2 DOWN.)
+    static const int8_t ty[6] = {kFigStutter, kFigRepeat, kFigRatchet, kFigRetrig, kFigReverse, kFigRest};
     const float pdec = VESTIGE_DEGRADE_DECIM_P_MIN + VESTIGE_DEGRADE_DECIM_P_SPAN * u;   // a non-rest event's decimate chance
     for (int m = 0; m < k; m++) {
       const uint64_t free = all & ~dg_mask_[s];
@@ -2220,7 +2221,7 @@ class Vestige : public Module {
         int r = TimingPick(__builtin_popcountll(free));
         i = 0; for (;; i++) if ((free >> i) & 1ull) { if (r == 0) break; r--; }
       } else i = TimingPick(G);                            // all mutated: any step
-      const int t = ty[TimingPick(7)];
+      const int t = ty[TimingPick(6)];
       // sub: a rest 1; a ratchet / speed its graded count by the depth u.
       const int8_t sub = (t == kFigRest) ? 1 : (t == kFigRatchet || t == kFigSpeed) ? (int8_t)GradedK(u) : 0;
       int8_t dec = 0;                                      // the decimate quality (non-rest only): factor, 0 none
