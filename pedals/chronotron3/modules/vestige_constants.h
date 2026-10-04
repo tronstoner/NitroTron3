@@ -478,14 +478,24 @@ static constexpr float  VESTIGE_K3_DEADZONE          = 0.04f;
 // freeze side's virtual pass) mutations ACCUMULATE pass by pass and stay. A
 // mutation gives one step of the pass a random event, uniform over the CW
 // layers' event set (stutter, repeat, double, ratchet, retrig, reverse, rest,
-// decimate; decimate factor uniform from DECIM_FACTORS); first only unmutated
-// steps, once all G steps are mutated any step (overwritten). The rate, by the
+// decimate; decimate factor uniform from DECIM_FACTORS) over 1 + its next
+// steps: length uniform DEGRADE_LEN_MIN..MAX steps, clipped at the pass end,
+// rendered like a CW layer hit of that length. Its first step: an unmutated
+// step if any (uniform), else any step; the steps it covers are overwritten
+// (an older event keeps the rest of its steps). Each mutation lives a random
+// DEGRADE_LIFE_MIN..MAX passes (its creation pass included; counted in the
+// passes its loop / the freeze's virtual pass plans with degrade on), then its
+// steps play clean again. The rate, by the
 // CCW depth u over the levels [1 every DEGRADE_SLOW_PASSES[0] passes, ...,
 // 1 every DEGRADE_SLOW_PASSES[n-1], then 1, 2, ..., G per pass] (per loop: G =
 // its step count), level = round(u x (levels - 1)). A new loop / freeze starts
 // clean.
 static constexpr int    VESTIGE_DEGRADE_SLOW_N = 3;
 static constexpr int    VESTIGE_DEGRADE_SLOW_PASSES[VESTIGE_DEGRADE_SLOW_N] = {4, 3, 2};
+static constexpr int    VESTIGE_DEGRADE_LEN_MIN  = 1;    // event length, steps (uniform)
+static constexpr int    VESTIGE_DEGRADE_LEN_MAX  = 4;
+static constexpr int    VESTIGE_DEGRADE_LIFE_MIN = 6;    // lifespan, passes (uniform)
+static constexpr int    VESTIGE_DEGRADE_LIFE_MAX = 10;
 static constexpr int    VESTIGE_TIMING_RHY_ENGINE    = 0;   // 0 polymetric · 1 afro table · 2 interlock table
 static constexpr int    VESTIGE_TIMING_RHY_S_CYCLE   = 12;
 static constexpr float  VESTIGE_TIMING_RHY_S_K_MIN   = 2.f;

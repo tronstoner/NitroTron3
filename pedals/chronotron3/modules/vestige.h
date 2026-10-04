@@ -2149,14 +2149,19 @@ class Vestige : public Module {
   }
   void LineClear(int s) { for (int l = 0; l < kErrTypes; l++) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; } ln_cells_[s] = 0; }
   // ---- K3 mode 2 CCW: DEGRADE ---------------------------------------------
-  // Per planner index s (a loop voice, or kFzR): mutated steps that stay, one
-  // event each, re-rendered every pass. Reset at a loop's / freeze's
-  // activation (fresh: its activation pass adds none).
+  // Per planner index s (a loop voice, or kFzR): mutation events (1..4 steps
+  // each) that live 6..10 passes, re-rendered every pass. Stored per step:
+  // the owning event's type / sub / start / length / id and its passes left.
+  // Reset at a loop's / freeze's activation (fresh: its activation pass adds
+  // none).
   void DgClear(int s, bool fresh) { dg_mask_[s] = 0; dg_G_[s] = 0; dg_pc_[s] = 0; dg_fresh_[s] = fresh; }
-  // Pass start with degrade on (depth u, G steps): this pass's mutations.
+  // Pass start with degrade on (depth u, G steps): age the live events (an
+  // expired one's steps play clean again), then this pass's new ones.
   void DgMutate(int s, int G, float u) {
     if (dg_G_[s] != G) { dg_mask_[s] = 0; dg_pc_[s] = 0; dg_G_[s] = G; }   // steps changed: the mutations no longer fit
     if (dg_fresh_[s]) { dg_fresh_[s] = false; return; }    // the activation pass plays clean
+    for (int i = 0; i < G; i++)                            // one pass older (all steps of an event age alike)
+      if (((dg_mask_[s] >> i) & 1ull) && --dg_lf_[s][i] <= 0) dg_mask_[s] &= ~(1ull << i);
     constexpr int NS = VESTIGE_DEGRADE_SLOW_N;
     const int nlev = NS + G;                               // [every SLOW[0] .. SLOW[NS-1] passes, 1 .. G per pass]
     int li = (int)(u * (float)(nlev - 1) + 0.5f);
@@ -2172,15 +2177,26 @@ class Vestige : public Module {
     for (int m = 0; m < k; m++) {
       const uint64_t free = all & ~dg_mask_[s];
       int i;
-      if (free) {                                          // an unmutated step, uniform
+      if (free) {                                          // first step: an unmutated step, uniform
         int r = TimingPick(__builtin_popcountll(free));
         i = 0; for (;; i++) if ((free >> i) & 1ull) { if (r == 0) break; r--; }
-      } else i = TimingPick(G);                            // all mutated: any step (overwrite)
+      } else i = TimingPick(G);                            // all mutated: any step
       const int t = ty[TimingPick(8)];
-      dg_ty_[s][i] = (int8_t)t;
-      dg_sub_[s][i] = (t == kFigRest) ? 1 : (t == kFigDecimate) ? (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)] : 0;
-      dg_mask_[s] |= 1ull << i;
+      const int8_t sub = (t == kFigRest) ? 1 : (t == kFigDecimate) ? (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)] : 0;
+      int len = VESTIGE_DEGRADE_LEN_MIN + TimingPick(VESTIGE_DEGRADE_LEN_MAX - VESTIGE_DEGRADE_LEN_MIN + 1);
+      if (len > G - i) len = G - i;                        // clipped at the pass end
+      const int8_t life = (int8_t)(VESTIGE_DEGRADE_LIFE_MIN + TimingPick(VESTIGE_DEGRADE_LIFE_MAX - VESTIGE_DEGRADE_LIFE_MIN + 1));
+      const uint16_t id = ++dg_nid_[s];
+      for (int j = i; j < i + len; j++) {                  // overwrites the steps it covers
+        dg_ty_[s][j] = (int8_t)t; dg_sub_[s][j] = sub; dg_st_[s][j] = (int8_t)i; dg_ln_[s][j] = (int8_t)len;
+        dg_lf_[s][j] = life; dg_id_[s][j] = id;
+        dg_mask_[s] |= 1ull << j;
+      }
     }
+  }
+  // Step i still belongs to the same event as step i - 1 (an event's run).
+  bool DgSameAsPrev(int s, int i) const {
+    return i > 0 && ((dg_mask_[s] >> (i - 1)) & 1ull) && dg_id_[s][i - 1] == dg_id_[s][i];
   }
   // Once per audio block: one pending change per layer per loop voice. A pass
   // start only renders; the changes for the NEXT pass are spread over the
@@ -2812,12 +2828,21 @@ class Vestige : public Module {
       }
     FzNoStrikeInReverse(G);
   }
-  // Degrade: the freeze's own mutated steps (DgMutate on kFzR), one step each.
+  // Degrade: the freeze's own mutation events (DgMutate on kFzR), mapped as
+  // FzPlanLayers maps a multi-step hit; each run of steps an event still owns
+  // (overwritten steps split it) counts as its hit in the pass: strikes /
+  // reverse gate from the run's first step, the gate over the run.
   void FzPlanDegrade(int G) {
-    DgMutate(kFzR, G, dg_level_);
+    const int s = kFzR;
+    DgMutate(s, G, dg_level_);
     int8_t r2, r4; FzRatchets(G, &r2, &r4);
-    for (int i = 0; i < G; i++)
-      if ((dg_mask_[kFzR] >> i) & 1ull) FzEvent(i, dg_ty_[kFzR][i], dg_sub_[kFzR][i], true, 1, r2, r4);
+    for (int i = 0; i < G; i++) {
+      if (!((dg_mask_[s] >> i) & 1ull)) continue;
+      const bool first = !DgSameAsPrev(s, i);
+      int rvn = 1;
+      if (first) while (i + rvn < G && DgSameAsPrev(s, i + rvn)) rvn++;
+      FzEvent(i, dg_ty_[s][i], dg_sub_[s][i], first, rvn, r2, r4);
+    }
     FzNoStrikeInReverse(G);
   }
   // Plan a pass; el0 > 0 joins it mid-way (the hits behind it are skipped).
@@ -3104,18 +3129,22 @@ class Vestige : public Module {
       int a, b; if (!seg_cells(x, &a, &b)) continue;
       for (int i = a; i < b; i++) cnd[i] = x.sub;
     }
-    // Degrade: each mutated step's event, rendered as a one-step hit of its
-    // layer would be (stutter / repeat: the step before; retrig: the loop's
-    // first step; reverse: the step backward; the ratchets' MIN_STEP fallback).
+    // Degrade: each mutated step, rendered as its event's step would be in a
+    // CW layer hit of the event's start / length (stutter: the len steps
+    // before as a block; repeat: the step before the event, held; retrig: the
+    // loop from its first step; reverse: the event's span mirrored, on the
+    // clean steps; the ratchets' MIN_STEP fallback). An overwritten step plays
+    // its newer event; the older event's other steps keep their place in it.
     if (dgl > 0.f && dg_G_[s] == G) for (int i = 0; i < G; i++) {
       if (!((dg_mask_[s] >> i) & 1ull)) continue;
+      const int st = dg_st_[s][i], ln = dg_ln_[s][i];
       switch (dg_ty_[s][i]) {
-        case kFigStutter:
-        case kFigRepeat:   src[i] = (int8_t)((i - 1 + G) % G); break;
+        case kFigStutter:  src[i] = (int8_t)(((i - ln) % G + G) % G); break;
+        case kFigRepeat:   src[i] = (int8_t)(((st - 1) % G + G) % G); break;
         case kFigDouble:   if (ok2) rat[i] = 2; break;
         case kFigRatchet:  rat[i] = ok4 ? 4 : (ok2 ? 2 : 1); break;
-        case kFigRetrig:   src[i] = 0; break;
-        case kFigReverse:  if (okr) dir[i] = -1; break;
+        case kFigRetrig:   src[i] = (int8_t)((i - st) % G); break;
+        case kFigReverse:  if (okr) { src[i] = (int8_t)(2 * st + ln - 1 - i); dir[i] = -1; } break;
         case kFigRest:
         case kFigDecimate: cnd[i] = dg_sub_[s][i]; break;
         default: break;
@@ -5379,6 +5408,11 @@ class Vestige : public Module {
   int      dg_G_[kRhySlots]        = {};       // the step count the mutations were placed on
   int      dg_pc_[kRhySlots]       = {};       // passes since the last mutation (the slow levels)
   bool     dg_fresh_[kRhySlots]    = {};       // its next plan is the activation pass (no mutation)
+  int8_t   dg_st_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   // per mutated step: its event's first step
+  int8_t   dg_ln_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   //  its length (steps, clipped)
+  int8_t   dg_lf_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   //  its passes left (incl. this one)
+  uint16_t dg_id_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   //  its id (runs of one event)
+  uint16_t dg_nid_[kRhySlots]      = {};       // the last event id handed out
   volatile float dg_level_ = 0.f;                         // K3 mode-2 CCW degrade depth (0 = off)
   volatile float rhy_level_ = 0.f;                        // K3 mode-1 rhythm depth, either half (0 = off)
   volatile int   rhy_side_  = 0;                          //  its half: kRhyCcw / kRhyCw (which table)
