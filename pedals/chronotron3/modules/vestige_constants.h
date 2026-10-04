@@ -497,6 +497,7 @@ static constexpr int    VESTIGE_DEGRADE_SLOW_N = 3;
 static constexpr int    VESTIGE_DEGRADE_SLOW_PASSES[VESTIGE_DEGRADE_SLOW_N] = {4, 3, 2};
 static constexpr int    VESTIGE_DEGRADE_LEN_MIN  = 1;    // event length, steps (uniform)
 static constexpr int    VESTIGE_DEGRADE_LEN_MAX  = 4;
+static constexpr int    VESTIGE_DEGRADE_REST_LEN_MAX = 2;   // rests at most this long (long rests were a problem)
 static constexpr int    VESTIGE_DEGRADE_LIFE_MIN = 6;    // lifespan, passes (uniform)
 static constexpr int    VESTIGE_DEGRADE_LIFE_MAX = 10;   // (at full CCW)
 static constexpr int    VESTIGE_DEGRADE_LIFE_LOW_MIN = 24;   // lifespan just past noon (longer: fewer changes early)

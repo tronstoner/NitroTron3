@@ -2187,7 +2187,8 @@ class Vestige : public Module {
       const int8_t sub = (t == kFigRest) ? 1 : 0;
       int8_t dec = 0;                                      // the decimate quality (non-rest only): factor, 0 none
       if (t != kFigRest && TimingRand() < pdec) dec = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)];
-      int len = VESTIGE_DEGRADE_LEN_MIN + TimingPick(VESTIGE_DEGRADE_LEN_MAX - VESTIGE_DEGRADE_LEN_MIN + 1);
+      const int lmx = (t == kFigRest) ? VESTIGE_DEGRADE_REST_LEN_MAX : VESTIGE_DEGRADE_LEN_MAX;   // rests: shorter
+      int len = VESTIGE_DEGRADE_LEN_MIN + TimingPick(lmx - VESTIGE_DEGRADE_LEN_MIN + 1);
       if (len > G - i) len = G - i;                        // clipped at the pass end
       // Lifespan by depth: LIFE_LOW_* just past noon .. LIFE_* at full CCW.
       const int lmin = (int)(VESTIGE_DEGRADE_LIFE_LOW_MIN + (VESTIGE_DEGRADE_LIFE_MIN - VESTIGE_DEGRADE_LIFE_LOW_MIN) * u + 0.5f);
