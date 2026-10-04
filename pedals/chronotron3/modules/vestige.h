@@ -222,7 +222,8 @@ class Vestige : public Module {
     // either half (engine VESTIGE_TIMING_RHY_ENGINE; engine 0: CCW 12 : 8, CW
     // 15 : 10; engine 2: its two tables; engine 1: CW clean). Mode 2 (SW2
     // MIDDLE) CW half: the three layers (TIMING / CONDITION / PLAYBACK)
-    // together at level 0 -> 1 over the half; CCW half: DEGRADE (DgMutate).
+    // together at level 0 -> 1 over the half; CCW half: the same three layers
+    // with the CCW params (accumulating hits, LineCcwPass).
     // Both halves of both modes also play on the freeze side (FzRhyPlan).
     {
       // Centred on the knob's real noon: a physical noon (raw 0.5) reads
@@ -234,13 +235,13 @@ class Vestige : public Module {
       const float u3 = (a3 <= VESTIGE_K3_DEADZONE) ? 0.f : fminf(1.f, (a3 - VESTIGE_K3_DEADZONE) / (half3 - VESTIGE_K3_DEADZONE));
       // SW2 = the K3 MODE (each bipolar): UP 1 Euclidean (CCW traditional
       // timelines, CW academic odd-cycle Euclids), MIDDLE 2 random (CW the
-      // three glitch layers, CCW degrade), DOWN 3 straight tremolo / shutter (tbd).
+      // three glitch layers with the CW / CCW params), DOWN 3 straight tremolo / shutter (tbd).
       // A half that is not built yet is clean.
       glitch_mode_ = (sw2 == 0) ? 0 : (sw2 == 1) ? 1 : 2;
       const float cw = (c3 > 0.f && glitch_mode_ == 1) ? u3 : 0.f;
       err_level_[kErrTiming] = err_level_[kErrCondition] = err_level_[kErrPlayback] = cw;
-      // Mode 2 CCW half: DEGRADE at depth u3 (DgMutate; 0 = off).
-      dg_level_ = (c3 < 0.f && glitch_mode_ == 1) ? u3 : 0.f;
+      // Mode 2 CCW half: the three layers, CCW params, at depth u3 (0 = off).
+      ccw_level_ = (c3 < 0.f && glitch_mode_ == 1) ? u3 : 0.f;
       // Mode 1: one rhythm, its table by the side, its depth = that half's u3
       // (the running step count and the planner are shared). The ISR reads
       // side and depth separately: a pass planned across a jump over noon
@@ -1974,13 +1975,15 @@ class Vestige : public Module {
   // ---- Timing mode 3: LAYERS -------------------------------------------------
   // Three rhythm lines (TIMING / CONDITION / PLAYBACK) per loop voice, each a
   // list of hits on a line of ln_cells_ cells (G steps x the passes per line).
-  struct LineHit { int8_t start, len, type, sub, age; };
+  // life: CCW params only, the passes left (incl. this one); CW: unused (0).
+  struct LineHit { int8_t start, len, type, sub, age, life; };
   // K3 mode 1 on the FREEZE side: one extra, virtual planner index past the
   // loop voices (its own lines, rotation words, running step count, hit
   // variation and rest / decimate state). Loop-side loops never reach it.
   static constexpr int kFzR = VESTIGE_VOICE_SLABS;
   static constexpr int kRhySlots = VESTIGE_VOICE_SLABS + 1;
-  static constexpr int kLineMaxHits = VESTIGE_TIMING_LINE_MAX_CELLS / 2;
+  static constexpr int kLineMaxHits = VESTIGE_TIMING_LINE_MAX_CELLS / 2;   // CW / rhythm (a pause between hits)
+  static constexpr int kLineStore = VESTIGE_TIMING_LINE_MAX_CELLS;          // storage: CCW hits may abut (<= 1 per step)
   static uint64_t LineMask(int start, int len) { return ((1ull << len) - 1ull) << start; }   // len <= 4
   // Cells a new hit may not touch: every other hit plus one pause cell on each
   // side (cyclic: the line loops). skip = a hit to leave out (-1 none).
@@ -2147,56 +2150,101 @@ class Vestige : public Module {
     return VESTIGE_TIMING_W_STUTTER + VESTIGE_TIMING_W_REPEAT + VESTIGE_TIMING_W_DOUBLE +
            VESTIGE_TIMING_W_RATCHET + VESTIGE_TIMING_W_RETRIG > 0.f;
   }
-  void LineClear(int s) { for (int l = 0; l < kErrTypes; l++) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; } ln_cells_[s] = 0; }
-  // ---- K3 mode 2 CCW: DEGRADE ---------------------------------------------
-  // Per planner index s (a loop voice, or kFzR): mutation events (1..4 steps
-  // each) that live 6..10 passes, re-rendered every pass. Stored per step:
-  // the owning event's type / sub / start / length / id and its passes left.
-  // Reset at a loop's / freeze's activation (fresh: its activation pass adds
-  // none).
-  void DgClear(int s, bool fresh) { dg_mask_[s] = 0; dg_G_[s] = 0; dg_pc_[s] = 0; dg_fresh_[s] = fresh; }
-  // Pass start with degrade on (depth u, G steps): age the live events (an
-  // expired one's steps play clean again), then this pass's new ones.
-  void DgMutate(int s, int G, float u) {
-    if (dg_G_[s] != G) { dg_mask_[s] = 0; dg_pc_[s] = 0; dg_G_[s] = G; }   // steps changed: the mutations no longer fit
-    if (dg_fresh_[s]) { dg_fresh_[s] = false; return; }    // the activation pass plays clean
-    for (int i = 0; i < G; i++)                            // one pass older (all steps of an event age alike)
-      if (((dg_mask_[s] >> i) & 1ull) && --dg_lf_[s][i] <= 0) dg_mask_[s] &= ~(1ull << i);
-    constexpr int NS = VESTIGE_DEGRADE_SLOW_N;
+  void LineClear(int s) { for (int l = 0; l < kErrTypes; l++) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; } ln_cells_[s] = 0; ln_pc_[s] = 0; }
+  // ---- K3 mode 2: the three layers' lines, one engine, two parameter sets --
+  // Passes per line: CW params a line of >= VESTIGE_TIMING_LINE_STEPS steps
+  // (over several passes when G is small); CCW params one pass.
+  static int LinePasses(int G, bool ccw) {
+    return (ccw || G >= VESTIGE_TIMING_LINE_STEPS) ? 1 : (VESTIGE_TIMING_LINE_STEPS + G - 1) / G;
+  }
+  // Pass start (segment seg0 of a line of G x LinePasses steps): this pass's
+  // changes to the three lines. CW params: evolve (LineMutate, spread over the
+  // blocks by TimingLayerTick; an empty line is seeded there) + age (a hit
+  // that played VESTIGE_TIMING_LINE_LIFE passes is retyped). CCW params:
+  // LineCcwPass at depth u. Returns the layers worked (diag).
+  int LinesPass(int s, int G, int seg0, bool ccw, float u) {
+    if (ccw) { LineCcwPass(s, G, u); return 0; }
+    int worked = 0;
+    for (int l = 0; l < kErrTypes; l++) {
+      const float lv = err_level_[l];
+      if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; continue; }
+      if (ln_nh_[s][l] == 0) { ln_ops_[s][l] = -1; continue; }   // empty: seed in the block tick (no hits to age)
+      if (ln_ops_[s][l] > 0) LineMutate(s, l, lv, ln_ops_[s][l]);   // leftovers (a pass shorter than the spread)
+      ln_ops_[s][l] = LineOps(lv);                          // this pass's changes, one per block (TimingLayerTick)
+      for (int h = 0; h < ln_nh_[s][l]; h++) {               // a hit in this pass plays once more
+        LineHit& x = ln_hit_[s][l][h];
+        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= VESTIGE_TIMING_LINE_LIFE) LineRetype(l, x);
+      }
+      worked++;
+    }
+    return worked;
+  }
+  // CCW params, per pass (lines of one pass, G steps): a first pass (ln_fresh_)
+  // adds nothing; else each layer, independently: its hits one pass older
+  // (expired ones go), then this pass's new hits, the same count on all three
+  // layers (the rate: see VESTIGE_TIMING_CCW_*).
+  void LineCcwPass(int s, int G, float u) {
+    for (int l = 0; l < kErrTypes; l++) ln_ops_[s][l] = 0;   // (no per-block changes)
+    if (ln_fresh_[s]) { ln_fresh_[s] = false; ln_pc_[s] = 0; return; }
+    constexpr int NS = VESTIGE_TIMING_CCW_SLOW_N;
     const int nlev = NS + G;                               // [every SLOW[0] .. SLOW[NS-1] passes, 1 .. G per pass]
     int li = (int)(u * (float)(nlev - 1) + 0.5f);
     if (li < 0) li = 0;
     if (li > nlev - 1) li = nlev - 1;
     int k;
     if (li < NS) {
-      if (++dg_pc_[s] < VESTIGE_DEGRADE_SLOW_PASSES[li]) return;
-      dg_pc_[s] = 0; k = 1;
-    } else { dg_pc_[s] = 0; k = li - NS + 1; }
-    const uint64_t all = (G >= 64) ? ~0ull : ((1ull << G) - 1ull);
-    static const int8_t ty[8] = {kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig, kFigReverse, kFigRest, kFigDecimate};
-    for (int m = 0; m < k; m++) {
-      const uint64_t free = all & ~dg_mask_[s];
-      int i;
-      if (free) {                                          // first step: an unmutated step, uniform
-        int r = TimingPick(__builtin_popcountll(free));
-        i = 0; for (;; i++) if ((free >> i) & 1ull) { if (r == 0) break; r--; }
-      } else i = TimingPick(G);                            // all mutated: any step
-      const int t = ty[TimingPick(8)];
-      const int8_t sub = (t == kFigRest) ? 1 : (t == kFigDecimate) ? (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)] : 0;
-      int len = VESTIGE_DEGRADE_LEN_MIN + TimingPick(VESTIGE_DEGRADE_LEN_MAX - VESTIGE_DEGRADE_LEN_MIN + 1);
-      if (len > G - i) len = G - i;                        // clipped at the pass end
-      const int8_t life = (int8_t)(VESTIGE_DEGRADE_LIFE_MIN + TimingPick(VESTIGE_DEGRADE_LIFE_MAX - VESTIGE_DEGRADE_LIFE_MIN + 1));
-      const uint16_t id = ++dg_nid_[s];
-      for (int j = i; j < i + len; j++) {                  // overwrites the steps it covers
-        dg_ty_[s][j] = (int8_t)t; dg_sub_[s][j] = sub; dg_st_[s][j] = (int8_t)i; dg_ln_[s][j] = (int8_t)len;
-        dg_lf_[s][j] = life; dg_id_[s][j] = id;
-        dg_mask_[s] |= 1ull << j;
-      }
+      if (++ln_pc_[s] < VESTIGE_TIMING_CCW_SLOW_PASSES[li]) k = 0;
+      else { ln_pc_[s] = 0; k = 1; }
+    } else { ln_pc_[s] = 0; k = li - NS + 1; }
+    for (int l = 0; l < kErrTypes; l++) {
+      int& nh = ln_nh_[s][l];
+      for (int h = 0; h < nh; h++)                         // one pass older
+        if (--ln_hit_[s][l][h].life <= 0) { ln_hit_[s][l][h] = ln_hit_[s][l][--nh]; h--; }
+      for (int m = 0; m < k; m++) LineCcwAdd(s, l, G);
     }
   }
-  // Step i still belongs to the same event as step i - 1 (an event's run).
-  bool DgSameAsPrev(int s, int i) const {
-    return i > 0 && ((dg_mask_[s] >> (i - 1)) & 1ull) && dg_id_[s][i - 1] == dg_id_[s][i];
+  // CCW params: one new hit on layer l (see VESTIGE_TIMING_CCW_*). It cuts the
+  // steps it covers out of the layer's other hits (a hit split in two keeps
+  // both parts, each a hit of its own).
+  void LineCcwAdd(int s, int l, int G) {
+    int& nh = ln_nh_[s][l];
+    LineHit* hit = ln_hit_[s][l];
+    const uint64_t all = (G >= 64) ? ~0ull : ((1ull << G) - 1ull);
+    uint64_t cov = 0;
+    for (int h = 0; h < nh; h++) cov |= LineMask(hit[h].start, hit[h].len);
+    const uint64_t free = all & ~cov;
+    int i;
+    if (free) {                                            // first step: an uncovered step, uniform
+      int r = TimingPick(__builtin_popcountll(free));
+      i = 0; for (;; i++) if ((free >> i) & 1ull) { if (r == 0) break; r--; }
+    } else i = TimingPick(G);                              // all covered: any step
+    int t; int8_t sub = 0;
+    if (l == kErrTiming) {
+      static const int8_t ty[5] = {kFigStutter, kFigRepeat, kFigDouble, kFigRatchet, kFigRetrig};
+      t = ty[TimingPick(5)];
+    } else if (l == kErrCondition) {
+      if (TimingPick(2) == 0) { t = kFigRest; sub = 1; }
+      else { t = kFigDecimate; sub = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)]; }
+    } else t = kFigReverse;
+    int len = VESTIGE_TIMING_CCW_LEN_MIN + TimingPick(VESTIGE_TIMING_CCW_LEN_MAX - VESTIGE_TIMING_CCW_LEN_MIN + 1);
+    if (len > G - i) len = G - i;                          // clipped at the pass end
+    const int8_t life = (int8_t)(VESTIGE_TIMING_CCW_LIFE_MIN + TimingPick(VESTIGE_TIMING_CCW_LIFE_MAX - VESTIGE_TIMING_CCW_LIFE_MIN + 1));
+    const int e = i + len;
+    for (int h = 0; h < nh; h++) {                         // overwrite: cut [i, e) out of the layer's hits
+      LineHit& x = hit[h];
+      const int a = x.start, b = x.start + x.len;
+      if (b <= i || a >= e) continue;
+      const int left = i - a, right = b - e;
+      if (left > 0 && right > 0) {                         // split: the right part becomes a hit of its own
+        x.len = (int8_t)left;
+        LineHit& y = hit[nh++];                            // (hits stay disjoint: <= G <= kLineStore)
+        y = x; y.start = (int8_t)e; y.len = (int8_t)right;
+      } else if (left > 0) x.len = (int8_t)left;
+      else if (right > 0) { x.start = (int8_t)e; x.len = (int8_t)right; }
+      else { hit[h] = hit[--nh]; h--; }
+    }
+    LineHit& y = hit[nh++];
+    y.start = (int8_t)i; y.len = (int8_t)len; y.type = (int8_t)t; y.sub = sub; y.age = 0; y.life = life;
   }
   // Once per audio block: one pending change per layer per loop voice. A pass
   // start only renders; the changes for the NEXT pass are spread over the
@@ -2757,13 +2805,13 @@ class Vestige : public Module {
   void FzRhyStart(int s, uint32_t now) {
     FzRhyNewWords();
     rhy_t_[kFzR] = 0;
-    DgClear(kFzR, true);                                  // K3 mode 2: a new freeze starts clean (degrade
-    ln_cells_[kFzR] = 0;                                  //  evolution + the CW lines: re-seeded, FzPlanLayers)
+    ln_fresh_[kFzR] = true;                               // K3 mode 2: a new freeze starts clean (CCW params:
+    ln_cells_[kFzR] = 0;                                  //  its first pass clean; CW: re-seeded; FzPlanLayers)
     fz_pdiv_ = fz_sdiv_[s];
     fz_ppin_ = tgrid_.PinsHeld() ? fz_spin_[s] : 0;       // K2 free-run: a free / pinned freeze keeps its pass
     FzRhyPlan((now - cap_start_[s]) % FzPassLen());
   }
-  // ---- K3 mode 2 on the FREEZE side: the CW layers / degrade ---------------
+  // ---- K3 mode 2 on the FREEZE side: the three layers (CW / CCW params) ----
   // Planned on kFzR like a loop voice's pass (G = the loop side's non-rhythm
   // step count), rendered into the freeze's per-step LPG events: stutter /
   // repeat / retrig = a strike, double = 2 strikes, ratchet = 4 (the MIN_STEP
@@ -2797,26 +2845,15 @@ class Vestige : public Module {
     for (int i = 0; i < G; i++)
       if (fz_rvn_[i] > 0) for (int j = i; j < i + fz_rvn_[i] && j < G; j++) fz_stk_[j] = 0;
   }
-  // The CW layers: the loop side's lines (seed / evolve / age, TimingPlanLayers)
+  // The three layers (CW or CCW params): the loop side's lines (LinesPass)
   // on kFzR, this pass's segment rendered as above.
-  void FzPlanLayers(int G) {
+  void FzPlanLayers(int G, bool ccw) {
     const int s = kFzR;
-    const int LP = (G >= VESTIGE_TIMING_LINE_STEPS) ? 1 : (VESTIGE_TIMING_LINE_STEPS + G - 1) / G;   // passes per line
-    const int C = G * LP;
+    const int C = G * LinePasses(G, ccw);
     if (ln_cells_[s] != C) { LineClear(s); ln_cells_[s] = C; ln_pass_[s] = -1; }
-    ln_pass_[s] = (ln_pass_[s] + 1) % LP;
+    ln_pass_[s] = (ln_pass_[s] + 1) % (C / G);
     const int seg0 = ln_pass_[s] * G;
-    for (int l = 0; l < kErrTypes; l++) {
-      const float lv = err_level_[l];
-      if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; continue; }
-      if (ln_nh_[s][l] == 0) { ln_ops_[s][l] = -1; continue; }   // empty: seed in the block tick
-      if (ln_ops_[s][l] > 0) LineMutate(s, l, lv, ln_ops_[s][l]);   // leftovers
-      ln_ops_[s][l] = LineOps(lv);                          // this pass's changes, one per block (TimingLayerTick)
-      for (int h = 0; h < ln_nh_[s][l]; h++) {
-        LineHit& x = ln_hit_[s][l][h];
-        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= VESTIGE_TIMING_LINE_LIFE) LineRetype(l, x);
-      }
-    }
+    LinesPass(s, G, seg0, ccw, ccw_level_);
     int8_t r2, r4; FzRatchets(G, &r2, &r4);
     for (int l = 0; l < kErrTypes; l++)
       for (int h = 0; h < ln_nh_[s][l]; h++) {
@@ -2828,23 +2865,6 @@ class Vestige : public Module {
       }
     FzNoStrikeInReverse(G);
   }
-  // Degrade: the freeze's own mutation events (DgMutate on kFzR), mapped as
-  // FzPlanLayers maps a multi-step hit; each run of steps an event still owns
-  // (overwritten steps split it) counts as its hit in the pass: strikes /
-  // reverse gate from the run's first step, the gate over the run.
-  void FzPlanDegrade(int G) {
-    const int s = kFzR;
-    DgMutate(s, G, dg_level_);
-    int8_t r2, r4; FzRatchets(G, &r2, &r4);
-    for (int i = 0; i < G; i++) {
-      if (!((dg_mask_[s] >> i) & 1ull)) continue;
-      const bool first = !DgSameAsPrev(s, i);
-      int rvn = 1;
-      if (first) while (i + rvn < G && DgSameAsPrev(s, i + rvn)) rvn++;
-      FzEvent(i, dg_ty_[s][i], dg_sub_[s][i], first, rvn, r2, r4);
-    }
-    FzNoStrikeInReverse(G);
-  }
   // Plan a pass; el0 > 0 joins it mid-way (the hits behind it are skipped).
   void FzRhyPlan(uint32_t el0 = 0) {
     fz_L_ = FzPassLen();
@@ -2852,9 +2872,10 @@ class Vestige : public Module {
     for (int i = 0; i < VESTIGE_TIMING_LAYER_MAX_STEPS; i++) { fz_cnd_[i] = 0; fz_stk_[i] = 0; fz_rst_[i] = 0; fz_rvn_[i] = 0; }
     if (fz_rg_on_) FzRevClose();                          // a reverse gate ends with its pass at the latest
     // The K3 mode of this pass: 1 the rhythm (mode 1, either half), 2 the CW
-    // layers, 3 degrade (mode 2 CCW). Read once, at the pass start.
-    const int fm = (rhy_level_ > 0.f) ? 1 : (err_level_[kErrTiming] > 0.f) ? 2 : (dg_level_ > 0.f) ? 3 : 0;
-    if (fm == 2 && fz_fm_ != 2) LineClear(kFzR);          // entering the CW layers: fresh lines (mode 1 wrote them)
+    // layers' CW params, 3 their CCW params. Read once, at the pass start.
+    const int fm = (rhy_level_ > 0.f) ? 1 : (err_level_[kErrTiming] > 0.f) ? 2 : (ccw_level_ > 0.f) ? 3 : 0;
+    if (fm == 2 && fz_fm_ != 2) LineClear(kFzR);          // entering the CW params: fresh lines (mode 1 wrote them)
+    if (fm == 3 && fz_fm_ != 3) { LineClear(kFzR); ln_fresh_[kFzR] = true; }   // the CCW params: fresh, first pass clean
     fz_fm_ = fm;
     fz_lpg_on_ = fm != 0 && fz_pdiv_ >= 0;                // the LPG engages / bypasses at the pass start
     if (fz_lpg_on_ && fm == 1) {                          // (as a loop: the depth at the pass start)
@@ -2883,10 +2904,10 @@ class Vestige : public Module {
       if (VESTIGE_FRZ_LPG_MODEL == 1)                     // B: a rest damps the LPG instead of muting
         for (int i = 0; i < G; i++) if (fz_cnd_[i] == 1) { fz_cnd_[i] = 0; fz_rst_[i] = 1; }
       fz_G_ = G; fz_nb_ = FzBnd(1);
-    } else if (fz_lpg_on_) {                              // mode 2: the CW layers / degrade
+    } else if (fz_lpg_on_) {                              // mode 2: the three layers (CW / CCW params)
       const int G = TimingStepCount((double)fz_L_, false, 0.f);   // (the loop side's non-rhythm step)
       const uint32_t keep = timing_rng_; timing_rng_ = fz_rng_;
-      if (fm == 2) FzPlanLayers(G); else FzPlanDegrade(G);
+      FzPlanLayers(G, fm == 3);
       fz_rng_ = timing_rng_; timing_rng_ = keep;
       if (VESTIGE_FRZ_LPG_MODEL == 1)                     // B: a rest damps the LPG instead of muting
         for (int i = 0; i < G; i++) if (fz_cnd_[i] == 1) { fz_cnd_[i] = 0; fz_rst_[i] = 1; }
@@ -3057,11 +3078,16 @@ class Vestige : public Module {
     sl_n_[s] = 0; TimingCond(s, 0);
     var_last_[s] = false;
     const bool rhythm = rhy_level_ > 0.f;
-    const float dgl = rhythm ? 0.f : dg_level_;             // K3 mode 2 CCW: degrade (read once per pass)
+    const float ccwl = rhythm ? 0.f : ccw_level_;           // K3 mode 2: the CCW params' depth (read once per pass)
+    const bool ccw = ccwl > 0.f;
     const bool any = rhythm || err_level_[kErrTiming] > 0.f || err_level_[kErrCondition] > 0.f || err_level_[kErrPlayback] > 0.f
-                  || dgl > 0.f;
-    if (!any) { LineClear(s); return; }
-    if (ln_rhythm_[s] != rhythm) { LineClear(s); ln_rhythm_[s] = rhythm; }   // the two halves never share lines
+                  || ccw;
+    if (!any) { LineClear(s); ln_fresh_[s] = true; return; }   // (re-entering the CCW params: a first pass)
+    if (ln_rhythm_[s] != rhythm || ln_ccw_[s] != ccw) {      // the halves / modes never share lines
+      LineClear(s);
+      if (ccw) ln_fresh_[s] = true;
+      ln_rhythm_[s] = rhythm; ln_ccw_[s] = ccw;
+    }
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
     const double min_step = tgrid_.MinStep();
     // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to the
@@ -3069,29 +3095,16 @@ class Vestige : public Module {
     // VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^STEP_EXP
     // (long, ambient loops glitch slower: 8 s = 250 ms at 0.5).
     const int G = TimingStepCount(pass_out, rhythm, rhy_level_);
-    const int LP = (G >= VESTIGE_TIMING_LINE_STEPS) ? 1 : (VESTIGE_TIMING_LINE_STEPS + G - 1) / G;   // passes per line
-    const int C = G * LP;
+    const int C = G * LinePasses(G, ccw);
     if (ln_cells_[s] != C) { LineClear(s); ln_cells_[s] = C; ln_pass_[s] = -1; }
-    ln_pass_[s] = (ln_pass_[s] + 1) % LP;
+    ln_pass_[s] = (ln_pass_[s] + 1) % (C / G);
     const int seg0 = ln_pass_[s] * G;
     const bool ok4 = pass_out / (double)G / 4.0 >= min_step;
     const bool ok2 = pass_out / (double)G / 2.0 >= min_step;
     const bool okr = GuardReady(s);
     if (rhythm) TimingPlanRhythm(s, G, seg0);
-    // Evolve + age (the CW layers).
-    for (int l = 0; l < kErrTypes && !rhythm; l++) {
-      const float lv = err_level_[l];
-      if (!(lv > 0.f) || !LayerOn(l)) { ln_nh_[s][l] = 0; ln_ops_[s][l] = 0; continue; }
-      if (ln_nh_[s][l] == 0) { ln_ops_[s][l] = -1; continue; }   // empty: seed in the block tick (no hits to age)
-      if (ln_ops_[s][l] > 0) LineMutate(s, l, lv, ln_ops_[s][l]);   // leftovers (a pass shorter than the spread)
-      ln_ops_[s][l] = LineOps(lv);                          // this pass's changes, one per block (TimingLayerTick)
-      for (int h = 0; h < ln_nh_[s][l]; h++) {               // a hit in this pass plays once more
-        LineHit& x = ln_hit_[s][l][h];
-        if (x.start + x.len > seg0 && x.start < seg0 + G && ++x.age >= VESTIGE_TIMING_LINE_LIFE) LineRetype(l, x);
-      }
-      timing_edits_++;
-    }
-    if (dgl > 0.f) DgMutate(s, G, dgl);                     // degrade: this pass's mutations (they stay)
+    // K3 mode 2: this pass's changes to the three lines (CW / CCW params).
+    if (!rhythm) timing_edits_ += (uint32_t)LinesPass(s, G, seg0, ccw, ccwl);
     // Render. src = which step's material plays (0..G-1), dir = +1 / -1.
     int8_t src[VESTIGE_TIMING_LAYER_MAX_STEPS], dir[VESTIGE_TIMING_LAYER_MAX_STEPS];
     int8_t rat[VESTIGE_TIMING_LAYER_MAX_STEPS], cnd[VESTIGE_TIMING_LAYER_MAX_STEPS];
@@ -3128,27 +3141,6 @@ class Vestige : public Module {
       const LineHit& x = ln_hit_[s][kErrCondition][h];
       int a, b; if (!seg_cells(x, &a, &b)) continue;
       for (int i = a; i < b; i++) cnd[i] = x.sub;
-    }
-    // Degrade: each mutated step, rendered as its event's step would be in a
-    // CW layer hit of the event's start / length (stutter: the len steps
-    // before as a block; repeat: the step before the event, held; retrig: the
-    // loop from its first step; reverse: the event's span mirrored, on the
-    // clean steps; the ratchets' MIN_STEP fallback). An overwritten step plays
-    // its newer event; the older event's other steps keep their place in it.
-    if (dgl > 0.f && dg_G_[s] == G) for (int i = 0; i < G; i++) {
-      if (!((dg_mask_[s] >> i) & 1ull)) continue;
-      const int st = dg_st_[s][i], ln = dg_ln_[s][i];
-      switch (dg_ty_[s][i]) {
-        case kFigStutter:  src[i] = (int8_t)(((i - ln) % G + G) % G); break;
-        case kFigRepeat:   src[i] = (int8_t)(((st - 1) % G + G) % G); break;
-        case kFigDouble:   if (ok2) rat[i] = 2; break;
-        case kFigRatchet:  rat[i] = ok4 ? 4 : (ok2 ? 2 : 1); break;
-        case kFigRetrig:   src[i] = (int8_t)((i - st) % G); break;
-        case kFigReverse:  if (okr) { src[i] = (int8_t)(2 * st + ln - 1 - i); dir[i] = -1; } break;
-        case kFigRest:
-        case kFigDecimate: cnd[i] = dg_sub_[s][i]; break;
-        default: break;
-      }
     }
     for (int i = 0; i < G; i++) {
       if (i < VESTIGE_TIMING_SLICE_MAX) sl_order_[s][i] = (cnd[i] == 1) ? (int8_t)-1 : src[i];
@@ -3193,7 +3185,7 @@ class Vestige : public Module {
       }
     }
     sl_n_[s] = G; cur_pat_[s] = 0; timing_patterns_++;
-    if (ln_nh_[s][0] + ln_nh_[s][1] + ln_nh_[s][2] > 0 || (dgl > 0.f && dg_mask_[s])) { cur_var_[s] = kVarRot; timing_vars_++; }
+    if (ln_nh_[s][0] + ln_nh_[s][1] + ln_nh_[s][2] > 0) { cur_var_[s] = kVarRot; timing_vars_++; }
   }
   // Per sample, per loop voice (after the head advance): instance-start plan,
   // then the next pending hit. Cost: one compare while nothing is pending; one
@@ -4047,7 +4039,7 @@ class Vestige : public Module {
       if (VESTIGE_TIMING_MODE == 1) TimingDrawSlices(s);    // this loop's arrangement, for its whole life
       TimingMemClear(s); pm_cur_[s] = VESTIGE_TIMING_MEM_PASSES - 1;   // mode 2: fresh, empty memories;
       LineClear(s);                                            // mode 3: fresh, empty lines
-      DgClear(s, true);                                        //  and no degrade yet (its first pass clean)
+      ln_fresh_[s] = true;                                     //  (CCW params: its first pass clean)
       mute_d_[s] = mute_dt_[s] = 0.f; lrev_[s] = false;        //  the first pass plays memory 0
       decim_d_[s] = decim_dt_[s] = 0.f; decim_c_[s] = 0;
       var_last_[s] = false; cur_var_[s] = kVarNone;
@@ -5386,12 +5378,15 @@ class Vestige : public Module {
   float    decim_lp_[VESTIGE_TIMING_DECIM_N][5] = {};     // LP coefs per factor (MBSetLP)
   uint32_t timing_edits_ = 0;                             // diag: memory edits
   // Timing mode 3 (layers), per loop voice slot.
-  LineHit  ln_hit_[kRhySlots][kErrTypes][VESTIGE_TIMING_LINE_MAX_CELLS / 2] = {};
+  LineHit  ln_hit_[kRhySlots][kErrTypes][kLineStore] = {};
   int      ln_nh_[kRhySlots][kErrTypes] = {};
   int      ln_cells_[kRhySlots]    = {0};      // the line length the hits were placed on
   int      ln_pass_[kRhySlots]     = {0};      // which pass of the line plays
   int      ln_ops_[kRhySlots][kErrTypes] = {};   // changes still pending for the next pass
   bool     ln_rhythm_[kRhySlots]   = {};       // the lines hold the K3 CCW rhythm
+  bool     ln_ccw_[kRhySlots]      = {};       // the lines hold mode 2's CCW-params hits
+  bool     ln_fresh_[kRhySlots]    = {};       // CCW params: the next plan is a first pass (no new hits)
+  int      ln_pc_[kRhySlots]       = {};       // CCW params: passes since the last new hits (slow levels)
   uint32_t rhy_rot_[kRhySlots]     = {};       // per-loop rotation word: stutters (+ decimates, >> 8)
   uint32_t rhy_rrot_[kRhySlots]    = {};       //  and rests
   int32_t  rhy_t_[kRhySlots]       = {};       // running step count (the polymeter's clock)
@@ -5401,19 +5396,7 @@ class Vestige : public Module {
   int32_t  rkv_t1_[kRhySlots]      = {};
   int8_t   rkv_voice_[kRhySlots]   = {};       //  0 stutters, 1 rests
   int8_t   rkv_dk_[kRhySlots]      = {};       //  +1 / -1 hit
-  // K3 mode 2 CCW: DEGRADE, per planner index (loop voices + kFzR; DgMutate).
-  uint64_t dg_mask_[kRhySlots]     = {};       // the mutated steps (bit i = step i)
-  int8_t   dg_ty_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   // per mutated step: its kFig type
-  int8_t   dg_sub_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  //  and sub (rest 1, decimate factor)
-  int      dg_G_[kRhySlots]        = {};       // the step count the mutations were placed on
-  int      dg_pc_[kRhySlots]       = {};       // passes since the last mutation (the slow levels)
-  bool     dg_fresh_[kRhySlots]    = {};       // its next plan is the activation pass (no mutation)
-  int8_t   dg_st_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   // per mutated step: its event's first step
-  int8_t   dg_ln_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   //  its length (steps, clipped)
-  int8_t   dg_lf_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   //  its passes left (incl. this one)
-  uint16_t dg_id_[kRhySlots][VESTIGE_TIMING_LAYER_MAX_STEPS] = {};   //  its id (runs of one event)
-  uint16_t dg_nid_[kRhySlots]      = {};       // the last event id handed out
-  volatile float dg_level_ = 0.f;                         // K3 mode-2 CCW degrade depth (0 = off)
+  volatile float ccw_level_ = 0.f;                        // K3 mode-2 CCW depth (the CCW params; 0 = off)
   volatile float rhy_level_ = 0.f;                        // K3 mode-1 rhythm depth, either half (0 = off)
   volatile int   rhy_side_  = 0;                          //  its half: kRhyCcw / kRhyCw (which table)
   int8_t   tl_src_[VESTIGE_VOICE_SLABS][VESTIGE_TIMING_LAYER_MAX_STEPS] = {},   // this pass's render (diag)
@@ -5449,7 +5432,7 @@ class Vestige : public Module {
   float    fz_dx_ = 1.f, fz_dinc_ = 0.f, fz_z1_ = 0.f, fz_z2_ = 0.f;   // LPG decay progress + step, filter state
   int8_t   fz_rvn_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: a reverse gate of n steps starts here (mode 2)
   bool     fz_rg_on_ = false; int fz_rg_i0_ = 0, fz_rg_i1_ = 0;   // the reverse gate playing: its steps [i0, i1)
-  int      fz_fm_ = 0;                                    // the freeze pass's K3 mode: 0 off, 1 rhythm, 2 layers, 3 degrade
+  int      fz_fm_ = 0;                                    // the freeze pass's K3 mode: 0 off, 1 rhythm, 2 layers CW params, 3 layers CCW params
   int8_t   fz_cnd_[VESTIGE_TIMING_LAYER_MAX_STEPS] = {};  // per step: 0 clean, 1 rest, N decimate xN                    // own RNG: level 0 never touches VestigeRand
   uint32_t timing_trigs_ = 0, timing_returns_ = 0;       // diag
   int      last_trig_slot_ = -1; uint32_t last_trig_at_ = 0;
