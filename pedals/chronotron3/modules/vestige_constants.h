@@ -477,7 +477,9 @@ static constexpr float  VESTIGE_K3_DEADZONE          = 0.04f;
 // K3 mode 2 (SW2 MIDDLE) CCW half = DEGRADE: per loop (and per freeze, on the
 // freeze side's virtual pass) mutations ACCUMULATE pass by pass and stay. A
 // mutation gives one step of the pass a random event, uniform over (stutter,
-// repeat, double, ratchet, retrig, reverse, rest) over 1 + its next steps:
+// repeat, ratchet, retrig, reverse, rest, speed) over 1 + its next steps
+// (ratchet and speed carry a GRADED count by the CCW depth u, see
+// VESTIGE_TIMING_GRADE_* below):
 // length uniform DEGRADE_LEN_MIN..MAX steps, clipped at the pass end, rendered
 // like a CW layer hit of that length. A non-rest event carries the DECIMATE
 // quality with probability DEGRADE_DECIM_P_MIN + DEGRADE_DECIM_P_SPAN x u
@@ -564,13 +566,21 @@ static constexpr int    VESTIGE_TIMING_RHY_HALF_KR_MIN_CCW = 2;
 // RATCHETS at the top end (engine 0): from depth RAT_U0 on, each stutter of a
 // pass (drawn per pass) becomes a ratchet with chance p = RAT_P_MAX x
 // ramp^RAT_P_CURVE, ramp = (u - RAT_U0) / (1 - RAT_U0) (curve > 1: rare at the
-// start; the builder: not forbidden there, just too often); a ratchet is a QUADRUPLE (4 retrigs in
-// its step) with chance RAT_Q_MAX x ramp, else a DOUBLE (2). Steps shorter
-// than VESTIGE_TIMING_MIN_STEP_MS per retrig fall back (4 -> 2 -> none).
+// start; the builder: not forbidden there, just too often); its retrig count
+// is GRADED by the ramp (VESTIGE_TIMING_GRADE_* below: 2 / 2-3 / 2-3-4). Steps
+// shorter than VESTIGE_TIMING_MIN_STEP_MS per retrig fall back to the largest
+// count that fits (down to 1 = none).
 static constexpr float  VESTIGE_TIMING_RHY_RAT_U0     = 0.6f;
 static constexpr float  VESTIGE_TIMING_RHY_RAT_P_MAX  = 0.5f;
 static constexpr float  VESTIGE_TIMING_RHY_RAT_P_CURVE = 2.f;
-static constexpr float  VESTIGE_TIMING_RHY_RAT_Q_MAX  = 0.5f;
+// GRADED COUNT (every ratchet, mode 1 + mode 2, loop + freeze; and the mode 2
+// SPEED event's factor): by the intensity g (mode 1: the ratchet ramp above;
+// mode 2: the half's depth): g < GRADE_3_FROM -> 2 only; up to GRADE_4_FROM ->
+// 2 or 3 (equal chance); from GRADE_4_FROM -> 2, 3 or 4 (equal). Drawn when the
+// event is made (a CW line hit: at its creation / retype; degrade: at the
+// mutation; mode 1: per pass with the ratchet itself).
+static constexpr float  VESTIGE_TIMING_GRADE_3_FROM = 1.f / 3.f;
+static constexpr float  VESTIGE_TIMING_GRADE_4_FROM = 2.f / 3.f;
 // Engine 0 FIXED ROTATIONS — used only with RHY_ROT_RANDOM false (the default
 // draws them per loop, above). E(k, n) rotated by rot: hit at i if
 // ((i + rot) % n * k) % n < k. S_ROT rotates the stutter cycle (0 .. S_CYCLE-1),
@@ -1047,7 +1057,7 @@ static constexpr float  VESTIGE_TIMING_FIG_WEIGHT[VESTIGE_TIMING_FIGS] = {
   1.f,   // DECIMATE
   1.f,   // CLEAN
 };
-// RATCHET only from this K3 level on (below it: weight 0; ones already placed
+// (Pass memory mode only.) RATCHET only from this K3 level on (below it: weight 0; ones already placed
 // age out). 0.5 = noon.
 static constexpr float  VESTIGE_TIMING_RATCHET_FROM = 0.5f;
 // DECIMATE: the loop's output is held for N samples (48 kHz / N, an integer: no
@@ -1068,7 +1078,8 @@ static constexpr float  VESTIGE_TIMING_MUTE_MS    = 5.f;         // rest fade (e
 // ---- Timing mode 3: LAYERS ---------------------------------------------------
 // Three error LAYERS play at once, on top of each other, each its own rhythm
 // line — like drum parts. K3 sets all three levels together:
-//   TIMING     STUTTER, REPEAT, DOUBLE, RATCHET, RETRIG
+//   TIMING     STUTTER, REPEAT, RATCHET (graded 2 / 3 / 4), RETRIG, SPEED
+//              (graded 2x / 3x / 4x, tape-style: pitch up with it)
 //   CONDITION  REST, DECIMATE
 //   PLAYBACK   REVERSE
 // A layer at level 0 is off. STEPS: the pass is cut into G equal steps, G =
@@ -1119,9 +1130,12 @@ static_assert(VESTIGE_TIMING_LINE_STEPS <= VESTIGE_TIMING_LINE_MAX_CELLS, "line 
 // weights are all 0 is off.
 static constexpr float  VESTIGE_TIMING_W_STUTTER = 1.f;         // TIMING
 static constexpr float  VESTIGE_TIMING_W_REPEAT  = 1.f;
-static constexpr float  VESTIGE_TIMING_W_DOUBLE  = 0.f;
-static constexpr float  VESTIGE_TIMING_W_RATCHET = 0.f;         // (only from VESTIGE_TIMING_RATCHET_FROM)
+static constexpr float  VESTIGE_TIMING_W_RATCHET = 1.f;         // retrigs per step graded 2 / 3 / 4 (DOUBLE folded in)
 static constexpr float  VESTIGE_TIMING_W_RETRIG  = 1.f;         // the hit plays the loop from its start
+// SPEED: for the hit's span the voice reads its material at k x (k graded
+// 2 / 3 / 4) from the span start, pitch up with it (tape), then returns to the
+// timeline in phase at the span end. Freeze: the pad's grains read at k x.
+static constexpr float  VESTIGE_TIMING_W_SPEED   = 1.f;
 static constexpr float  VESTIGE_TIMING_W_REST    = 1.f;         // CONDITION
 static constexpr float  VESTIGE_TIMING_W_DECIM   = 1.f;
 static constexpr float  VESTIGE_TIMING_W_REVERSE = 1.f;         // PLAYBACK

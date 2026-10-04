@@ -3911,7 +3911,7 @@ static void TestK3RhythmPoly() {
       const int Ns = RhyNs(c.side), Nr = RhyNr(c.side);
       const double pr = R.stut ? (double)R.rat / (double)R.stut : 0.0, pq = R.rat ? (double)R.quad / (double)R.rat : 0.0;
       const double ramp = Vestige::RhyRatRamp(c.u);
-      const double want_p = VESTIGE_TIMING_RHY_RAT_P_MAX * pow(ramp, VESTIGE_TIMING_RHY_RAT_P_CURVE), want_q = VESTIGE_TIMING_RHY_RAT_Q_MAX * ramp;
+      const double want_p = VESTIGE_TIMING_RHY_RAT_P_MAX * pow(ramp, VESTIGE_TIMING_RHY_RAT_P_CURVE), want_q = 1.0;   // (graded 2 / 3 / 4 now, all kFigRatchet: the old x4 share is not checked — discovery)
       printf("      %-3s u=%.2f E(%d,%d) vs E(%d,%d): base %5.1f%% of %ld steps, on-1 bad %ld/%ld, unexplained runs %ld/%ld, varied S %ld R %ld (min gap %ld), "
              "ratchets %ld/%ld = %.3f (want %.3f), x4 %.2f (want %.2f)\n",
              sn[c.side], (double)c.u, Vestige::RhyPolyKs(c.u, c.side), Ns, Vestige::RhyPolyKr(c.u, c.side), Nr,
@@ -3932,7 +3932,7 @@ static void TestK3RhythmPoly() {
       tot_vs += R.var_s; tot_vr += R.var_r;
       if (c.u <= VESTIGE_TIMING_RHY_RAT_U0 && R.rat != 0) rat_low = false;
       if (c.u > VESTIGE_TIMING_RHY_RAT_U0 && c.u < 0.9f && !(R.rat > 0 && pr < 0.2 && fabs(pr - want_p) < 0.05)) rat_mid = false;
-      if (c.u == 1.f && !(fabs(pr - want_p) < 0.06 && fabs(pq - want_q) < 0.1)) rat_top = false;
+      if (c.u == 1.f && !(fabs(pr - want_p) < 0.06)) rat_top = false;   // (x4 share: graded now, not checked)
     }
     Check(all_ok, "planner: only one-step stutters + rests + decimates (+ ratchets on stutters), one per step, inside the pass");
     Check(words_ok, "planner: a loop's rotation words stay fixed while the rhythm does not change");
@@ -3979,7 +3979,7 @@ static void TestK3RhythmPoly() {
             "decimate fade: K3 rhythm decimates fade over RHY_DECIM_FADE_MS (15 ms), the mode-2 layers over MUTE_MS"); }
     Check(rat_low, "ratchets: none up to depth 0.6");
     Check(rat_mid, "ratchets: rare just past 0.6 (p = 0.5 x ramp^2: 0.125 at depth 0.8)");
-    Check(rat_top, "ratchets: at full depth half the stutters ratchet (p 0.5), half of those x4, the rest x2"); }
+    Check(rat_top, "ratchets: at full depth half the stutters ratchet (p 0.5)"); }
   // (7) The hit variation's scheduler: the 4th / 5th run of its voice.
   { RhyKvRes K;
     for (int side = kRhyCcw; side <= kRhyCw; side++)
