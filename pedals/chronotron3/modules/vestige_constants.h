@@ -109,6 +109,13 @@ static constexpr float  VESTIGE_K2_DEADZONE = 0.06f;   // ±6% around noon: shor
 // becomes T), ceiling = the full
 // buffer (T_MAX), and T is then SET to Q. Direction unchanged (CCW = reverse).
 static constexpr float  VESTIGE_K2_FREE_ZONE = 0.02f;
+// K2 taper (2026-10-04, the builder): per half, from noon — the first SEG1 of
+// the travel T_MIN..T1_MS, up to SEG2 T1..T2_MS (the musical range), the rest
+// T2..T_MAX (long times compressed). Each section logarithmic.
+static constexpr float  VESTIGE_K2_SEG1  = 0.15f;
+static constexpr float  VESTIGE_K2_SEG2  = 0.80f;
+static constexpr float  VESTIGE_K2_T1_MS = 100.f;
+static constexpr float  VESTIGE_K2_T2_MS = 2000.f;
 
 // ---------------------------------------------------------------------------
 // T — THE MASTER PERIOD (rework stage 1, plan §4.3). K2's magnitude (above) or

@@ -325,7 +325,7 @@ class Vestige : public Module {
              : 0.f;
     // Freeze side: K5 CCW = also a FADE-IN for each new freeze, ATTACK_MAX_S x
     // u5^ATTACK_CURVE (0 at noon / CW); the sustain starts once it completes.
-    frz_atk_s_ = (c5 < 0.f && u5 > 0.f) ? VESTIGE_FREEZE_ATTACK_MAX_S * powf(u5, VESTIGE_FREEZE_ATTACK_CURVE) : 0.f;
+    frz_atk_s_ = 0.f;                                     // (K5 CCW freeze fade-in removed 2026-10-04)
     float atk_s = fade_u * VESTIGE_FADE_ATTACK_MAX_S;
     float rel_s = fade_u * VESTIGE_FADE_RELEASE_MAX_S;
     // Floor at a short declick so K5 hard-CCW is "instant" but not a 1-sample
@@ -3954,6 +3954,10 @@ class Vestige : public Module {
     c.free_zone      = VESTIGE_K2_FREE_ZONE;
     c.knob_move_eps  = VESTIGE_K2_MOVE_EPS;
     c.knob_follow_db = VESTIGE_K2_FOLLOW_DB;
+    c.knob_seg1      = VESTIGE_K2_SEG1;
+    c.knob_seg2      = VESTIGE_K2_SEG2;
+    c.knob_t1        = (size_t)(VESTIGE_K2_T1_MS * 48);   // (48 kHz samples, as T_MIN/T_MAX)
+    c.knob_t2        = (size_t)(VESTIGE_K2_T2_MS * 48);
     c.tap_release_ms = VESTIGE_TAP_RELEASE_MS;
     c.tap_agree      = VESTIGE_TAP_AGREE;
     c.step_ms        = VESTIGE_TIMING_STEP_MS;

@@ -53,6 +53,13 @@ struct DynquapotegConfig {
   float    free_zone;        // outer zone at each end: free-run (0 = none)
   float    knob_move_eps;    // raw travel that cancels a tapped T
   float    knob_follow_db;   // travel below which T does not move (ADC jitter)
+  // Knob taper: three log sections per half (from noon): travel 0..seg1 ->
+  // t_min..knob_t1, seg1..seg2 -> knob_t1..knob_t2, seg2..1 -> knob_t2..t_max.
+  // seg1 = 0 = one log section t_min..t_max.
+  float    knob_seg1;
+  float    knob_seg2;
+  size_t   knob_t1;
+  size_t   knob_t2;
   // ---- the tap ------------------------------------------------------------------
   uint32_t tap_release_ms;   // a press released before this is a tap
   float    tap_agree;        // a second interval within this fraction sets T
@@ -91,9 +98,14 @@ class Dynquapoteg {
     float mag = (fabsf(c) - cfg_.knob_deadzone) / (0.5f - cfg_.knob_deadzone);
     if (mag < 0.f) mag = 0.f;
     if (mag > 1.f) mag = 1.f;
-    const float lo = (float)cfg_.t_min;
-    const float hi = (float)cfg_.t_max;
-    size_t t = (size_t)(lo * powf(hi / lo, mag));
+    float lo = (float)cfg_.t_min, hi = (float)cfg_.t_max, x = mag;
+    if (cfg_.knob_seg1 > 0.f) {                       // three log sections
+      const float s1 = cfg_.knob_seg1, s2 = cfg_.knob_seg2;
+      if (mag < s1)      { hi = (float)cfg_.knob_t1; x = mag / s1; }
+      else if (mag < s2) { lo = (float)cfg_.knob_t1; hi = (float)cfg_.knob_t2; x = (mag - s1) / (s2 - s1); }
+      else               { lo = (float)cfg_.knob_t2; x = (mag - s2) / (1.f - s2); }
+    }
+    size_t t = (size_t)(lo * powf(hi / lo, x));
     if (t < cfg_.t_min) t = cfg_.t_min;
     if (t > cfg_.t_max) t = cfg_.t_max;
     return t;
