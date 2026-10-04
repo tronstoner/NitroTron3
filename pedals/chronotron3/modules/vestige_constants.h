@@ -1135,12 +1135,21 @@ static constexpr int    VESTIGE_TIMING_LINE_MAX_CELLS  = 64;    // line bound (6
 //      hit anywhere (the RAND path at chance 1)
 //   3. CCW: degrade lifespan ramps linearly from its value at FROM to
 //      TOP_CCW_LIFE_MIN .. _MAX at z = 1 (rounded)
+//   4. both halves: the max event length ramps linearly (rounded) from its
+//      normal max to TOP_LEN_MIN_AT_FULL at z = 1 (min stays 1). CCW: the
+//      degrade length max (LEN_MAX, rests REST_LEN_MAX); CW: the hit span
+//      max (TIMING_SPAN_MAX) for new hits and every grow (seed, add, grow op)
+//   5. both halves: no new rests at z = 1. CW: the CONDITION layer's REST
+//      weight x (1 - z) (the rest decimate); CCW: a drawn rest is redrawn,
+//      with chance z, uniformly among the 5 non-rest events. Live rests
+//      age out normally.
 static constexpr float  VESTIGE_M2_TOP_FROM          = 0.75f;
 static constexpr float  VESTIGE_M2_TOP_STEP_SCALE    = 0.5f;
 static constexpr int    VESTIGE_M2_TOP_OPS           = 8;
 static constexpr int    VESTIGE_M2_TOP_LIFE          = 2;
 static constexpr int    VESTIGE_M2_TOP_CCW_LIFE_MIN  = 2;
 static constexpr int    VESTIGE_M2_TOP_CCW_LIFE_MAX  = 4;
+static constexpr int    VESTIGE_M2_TOP_LEN_MIN_AT_FULL = 1;
 static_assert(VESTIGE_TIMING_LINE_STEPS <= VESTIGE_TIMING_LINE_MAX_CELLS, "line too long");
 // Type weights per layer — EDITABLE. 0 = that type is off; a layer whose
 // weights are all 0 is off.

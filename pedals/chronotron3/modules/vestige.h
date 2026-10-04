@@ -2047,8 +2047,10 @@ class Vestige : public Module {
     *sub = 0;
     if (l == kErrPlayback) return kFigReverse;
     if (l == kErrCondition) {
-      const float t = VESTIGE_TIMING_W_REST + VESTIGE_TIMING_W_DECIM;
-      if (TimingRand() * t < VESTIGE_TIMING_W_REST) { *sub = 1; return kFigRest; }
+      // Top zone: the REST weight x (1 - z) (no new rests at z = 1).
+      const float wr = VESTIGE_TIMING_W_REST * (1.f - M2TopZ(err_level_[kErrCondition]));
+      const float t = wr + VESTIGE_TIMING_W_DECIM;
+      if (TimingRand() * t < wr) { *sub = 1; return kFigRest; }
       *sub = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)];
       return kFigDecimate;
     }
@@ -2070,18 +2072,18 @@ class Vestige : public Module {
     if (t == h.type) t = LineDrawType(l, &sub);            // (a one-type layer keeps its type)
     h.type = (int8_t)t; h.sub = sub; h.age = 0;
   }
-  // Grow hit h cell by cell with chance fill (up to VESTIGE_TIMING_SPAN_MAX).
-  void LineGrow(int s, int l, int h, float fill) {
+  // Grow hit h cell by cell with chance fill (up to smax: LineSpanMax).
+  void LineGrow(int s, int l, int h, float fill, int smax) {
     LineHit& x = ln_hit_[s][l][h];
     const uint64_t blocked = LineBlocked(s, l, h);          // the other hits do not move while it grows
-    while (x.len < VESTIGE_TIMING_SPAN_MAX && TimingRand() < fill && LineFitsIn(s, x.start, x.len + 1, blocked)) x.len++;
+    while (x.len < smax && TimingRand() < fill && LineFitsIn(s, x.start, x.len + 1, blocked)) x.len++;
   }
-  bool LineAdd(int s, int l, int start, float fill) {
+  bool LineAdd(int s, int l, int start, float fill, int smax) {
     if (ln_nh_[s][l] >= kLineMaxHits || !LineFits(s, l, start, 1, -1)) return false;
     LineHit& x = ln_hit_[s][l][ln_nh_[s][l]++];
     x.start = (int8_t)start; x.len = 1; x.age = 0;
     int8_t sub; x.type = (int8_t)LineDrawType(l, &sub); x.sub = sub;
-    LineGrow(s, l, ln_nh_[s][l] - 1, fill);
+    LineGrow(s, l, ln_nh_[s][l] - 1, fill, smax);
     return true;
   }
   // A free cell for a new hit: a pulse (even) cell, or any cell if !pulse;
@@ -2110,6 +2112,7 @@ class Vestige : public Module {
     int k = (int)(LineTarget(s, level) + 0.5f); if (k < 1) k = 1; if (k > P) k = P;
     const int rot = TimingPick(P);
     const float fill = VESTIGE_TIMING_LINE_FILL_A + VESTIGE_TIMING_LINE_FILL_B * level;
+    const int smax = LineSpanMax(level);
     // Evenly spread (Euclidean) on distinct even cells: always free, always a
     // pause apart, so no search. Computed directly, in O(k) — the old search
     // per hit per cell (LineAdd / LineGrow) was a CPU spike at every new loop.
@@ -2133,7 +2136,7 @@ class Vestige : public Module {
         const int nx = hit[(i + 1) % k].start;
         limit = (nx > x.start) ? nx - 1 : (nx == 0 ? C - 1 : C);
       }
-      while (x.len < VESTIGE_TIMING_SPAN_MAX && TimingRand() < fill && x.start + x.len + 1 <= limit) x.len++;
+      while (x.len < smax && TimingRand() < fill && x.start + x.len + 1 <= limit) x.len++;
     }
   }
   // K3 mode 2 top zone (vestige_constants.h): z 0..1 above VESTIGE_M2_TOP_FROM, 0 below.
@@ -2144,6 +2147,12 @@ class Vestige : public Module {
     const int o0 = 1 + (int)(VESTIGE_TIMING_LINE_OPS_B * VESTIGE_M2_TOP_FROM + 0.5f);   // the value at FROM
     return (int)((float)o0 + (float)(VESTIGE_M2_TOP_OPS - o0) * M2TopZ(level) + 0.5f);
   }
+  // Top zone: an event's max length from `mx` down to TOP_LEN_MIN_AT_FULL at z = 1 (rounded).
+  static int M2TopLenMax(int mx, float u) {
+    if (!(u > VESTIGE_M2_TOP_FROM)) return mx;
+    return (int)((float)mx + (float)(VESTIGE_M2_TOP_LEN_MIN_AT_FULL - mx) * M2TopZ(u) + 0.5f);
+  }
+  static int LineSpanMax(float level) { return M2TopLenMax(VESTIGE_TIMING_SPAN_MAX, level); }
   static int LineLife(float level) { return (level > VESTIGE_M2_TOP_FROM) ? VESTIGE_M2_TOP_LIFE : VESTIGE_TIMING_LINE_LIFE; }
   // `ops` changes to layer l's line (see vestige_constants.h).
   void LineMutate(int s, int l, float level, int ops) {
@@ -2152,6 +2161,7 @@ class Vestige : public Module {
     float rnd = (level - VESTIGE_TIMING_LINE_RAND_FROM) / (1.f - VESTIGE_TIMING_LINE_RAND_FROM);
     if (rnd < 0.f) rnd = 0.f;
     if (level > VESTIGE_M2_TOP_FROM) rnd = 1.f;                 // top zone: every change a random hit anywhere
+    const int smax = LineSpanMax(level);
     for (int o = 0; o < ops; o++) {
       int& nh = ln_nh_[s][l];
       const int tgt = LineDrawTarget(s, level);
@@ -2159,12 +2169,12 @@ class Vestige : public Module {
         const int h = TimingPick(nh);
         ln_hit_[s][l][h] = ln_hit_[s][l][--nh];
         const int c = LineFreeCell(s, l, false);
-        if (c >= 0) LineAdd(s, l, c, fill);
+        if (c >= 0) LineAdd(s, l, c, fill, smax);
         continue;
       }
       if (nh < tgt) {
         const int c = LineFreeCell(s, l, true);
-        if (c >= 0) { LineAdd(s, l, c, fill); continue; }
+        if (c >= 0) { LineAdd(s, l, c, fill, smax); continue; }
       } else if (nh > tgt && nh > 0) {
         const int h = TimingPick(nh);
         ln_hit_[s][l][h] = ln_hit_[s][l][--nh];
@@ -2180,7 +2190,7 @@ class Vestige : public Module {
           if (LineFits(s, l, ns, x.len, h)) x.start = (int8_t)ns;
         } break;
         default: {                                              // grow / shrink by one cell
-          if (TimingPick(2) && LineFits(s, l, x.start, x.len + 1, h)) x.len++;
+          if (TimingPick(2) && x.len < smax && LineFits(s, l, x.start, x.len + 1, h)) x.len++;
           else if (x.len > 1) x.len--;
         } break;
       }
@@ -2230,12 +2240,14 @@ class Vestige : public Module {
         int r = TimingPick(__builtin_popcountll(free));
         i = 0; for (;; i++) if ((free >> i) & 1ull) { if (r == 0) break; r--; }
       } else i = TimingPick(G);                            // all mutated: any step
-      const int t = ty[TimingPick(6)];
+      int t = ty[TimingPick(6)];
+      // Top zone: a drawn rest is redrawn among the 5 non-rest events with chance z.
+      if (t == kFigRest && u > VESTIGE_M2_TOP_FROM && TimingRand() < M2TopZ(u)) t = ty[TimingPick(5)];
       // sub: a rest 1; a ratchet / speed its graded count by the depth u.
       const int8_t sub = (t == kFigRest) ? 1 : (t == kFigRatchet || t == kFigSpeed) ? (int8_t)GradedK(u) : 0;
       int8_t dec = 0;                                      // the decimate quality (non-rest only): factor, 0 none
       if (t != kFigRest && TimingRand() < pdec) dec = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)];
-      const int lmx = (t == kFigRest) ? VESTIGE_DEGRADE_REST_LEN_MAX : VESTIGE_DEGRADE_LEN_MAX;   // rests: shorter
+      const int lmx = M2TopLenMax((t == kFigRest) ? VESTIGE_DEGRADE_REST_LEN_MAX : VESTIGE_DEGRADE_LEN_MAX, u);   // rests: shorter; top zone: down to 1
       int len = VESTIGE_DEGRADE_LEN_MIN + TimingPick(lmx - VESTIGE_DEGRADE_LEN_MIN + 1);
       if (len > G - i) len = G - i;                        // clipped at the pass end
       // Lifespan by depth: LIFE_LOW_* just past noon .. LIFE_* at full CCW.
