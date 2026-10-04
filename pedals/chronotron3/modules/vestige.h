@@ -1069,7 +1069,7 @@ class Vestige : public Module {
       if (s < VESTIGE_VOICE_SLABS && !e.frozen) TimingStep(s, rev, L);
       else if (s < VESTIGE_VOICE_SLABS) { TimingCond(s, 0); lrev_[s] = false; }   // no timing: nothing hangs
     }
-    const bool orig = OrigPath(s, rho_d) && cur_view_[s] < 0;   // no T change has touched this loop
+    const bool orig = OrigPath(s, rho_d) && (s >= VESTIGE_VOICE_SLABS || cur_view_[s] < 0);   // no T change has touched this loop (freeze slots: no view)
     // Grain read rate: tape reads at the head rate (pitch follows), stretch at
     // 1 (pitch stays; only the head moves at rho). K1 multiplies either.
     const bool  stretch = (follow_mode_ == kFollowStretch);
