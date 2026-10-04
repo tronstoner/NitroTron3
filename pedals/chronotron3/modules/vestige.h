@@ -2189,7 +2189,10 @@ class Vestige : public Module {
       if (t != kFigRest && TimingRand() < pdec) dec = (int8_t)VESTIGE_TIMING_DECIM_FACTORS[TimingPick(VESTIGE_TIMING_DECIM_N)];
       int len = VESTIGE_DEGRADE_LEN_MIN + TimingPick(VESTIGE_DEGRADE_LEN_MAX - VESTIGE_DEGRADE_LEN_MIN + 1);
       if (len > G - i) len = G - i;                        // clipped at the pass end
-      const int8_t life = (int8_t)(VESTIGE_DEGRADE_LIFE_MIN + TimingPick(VESTIGE_DEGRADE_LIFE_MAX - VESTIGE_DEGRADE_LIFE_MIN + 1));
+      // Lifespan by depth: LIFE_LOW_* just past noon .. LIFE_* at full CCW.
+      const int lmin = (int)(VESTIGE_DEGRADE_LIFE_LOW_MIN + (VESTIGE_DEGRADE_LIFE_MIN - VESTIGE_DEGRADE_LIFE_LOW_MIN) * u + 0.5f);
+      const int lmax = (int)(VESTIGE_DEGRADE_LIFE_LOW_MAX + (VESTIGE_DEGRADE_LIFE_MAX - VESTIGE_DEGRADE_LIFE_LOW_MAX) * u + 0.5f);
+      const int8_t life = (int8_t)(lmin + TimingPick(lmax - lmin + 1));
       const uint16_t id = ++dg_nid_[s];
       for (int j = i; j < i + len; j++) {                  // overwrites the steps it covers
         dg_ty_[s][j] = (int8_t)t; dg_sub_[s][j] = sub; dg_dec_[s][j] = dec; dg_st_[s][j] = (int8_t)i; dg_ln_[s][j] = (int8_t)len;
