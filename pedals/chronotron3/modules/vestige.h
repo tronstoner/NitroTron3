@@ -59,7 +59,7 @@
 #include "vestige_constants.h"
 #include "grain_voice.h"   // core/blocks — pulls in ring_buffer.h
 #include "mnemonic_degrade.h" // BBD/Tape degradation engine (folded in on K4)
-#include "grid_quantize.h"   // core/blocks — loop length -> nearest division of T
+#include "dynquapoteg.h"     // core/blocks — T, length quantisation, follow, rhythm steps
 #include <cmath>
 #include <cstring>         // memcpy (commit copies record scratch → target slot)
 #include <cstdio>          // snprintf (DIAG builds only: the K3 CCW rhythm log line)
@@ -109,15 +109,12 @@ static inline float VestigeRand() {
   return static_cast<float>(vestige_rng) / 4294967295.f;
 }
 
-static inline float VestigeClamp(float v, float lo, float hi) {
-  return v < lo ? lo : (v > hi ? hi : v);
-}
-
 class Vestige : public Module {
  public:
   // -------------------------------------------------------------------------
   void Init(float sr) override {
     sr_ = sr;
+    tgrid_.Init(GridConfig(), sr_);   // T, lengths, steps: vestige's bounds (vestige_constants.h)
     degrade_.Init(sr_);   // BBD/Tape degradation engine (K4)
     degrade_.SetFoldScale(VESTIGE_BBD_FOLD_SCALE);  // brighter BBD fold in the looper (clarity, keeps grit)
     MBInit();             // multiband granular freeze coeffs + band params
@@ -384,7 +381,7 @@ class Vestige : public Module {
       // Past the CCW dead zone the loop plays in reverse; the dead zone and the
       // CW half play forward. T (UpdatePeriod) is the maximum capture length.
       rev_play_     = ((k2 - 0.5f) < -VESTIGE_K2_DEADZONE);
-      max_loop_len_ = period_;
+      max_loop_len_ = tgrid_.T();
     }
 
     // ---- K4 = degradation colour (MnemDegrade, bipolar) --------------------
@@ -1280,8 +1277,7 @@ class Vestige : public Module {
     const int fm = follow_mode_;
     if ((fm != kFollowTape && fm != kFollowStretch) || div_[s] < 0) return 1.0;
     const size_t M  = loop_len_[s];
-    const size_t Lt = (s < VESTIGE_VOICE_SLABS && pin_len_[s]) ? pin_len_[s]   // K2 free-run pin
-                                                               : LoopBoundary(div_[s], period_);
+    const size_t Lt = tgrid_.FollowTarget(div_[s], (s < VESTIGE_VOICE_SLABS) ? pin_len_[s] : 0);   // (K2 free-run pin)
     if (Lt == 0 || Lt == M) return 1.0;                     // unchanged T: exactly 1
     double r = (double)M / (double)Lt;
     if (fm == kFollowTape) {                                 // no folding: exactly M / Lt
@@ -1315,8 +1311,7 @@ class Vestige : public Module {
   size_t PlayLen(int s) const { return (s < VESTIGE_VOICE_SLABS) ? play_len_[s] : loop_len_[s]; }
   size_t RecutTarget(int s) const {
     if (follow_mode_ != kFollowRecut || div_[s] < 0) return loop_len_[s];
-    const size_t Lt = (s < VESTIGE_VOICE_SLABS && pin_len_[s]) ? pin_len_[s]   // K2 free-run pin
-                                                               : LoopBoundary(div_[s], period_);
+    const size_t Lt = tgrid_.FollowTarget(div_[s], (s < VESTIGE_VOICE_SLABS) ? pin_len_[s] : 0);   // (K2 free-run pin)
     return (Lt == 0) ? loop_len_[s] : Lt;
   }
   bool ViewBusy(int s, int v) const {
@@ -1382,7 +1377,7 @@ class Vestige : public Module {
   void SetPlayLen(int s, size_t Le) {
     play_len_[s] = Le;
     if (div_[s] >= 0) {
-      const double frac = (double)GridQuantize::kDivNum[div_[s]] / (double)GridQuantize::kDivDen[div_[s]];
+      const double frac = Dynquapoteg::DivFrac(div_[s]);
       beat_k_[s] = frac / (double)Le;                        // a pass is still its division of a beat
     }
   }
@@ -1589,7 +1584,7 @@ class Vestige : public Module {
   // sparsest one above it that does; -1 = none fits at all. (span_out: output
   // samples per pattern span.)
   int TimingFit(int base, double span_out) const {
-    const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+    const double min_step = tgrid_.MinStep();
     for (int i = base; i >= 0; i--)
       if (span_out / (double)VESTIGE_TIMING_PAT_STEPS[i] >= min_step) return i;
     for (int i = base + 1; i < VESTIGE_TIMING_PATTERNS; i++)
@@ -1671,7 +1666,7 @@ class Vestige : public Module {
   // Slice count for this pass: VESTIGE_TIMING_SLICES halved until a slice
   // (output time) is >= the minimum; 0 = none fits. *tier = its table.
   int TimingSliceN(double pass_out, int* tier) const {
-    const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+    const double min_step = tgrid_.MinStep();
     int nsl = VESTIGE_TIMING_SLICES, t = 0;
     while (nsl >= 2 && t < VESTIGE_TIMING_SLICE_TIERS) {
       if (pass_out / (double)nsl >= min_step) { *tier = t; return nsl; }
@@ -1880,7 +1875,7 @@ class Vestige : public Module {
     if (n == 0) { timing_skipped_++; TimingMemClear(s); var_last_[s] = false; return; }
     if (n != VESTIGE_TIMING_SLICES) timing_fallbacks_++;
     if (pm_n_[s][pm_cur_[s]] != n) { pm_nf_[s][pm_cur_[s]] = 0; pm_n_[s][pm_cur_[s]] = n; }      // steps changed: the memory no longer fits
-    const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+    const double min_step = tgrid_.MinStep();
     const bool ok4 = pass_out / (double)n / 4.0 >= min_step;   // a step split in 4 (ratchet) fits
     const bool ok2 = pass_out / (double)n / 2.0 >= min_step;   // split in 2 (double) fits
     const bool okr = GuardReady(s);                             // reverse reads need the guard
@@ -2651,25 +2646,13 @@ class Vestige : public Module {
     TimingPlanLayersImpl(s, rev, L, rho, el0);
     const uint32_t d = diag_clock_() - t0; if (d > diag_plan_us_) diag_plan_us_ = d;
   }
-  // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to the
-  // wanted step in output time: VESTIGE_TIMING_STEP_MS up to a loop of
-  // VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^STEP_EXP
-  // (long, ambient loops glitch slower: 8 s = 250 ms at 0.5). Shared by the
-  // loop voices and the freeze side's virtual pass.
+  // G steps per pass (Dynquapoteg::StepCount: VESTIGE_TIMING_STEP_MS up to a
+  // loop of VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^
+  // STEP_EXP). K3 mode 1 hooks its tempo on the wanted step: half time below
+  // RHY_HALF_U (RhyTempoStep). Shared by the loop voices and the freeze side's
+  // virtual pass.
   int TimingStepCount(double pass_out, bool rhythm, float rl) const {
-    const double knee = (double)VESTIGE_TIMING_STEP_KNEE_MS * 0.001 * (double)sr_;
-    const double want = (double)VESTIGE_TIMING_STEP_MS * 0.001 * (double)sr_
-                      * (pass_out > knee ? pow(pass_out / knee, (double)VESTIGE_TIMING_STEP_EXP) : 1.0)
-                      * (rhythm ? (double)RhyTempoStep(rl) : 1.0);   // K3 mode 1: half / double time
-    int G = 1; double best = 1e30;
-    for (int base = 1; base <= 3; base += 2)
-      for (int g = base; g <= VESTIGE_TIMING_LAYER_MAX_STEPS; g *= 2) {
-        const double r = pass_out / (double)g / want;
-        const double d = r > 1.0 ? r : 1.0 / r;
-        const bool tie = fabs(d - best) <= best * 1e-6;       // (a tie keeps the finer grid)
-        if ((d < best && !tie) || (tie && g > G)) { best = d; G = g; }
-      }
-    return G;
+    return tgrid_.StepCount(pass_out, rhythm ? (double)RhyTempoStep(rl) : 1.0);
   }
   // ---- K3 mode 1 on the FREEZE side (SW1 DOWN): rests + decimates ----------
   // A virtual pass (FzPassLen: the playing freeze's virtual loop length,
@@ -2694,10 +2677,7 @@ class Vestige : public Module {
   // follows T like a stretch-following loop. Before any measured freeze has
   // played (fz_pdiv_ < 0) the pass is T and the rhythm stays clean.
   uint32_t FzPassLen() const {
-    if (fz_ppin_ > 0) return (uint32_t)fz_ppin_;          // K2 free-run pin
-    const size_t T = period_ > 0 ? period_ : 1u;
-    const size_t L = (fz_pdiv_ >= 0) ? LoopBoundary(fz_pdiv_, T) : LoopFloor(T);
-    return L > 0 ? (uint32_t)L : 1u;
+    return (uint32_t)tgrid_.PassLen(fz_pdiv_, fz_ppin_);  // (fz_ppin_: K2 free-run pin)
   }
   // A new freeze started playing at `now`: new rotation draws, step count 0,
   // and its pass (its own division) joined in phase with its onset — the
@@ -2706,7 +2686,7 @@ class Vestige : public Module {
     FzRhyNewWords();
     rhy_t_[kFzR] = 0;
     fz_pdiv_ = fz_sdiv_[s];
-    fz_ppin_ = pins_held_ ? fz_spin_[s] : 0;              // K2 free-run: a free / pinned freeze keeps its pass
+    fz_ppin_ = tgrid_.PinsHeld() ? fz_spin_[s] : 0;       // K2 free-run: a free / pinned freeze keeps its pass
     FzRhyPlan((now - cap_start_[s]) % FzPassLen());
   }
   // Plan a pass; el0 > 0 joins it mid-way (the hits behind it are skipped).
@@ -2729,7 +2709,7 @@ class Vestige : public Module {
       // LPG strikes: per stutter step its hit count (ratchets 2x / 4x, with
       // the loop side's MIN_STEP fallback 4 -> 2 -> 1).
       const double st = (double)fz_L_ / (double)G;
-      const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+      const double min_step = tgrid_.MinStep();
       const int8_t r2 = (st / 2.0 >= min_step) ? 2 : 1;
       const int8_t r4 = (st / 4.0 >= min_step) ? 4 : r2;
       for (int h = 0; h < ln_nh_[kFzR][kErrTiming]; h++) {
@@ -2899,7 +2879,7 @@ class Vestige : public Module {
     if (!any) { LineClear(s); return; }
     if (ln_rhythm_[s] != rhythm) { LineClear(s); ln_rhythm_[s] = rhythm; }   // the two halves never share lines
     const double pass_out = (double)L / (rho > 0.0 ? rho : 1.0);
-    const double min_step = (double)VESTIGE_TIMING_MIN_STEP_MS * 0.001 * (double)sr_;
+    const double min_step = tgrid_.MinStep();
     // G: 2^k or 3 x 2^k steps per pass, the step closest (in ratio) to the
     // wanted step in output time: VESTIGE_TIMING_STEP_MS up to a loop of
     // VESTIGE_TIMING_STEP_KNEE_MS, then growing as (loop / knee)^STEP_EXP
@@ -3600,7 +3580,7 @@ class Vestige : public Module {
     // Freeze phrase measurement. Hold engaged mid-phrase ends it here, with
     // the length so far (as hold ends a loop capture: keep it, quantised).
     if (fz_vrec_) {
-      if (!cap_allow_) FzVirtEnd(fz_vidx_, now);
+      if (!cap_allow_) FzVirtEnd(fz_phr_.Len(), now);
       else             FzVirtMeasure(x, g, close, now);
     }
     if (npend_ > 0) IsrActivations(now);
@@ -3609,9 +3589,9 @@ class Vestige : public Module {
 
   void IsrStart(int s, uint32_t now) {
     if (CT3_DIAG) DiagPush(GateDiag{'S', diag_why_, (uint8_t)PoolOf(s), now, env_, env_gate_,
-                                    auto_thresh_, auto_thresh_ * VESTIGE_AUTO_HYST, (uint32_t)period_, 0u});
+                                    auto_thresh_, auto_thresh_ * VESTIGE_AUTO_HYST, (uint32_t)tgrid_.T(), 0u});
     diag_why_ = '?';
-    if (fz_vrec_) FzVirtEnd(fz_vidx_, now);   // a new capture onset ends the phrase measurement: length so far
+    if (fz_vrec_) FzVirtEnd(fz_phr_.Len(), now);   // a new capture onset ends the phrase measurement: length so far
     KillSlotGrains(s);                  // zombie grains from the slot's last life (audio thread owns grains)
     rec_slot_  = s;
     rec_idx_   = 0;
@@ -3621,14 +3601,14 @@ class Vestige : public Module {
     end_req_   = false;                 // a stale request must not end this capture
     cap_start_[s] = now;
     const bool loop = (PoolOf(s) == kPoolLoop);
-    cap_T_[s]  = loop ? period_ : 0;    // T latched at the START: K2 / a tap cannot move this grid
-    cap_ceil_  = loop ? period_ : max_loop_len_;
+    cap_T_[s]  = loop ? tgrid_.T() : 0; // T latched at the START: K2 / a tap cannot move this grid
+    cap_ceil_  = loop ? tgrid_.T() : max_loop_len_;
     // K2 FREE-RUN zone, latched at the start: no grid, the ceiling is the full
     // buffer (the freeze phrase: see below). A new capture follows T (no pin).
-    const bool fr = k2_free_;
+    const bool fr = tgrid_.InFreeZone();
     if (loop) {
       cap_free_ = fr;
-      if (fr) cap_ceil_ = VESTIGE_T_MAX_SAMPLES;
+      if (fr) cap_ceil_ = tgrid_.TMax();
       if (s < VESTIGE_VOICE_SLABS) pin_len_[s] = 0;
     } else {
       fz_spin_[s] = 0;
@@ -3647,9 +3627,8 @@ class Vestige : public Module {
       // (FzVirtMeasure); its tail becomes the freeze (FzVirtEnd).
       gfill_base_[s] = 0; gfill_k_[s] = gfill_end_[s] = 0; gfill_src_[s] = 0; gready_[s] = 0;
       fz_vslot_ = s; fz_vw_ = 0;
-      fz_vidx_ = 0; fz_vT_ = fr ? VESTIGE_T_MAX_SAMPLES : period_;   // free: ceiling = the full buffer
+      fz_phr_.Start(fr ? tgrid_.TMax() : tgrid_.T());   // free: ceiling = the full buffer
       fz_vfree_ = fr;
-      fz_vsil_run_ = 0; fz_vsil_onset_ = 0; fz_vlast_loud_ = 0;
       fz_vrec_ = true;
     }
     recording_ = true;
@@ -3658,8 +3637,8 @@ class Vestige : public Module {
 
   // Freeze side: the PHRASE of a freeze capture. Runs per sample from the
   // freeze capture's onset, past the capture machine's own 400 ms, with the
-  // loop side's phrase-end rules (IsrCapture): the ceiling T latched at the
-  // onset (fz_vT_; the fast meter's 'c' case included) or
+  // loop side's phrase-end rules (IsrCapture; Dynquapoteg::Phrase): the
+  // ceiling T latched at the onset (the fast meter's 'c' case included) or
   // VESTIGE_AUTO_RELEASE_MS of silence (raw = where the sound stopped); a new
   // capture onset (IsrStart) or hold ends it with the length so far. The
   // slot's row records the phrase as a ring (index i at i mod cap_). It never
@@ -3668,19 +3647,8 @@ class Vestige : public Module {
     const int s = fz_vslot_;
     slab_[s][fz_vw_] = x;
     if (++fz_vw_ >= cap_[s]) fz_vw_ = 0;
-    const size_t r = fz_vidx_;
-    fz_vidx_ = r + 1;
-    if (env_ >= close) fz_vlast_loud_ = r;
-    if (fz_vidx_ >= fz_vT_) {
-      const bool ended = (VESTIGE_GATE_ENV_MODE != 0) && env_ < close && fz_vlast_loud_ + 1 < fz_vidx_;
-      FzVirtEnd(ended ? fz_vlast_loud_ + 1 : fz_vidx_, now);
-    } else if (g < close) {
-      if (fz_vsil_run_ == 0) fz_vsil_onset_ = r;
-      if (++fz_vsil_run_ >= release_samples_)
-        FzVirtEnd((VESTIGE_GATE_ENV_MODE == 0) ? fz_vsil_onset_ : fz_vlast_loud_ + 1, now);
-    } else {
-      fz_vsil_run_ = 0;
-    }
+    size_t raw;
+    if (fz_phr_.Step(env_, g, close, release_samples_, VESTIGE_GATE_ENV_MODE != 0, &raw)) FzVirtEnd(raw, now);
   }
   // The phrase ended at sample `now`; raw = its length (where the sound
   // stopped). Q / division exactly as IsrDecide / IsrActivate do on the loop
@@ -3693,18 +3661,13 @@ class Vestige : public Module {
   // in phase, when the end is known later (VESTIGE_LATE_JOIN_IN_PHASE).
   void FzVirtEnd(size_t raw, uint32_t now) {
     const int s = fz_vslot_;
-    const size_t D = fz_vidx_;                              // samples recorded into the ring
-    size_t Q;
+    const size_t D = fz_phr_.Len();                         // samples recorded into the ring
+    // Quantised to the phrase's T (nearest division, the loop floor, division
+    // kept). FREE-RUN: the raw phrase length is the pass and the new T (1/1 of it).
+    const size_t Q = tgrid_.DecideLen(raw, fz_phr_.Ceiling(), fz_vfree_, &fz_sdiv_[s]);
     if (fz_vfree_) {
-      // FREE-RUN: the raw phrase length is the pass and the new T (1/1 of it).
-      Q = FreeLen(raw);
-      fz_sdiv_[s] = 0;
       FreeSet(-1, Q);
       fz_spin_[s] = Q;
-    } else {
-      Q = GridQuantize::Quantize(raw, fz_vT_);
-      fz_sdiv_[s] = GridQuantize::IndexOf(Q, fz_vT_);
-      Q = LoopFloor(Q);                                     // the loop floor (division kept)
     }
     size_t end = (raw < VESTIGE_MIN_LOOP_SAMPLES) ? VESTIGE_MIN_LOOP_SAMPLES : raw;
     const size_t skip = (size_t)(VESTIGE_FREEZE_ATTACK_SKIP_MS * 0.001f * sr_);
@@ -3745,18 +3708,14 @@ class Vestige : public Module {
       recording_ = false;
       return;
     }
-    size_t Q;
+    // The nearest division of the capture's own T, up or down; its division
+    // before the floor, then the loop floor (extended, like a round-up).
+    // FREE-RUN: no grid. Q = the raw length; it becomes T (the loop is 1/1
+    // of it: cap_T_ = Q, so IsrActivate derives division 0).
+    const size_t Q = tgrid_.DecideLen(raw, cap_T_[s], cap_free_, &cap_div_[s]);
     if (cap_free_) {
-      // FREE-RUN: no grid. Q = the raw length; it becomes T (the loop is 1/1
-      // of it: cap_T_ = Q, so IsrActivate derives division 0).
-      Q = FreeLen(raw);
       cap_T_[s] = Q;
-      cap_div_[s] = 0;
       FreeSet(s, Q);
-    } else {
-      Q = GridQuantize::Quantize(raw, cap_T_[s]);           // nearest division, up or down
-      cap_div_[s] = GridQuantize::IndexOf(Q, cap_T_[s]);    // its division, before the floor
-      Q = LoopFloor(Q);                                     // the loop floor: extended, like a round-up
     }
     cap_raw_[s] = raw;
     cap_decide_at_[s] = now;           // diagnostics / host test: when the end was known
@@ -3858,7 +3817,7 @@ class Vestige : public Module {
     // its start; from here on it keeps its DIVISION and follows T_now.
     div_[s] = loop ? cap_div_[s] : -1;                      // the division IsrDecide quantised to
     if (div_[s] >= 0) {
-      const double frac = (double)GridQuantize::kDivNum[div_[s]] / (double)GridQuantize::kDivDen[div_[s]];
+      const double frac = Dynquapoteg::DivFrac(div_[s]);
       beat_k_[s] = frac / (double)L;                        // beats of T per material sample
       const double b = (double)(now - cap_start_[s]) / (double)cap_T_[s];
       beat_[s] = b - floor(b);                              // on the capture's own T grid
@@ -3980,110 +3939,56 @@ class Vestige : public Module {
     if (!any) gfill_idle_ = true;
   }
 
-  // ---- T: master period ----------------------------------------------------
-  // K2 magnitude -> T: log taper, noon dead zone = T_MIN, either end = T_MAX.
-  static size_t KnobPeriod(float k2) {
-    const float c = k2 - 0.5f;                        // [-0.5, +0.5]
-    float mag = (fabsf(c) - VESTIGE_K2_DEADZONE) / (0.5f - VESTIGE_K2_DEADZONE);
-    if (mag < 0.f) mag = 0.f;
-    if (mag > 1.f) mag = 1.f;
-    const float lo = (float)VESTIGE_T_MIN_SAMPLES;
-    const float hi = (float)VESTIGE_T_MAX_SAMPLES;
-    size_t t = (size_t)(lo * powf(hi / lo, mag));
-    if (t < VESTIGE_T_MIN_SAMPLES) t = VESTIGE_T_MIN_SAMPLES;
-    if (t > VESTIGE_T_MAX_SAMPLES) t = VESTIGE_T_MAX_SAMPLES;
-    return t;
+  // ---- T: master period (core/blocks/dynquapoteg.h) -------------------------
+  // The grid's bounds, from vestige_constants.h: T range 5 ms .. 8 s, the 240-
+  // sample loop floor, K2 taper / free zone / deadbands, the tap rule, and the
+  // K3 rhythm's step target.
+  static DynquapotegConfig GridConfig() {
+    DynquapotegConfig c;
+    c.t_min          = VESTIGE_T_MIN_SAMPLES;
+    c.t_max          = VESTIGE_T_MAX_SAMPLES;
+    c.t_min_ms       = VESTIGE_T_MIN_MS;
+    c.t_max_ms       = VESTIGE_T_MAX_MS;
+    c.loop_floor     = VESTIGE_LOOP_MIN_LEN;
+    c.knob_deadzone  = VESTIGE_K2_DEADZONE;
+    c.free_zone      = VESTIGE_K2_FREE_ZONE;
+    c.knob_move_eps  = VESTIGE_K2_MOVE_EPS;
+    c.knob_follow_db = VESTIGE_K2_FOLLOW_DB;
+    c.tap_release_ms = VESTIGE_TAP_RELEASE_MS;
+    c.tap_agree      = VESTIGE_TAP_AGREE;
+    c.step_ms        = VESTIGE_TIMING_STEP_MS;
+    c.step_knee_ms   = VESTIGE_TIMING_STEP_KNEE_MS;
+    c.step_exp       = VESTIGE_TIMING_STEP_EXP;
+    c.max_steps      = VESTIGE_TIMING_LAYER_MAX_STEPS;
+    c.min_step_ms    = VESTIGE_TIMING_MIN_STEP_MS;
+    return c;
   }
 
   // K2 / FS1 arbitration (sprawl's, exactly — see sprawl.h Controls): the last
-  // gesture wins. FS1 is a DEDICATED tap (no hold function), but the press is
-  // still measured the sprawl way: the DOWN-press is the timing reference (so
-  // tempo accuracy does not depend on the release), timed here from our own
-  // rising-edge timestamp — NOT FootswitchEvent::held_ms, which is 0 whenever
-  // the switch is up and therefore always 0 on the falling edge.
+  // gesture wins (Dynquapoteg::UpdatePeriod). FS1 is a DEDICATED tap (no hold
+  // function), but the press is still measured the sprawl way: the DOWN-press
+  // is the timing reference, timed from the grid's own rising-edge timestamp —
+  // NOT FootswitchEvent::held_ms, which is 0 whenever the switch is up and
+  // therefore always 0 on the falling edge.
   void UpdatePeriod(float k2_raw, float k2, const FootswitchEvent& f1) {
-    if (!k2_seeded_) { k2_last_ = k2_raw; k2_seeded_ = true; }
-    if (fabsf(k2_raw - k2_last_) > VESTIGE_K2_MOVE_EPS) {
-      k2_last_ = k2_raw;
-      tap_period_ = 0;                                // knob wins: drop the tapped T
+    uint32_t press = 0;
+    if (tgrid_.UpdatePeriod(k2_raw, k2, f1.rising, f1.falling, daisy::System::GetNow(), &press)) {
+      // Nothing captured on this side yet = no capture beat to show, so
+      // LED1 flashes from the tap itself (the down-press that closed the
+      // interval). Once a capture exists, a tap changes only the period:
+      // the beat stays on the capture's own start.
+      if (!PoolHasContent(pool_) && !recording_ && npend_ == 0 && !fz_vrec_)
+        led_anchor_[pool_] = sample_clock_ - (uint32_t)((float)press * 0.001f * sr_);
     }
-    const uint32_t now = daisy::System::GetNow();
-    if (f1.rising) f1_down_ms_ = now;
-    if (f1.falling) {
-      const uint32_t press = now - f1_down_ms_;
-      if (press < VESTIGE_TAP_RELEASE_MS) {
-        if (tap_prev_ms_ != 0) {
-          const uint32_t iv = f1_down_ms_ - tap_prev_ms_;
-          const bool valid = (iv >= VESTIGE_T_MIN_MS && iv <= VESTIGE_T_MAX_MS);
-          // VESTIGE_TAP_AGREE: only a SECOND interval agreeing with the previous
-          // one sets T (their mean), so one stray press cannot re-time the loops.
-          const uint32_t pv = tap_prev_iv_ms_;
-          const bool agree = valid && (tap_accept_one_ || (pv != 0 &&
-              fabsf((float)iv - (float)pv) <= VESTIGE_TAP_AGREE * (float)pv));
-          tap_prev_iv_ms_ = valid ? iv : 0;          // an invalid interval breaks the chain
-          if (agree) {
-            const float mean_ms = tap_accept_one_ ? (float)iv : 0.5f * ((float)iv + (float)pv);
-            size_t t = (size_t)(mean_ms * 0.001f * sr_ + 0.5f);
-            if (t < VESTIGE_T_MIN_SAMPLES) t = VESTIGE_T_MIN_SAMPLES;
-            if (t > VESTIGE_T_MAX_SAMPLES) t = VESTIGE_T_MAX_SAMPLES;
-            tap_period_ = t;
-            // Nothing captured on this side yet = no capture beat to show, so
-            // LED1 flashes from the tap itself (the down-press that closed the
-            // interval). Once a capture exists, a tap changes only the period:
-            // the beat stays on the capture's own start.
-            if (!PoolHasContent(pool_) && !recording_ && npend_ == 0 && !fz_vrec_)
-              led_anchor_[pool_] = sample_clock_ - (uint32_t)((float)press * 0.001f * sr_);
-          }
-        }
-        tap_prev_ms_ = f1_down_ms_;
-      }
-    }
-    // Knob T through a small movement deadband: loops now FOLLOW T, so ADC
-    // jitter on K2 must not reach it (1% of T is ~17 cents of tape warble).
-    // T is recomputed only when K2 has moved more than VESTIGE_K2_FOLLOW_DB;
-    // a knob that does not move gives exactly the same T as before.
-    if (!k2f_seeded_) { k2f_ = k2; k2f_seeded_ = true; }
-    if (fabsf(k2 - k2f_) > VESTIGE_K2_FOLLOW_DB) k2f_ = k2;
-    // FREE-RUN zone. K2 positions inside the zone count as ONE position (its
-    // edge), so wiggling inside it is no move. A free capture's T (posted by
-    // the ISR) is adopted here — it replaces a tapped T (last gesture wins) —
-    // and holds, also after K2 leaves the zone, until K2 moves on beyond
-    // VESTIGE_K2_FOLLOW_DB from where it was at the adoption, or a tap.
-    k2_free_ = (k2 >= 1.f - VESTIGE_K2_FREE_ZONE || k2 <= VESTIGE_K2_FREE_ZONE);
-    const float k2c = VestigeClamp(k2, VESTIGE_K2_FREE_ZONE, 1.f - VESTIGE_K2_FREE_ZONE);
-    if (tap_period_ > 0) free_period_ = 0;            // a tap (or a tap still standing) wins over an older free T
-    const uint32_t post = free_post_seq_;
-    if (post != free_seen_seq_) {
-      free_seen_seq_ = post;
-      free_period_ = free_post_Q_;
-      free_k2_ref_ = k2c;
-      tap_period_  = 0;
-    } else if (free_period_ > 0 && fabsf(k2c - free_k2_ref_) > VESTIGE_K2_FOLLOW_DB) {
-      free_period_ = 0;                               // K2 moved on: the knob sets T again
-    }
-    period_ = (tap_period_ > 0) ? tap_period_ : (free_period_ > 0) ? free_period_ : KnobPeriod(k2f_);
-    __asm__ __volatile__("" ::: "memory");            // period_ is stored before the flags the ISR reads
-    free_in_force_ = (tap_period_ == 0 && free_period_ > 0);
-    free_ack_seq_  = free_seen_seq_;                  // after period_: the ISR may now release on !free_in_force_
   }
 
-  // ---- K2 FREE-RUN: the free length, the T it sets, the pins (audio thread) --
-  // A free capture's length: raw, kept inside [T_MIN, T_MAX] — it becomes T
-  // (T_MIN >= VESTIGE_LOOP_MIN_LEN: the loop floor).
-  static size_t FreeLen(size_t raw) {
-    if (raw < VESTIGE_T_MIN_SAMPLES) return VESTIGE_T_MIN_SAMPLES;
-    if (raw > VESTIGE_T_MAX_SAMPLES) return VESTIGE_T_MAX_SAMPLES;
-    return raw;
-  }
+  // ---- K2 FREE-RUN: the pins (audio thread) ---------------------------------
   // The length a loop-side loop is heading for at T_now (what TapeTarget /
   // RecutTarget follow). A pending loop has no division yet: derived the way
   // IsrActivate will.
   size_t FollowLen(int q) const {
     const bool pend = pend_[q];
-    const size_t M = pend ? cap_len_[q] : loop_len_[q];
-    const int d = pend ? cap_div_[q] : div_[q];
-    const size_t Lt = (d >= 0) ? LoopBoundary(d, period_) : 0;
-    return (Lt == 0) ? M : Lt;
+    return tgrid_.FollowLen(pend ? cap_len_[q] : loop_len_[q], pend ? cap_div_[q] : div_[q]);
   }
   // A free capture decided at length Q (slot sn: loop side; -1: freeze side).
   // Every other loop keeps EXACTLY the length it has: pinned at its current
@@ -4098,20 +4003,17 @@ class Vestige : public Module {
     // Freeze side: the running pass, and freezes decided but not yet playing.
     if (fz_ppin_ == 0) fz_ppin_ = FzPassLen();
     for (int q = PoolLo(kPoolFreeze); q < PoolHi(kPoolFreeze); q++)
-      if (pend_[q] && fz_spin_[q] == 0 && fz_sdiv_[q] >= 0) fz_spin_[q] = LoopBoundary(fz_sdiv_[q], period_);
-    pins_held_ = true;
-    free_post_Q_ = Q;
-    free_post_seq_ = free_post_seq_ + 1;
+      if (pend_[q] && fz_spin_[q] == 0 && fz_sdiv_[q] >= 0) fz_spin_[q] = tgrid_.LoopBoundary(fz_sdiv_[q], tgrid_.T());
+    tgrid_.PostFree(Q);
   }
   // Block start: once T is no longer a free T (the control thread adopted the
   // last post and then K2 moved on / a tap), every pin releases: all loops
   // follow T_now by their division again (the free loops as 1/1).
   void FreeRelease() {
-    if (!pins_held_ || free_ack_seq_ != free_post_seq_ || free_in_force_) return;
+    if (!tgrid_.TakePinRelease()) return;
     for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) pin_len_[q] = 0;
     for (int q = 0; q < VESTIGE_SLOTS; q++) fz_spin_[q] = 0;
     fz_ppin_ = 0;
-    pins_held_ = false;
   }
 
   // Slot ranges. OWN = every slot backed by that side's slab (incl. the
@@ -4193,13 +4095,6 @@ class Vestige : public Module {
     fade_phase_[s]  = 0.f;
   }
 
-  // Loop floor (VESTIGE_LOOP_MIN_LEN): every loop length decided or followed.
-  static size_t LoopFloor(size_t L) { return (L < VESTIGE_LOOP_MIN_LEN) ? VESTIGE_LOOP_MIN_LEN : L; }
-  // Boundary(d, T), floored (0 stays 0: no division).
-  static size_t LoopBoundary(int d, size_t T) {
-    const size_t b = GridQuantize::Boundary(d, T);
-    return (b == 0) ? 0 : LoopFloor(b);
-  }
   // Below this a slot emits nothing: the loop floor on the loop side, the
   // grain floor on the freeze side (unchanged).
   static size_t MuteLen(int s) { return (PoolOf(s) == kPoolLoop) ? VESTIGE_LOOP_MIN_LEN : VESTIGE_GRAIN_MIN_LEN; }
@@ -4634,7 +4529,7 @@ class Vestige : public Module {
     // LED1 = the clock: one flash per T, anchored to this side's most recent
     // capture start (the current "one"), never free-running. Always — on or
     // bypassed — since T can be tapped while bypassed too.
-    if (period_ > 0) {
+    if (tgrid_.T() > 0) {
       const uint32_t width = (uint32_t)((float)VESTIGE_LED1_FLASH_MS * 0.001f * sr_);
       const int ls = led_slot_[pool_];
       bool flash;
@@ -4642,15 +4537,15 @@ class Vestige : public Module {
           ls >= 0 && active_[ls] && !dying_[ls] && div_[ls] >= 0) {
         // A following loop's "one" is no longer A + k*T once it has changed
         // speed: flash on its own loop time instead (integer beats of T).
-        flash = beat_frac_[ls] < (float)width / (float)period_;
+        flash = beat_frac_[ls] < (float)width / (float)tgrid_.T();
       } else {
         const uint32_t el = sample_clock_ - led_anchor_[pool_];
-        const uint32_t ph = el % (uint32_t)period_;
+        const uint32_t ph = el % (uint32_t)tgrid_.T();
         flash = ph < width;
       }
       // K2 in the FREE-RUN zone: INVERTED — constantly on, the tempo flashes
       // dark (same timing / width).
-      if (k2_free_) flash = !flash;
+      if (tgrid_.InFreeZone()) flash = !flash;
       led1.Set(flash ? 1.f : 0.f);
     } else {
       led1.Set(0.f);
@@ -4948,7 +4843,7 @@ class Vestige : public Module {
   float    DiagK3()       const { return err_level_[kErrTiming]; }
   float    DiagK4()    const { return diag_k4_; }
   float    DiagOpen()  const { return auto_thresh_; }
-  size_t   DiagT()     const { return period_; }
+  size_t   DiagT()     const { return tgrid_.T(); }
  private:
   static constexpr uint32_t kDiagN = CT3_DIAG ? 512u : 1u;   // power of two
   GateDiag diag_ring_[kDiagN] = {};
@@ -5309,14 +5204,14 @@ class Vestige : public Module {
   uint32_t fz_rng_ = 0x85EBCA6Bu;                         // its own RNG (the loop side's stays untouched)
   uint32_t fz_L_  = 0, fz_el_ = 0, fz_nb_ = 0;            // virtual pass length, elapsed, next step boundary
   // The freeze phrase (FzVirtMeasure): measuring, its slot, ring write index,
-  // samples since the freeze onset, T latched there, silence run / onset, last
-  // loud index; per slot the measured division, and the running pass's
-  // division (-1: no measured freeze has played yet: the pass = T, clean).
+  // its measurement (samples since the freeze onset, T latched there, silence
+  // run / onset, last loud index); per slot the measured division, and the
+  // running pass's division (-1: no measured freeze has played yet: the pass
+  // = T, clean).
   volatile bool fz_vrec_ = false;
   int      fz_vslot_ = VESTIGE_FREEZE_SLOT0;
   size_t   fz_vw_ = 0;
-  size_t   fz_vidx_ = 0, fz_vT_ = 0, fz_vsil_onset_ = 0, fz_vlast_loud_ = 0;
-  uint32_t fz_vsil_run_ = 0;
+  Dynquapoteg::Phrase fz_phr_;
   int      fz_sdiv_[VESTIGE_SLOTS] = {};
   int      fz_pdiv_ = -1;
   int      fz_G_  = 1, fz_i_  = 0;                        // its step count, current step
@@ -5346,22 +5241,11 @@ class Vestige : public Module {
   double   beat_k_[VESTIGE_SLOTS];           // beats per material sample
   float    beat_frac_[VESTIGE_SLOTS] = {0.f};// copy for the control thread (atomic 32-bit)
   int      led_slot_[2] = {-1, -1};          // slot of each side's most recent capture
-  float    k2f_ = 0.f;                       // K2 through the follow deadband
-  bool     k2f_seeded_ = false;
 
-  // T, the master period (samples), and its K2 / FS1 arbitration. Control
-  // thread only. tap_period_ = 0 means "no tap: the knob sets T".
-  size_t   period_       = VESTIGE_T_MIN_SAMPLES;
-  size_t   tap_period_   = 0;
-  uint32_t tap_prev_ms_  = 0;     // last committed tap down-press (0 = no chain)
-  uint32_t tap_prev_iv_ms_ = 0;   // previous valid tap interval (0 = none): the agreement check
-  // HOST-TEST HOOK, never set by the firmware: accept a single interval (the old
-  // two-tap rule), for tests that re-tap at a sample-exact moment to exercise
-  // how loops follow T — not the tap rule itself, which is tested without it.
-  bool     tap_accept_one_ = false;
-  uint32_t f1_down_ms_   = 0;     // current FS1 press start (own timestamp)
-  float    k2_last_      = 0.f;   // last seen raw K2 (move detector)
-  bool     k2_seeded_    = false;
+  // T, the master period, its K2 / FS1 arbitration (control thread) and the
+  // K2 free-run handshake; every length rule (quantise, floor, follow, pass)
+  // and the rhythm step count. See core/blocks/dynquapoteg.h.
+  Dynquapoteg tgrid_;
   // Sample count (audio thread writes, control thread reads — one aligned
   // 32-bit word). A timestamp source, NOT a grid: see Process.
   volatile uint32_t sample_clock_ = 0;
@@ -5370,27 +5254,16 @@ class Vestige : public Module {
   uint32_t led_anchor_[2] = {0, 0};
 
   // ---- K2 FREE-RUN zone (VESTIGE_K2_FREE_ZONE) -----------------------------
-  // Control -> ISR: K2 is in the zone now; the ISR latches it per capture at
-  // its start (cap_free_ loop side, fz_vfree_ freeze phrase).
-  volatile bool k2_free_ = false;
+  // The ISR latches tgrid_.InFreeZone() per capture at its start (cap_free_
+  // loop side, fz_vfree_ freeze phrase); the T handshake is in tgrid_.
   bool     cap_free_ = false;            // ISR: the running loop-side capture is free
   bool     fz_vfree_ = false;            // ISR: the running freeze phrase is free
-  // ISR -> control: a free capture decided; T is to become free_post_Q_.
-  // The control thread adopts it (free_period_) and acks with the same seq.
-  volatile size_t   free_post_Q_   = 0;
-  volatile uint32_t free_post_seq_ = 0;  // ISR writes
-  volatile uint32_t free_ack_seq_  = 0;  // control writes, after period_ / free_in_force_
-  uint32_t free_seen_seq_ = 0;           // control: last seq adopted
-  size_t   free_period_   = 0;           // control: the free T (0 = none); tap > free > knob
-  float    free_k2_ref_   = 0.f;         // control: zone-collapsed K2 at the adoption
-  volatile bool free_in_force_ = false;  // control: period_ IS the free T right now
   // ISR: loops PINNED at a fixed target length (0 = follow T as always). Set
   // at a free decide for every other loop-side loop (playing or pending), at
   // its current target; the free loop is pinned at its own Q until T = Q is
   // adopted. All pins release once T is no longer a free T (K2 moved on / a
   // tap) — from then on every loop follows T_now by its division again.
   size_t   pin_len_[VESTIGE_VOICE_SLABS] = {0};
-  bool     pins_held_ = false;
   // Freeze side: the running pass pinned (0 = follows T) and, per freeze slot,
   // the pin its pass takes when it starts while pins are held.
   size_t   fz_ppin_ = 0;
