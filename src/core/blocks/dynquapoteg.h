@@ -159,7 +159,10 @@ class Dynquapoteg {
     // recomputed only when the knob has moved more than knob_follow_db; a knob
     // that does not move gives exactly the same T as before.
     if (!k2f_seeded_) { k2f_ = k2; k2f_seeded_ = true; }
-    if (fabsf(k2 - k2f_) > cfg_.knob_follow_db) k2f_ = k2;
+    // Inside the free-run zone the knob does not set T at all: T only changes
+    // there when a free loop is played (the builder, 2026-10-05).
+    const bool in_free_zone = (k2 >= 1.f - cfg_.free_zone || k2 <= cfg_.free_zone);
+    if (!in_free_zone && fabsf(k2 - k2f_) > cfg_.knob_follow_db) k2f_ = k2;
     // FREE-RUN zone. Knob positions inside the zone count as ONE position (its
     // edge), so wiggling inside it is no move. A free capture's T (posted by
     // the audio thread, PostFree) is adopted here — it replaces a tapped T

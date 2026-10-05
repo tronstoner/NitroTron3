@@ -285,10 +285,16 @@ static void TestStage0() {
   cs.knob[1] = 0.5f; RunFor(0.05f);
   Check(v.tgrid_.T() == VESTIGE_T_MIN_SAMPLES && v.max_loop_len_ == VESTIGE_T_MIN_SAMPLES && !v.rev_play_,
         "K2 noon: T = T_MIN (100 ms), forward");
-  cs.knob[1] = 0.0f; RunFor(0.05f);
-  Check(v.max_loop_len_ == VESTIGE_LOOP_MAX_SAMPLES && v.rev_play_, "K2 CCW: longest, reverse");
-  cs.knob[1] = 1.0f; RunFor(0.05f);
-  Check(v.max_loop_len_ == VESTIGE_LOOP_MAX_SAMPLES && !v.rev_play_, "K2 CW: longest, forward");
+  // Into the free zone the knob does not set T (only a free loop does): T
+  // stays what it was just outside the zone.
+  cs.knob[1] = 0.03f; RunFor(0.05f);
+  { const size_t t_edge = v.tgrid_.T();
+    cs.knob[1] = 0.0f; RunFor(0.05f);
+    Check(v.tgrid_.T() == t_edge && t_edge > VESTIGE_LOOP_MAX_SAMPLES / 2 && v.rev_play_, "K2 CCW: long T kept into the free zone, reverse"); }
+  cs.knob[1] = 0.97f; RunFor(0.05f);
+  { const size_t t_edge = v.tgrid_.T();
+    cs.knob[1] = 1.0f; RunFor(0.05f);
+    Check(v.tgrid_.T() == t_edge && t_edge > VESTIGE_LOOP_MAX_SAMPLES / 2 && !v.rev_play_, "K2 CW: long T kept into the free zone, forward"); }
   cs.knob[1] = 0.15f;  // reverse, shorter
   Tap(); play_input = true; RunFor(3.0f); play_input = false; RunFor(1.0f);
   Check(v.rev_play_ && v.HasContent() && peak > 0.01f, "reverse: loop plays (audible)");
