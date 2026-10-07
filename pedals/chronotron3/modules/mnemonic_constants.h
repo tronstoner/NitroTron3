@@ -373,6 +373,8 @@ static constexpr float MNEM_PLL_LF_MAX_HZ = 2000.f;
 static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;
 static constexpr float MNEM_PLL_VCO_CENTRE_HZ = 200.f;
 static constexpr float MNEM_PLL_VCO_MAX_HZ    = 4000.f;
+// Wet-only gain in PLL mode (after the delay; the loop stays below the tape saturation).
+static constexpr float MNEM_PLL_OUT_GAIN = 8.f;   // +18 dB
 // Level: the VCO square x the INPUT's envelope (core env_follower.h, 33 Hz
 // MoogerFooger topology) — follows the playing's dynamics at its own level.
 

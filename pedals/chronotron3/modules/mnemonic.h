@@ -516,7 +516,9 @@ class Mnemonic : public Module {
         x = TapeDrive(x);                               // always-on base tape warmth
         x = degrade_.ColourProcess(x);                  // K3 BBD/Tape colour — IN the loop
         delay_.Write(x);
-        delayed = ds;
+        // PLL mode: a fixed gain on the WET only (after the loop), so the quiet
+        // linear square in the loop never hits the tape saturation.
+        delayed = pll_mode_ ? ds * MNEM_PLL_OUT_GAIN : ds;
       }
 
       // Freeze voice: 2 half-overlapped full-Hann grains loop the captured
