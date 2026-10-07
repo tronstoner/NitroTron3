@@ -36,6 +36,7 @@
 #include "mnemonic_multiband_freeze.h"   // multiband incommensurate granular freeze (SW1 DOWN)
 #include "constants.h"          // pedals/chronotron3 — CT3_BLOCK_SIZE
 #include "clouds_reverb_48k.h"  // core/blocks — K5-CCW reverb (shared with sprawl)
+#include "env_follower.h"       // core/blocks — MoogerFooger follower (PLL level)
 #include "pll.h"                // core/blocks — CD4046-style PLL (SW2 DOWN)
 #include <math.h>
 #include <cstring>         // memset (kill)
@@ -149,8 +150,7 @@ class Mnemonic : public Module {
     reverb_.Init(mnem_reverb_slab, MNEM_RESAMPLER_CUTOFF_HZ, MNEM_RESAMPLER_PROTO_FS_HZ,
                  MNEM_REVERB_IN_GAIN, MNEM_REVERB_TIME_MIN, MNEM_REVERB_AMT_SMOOTH);
     pll_.Init(sr_, MNEM_PLL_VCO_MIN_HZ, MNEM_PLL_VCO_CENTRE_HZ, MNEM_PLL_VCO_MAX_HZ);
-    pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
-    pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
+    pll_envf_.Init(sr_);                             // 33 Hz MoogerFooger follower, unity pre-gain
     degrade_.Init(sr_);
   }
 
@@ -505,12 +505,11 @@ class Mnemonic : public Module {
         float fb = FbSat(ds * fb_eff * FbCtl(ds) * FbDuck(ds) * panic_env_);
         float src = in[i];
         if (pll_mode_) {
-          // SW2 DOWN: the gated PLL square replaces the input as what gets
-          // written. Gate = fast envelope on the input, hard threshold.
-          const float ia = fabsf(in[i]);
-          pll_env_ += (ia > pll_env_ ? pll_gate_atk_ : pll_gate_rel_) * (ia - pll_env_);
-          const float gate = (pll_env_ > MNEM_PLL_GATE_THR) ? 1.f : 0.f;
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * gate;
+          // SW2 DOWN: the PLL square replaces the input as what gets written.
+          // Level = the input's envelope (MoogerFooger follower, core
+          // env_follower.h): the square follows the playing's dynamics and
+          // sits at the input's own level (no gate, no fixed level).
+          src = pll_.Process(in[i]) * pll_envf_.Process(in[i]);
         }
         float x = src * send_gain_ + loop_s + fb;
         x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
@@ -860,7 +859,7 @@ class Mnemonic : public Module {
   // PLL mode (SW2 DOWN): one line, gated PLL square written instead of the input
   bool  pll_mode_ = false;
   Pll4046 pll_;
-  float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
+  EnvFollower pll_envf_;                           // PLL level: the input envelope
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;
