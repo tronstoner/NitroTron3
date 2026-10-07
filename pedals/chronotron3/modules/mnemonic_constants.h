@@ -373,10 +373,14 @@ static constexpr float MNEM_PLL_LF_MAX_HZ = 2000.f;
 static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;
 static constexpr float MNEM_PLL_VCO_CENTRE_HZ = 200.f;
 static constexpr float MNEM_PLL_VCO_MAX_HZ    = 4000.f;
-// Wet-only gain in PLL mode (after the delay; the loop stays below the tape saturation).
-static constexpr float MNEM_PLL_OUT_GAIN = 8.f;   // +18 dB
-// Level: the VCO square x the INPUT's envelope (core env_follower.h, 33 Hz
-// MoogerFooger topology) — follows the playing's dynamics at its own level.
+// Wet-only trim in PLL mode (after the delay): the hot square down to the playing's level.
+static constexpr float MNEM_PLL_OUT_TRIM = 0.15f;   // about -16 dB
+// Fixed level of the bipolar VCO square written into the delay, gated by a
+// fast envelope on the INPUT (hard threshold, guitar-level).
+static constexpr float MNEM_PLL_LEVEL       = 0.1f;
+static constexpr float MNEM_PLL_GATE_THR    = 0.003f;
+static constexpr float MNEM_PLL_GATE_ATK_MS = 2.f;
+static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
 
 // ---------------------------------------------------------------------------
 // K1 narrowing (all SW2 modes, 2026-10-07). K1 = tone tilt AND narrow: the

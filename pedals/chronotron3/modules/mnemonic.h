@@ -36,7 +36,6 @@
 #include "mnemonic_multiband_freeze.h"   // multiband incommensurate granular freeze (SW1 DOWN)
 #include "constants.h"          // pedals/chronotron3 — CT3_BLOCK_SIZE
 #include "clouds_reverb_48k.h"  // core/blocks — K5-CCW reverb (shared with sprawl)
-#include "env_follower.h"       // core/blocks — MoogerFooger follower (PLL level)
 #include "pll.h"                // core/blocks — CD4046-style PLL (SW2 DOWN)
 #include <math.h>
 #include <cstring>         // memset (kill)
@@ -150,7 +149,8 @@ class Mnemonic : public Module {
     reverb_.Init(mnem_reverb_slab, MNEM_RESAMPLER_CUTOFF_HZ, MNEM_RESAMPLER_PROTO_FS_HZ,
                  MNEM_REVERB_IN_GAIN, MNEM_REVERB_TIME_MIN, MNEM_REVERB_AMT_SMOOTH);
     pll_.Init(sr_, MNEM_PLL_VCO_MIN_HZ, MNEM_PLL_VCO_CENTRE_HZ, MNEM_PLL_VCO_MAX_HZ);
-    pll_envf_.Init(sr_);                             // 33 Hz MoogerFooger follower, unity pre-gain
+    pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
+    pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
   }
 
@@ -506,19 +506,22 @@ class Mnemonic : public Module {
         float src = in[i];
         if (pll_mode_) {
           // SW2 DOWN: the PLL square replaces the input as what gets written.
-          // Level = the input's envelope (MoogerFooger follower, core
-          // env_follower.h): the square follows the playing's dynamics and
-          // sits at the input's own level (no gate, no fixed level).
-          src = pll_.Process(in[i]) * pll_envf_.Process(in[i]);
+          // Gate = fast envelope on the input, hard threshold; the square at a
+          // FIXED level while open (hard onset, full-level lock glitches = the
+          // brittle character). Overall level: the wet trim below.
+          const float ia = fabsf(in[i]);
+          pll_env_ += (ia > pll_env_ ? pll_gate_atk_ : pll_gate_rel_) * (ia - pll_env_);
+          const float gate = (pll_env_ > MNEM_PLL_GATE_THR) ? 1.f : 0.f;
+          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * gate;
         }
         float x = src * send_gain_ + loop_s + fb;
         x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
         x = TapeDrive(x);                               // always-on base tape warmth
         x = degrade_.ColourProcess(x);                  // K3 BBD/Tape colour — IN the loop
         delay_.Write(x);
-        // PLL mode: a fixed gain on the WET only (after the loop), so the quiet
-        // linear square in the loop never hits the tape saturation.
-        delayed = pll_mode_ ? ds * MNEM_PLL_OUT_GAIN : ds;
+        // PLL mode: a fixed trim on the WET only (after the loop) brings the
+        // hot square down to the playing's level.
+        delayed = pll_mode_ ? ds * MNEM_PLL_OUT_TRIM : ds;
       }
 
       // Freeze voice: 2 half-overlapped full-Hann grains loop the captured
@@ -861,7 +864,7 @@ class Mnemonic : public Module {
   // PLL mode (SW2 DOWN): one line, gated PLL square written instead of the input
   bool  pll_mode_ = false;
   Pll4046 pll_;
-  EnvFollower pll_envf_;                           // PLL level: the input envelope
+  float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;
