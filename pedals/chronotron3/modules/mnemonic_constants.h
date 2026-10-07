@@ -372,10 +372,17 @@ static constexpr float MNEM_PLL_LF_HZ = 2000.f;
 //   0 output /4 · 1 output /2 · 2 PC2 (phase-frequency detector) 1:1 ·
 //   3 normal XOR 1:1 · 4 feedback /2 (octave up) · 5 feedback /3 (oct + fifth) ·
 //   6 feedback /3 + output /2 (fifth up, 3:2).
-static constexpr int MNEM_PLL_ZONES = 7;
-static constexpr int  MNEM_PLL_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1, 1, 2, 3, 3};
-static constexpr int  MNEM_PLL_OUT_DIV[MNEM_PLL_ZONES] = {4, 2, 1, 1, 1, 1, 2};
-static constexpr bool MNEM_PLL_PC2[MNEM_PLL_ZONES]     = {false, false, true, false, false, false, false};
+// 13 zones (2026-10-07): the 7 modes at the fast fuzz filter in the middle,
+// three UNSTABLE variants at each edge (own mode + slow loop filter: low
+// loop-filter Hz = audibly unstable / glitchy; high = fuzz).
+//   zone:   0 /4@3  1 PC2@5  2 XOR@15 | 3 /4  4 /2  5 PC2  6 XOR  7 x2  8 x3  9 x1.5 | 10 x2@10  11 x1.5@25  12 x3@4
+static constexpr int MNEM_PLL_ZONES = 13;
+static constexpr int   MNEM_PLL_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1,   1, 1, 1, 1, 2, 3, 3,   2, 3, 3};
+static constexpr int   MNEM_PLL_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1,   4, 2, 1, 1, 1, 1, 2,   1, 2, 1};
+static constexpr bool  MNEM_PLL_PC2[MNEM_PLL_ZONES]     = {false, true, false,   false, false, true, false, false, false, false,   false, false, false};
+static constexpr float MNEM_PLL_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f,
+    MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ,
+    10.f, 25.f, 4.f};
 // VCO range + free-running centre (loop-filter output 0.5 = centre; the two
 // halves map exponentially to MIN / MAX).
 static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;

@@ -256,6 +256,7 @@ class Mnemonic : public Module {
       int z = (int)(knob_k3 * (float)MNEM_PLL_ZONES);
       if (z > MNEM_PLL_ZONES - 1) z = MNEM_PLL_ZONES - 1;
       pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z]);
+      if (z != pll_zone_) { pll_.SetLoopFilterHz(MNEM_PLL_ZONE_LF_HZ[z]); pll_zone_ = z; }   // per-zone loop filter
     }
 
     // Curve |tilt| for more sensitivity around noon (see MNEM_FILT_TILT_CURVE).
@@ -870,6 +871,7 @@ class Mnemonic : public Module {
   bool  pll_mode_ = false;
   Pll4046 pll_;
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
+  int   pll_zone_ = -1;                              // K3 zone whose loop filter is set
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;
