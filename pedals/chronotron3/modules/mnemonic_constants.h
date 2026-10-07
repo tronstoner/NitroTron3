@@ -358,34 +358,34 @@ static constexpr float MNEM_REVERB_AMT_MAX = 0.75f;
 static constexpr float MNEM_REVERB_FB_CEIL = 0.90f;
 
 // ---------------------------------------------------------------------------
-// SW2 DOWN — cross-ring mode (2026-09-15). A VARIANT OF EDGE: same two delay
-// lines, same K2 division table + per-stop companion ratio, same K5 feedback on
-// both loops. What changes is the signal path — the companion line stops being
-// an audible "telephone" voice and becomes the MODULATOR, multiplied against
-// the primary AFTER both loops. No product is ever written back, so the
-// spectrum cannot collapse toward noise across repeats.
-//
-// Both lines run at unison, so sum/difference terms land back on harmonics of
-// the played fundamental: single notes stay in key with no pitch tracking
-// anywhere. Chords give inharmonic cross terms — expected here, not a defect.
-//
-// The knob-time SW2 position is retired; all three positions are tap-derived.
+// SW2 DOWN — PLL mode (2026-10-07; replaces the cross-ring). ONE delay line,
+// timed exactly like SW2 UP (quarter x K2 division). A CD4046-style PLL
+// (src/core/blocks/pll.h) tracks the INPUT; its gated VCO square is what gets
+// WRITTEN into the delay (instead of the input), summed with the loop playback
+// and the feedback return. EQ / tape drive / degrade stay IN the loop as in the
+// other modes; wet = the delay output only. The dry is untouched (shell mix).
 // ---------------------------------------------------------------------------
-// K3 drives the companion into tanh BEFORE the multiply. Driven hard the tanh
-// approaches a square, which does both jobs the mode needs from one control:
-// it holds modulation DEPTH up as the companion's tail decays (the product
-// would otherwise die at the product of both envelopes, roughly twice as fast
-// as either line), and it strengthens the sidebands. Post-trim is FIXED —
-// never 1/drive, which would undo exactly the level-independence we want.
-static constexpr float MNEM_RING_DRIVE_MIN = 2.0f;   // K3 CCW: gentle, follows the tail
-static constexpr float MNEM_RING_DRIVE_MAX = 40.0f;  // K3 CW: near-square, constant depth
-static constexpr float MNEM_RING_TRIM      = 1.0f;   // fixed post-saturator trim
-// The product carries DC proportional to the instantaneous correlation of the
-// two lines; block it on the wet path.
-static constexpr float MNEM_RING_DC_HZ     = 20.0f;
-// The EQ is bypassed AS A CONTROL in this mode (K1/K3 are reassigned), but the
-// filter stays IN the path at fixed neutral values — widest band, unity makeup.
-// That keeps the loop gain comparable to Edge instead of silently changing how
-// K5 feels, and leaves the stage available for later ideas.
-static constexpr float MNEM_RING_EQ_TILT   = 0.5f;   // noon = flat
-static constexpr float MNEM_RING_EQ_NARROW = 0.0f;   // fully CCW = no narrowing
+// K3 = loop-filter (one-pole RC) cutoff, log taper CCW slow .. CW fast.
+static constexpr float MNEM_PLL_LF_MIN_HZ = 2.f;
+static constexpr float MNEM_PLL_LF_MAX_HZ = 2000.f;
+// VCO range + free-running centre (loop-filter output 0.5 = centre; the two
+// halves map exponentially to MIN / MAX).
+static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;
+static constexpr float MNEM_PLL_VCO_CENTRE_HZ = 200.f;
+static constexpr float MNEM_PLL_VCO_MAX_HZ    = 4000.f;
+// Fixed level of the bipolar VCO square written into the delay.
+static constexpr float MNEM_PLL_LEVEL = 0.1f;
+// Gate: fast envelope on the INPUT (one-pole, attack / release), hard open
+// above the threshold. Guitar-level threshold so it opens on any instrument.
+static constexpr float MNEM_PLL_GATE_THR    = 0.003f;
+static constexpr float MNEM_PLL_GATE_ATK_MS = 2.f;
+static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
+
+// ---------------------------------------------------------------------------
+// K1 narrowing (all SW2 modes, 2026-10-07). K1 = tone tilt AND narrow: the
+// narrow amount is 0 at K1 noon and rises toward BOTH K1 ends to MAX (= what
+// K3 at noon gave under the old K3 narrow mapping: 0.5). Curve applies to
+// |tilt| (0..1): 1.0 = linear. K3 no longer narrows.
+// ---------------------------------------------------------------------------
+static constexpr float MNEM_K1_NARROW_MAX   = 0.5f;
+static constexpr float MNEM_K1_NARROW_CURVE = 1.0f;
