@@ -6,7 +6,7 @@
 //                                                      phase comparator
 //   VCO square -> feedback divider /N (flip-flop) -----+   (PC1 XOR or PC2 PFD)
 //        |                                                 -> one-pole RC loop filter -> VCO control
-//        +-> output divider /M (flip-flop) -> output
+//        +-> output divider /M (flip-flop) -> output (square, or triangle)
 //
 // The loop-filter output v (0..1) drives the VCO exponentially through its
 // free-running centre: v = 0.5 -> centre, v = 0 -> fmin, v = 1 -> fmax (each
@@ -26,6 +26,11 @@
 //         -1 towards 0 (VCO down), 0 = high impedance: the filter HOLDS
 //         (charge pump into the one-pole). Locks with zero phase error to the
 //         input's rising zero crossings.
+//
+// Output shape: the divided square (default) or a bipolar TRIANGLE (-1..+1)
+// of the OUTPUT phase at the same frequency. Output phase = (output-divider
+// half-cycle count + VCO half-cycle phase) / (2 M) — i.e. (count + VCO
+// phase) / M; for M = 1 it is the VCO phase itself. Naive (not band-limited).
 //
 // Nothing else: no hysteresis on the comparator, no lock detector, no
 // frequency clamp beyond the VCO range itself.
@@ -51,16 +56,18 @@ class Pll4046 {
   }
   // One-pole RC loop-filter cutoff (Hz).
   void SetLoopFilterHz(float hz) { a_ = 1.f - expf(-2.f * 3.14159265f * hz / sr_); }
-  // Feedback divider N (>= 1), output divider M (>= 1), comparator PC2 (else PC1).
-  // Divider counters and the PFD state are kept across changes (no reset).
-  void SetMode(int fb_div, int out_div, bool pc2) {
+  // Feedback divider N (>= 1), output divider M (>= 1), comparator PC2 (else PC1),
+  // output triangle (else square). Divider counters and the PFD state are kept
+  // across changes (no reset).
+  void SetMode(int fb_div, int out_div, bool pc2, bool tri = false) {
+    tri_ = tri;
     fb_div_  = fb_div  < 1 ? 1 : fb_div;
     out_div_ = out_div < 1 ? 1 : out_div;
     if (pc2 && !pc2_) pfd_ = 0;        // entering PC2: start tri-stated
     pc2_ = pc2;
   }
 
-  // One sample. Returns the divided VCO square (+-1).
+  // One sample. Returns the divided VCO square (+-1), or the triangle (-1..+1).
   inline float Process(float in) {
     const bool in_hi  = in >= 0.f;               // comparator: sign of the input
     const bool vco_hi = phase_ < 0.5f;           // VCO square
@@ -83,6 +90,17 @@ class Pll4046 {
     }
     const float c = 2.f * v_ - 1.f;              // -1 .. +1 around the centre
     freq_ = fc_ * expf(c * (c >= 0.f ? up_oct_ : dn_oct_));
+    if (tri_) {
+      // Output phase from the divider state + the VCO phase (read before the
+      // advance, i.e. the same instant the square value below reflects).
+      const float half = vco_hi ? phase_ * 2.f : phase_ * 2.f - 1.f;   // 0..1 within the VCO half
+      const int   e    = (out_q_ ? 0 : out_div_) + out_cnt_;              // half-cycles into the output period
+      float op = ((float)e + half) / (float)(2 * out_div_);
+      if (op > 1.f) op = 1.f;                    // (counter left above a reduced M: until it wraps)
+      phase_ += freq_ / sr_;
+      if (phase_ >= 1.f) phase_ -= 1.f;
+      return 4.f * fabsf(op - 0.5f) - 1.f;       // +1 at the square's rising edge, -1 mid-period
+    }
     phase_ += freq_ / sr_;
     if (phase_ >= 1.f) phase_ -= 1.f;
     return out_q_ ? 1.f : -1.f;
@@ -96,7 +114,7 @@ class Pll4046 {
   float up_oct_ = 0.f, dn_oct_ = 0.f;
   float phase_ = 0.f, v_ = 0.5f, a_ = 0.f, freq_ = 200.f;
   int  fb_div_ = 1, out_div_ = 1;
-  bool pc2_ = false;
+  bool pc2_ = false, tri_ = false;
   bool vco_prev_ = true, fb_q_ = true, out_q_ = true, in_prev_ = false;
   int  fb_cnt_ = 0, out_cnt_ = 0, pfd_ = 0;
 };

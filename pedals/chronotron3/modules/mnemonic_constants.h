@@ -372,17 +372,38 @@ static constexpr float MNEM_PLL_LF_HZ = 2000.f;
 //   0 output /4 · 1 output /2 · 2 PC2 (phase-frequency detector) 1:1 ·
 //   3 normal XOR 1:1 · 4 feedback /2 (octave up) · 5 feedback /3 (oct + fifth) ·
 //   6 feedback /3 + output /2 (fifth up, 3:2).
-// 13 zones (2026-10-07): the 7 modes at the fast fuzz filter in the middle,
-// three UNSTABLE variants at each edge (own mode + slow loop filter: low
-// loop-filter Hz = audibly unstable / glitchy; high = fuzz).
-//   zone:   0 /4@3  1 PC2@5  2 XOR@15 | 3 /4  4 /2  5 PC2  6 XOR  7 x2  8 x3  9 x1.5 | 10 x2@10  11 x1.5@25  12 x3@4
+// MNEM_PLL_SET picks the K3 zone set (both 13 zones, zone = min(12, k3*13)):
+//   0 = the 2026-10-07 set (below), unchanged;  1 = the triangle set (active).
+static constexpr int MNEM_PLL_SET = 1;
 static constexpr int MNEM_PLL_ZONES = 13;
-static constexpr int   MNEM_PLL_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1,   1, 1, 1, 1, 2, 3, 3,   2, 3, 3};
-static constexpr int   MNEM_PLL_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1,   4, 2, 1, 1, 1, 1, 2,   1, 2, 1};
-static constexpr bool  MNEM_PLL_PC2[MNEM_PLL_ZONES]     = {false, true, false,   false, false, true, false, false, false, false,   false, false, false};
-static constexpr float MNEM_PLL_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f,
+// SET 0 — 13 zones (2026-10-07): the 7 modes at the fast fuzz filter in the middle,
+// three UNSTABLE variants at each edge (own mode + slow loop filter: low
+// loop-filter Hz = audibly unstable / glitchy; high = fuzz). All square.
+//   zone:   0 /4@3  1 PC2@5  2 XOR@15 | 3 /4  4 /2  5 PC2  6 XOR  7 x2  8 x3  9 x1.5 | 10 x2@10  11 x1.5@25  12 x3@4
+static constexpr int   MNEM_PLL_S0_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1,   1, 1, 1, 1, 2, 3, 3,   2, 3, 3};
+static constexpr int   MNEM_PLL_S0_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1,   4, 2, 1, 1, 1, 1, 2,   1, 2, 1};
+static constexpr bool  MNEM_PLL_S0_PC2[MNEM_PLL_ZONES]     = {false, true, false,   false, false, true, false, false, false, false,   false, false, false};
+static constexpr float MNEM_PLL_S0_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f,
     MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ,
     10.f, 25.f, 4.f};
+static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_ZONES]     = {false, false, false, false, false, false, false, false, false, false, false, false, false};
+// SET 1 (2026-10-07) — square at the edges, triangle in the middle (zones 4..8).
+//   zone:  0 /4 XOR@3 sq · 1 PC2@2000 sq · 2 XOR@15 sq · 3 /2 @25 sq ·
+//          4 1:1 @30 tri · 5 /2 @60 tri · 6 1:1 @60 tri · 7 x2 @60 tri · 8 x1.5 @30 tri ·
+//          9 x2 @15 sq · 10 x1.5 @25 sq · 11 x3 @2000 sq · 12 x3 @4 sq   (all XOR except zone 1)
+static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1, 1,   1, 1, 1, 2, 3,   2, 3, 3, 3};
+static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1, 2,   1, 2, 1, 1, 2,   1, 2, 1, 1};
+static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_ZONES]     = {false, true, false, false,   false, false, false, false, false,   false, false, false, false};
+static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, MNEM_PLL_LF_HZ, 15.f, 25.f,
+    30.f, 60.f, 60.f, 60.f, 30.f,
+    15.f, 25.f, MNEM_PLL_LF_HZ, 4.f};
+static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_ZONES]     = {false, false, false, false,   true, true, true, true, true,   false, false, false, false};
+// The active set (what mnemonic.h reads).
+static constexpr const int*   MNEM_PLL_FB_DIV     = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_FB_DIV     : MNEM_PLL_S1_FB_DIV;
+static constexpr const int*   MNEM_PLL_OUT_DIV    = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_OUT_DIV    : MNEM_PLL_S1_OUT_DIV;
+static constexpr const bool*  MNEM_PLL_PC2        = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_PC2        : MNEM_PLL_S1_PC2;
+static constexpr const float* MNEM_PLL_ZONE_LF_HZ = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_ZONE_LF_HZ : MNEM_PLL_S1_ZONE_LF_HZ;
+static constexpr const bool*  MNEM_PLL_TRI        = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_TRI        : MNEM_PLL_S1_TRI;
 // VCO range + free-running centre (loop-filter output 0.5 = centre; the two
 // halves map exponentially to MIN / MAX).
 static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;

@@ -257,7 +257,7 @@ class Mnemonic : public Module {
     {
       int z = (int)(knob_k3 * (float)MNEM_PLL_ZONES);
       if (z > MNEM_PLL_ZONES - 1) z = MNEM_PLL_ZONES - 1;
-      pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z]);
+      pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z], MNEM_PLL_TRI[z]);
       pll_zone_ = z;                                     // (its loop filter: set per block with the dynamics)
     }
 
