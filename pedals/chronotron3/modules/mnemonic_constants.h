@@ -396,6 +396,14 @@ static constexpr float MNEM_PLL_LEVEL       = 0.1f;
 static constexpr float MNEM_PLL_GATE_THR    = 0.003f;
 static constexpr float MNEM_PLL_GATE_ATK_MS = 2.f;
 static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
+// Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
+// DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's
+// loop filter x 2^(LF_OCT (2d-1)) — hard playing faster / fuzzier, soft slower
+// / more unstable.
+static constexpr float MNEM_PLL_DYN_DB_LO  = -50.f;
+static constexpr float MNEM_PLL_DYN_DB_HI  = -20.f;
+static constexpr float MNEM_PLL_DYN_FLOOR  = 0.6f;
+static constexpr float MNEM_PLL_DYN_LF_OCT = 2.f;
 
 // ---------------------------------------------------------------------------
 // K1 narrowing (all SW2 modes, 2026-10-07). K1 = tone tilt AND narrow: the

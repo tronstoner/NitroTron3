@@ -37,6 +37,7 @@
 #include "mnemonic_multiband_freeze.h"   // multiband incommensurate granular freeze (SW1 DOWN)
 #include "constants.h"          // pedals/chronotron3 — CT3_BLOCK_SIZE
 #include "clouds_reverb_48k.h"  // core/blocks — K5-CCW reverb (shared with sprawl)
+#include "env_follower.h"       // core/blocks — MoogerFooger follower (PLL dynamics)
 #include "pll.h"                // core/blocks — CD4046-style PLL (SW2 DOWN)
 #include <math.h>
 #include <cstring>         // memset (kill)
@@ -151,6 +152,7 @@ class Mnemonic : public Module {
                  MNEM_REVERB_IN_GAIN, MNEM_REVERB_TIME_MIN, MNEM_REVERB_AMT_SMOOTH);
     pll_.Init(sr_, MNEM_PLL_VCO_MIN_HZ, MNEM_PLL_VCO_CENTRE_HZ, MNEM_PLL_VCO_MAX_HZ);
     pll_.SetLoopFilterHz(MNEM_PLL_LF_HZ);
+    pll_envf_.Init(sr_);
     pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
@@ -256,7 +258,7 @@ class Mnemonic : public Module {
       int z = (int)(knob_k3 * (float)MNEM_PLL_ZONES);
       if (z > MNEM_PLL_ZONES - 1) z = MNEM_PLL_ZONES - 1;
       pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z]);
-      if (z != pll_zone_) { pll_.SetLoopFilterHz(MNEM_PLL_ZONE_LF_HZ[z]); pll_zone_ = z; }   // per-zone loop filter
+      pll_zone_ = z;                                     // (its loop filter: set per block with the dynamics)
     }
 
     // Curve |tilt| for more sensitivity around noon (see MNEM_FILT_TILT_CURVE).
@@ -414,6 +416,10 @@ class Mnemonic : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     const float wp0  = (float)delay_.GetWritePos();
     const float wp2_0 = (float)delay2_.GetWritePos();   // Edge quarter line write base
+    // PLL dynamics (B): once per block, the playing's dynamics bend this
+    // zone's loop filter by +-MNEM_PLL_DYN_LF_OCT octaves (hard = faster/fuzzier).
+    if (pll_mode_ && pll_zone_ >= 0)
+      pll_.SetLoopFilterHz(MNEM_PLL_ZONE_LF_HZ[pll_zone_] * exp2f(MNEM_PLL_DYN_LF_OCT * (2.f * pll_dyn_ - 1.f)));
 
     for (size_t i = 0; i < size; i++) {
       // Audio-rate param smoothing — kills the control-tick (~10 ms) zipper on
@@ -518,7 +524,13 @@ class Mnemonic : public Module {
           const float ia = fabsf(in[i]);
           pll_env_ += (ia > pll_env_ ? pll_gate_atk_ : pll_gate_rel_) * (ia - pll_env_);
           const float gate = (pll_env_ > MNEM_PLL_GATE_THR) ? 1.f : 0.f;
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * gate;
+          // Dynamics: the input envelope in dB, DYN_DB_LO .. DYN_DB_HI -> 0..1
+          // (instrument-agnostic); level (A) = LEVEL x (FLOOR + (1-FLOOR) x d).
+          const float ev = pll_envf_.Process(in[i]);
+          float d = (20.f * log10f(ev + 1e-9f) - MNEM_PLL_DYN_DB_LO) / (MNEM_PLL_DYN_DB_HI - MNEM_PLL_DYN_DB_LO);
+          d = d < 0.f ? 0.f : (d > 1.f ? 1.f : d);
+          pll_dyn_ = d;
+          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate;
         }
         float x = src * send_gain_ + loop_s + fb;
         x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
@@ -871,7 +883,9 @@ class Mnemonic : public Module {
   bool  pll_mode_ = false;
   Pll4046 pll_;
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
-  int   pll_zone_ = -1;                              // K3 zone whose loop filter is set
+  int   pll_zone_ = -1;                              // K3 zone (its loop filter, set per block)
+  EnvFollower pll_envf_;                             // PLL dynamics: input envelope (MoogerFooger)
+  float pll_dyn_ = 0.f;                              //  -> 0..1
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;
