@@ -5,8 +5,7 @@ work, together with `agents-instructions.md` (git / docs / process rules).
 These are the builder's rules, distilled from many sessions. Where a rule has
 a reason, the reason matters as much as the rule.
 
-DRAFT 2026-10-03 — consolidated from the agents' notes; open points are marked
-**[OPEN]** for the builder to settle.
+Consolidated 2026-10-03 from the agents' notes; open points settled 2026-10-07.
 
 ---
 
@@ -78,9 +77,8 @@ DRAFT 2026-10-03 — consolidated from the agents' notes; open points are marked
 - Once a plan is agreed, execute it without re-confirming each step.
 - Implement only what is named. Adjacent ideas are offered as one short
   opt-in suggestion, never folded into the diff.
-- **[OPEN]** Numeric values inside an agreed change: the notes say both "just
-  pick a value, don't ask about trivia" and "every choice is surfaced first".
-  Proposed reading: pick it, but name it in the same message as the plan.
+- Numeric values inside an agreed change: pick a sensible value, but NAME it
+  in the plan before building (never a hidden choice).
 
 ## 6. Tuning
 
@@ -146,9 +144,8 @@ DRAFT 2026-10-03 — consolidated from the agents' notes; open points are marked
   prototype production-ready too early kills the project.
 - Iteration speed matters: when only data changes (e.g. a rhythm set), no
   plumbing in between.
-- **[OPEN]** Builds: an older note says "after tuning edits don't build, he
-  flashes himself" (NitroTron3 / instrument profiles). On ChronoTron3 we build
-  the DIAG firmware and hand over the flash command. Which holds now?
+- Builds (ChronoTron3): build WITHOUT DIAG and hand over
+  `task flash-chronotron3`; DIAG only when a serial log is actually needed.
 
 ## 11. Process (see agents-instructions.md for the full rules)
 
