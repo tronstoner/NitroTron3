@@ -249,7 +249,7 @@ class Mnemonic : public Module {
     // it shrinks both edges toward the geometric center => a band-limit by
     // convergence, resonant at both cutoffs (no single peak).
     const float eq_tilt = knob_tilt;
-    float tilt = (eq_tilt - 0.5f) * 2.f;               // -1 .. +1
+    float tilt = (eq_tilt - 0.5f) * 2.f * MNEM_K1_RANGE;   // -RANGE .. +RANGE (full K1 = old ~9:00 / 15:00)
     const float eq_narrow = MNEM_K1_NARROW_MAX *
         powf(tilt < 0.f ? -tilt : tilt, MNEM_K1_NARROW_CURVE);
 

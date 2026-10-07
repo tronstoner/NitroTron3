@@ -427,6 +427,9 @@ static constexpr float MNEM_PLL_DYN_FLOOR  = 0.6f;
 static constexpr float MNEM_PLL_DYN_LF_OCT = 2.f;
 
 // ---------------------------------------------------------------------------
+// K1 travel range (2026-10-07, the builder): beyond ~9:00 / 15:00 the signal
+// got cut off — the full knob now reaches what 9:00 / 15:00 gave (+ a little).
+static constexpr float MNEM_K1_RANGE = 0.65f;
 // K1 narrowing (all SW2 modes, 2026-10-07). K1 = tone tilt AND narrow: the
 // narrow amount is 0 at K1 noon and rises toward BOTH K1 ends to MAX (= what
 // K3 at noon gave under the old K3 narrow mapping: 0.5). Curve applies to
