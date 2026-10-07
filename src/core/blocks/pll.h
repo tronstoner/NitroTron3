@@ -2,14 +2,30 @@
 //
 // pll.h — minimal CD4046-style phase-locked loop (header-only).
 //
-//   input -> hard limiter (sign) -+
-//                                 XOR (type-1 phase comparator)
-//   VCO square (1:1, no divider) -+    -> one-pole RC loop filter -> VCO control
+//   input -> hard limiter (sign) ----------------------+
+//                                                      phase comparator
+//   VCO square -> feedback divider /N (flip-flop) -----+   (PC1 XOR or PC2 PFD)
+//        |                                                 -> one-pole RC loop filter -> VCO control
+//        +-> output divider /M (flip-flop) -> output
 //
-// The loop-filter output v (0..1, the averaged XOR duty) drives the VCO
-// exponentially through its free-running centre: v = 0.5 -> centre, v = 0 ->
-// fmin, v = 1 -> fmax (each half its own octave span). The VCO is a naive
-// (non-band-limited) square. Output is the VCO square, bipolar +-1.
+// The loop-filter output v (0..1) drives the VCO exponentially through its
+// free-running centre: v = 0.5 -> centre, v = 0 -> fmin, v = 1 -> fmax (each
+// half its own octave span). The VCO is a naive (non-band-limited) square.
+//
+// Dividers (4046 + CD4040 style): square/flip-flop counters on the VCO edges.
+// Each divider counts BOTH VCO edges and toggles its own square every N edges,
+// so /N is a 50 %-duty square at fVCO/N for any N (also /3). The comparator
+// sees the input against the VCO divided by N (VCO locks at N x input); the
+// audible output is the VCO divided by M.
+//
+// Phase comparators:
+//   PC1 — XOR of input sign and divided VCO, straight into the RC filter.
+//   PC2 — edge-triggered tri-state phase-frequency detector: an input rising
+//         edge steps the state up, a divided-VCO rising edge steps it down
+//         (state -1 / 0 / +1). +1 drives the RC filter towards 1 (VCO up),
+//         -1 towards 0 (VCO down), 0 = high impedance: the filter HOLDS
+//         (charge pump into the one-pole). Locks with zero phase error to the
+//         input's rising zero crossings.
 //
 // Nothing else: no hysteresis on the comparator, no lock detector, no
 // frequency clamp beyond the VCO range itself.
@@ -26,28 +42,61 @@ class Pll4046 {
     Reset();
     SetLoopFilterHz(20.f);
   }
-  void Reset() { phase_ = 0.f; v_ = 0.5f; freq_ = fc_; }
+  void Reset() {
+    phase_ = 0.f; v_ = 0.5f; freq_ = fc_;
+    vco_prev_ = true;                  // phase 0 -> VCO square high
+    fb_q_ = true;  fb_cnt_ = 0;
+    out_q_ = true; out_cnt_ = 0;
+    in_prev_ = false; pfd_ = 0;
+  }
   // One-pole RC loop-filter cutoff (Hz).
   void SetLoopFilterHz(float hz) { a_ = 1.f - expf(-2.f * 3.14159265f * hz / sr_); }
+  // Feedback divider N (>= 1), output divider M (>= 1), comparator PC2 (else PC1).
+  // Divider counters and the PFD state are kept across changes (no reset).
+  void SetMode(int fb_div, int out_div, bool pc2) {
+    fb_div_  = fb_div  < 1 ? 1 : fb_div;
+    out_div_ = out_div < 1 ? 1 : out_div;
+    if (pc2 && !pc2_) pfd_ = 0;        // entering PC2: start tri-stated
+    pc2_ = pc2;
+  }
 
-  // One sample. Returns the VCO square (+-1).
+  // One sample. Returns the divided VCO square (+-1).
   inline float Process(float in) {
     const bool in_hi  = in >= 0.f;               // comparator: sign of the input
-    const bool vco_hi = phase_ < 0.5f;           // VCO square, divider 1:1
-    const float xr = (in_hi != vco_hi) ? 1.f : 0.f;   // XOR phase comparator
-    v_ += (xr - v_) * a_;                        // RC loop filter
+    const bool vco_hi = phase_ < 0.5f;           // VCO square
+    if (vco_hi != vco_prev_) {                   // a VCO edge: clock both dividers
+      vco_prev_ = vco_hi;
+      const bool fb_was = fb_q_;
+      if (++fb_cnt_ >= fb_div_)  { fb_cnt_ = 0;  fb_q_ = !fb_q_; }
+      if (++out_cnt_ >= out_div_) { out_cnt_ = 0; out_q_ = !out_q_; }
+      if (fb_q_ && !fb_was && pfd_ > -1) pfd_--;  // divided-VCO rising edge: down
+    }
+    if (in_hi && !in_prev_ && pfd_ < 1) pfd_++;   // input rising edge: up
+    in_prev_ = in_hi;
+    if (pc2_) {
+      if (pfd_ > 0)      v_ += (1.f - v_) * a_;  // pump up
+      else if (pfd_ < 0) v_ += (0.f - v_) * a_;  // pump down
+      // pfd_ == 0: high impedance, the RC filter holds
+    } else {
+      const float xr = (in_hi != fb_q_) ? 1.f : 0.f;   // XOR phase comparator
+      v_ += (xr - v_) * a_;                      // RC loop filter
+    }
     const float c = 2.f * v_ - 1.f;              // -1 .. +1 around the centre
     freq_ = fc_ * expf(c * (c >= 0.f ? up_oct_ : dn_oct_));
     phase_ += freq_ / sr_;
     if (phase_ >= 1.f) phase_ -= 1.f;
-    return vco_hi ? 1.f : -1.f;
+    return out_q_ ? 1.f : -1.f;
   }
 
-  float VcoHz() const { return freq_; }          // current VCO frequency
+  float VcoHz() const { return freq_; }          // current VCO frequency (undivided)
   float Control() const { return v_; }           // loop-filter output 0..1
 
  private:
   float sr_ = 48000.f, fmin_ = 30.f, fc_ = 200.f, fmax_ = 4000.f;
   float up_oct_ = 0.f, dn_oct_ = 0.f;
   float phase_ = 0.f, v_ = 0.5f, a_ = 0.f, freq_ = 200.f;
+  int  fb_div_ = 1, out_div_ = 1;
+  bool pc2_ = false;
+  bool vco_prev_ = true, fb_q_ = true, out_q_ = true, in_prev_ = false;
+  int  fb_cnt_ = 0, out_cnt_ = 0, pfd_ = 0;
 };

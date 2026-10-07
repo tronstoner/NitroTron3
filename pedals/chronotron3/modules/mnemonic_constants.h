@@ -365,9 +365,17 @@ static constexpr float MNEM_REVERB_FB_CEIL = 0.90f;
 // and the feedback return. EQ / tape drive / degrade stay IN the loop as in the
 // other modes; wet = the delay output only. The dry is untouched (shell mix).
 // ---------------------------------------------------------------------------
-// K3 = loop-filter (one-pole RC) cutoff, log taper CCW slow .. CW fast.
-static constexpr float MNEM_PLL_LF_MIN_HZ = 2.f;
-static constexpr float MNEM_PLL_LF_MAX_HZ = 2000.f;
+// Loop-filter (one-pole RC) cutoff, FIXED = what K3 at noon gave under the
+// old K3 log taper: 2 Hz * (2000 / 2)^0.5 = 63.2 Hz.
+static constexpr float MNEM_PLL_LF_HZ = 63.245553f;
+// K3 = PLL mode selector, 7 equal stepped zones CCW -> CW (zone = min(6, k3*7)):
+//   0 output /4 · 1 output /2 · 2 PC2 (phase-frequency detector) 1:1 ·
+//   3 normal XOR 1:1 · 4 feedback /2 (octave up) · 5 feedback /3 (oct + fifth) ·
+//   6 feedback /3 + output /2 (fifth up, 3:2).
+static constexpr int MNEM_PLL_ZONES = 7;
+static constexpr int  MNEM_PLL_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1, 1, 2, 3, 3};
+static constexpr int  MNEM_PLL_OUT_DIV[MNEM_PLL_ZONES] = {4, 2, 1, 1, 1, 1, 2};
+static constexpr bool MNEM_PLL_PC2[MNEM_PLL_ZONES]     = {false, false, true, false, false, false, false};
 // VCO range + free-running centre (loop-filter output 0.5 = centre; the two
 // halves map exponentially to MIN / MAX).
 static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;

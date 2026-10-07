@@ -14,7 +14,8 @@
 //   K1 = tone tilt / center — bipolar: CCW toward LPF · noon flat · CW toward HPF;
 //        also narrows the band (0 at noon, rising toward both ends)
 //   K2 = tap division (SW2 UP + DOWN) / Edge division (SW2 MID)
-//   K3 = SW2 DOWN: PLL loop-filter speed (CCW slow .. CW fast) · UP/MID: unused
+//   K3 = SW2 DOWN: PLL mode, 7 stepped zones (CCW /4 /2 PC2 normal x2 x3 x1.5 CW)
+//        · UP/MID: unused
 //   K4 = degrade — bipolar: CCW BBD/decimate · noon clean · CW tape warble/drive
 //   K5 = bipolar: CCW reverb (blend + decay sweep + capped feedback) · noon off
 //        · CW feedback (0 -> self-oscillation)
@@ -149,6 +150,7 @@ class Mnemonic : public Module {
     reverb_.Init(mnem_reverb_slab, MNEM_RESAMPLER_CUTOFF_HZ, MNEM_RESAMPLER_PROTO_FS_HZ,
                  MNEM_REVERB_IN_GAIN, MNEM_REVERB_TIME_MIN, MNEM_REVERB_AMT_SMOOTH);
     pll_.Init(sr_, MNEM_PLL_VCO_MIN_HZ, MNEM_PLL_VCO_CENTRE_HZ, MNEM_PLL_VCO_MAX_HZ);
+    pll_.SetLoopFilterHz(MNEM_PLL_LF_HZ);
     pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
@@ -184,7 +186,7 @@ class Mnemonic : public Module {
     // physical knob it reads. Hardware index in the comment.
     const float knob_tilt    = RemapKnob(cs.Knob(0));  // K1 (was K4)
     const float knob_time    = RemapKnob(cs.Knob(1));  // K2 (was K1)
-    const float knob_k3      = RemapKnob(cs.Knob(2));  // K3: PLL loop filter (SW2 DOWN only)
+    const float knob_k3      = RemapKnob(cs.Knob(2));  // K3: PLL mode (SW2 DOWN only)
     const float knob_degrade = RemapKnob(cs.Knob(3));  // K4 (was K3)
     const float knob_fb      = RemapKnob(cs.Knob(4));  // K5 (was K2)
 
@@ -249,9 +251,12 @@ class Mnemonic : public Module {
     const float eq_narrow = MNEM_K1_NARROW_MAX *
         powf(tilt < 0.f ? -tilt : tilt, MNEM_K1_NARROW_CURVE);
 
-    // ---- K3: PLL loop-filter cutoff (SW2 DOWN), log taper ----------------
-    pll_.SetLoopFilterHz(MNEM_PLL_LF_MIN_HZ *
-                         powf(MNEM_PLL_LF_MAX_HZ / MNEM_PLL_LF_MIN_HZ, knob_k3));
+    // ---- K3: PLL mode selector (SW2 DOWN), 7 stepped zones, no blending ---
+    {
+      int z = (int)(knob_k3 * (float)MNEM_PLL_ZONES);
+      if (z > MNEM_PLL_ZONES - 1) z = MNEM_PLL_ZONES - 1;
+      pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z]);
+    }
 
     // Curve |tilt| for more sensitivity around noon (see MNEM_FILT_TILT_CURVE).
     float tmag = powf(tilt < 0.f ? -tilt : tilt, MNEM_FILT_TILT_CURVE);
