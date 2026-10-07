@@ -367,7 +367,7 @@ static constexpr float MNEM_REVERB_FB_CEIL = 0.90f;
 // ---------------------------------------------------------------------------
 // Loop-filter (one-pole RC) cutoff, FIXED = what K3 at noon gave under the
 // old K3 log taper: 2 Hz * (2000 / 2)^0.5 = 63.2 Hz.
-static constexpr float MNEM_PLL_LF_HZ = 63.245553f;
+static constexpr float MNEM_PLL_LF_HZ = 2000.f;  
 // K3 = PLL mode selector, 7 equal stepped zones CCW -> CW (zone = min(6, k3*7)):
 //   0 output /4 · 1 output /2 · 2 PC2 (phase-frequency detector) 1:1 ·
 //   3 normal XOR 1:1 · 4 feedback /2 (octave up) · 5 feedback /3 (oct + fifth) ·
