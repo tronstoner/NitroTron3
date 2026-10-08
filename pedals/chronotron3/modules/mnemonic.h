@@ -537,7 +537,10 @@ class Mnemonic : public Module {
           pll_dyn_ = d;
           // Tempo-synced HARD tremolo on the PLL (zones 1 + 13 only): on for the
           // first half of every 1/8, off for the second, full depth.
-          if (trem_reset_) { trem_ph_ = 0.f; trem_reset_ = false; }
+          // Downbeat: the tap, or the gate OPENING (a note after silence) —
+          // as vestige's capture onset; legato keeps the running phase.
+          if (trem_reset_ || (gate > 0.f && !trem_gate_prev_)) { trem_ph_ = 0.f; trem_reset_ = false; }
+          trem_gate_prev_ = gate > 0.f;
           trem_ph_ += trem_inc_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f;
           const bool trem_on = (pll_zone_ == 0 || pll_zone_ == MNEM_PLL_ZONES - 1);
           const float trem = (trem_on && trem_ph_ >= 0.5f) ? 0.f : 1.f;
@@ -897,6 +900,7 @@ class Mnemonic : public Module {
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
   float trem_ph_ = 0.f, trem_inc_ = 0.f;          // PLL tremolo phase (cycles) + step
   volatile bool trem_reset_ = false;
+  bool  trem_gate_prev_ = false;                     // the PLL gate one sample ago (tremolo downbeat)
   int   pll_zone_ = -1;                              // K3 zone (its loop filter, set per block)
   EnvFollower pll_envf_;                             // PLL dynamics: input envelope (MoogerFooger)
   float pll_dyn_ = 0.f;                              //  -> 0..1
