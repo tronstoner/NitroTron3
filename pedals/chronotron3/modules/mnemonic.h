@@ -521,12 +521,12 @@ class Mnemonic : public Module {
         float dq = delay2_.ReadFrac(wp2 - read_delay2_);            // secondary read (own delay)
 
         UpdateNoiseDuck(dd);                             // duck tracks the K3-coloured (primary) line
+        dd = Filter(dd); dd = TapeDrive(dd);             // K1 tone + base tape warmth: READ side (K1 heard at once), still in the loop
         dd = degrade_.ColourProcess(dd);                 // K4 colour on the READ side (as in sprawl): heard at once, still in the loop
 
         float fbsc = FbCtl(dd) * FbDuck(dd);             // controlled-decay + build-up cap (primary-driven)
         float fbd = FbSat(dd * fb_eff * fbsc * panic_env_);  // primary loop: full colour (= MID)
         float xd = in[i] * send_gain_ + loop_s + fbd;
-        xd = Filter(xd); xd = TapeDrive(xd);
         delay_.Write(xd);
 
         // secondary loop: lo-fi telephone voice on the FRESH input (outside the
@@ -544,6 +544,8 @@ class Mnemonic : public Module {
         // Single line (SW2 UP tap-division / DOWN PLL).
         float ds = delay_.ReadFrac(wp - read_delay_ - wobble);
         UpdateNoiseDuck(ds);
+        ds = Filter(ds);                                 // K1 tone — READ side (heard at once), IN the loop (ages repeats)
+        ds = TapeDrive(ds);                              // always-on base tape warmth
         ds = degrade_.ColourProcess(ds);                 // K4 colour on the READ side (as in sprawl): heard at once, still in the loop
         float fb = FbSat(ds * fb_eff * FbCtl(ds) * FbDuck(ds) * panic_env_);
         float src = in[i];
@@ -578,9 +580,7 @@ class Mnemonic : public Module {
               + in[i] * MNEM_PLL_CLEAN_MIX;
         }
         float x = src * send_gain_ + loop_s + fb;
-        x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
-        x = TapeDrive(x);                               // always-on base tape warmth
-        delay_.Write(x);
+        delay_.Write(x);                                // (tone / warmth / colour: on the read side above)
         // PLL mode: a fixed trim on the WET only (after the loop) brings the
         // hot square down to the playing's level.
         // (+ the zone-1/13 tremolo on the wet only: post-delay, nothing of it
