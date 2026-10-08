@@ -378,18 +378,20 @@ static constexpr float MNEM_PLL_LF_HZ = 2000.f;
 // pure triangle — too muffled; higher = toward the square).
 static constexpr float MNEM_PLL_TRAP_GAIN = 3.f;
 static constexpr int MNEM_PLL_SET = 1;
-static constexpr int MNEM_PLL_ZONES = 13;
+static constexpr int MNEM_PLL_S0_ZONES = 13;
+static constexpr int MNEM_PLL_S1_ZONES = 15;
+static constexpr int MNEM_PLL_ZONES = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_ZONES : MNEM_PLL_S1_ZONES;
 // SET 0 — 13 zones (2026-10-07): the 7 modes at the fast fuzz filter in the middle,
 // three UNSTABLE variants at each edge (own mode + slow loop filter: low
 // loop-filter Hz = audibly unstable / glitchy; high = fuzz). All square.
 //   zone:   0 /4@3  1 PC2@5  2 XOR@15 | 3 /4  4 /2  5 PC2  6 XOR  7 x2  8 x3  9 x1.5 | 10 x2@10  11 x1.5@25  12 x3@4
-static constexpr int   MNEM_PLL_S0_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1,   1, 1, 1, 1, 2, 3, 3,   2, 3, 3};
-static constexpr int   MNEM_PLL_S0_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1,   4, 2, 1, 1, 1, 1, 2,   1, 2, 1};
-static constexpr bool  MNEM_PLL_S0_PC2[MNEM_PLL_ZONES]     = {false, true, false,   false, false, true, false, false, false, false,   false, false, false};
-static constexpr float MNEM_PLL_S0_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f,
+static constexpr int   MNEM_PLL_S0_FB_DIV[MNEM_PLL_S0_ZONES]  = {1, 1, 1,   1, 1, 1, 1, 2, 3, 3,   2, 3, 3};
+static constexpr int   MNEM_PLL_S0_OUT_DIV[MNEM_PLL_S0_ZONES] = {4, 1, 1,   4, 2, 1, 1, 1, 1, 2,   1, 2, 1};
+static constexpr bool  MNEM_PLL_S0_PC2[MNEM_PLL_S0_ZONES]     = {false, true, false,   false, false, true, false, false, false, false,   false, false, false};
+static constexpr float MNEM_PLL_S0_ZONE_LF_HZ[MNEM_PLL_S0_ZONES] = {3.f, 5.f, 15.f,
     MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ,
     10.f, 25.f, 4.f};
-static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_ZONES]     = {false, false, false, false, false, false, false, false, false, false, false, false, false};
+static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_S0_ZONES]     = {false, false, false, false, false, false, false, false, false, false, false, false, false};
 // SET 1 (2026-10-07) — square at the edges, triangle in the middle (zones 4..8).
 //   zone:  0 /4 XOR@3 sq · 1 PC2@2000 sq · 2 XOR@15 sq · 3 /2 @25 sq ·
 //          4 1:1 @30 tri · 5 /2 @60 tri · 6 1:1 @60 tri · 7 x2 @60 tri · 8 x1.5 @30 tri ·
@@ -398,19 +400,25 @@ static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_ZONES]     = {false, false, fals
 // garbled 25-60 Hz / 4 Hz ones (4 6 7 8 9 11 13) -> higher ratios at the filter
 // types that worked (15 Hz / 2 kHz): 4 x4@15 · 6 x5@2k · 7 x2@2k · 8 x3@15 ·
 // 9 x5@15 · 11 x7@2k · 13 x8@15.
-static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1, 4,   1, 5, 2, 3, 5,   2, 7, 3, 8};
-static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1, 1,   1, 1, 1, 1, 1,   1, 1, 1, 1};
-static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_ZONES]     = {false, true, false, false,   false, false, false, false, false,   false, false, false, false};
-static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f, 15.f,
+// 2026-10-08: 15 zones — the outer zone at each end became TWO with the same
+// PLL (CCW /4 XOR@3, CW x8 XOR@15), each with a post-delay tremolo (TREM:
+// 2 = straight, half the delay; 3 = triplet, a third of the delay — outermost).
+static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_S1_ZONES]  = {1, 1, 1, 1, 4,   1, 5, 2, 3, 5,   2, 7, 3, 8, 8};
+static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_S1_ZONES] = {4, 4, 1, 1, 1,   1, 1, 1, 1, 1,   1, 1, 1, 1, 1};
+static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_S1_ZONES]     = {false, false, true, false, false,   false, false, false, false, false,   false, false, false, false, false};
+static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_S1_ZONES] = {3.f, 3.f, 5.f, 15.f, 15.f,
     30.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f, 15.f,
-    15.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f};
-static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_ZONES]     = {false, false, false, false,   false, false, false, false, false,   false, false, false, false};   // all square (2026-10-08: K1 tone does the mellowing)
+    15.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f, 15.f};
+static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_S1_ZONES]     = {};   // all square (2026-10-08: K1 tone does the mellowing)
+static constexpr int   MNEM_PLL_S1_TREM[MNEM_PLL_S1_ZONES]    = {3, 2, 0, 0, 0,   0, 0, 0, 0, 0,   0, 0, 0, 2, 3};
+static constexpr int   MNEM_PLL_S0_TREM[MNEM_PLL_S0_ZONES]    = {};   // (SET 0 predates the tremolo)
 // The active set (what mnemonic.h reads).
 static constexpr const int*   MNEM_PLL_FB_DIV     = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_FB_DIV     : MNEM_PLL_S1_FB_DIV;
 static constexpr const int*   MNEM_PLL_OUT_DIV    = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_OUT_DIV    : MNEM_PLL_S1_OUT_DIV;
 static constexpr const bool*  MNEM_PLL_PC2        = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_PC2        : MNEM_PLL_S1_PC2;
 static constexpr const float* MNEM_PLL_ZONE_LF_HZ = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_ZONE_LF_HZ : MNEM_PLL_S1_ZONE_LF_HZ;
 static constexpr const bool*  MNEM_PLL_TRI        = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_TRI        : MNEM_PLL_S1_TRI;
+static constexpr const int*   MNEM_PLL_TREM       = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_TREM       : MNEM_PLL_S1_TREM;
 // VCO range + free-running centre (loop-filter output 0.5 = centre; the two
 // halves map exponentially to MIN / MAX).
 static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;
@@ -427,17 +435,10 @@ static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
 // A little of the clean playing written into the delay alongside the PLL (so the
 // PLL adds to the note instead of swallowing it): input x CLEAN_MIX (~-10 dB under the PLL).
 static constexpr float MNEM_PLL_CLEAN_MIX = 1.5f;
-// Tempo-synced HARD tremolo in the outermost PLL zones (1 + 13), applied AFTER
-// the delay on the wet only (pre-delay it smeared through the feedback,
-// 2026-10-08): cycle = MNEM_PLL_TREM_Q per K2 stop (a cross-rhythm to the
-// repeats), 50 % duty, full depth; downbeat = the tap or the gate opening.
-// Its cycle per K2 division stop, in quarters (2026-10-08): musical values, a
-// x4 range, each deliberately NOT dividing its delay evenly (a counter-rhythm).
-//   stop:   1/16   1/8T  1/8    1/4T   1/8.   1/4    1/2T   1/4.   1/2    1/2.   1/1
-//   trem:   1/64.  1/32  1/32.  1/32.  1/16T  1/32.  1/16   1/8T   1/16.  1/8q5  1/16.
-static constexpr float MNEM_PLL_TREM_Q[MNEM_DIV_COUNT] = {
-    3.f / 32.f, 1.f / 8.f, 3.f / 16.f, 3.f / 16.f, 1.f / 6.f, 3.f / 16.f,
-    1.f / 4.f, 1.f / 3.f, 3.f / 8.f, 2.f / 5.f, 3.f / 8.f};
+// Tempo-synced HARD tremolo in the zones with MNEM_PLL_TREM > 0, applied AFTER
+// the delay on the wet only (pre-delay it smeared through the feedback):
+// cycle = the delay time / TREM (2 straight, 3 triplet), 50 % duty, full depth;
+// downbeat = the tap or the gate opening.
 // Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
 // DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's
 // loop filter x 2^(LF_OCT (2d-1)) — hard playing faster / fuzzier, soft slower

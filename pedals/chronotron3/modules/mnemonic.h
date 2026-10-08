@@ -260,6 +260,7 @@ class Mnemonic : public Module {
       if (z > MNEM_PLL_ZONES - 1) z = MNEM_PLL_ZONES - 1;
       pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z], MNEM_PLL_TRI[z]);
       pll_zone_ = z;                                     // (its loop filter: set per block with the dynamics)
+      trem_k_ = MNEM_PLL_TREM[z];                         // 0 none, 2 straight, 3 triplet
     }
 
     // Curve |tilt| for more sensitivity around noon (see MNEM_FILT_TILT_CURVE).
@@ -302,7 +303,7 @@ class Mnemonic : public Module {
       // leading edge. 1:1 = quarter.
       float q_ms = have_tempo_ ? quarter_ms_ : KnobTimeMs(knob_time) * MNEM_TAP_INIT_RATIO;
       base_delay_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-      trem_inc_ = 1.f / (q_ms * MNEM_PLL_TREM_Q[d] * 0.001f * sr_);   // PLL tremolo: its cycle per K2 stop (quarters)
+      trem_delay_s_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;      // PLL tremolo: the delay time (samples)
       if (edge_)                                       // + companion line
         base_delay2_ = q_ms * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_;
     }
@@ -541,8 +542,8 @@ class Mnemonic : public Module {
           // as vestige's capture onset; legato keeps the running phase.
           if (trem_reset_ || (gate > 0.f && !trem_gate_prev_)) { trem_ph_ = 0.f; trem_reset_ = false; }
           trem_gate_prev_ = gate > 0.f;
-          trem_ph_ += trem_inc_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f;
-          const bool trem_on = (pll_zone_ == 0 || pll_zone_ == MNEM_PLL_ZONES - 1);
+          if (trem_k_ > 0 && trem_delay_s_ > 0.f) { trem_ph_ += (float)trem_k_ / trem_delay_s_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f; }
+          const bool trem_on = trem_k_ > 0;
           const float trem = (trem_on && trem_ph_ >= 0.5f) ? 0.f : 1.f;
           trem_val_ = trem;                                 // applied AFTER the delay (wet only)
           src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate
@@ -901,7 +902,8 @@ class Mnemonic : public Module {
   bool  pll_mode_ = false;
   Pll4046 pll_;
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
-  float trem_ph_ = 0.f, trem_inc_ = 0.f;          // PLL tremolo phase (cycles) + step
+  float trem_ph_ = 0.f, trem_delay_s_ = 0.f;       // PLL tremolo phase (cycles) + the delay time (samples)
+  int   trem_k_ = 0;                                 // tremolo cycles per delay (0 off, 2, 3)
   volatile bool trem_reset_ = false;
   bool  trem_gate_prev_ = false;
   float trem_val_ = 1.f;                             // this sample's tremolo gain (post-delay)                     // the PLL gate one sample ago (tremolo downbeat)
