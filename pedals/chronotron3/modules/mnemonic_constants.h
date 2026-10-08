@@ -445,12 +445,14 @@ static constexpr float MNEM_PLL_CLEAN_MIX = 1.5f;
 // cycle = the delay time / TREM (2 straight, 3 triplet), 50 % duty, full depth;
 // downbeat = the tap or the gate opening.
 // Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
-// DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's
+// DB_LO .. DB_HI -> d = 0..1 (used by B). (A) see DYN_REF; (B) the zone's
 // loop filter x 2^(LF_OCT (2d-1)) — hard playing faster / fuzzier, soft slower
 // / more unstable.
 static constexpr float MNEM_PLL_DYN_DB_LO  = -50.f;
 static constexpr float MNEM_PLL_DYN_DB_HI  = -20.f;
-static constexpr float MNEM_PLL_DYN_FLOOR  = 0.6f;
+// (A) level = LEVEL x env / DYN_REF, proportional (2026-10-08: no floor, no
+// cap — the wet follows the instrument like the dry). REF = -34 dB (~guitar).
+static constexpr float MNEM_PLL_DYN_REF    = 0.01f;   // (measured: guitar-level playing keeps the previous wet level)
 static constexpr float MNEM_PLL_DYN_LF_OCT = 2.f;
 
 // ---------------------------------------------------------------------------

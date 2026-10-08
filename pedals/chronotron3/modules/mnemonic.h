@@ -531,7 +531,7 @@ class Mnemonic : public Module {
           pll_env_ += (ia > pll_env_ ? pll_gate_atk_ : pll_gate_rel_) * (ia - pll_env_);
           const float gate = (pll_env_ > MNEM_PLL_GATE_THR) ? 1.f : 0.f;
           // Dynamics: the input envelope in dB, DYN_DB_LO .. DYN_DB_HI -> 0..1
-          // (instrument-agnostic); level (A) = LEVEL x (FLOOR + (1-FLOOR) x d).
+          // (instrument-agnostic); level (A): proportional, see below.
           const float ev = pll_envf_.Process(in[i]);
           float d = (20.f * log10f(ev + 1e-9f) - MNEM_PLL_DYN_DB_LO) / (MNEM_PLL_DYN_DB_HI - MNEM_PLL_DYN_DB_LO);
           d = d < 0.f ? 0.f : (d > 1.f ? 1.f : d);
@@ -546,7 +546,10 @@ class Mnemonic : public Module {
           const bool trem_on = trem_k_ > 0;
           const float trem = (trem_on && trem_ph_ >= 0.5f) ? 0.f : 1.f;
           trem_val_ = trem;                                 // applied AFTER the delay (wet only)
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate
+          // Level (A): proportional to the playing's envelope, no floor / cap —
+          // REF (guitar-ish level) = the old fixed level; bass comes out louder
+          // in step with its dry signal.
+          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (ev / MNEM_PLL_DYN_REF) * gate
               + in[i] * MNEM_PLL_CLEAN_MIX;
         }
         float x = src * send_gain_ + loop_s + fb;
