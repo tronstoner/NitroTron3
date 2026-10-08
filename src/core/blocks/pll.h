@@ -32,6 +32,18 @@
 // half-cycle count + VCO half-cycle phase) / (2 M) — i.e. (count + VCO
 // phase) / M; for M = 1 it is the VCO phase itself. Naive (not band-limited).
 //
+// Output kind (Ray Gun Youth's rotary, 2026-10-08):
+//   OUT_VCO    — the divided VCO (square / triangle as above).
+//   OUT_CLASH  — the PC1 XOR output itself: +1 where the input sign and the
+//                divided VCO differ, -1 where they agree.
+//   OUT_SPIKES — the 4046 phase pulses (pin 1): +1 while PC2 is tri-stated
+//                (in phase), -1 while it pumps up or down.
+// Optional output coupling (one-pole high-pass, the pedal's output capacitor)
+// on whatever is played.
+//
+// Optional front end (Ray Gun Youth): the input is squared (sign), AC-coupled
+// (one-pole high-pass) and low-passed (2-pole) before the comparator.
+//
 // Nothing else: no hysteresis on the comparator, no lock detector, no
 // frequency clamp beyond the VCO range itself.
 //
@@ -59,6 +71,18 @@ class Pll4046 {
   // Feedback divider N (>= 1), output divider M (>= 1), comparator PC2 (else PC1),
   // output triangle (else square). Divider counters and the PFD state are kept
   // across changes (no reset).
+  enum OutKind { OUT_VCO = 0, OUT_CLASH = 1, OUT_SPIKES = 2 };
+  void SetOutKind(int k) { kind_ = k; }
+  // Front end: square -> one-pole HP (hp_hz) -> 2-pole LP (lp_hz, q). on = false: raw input.
+  void SetFrontEnd(bool on, float hp_hz, float lp_hz, float q) {
+    fe_ = on;
+    fe_hp_a_ = 1.f / (1.f + 2.f * 3.14159265f * hp_hz / sr_);
+    const float w = 2.f * 3.14159265f * lp_hz / sr_, cw = cosf(w), al = sinf(w) / (2.f * q), a0 = 1.f + al;
+    fe_b0_ = (1.f - cw) * 0.5f / a0; fe_b1_ = (1.f - cw) / a0; fe_b2_ = fe_b0_;
+    fe_a1_ = -2.f * cw / a0; fe_a2_ = (1.f - al) / a0;
+  }
+  // Output coupling: one-pole high-pass on the output (hz <= 0: off).
+  void SetOutputHighpass(float hz) { out_hp_a_ = hz > 0.f ? 1.f / (1.f + 2.f * 3.14159265f * hz / sr_) : 1.f; }
   void SetTriGain(float g) { tri_gain_ = g; }    // 1 = triangle, >1 = trapezoid
   void SetMode(int fb_div, int out_div, bool pc2, bool tri = false) {
     tri_ = tri;
@@ -68,8 +92,23 @@ class Pll4046 {
     pc2_ = pc2;
   }
 
-  // One sample. Returns the divided VCO square (+-1), or the triangle (-1..+1).
+  // One sample. Returns the chosen output (VCO square / triangle, CLASH, SPIKES), coupled.
   inline float Process(float in) {
+    if (fe_) {                                   // front end: square, AC couple, low-pass
+      const float sq = in >= 0.f ? 1.f : -1.f;
+      fe_hp_y_ = fe_hp_a_ * (fe_hp_y_ + sq - fe_hp_x_); fe_hp_x_ = sq;
+      const float x = fe_hp_y_;
+      const float y = fe_b0_ * x + fe_b1_ * fe_x1_ + fe_b2_ * fe_x2_ - fe_a1_ * fe_y1_ - fe_a2_ * fe_y2_;
+      fe_x2_ = fe_x1_; fe_x1_ = x; fe_y2_ = fe_y1_; fe_y1_ = y;
+      in = y;
+    }
+    const float o = Raw(in);
+    out_hp_y_ = out_hp_a_ * (out_hp_y_ + o - out_hp_x_); out_hp_x_ = o;   // output coupling
+    return out_hp_y_;
+  }
+
+ private:
+  inline float Raw(float in) {
     const bool in_hi  = in >= 0.f;               // comparator: sign of the input
     const bool vco_hi = phase_ < 0.5f;           // VCO square
     if (vco_hi != vco_prev_) {                   // a VCO edge: clock both dividers
@@ -89,8 +128,15 @@ class Pll4046 {
       const float xr = (in_hi != fb_q_) ? 1.f : 0.f;   // XOR phase comparator
       v_ += (xr - v_) * a_;                      // RC loop filter
     }
+    const float clash  = (in_hi != fb_q_) ? 1.f : -1.f;   // PC1 output (before the VCO moves)
+    const float spikes = pfd_ == 0 ? 1.f : -1.f;          // phase pulses
     const float c = 2.f * v_ - 1.f;              // -1 .. +1 around the centre
     freq_ = fc_ * expf(c * (c >= 0.f ? up_oct_ : dn_oct_));
+    if (kind_ == OUT_CLASH || kind_ == OUT_SPIKES) {
+      phase_ += freq_ / sr_;
+      if (phase_ >= 1.f) phase_ -= 1.f;
+      return kind_ == OUT_CLASH ? clash : spikes;
+    }
     if (tri_) {
       // Output phase from the divider state + the VCO phase (read before the
       // advance, i.e. the same instant the square value below reflects).
@@ -110,10 +156,18 @@ class Pll4046 {
     return out_q_ ? 1.f : -1.f;
   }
 
+
+ public:
   float VcoHz() const { return freq_; }          // current VCO frequency (undivided)
   float Control() const { return v_; }           // loop-filter output 0..1
 
  private:
+  int   kind_ = OUT_VCO;
+  bool  fe_ = false;
+  float fe_hp_a_ = 1.f, fe_hp_x_ = 0.f, fe_hp_y_ = 0.f;
+  float fe_b0_ = 1.f, fe_b1_ = 0.f, fe_b2_ = 0.f, fe_a1_ = 0.f, fe_a2_ = 0.f;
+  float fe_x1_ = 0.f, fe_x2_ = 0.f, fe_y1_ = 0.f, fe_y2_ = 0.f;
+  float out_hp_a_ = 1.f, out_hp_x_ = 0.f, out_hp_y_ = 0.f;
   float sr_ = 48000.f, fmin_ = 30.f, fc_ = 200.f, fmax_ = 4000.f;
   float up_oct_ = 0.f, dn_oct_ = 0.f;
   float phase_ = 0.f, v_ = 0.5f, a_ = 0.f, freq_ = 200.f;

@@ -153,7 +153,9 @@ class Mnemonic : public Module {
     pll_.Init(sr_, MNEM_PLL_VCO_MIN_HZ, MNEM_PLL_VCO_CENTRE_HZ, MNEM_PLL_VCO_MAX_HZ);
     pll_.SetLoopFilterHz(MNEM_PLL_LF_HZ);
     pll_envf_.Init(sr_);
-    pll_.SetTriGain(MNEM_PLL_TRAP_GAIN);              // the "triangle" zones play a trapezoid
+    pll_.SetTriGain(MNEM_PLL_TRAP_GAIN);
+    pll_.SetFrontEnd(MNEM_PLL_FRONT_END, MNEM_PLL_FE_HP_HZ, MNEM_PLL_FE_LP_HZ, MNEM_PLL_FE_LP_Q);
+    pll_.SetOutputHighpass(MNEM_PLL_OUT_HP_HZ);              // the "triangle" zones play a trapezoid
     pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
@@ -259,6 +261,7 @@ class Mnemonic : public Module {
       int z = (int)(knob_k3 * (float)MNEM_PLL_ZONES);
       if (z > MNEM_PLL_ZONES - 1) z = MNEM_PLL_ZONES - 1;
       pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z], MNEM_PLL_TRI[z]);
+      pll_.SetOutKind(MNEM_PLL_OUT_KIND[z]);
       pll_zone_ = z;                                     // (its loop filter: set per block with the dynamics)
       trem_k_ = MNEM_PLL_TREM[z];                         // 0 none, 2 straight, 3 triplet
     }

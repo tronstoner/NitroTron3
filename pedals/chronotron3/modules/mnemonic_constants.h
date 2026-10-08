@@ -405,12 +405,34 @@ static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_S0_ZONES]     = {false, false, f
 // 2 = straight, half the delay; 3 = triplet, a third of the delay — outermost).
 // (the straight-tremolo zones 2 / 14 take the PLL of their INNER neighbour:
 //  zone 2 = PC2@5 like zone 3, zone 14 = x3@2k like zone 13 — the builder)
-static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_S1_ZONES]  = {1, 1, 1, 1, 4,   1, 5, 2, 3, 5,   2, 7, 3, 3, 8};
-static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_S1_ZONES] = {4, 1, 1, 1, 1,   1, 1, 1, 1, 1,   1, 1, 1, 1, 1};
-static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_S1_ZONES]     = {false, true, true, false, false,   false, false, false, false, false,   false, false, false, false, false};
-static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_S1_ZONES] = {3.f, 5.f, 5.f, 15.f, 15.f,
-    30.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f, 15.f,
-    15.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f};
+// 2026-10-08 (builder's DIAG rating, host test with plucked strings): the slow-XOR
+// zones 1 4 5 6 9 10 11 15 (1-based) sat on a fixed ~200 Hz drone whatever was
+// played -> replaced. New: the Ray Gun Youth outputs (OUT_KIND 1 = CLASH = the
+// PC1 XOR output, 2 = SPIKES = the PC2 phase pulses), at a lazy (PC2@5) or a
+// frantic (PC2@200) chase; plus fifth (x3/2), x4, x8 at the fast XOR@2k.
+//   zone (1-based): 1 CLASH lazy (trem 3) · 2 3 keep · 4 SPIKES lazy · 5 CLASH frantic ·
+//   6 SPIKES frantic · 7 8 keep · 9 fifth fast · 10 x4 fast · 11 CLASH x2 lazy ·
+//   12 13 14 keep · 15 x8 fast (trem 3)
+static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_S1_ZONES]  = {1, 1, 1, 1, 1,   1, 5, 2, 3, 4,   2, 7, 3, 3, 8};
+static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_S1_ZONES] = {1, 1, 1, 1, 1,   1, 1, 1, 2, 1,   1, 1, 1, 1, 1};
+static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_S1_ZONES]     = {true, true, true, true, true,   true, false, false, false, false,   true, false, false, false, false};
+static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_S1_ZONES] = {5.f, 5.f, 5.f, 5.f, 200.f,
+    200.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ,
+    5.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ};
+// What each zone plays (Pll4046::OutKind): 0 = the VCO (divided), 1 = CLASH, 2 = SPIKES.
+static constexpr int   MNEM_PLL_S1_OUT_KIND[MNEM_PLL_S1_ZONES] = {1, 0, 0, 2, 1,   2, 0, 0, 0, 0,   1, 0, 0, 0, 0};
+static constexpr int   MNEM_PLL_S0_OUT_KIND[MNEM_PLL_S0_ZONES] = {};
+// Ray Gun Youth front end (Parasit Studio, from its schematic): the input is
+// squared by an op-amp comparator, AC-coupled (C2 100n / R3 47k -> ~34 Hz) and
+// low-passed by a 2-pole MFB filter (R3 47k, R4 4.7k, R5 100k, C9 100n, C3 10n
+// -> ~232 Hz, Q ~0.6) before the 4046's own comparator. All zones (as in the pedal).
+static constexpr bool  MNEM_PLL_FRONT_END   = true;
+static constexpr float MNEM_PLL_FE_HP_HZ    = 34.f;
+static constexpr float MNEM_PLL_FE_LP_HZ    = 232.f;
+static constexpr float MNEM_PLL_FE_LP_Q     = 0.6f;
+// Output coupling (the pedal's C7 100n into ~150k -> ~10 Hz high-pass) on the
+// PLL voice only, all zones: takes out the SPIKES output's standing level.
+static constexpr float MNEM_PLL_OUT_HP_HZ   = 10.f;
 static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_S1_ZONES]     = {};   // all square (2026-10-08: K1 tone does the mellowing)
 // Tremolo speed scale on the TREM counts (2 = twice as fast as the plain counts:
 // straight = 4 chops per delay, triplet = 6 per delay — 2026-10-08).
@@ -426,6 +448,7 @@ static constexpr const bool*  MNEM_PLL_PC2        = MNEM_PLL_SET == 0 ? MNEM_PLL
 static constexpr const float* MNEM_PLL_ZONE_LF_HZ = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_ZONE_LF_HZ : MNEM_PLL_S1_ZONE_LF_HZ;
 static constexpr const bool*  MNEM_PLL_TRI        = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_TRI        : MNEM_PLL_S1_TRI;
 static constexpr const int*   MNEM_PLL_TREM       = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_TREM       : MNEM_PLL_S1_TREM;
+static constexpr const int*   MNEM_PLL_OUT_KIND   = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_OUT_KIND   : MNEM_PLL_S1_OUT_KIND;
 // VCO range + free-running centre (loop-filter output 0.5 = centre; the two
 // halves map exponentially to MIN / MAX).
 static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;
