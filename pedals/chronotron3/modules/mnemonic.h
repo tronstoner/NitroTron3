@@ -509,10 +509,11 @@ class Mnemonic : public Module {
         xd = Filter(xd); xd = TapeDrive(xd); xd = degrade_.ColourProcess(xd);
         delay_.Write(xd);
 
-        // secondary loop: clean lo-fi telephone voice on the FRESH input (outside
-        // the feedback). Just the mid band-pass — no drive/shaper (the band alone
-        // gives the rhythmic separation; drive wasn't needed).
+        // secondary loop: lo-fi telephone voice on the FRESH input (outside the
+        // feedback): sprawl's wavefolder (fixed) -> the mid band-pass.
         float si = in[i];
+        si = si * (1.f - MNEM_EDGE_FOLD_AMT)
+           + sinf(si * (1.f + MNEM_EDGE_FOLD_AMT * MNEM_EDGE_FOLD_DRIVE) * 1.5707963f) * MNEM_EDGE_FOLD_LEVEL * MNEM_EDGE_FOLD_AMT;
         { float l, b, h; sec_hp_.Process(si, l, b, h); si = h;   // telephone HP
                          sec_lp_.Process(si, l, b, h); si = l; } // telephone LP
         float fbq = FbSat(dq * fb_eff * fbsc * panic_env_);

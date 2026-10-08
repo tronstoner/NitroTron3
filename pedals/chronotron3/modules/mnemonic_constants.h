@@ -259,6 +259,12 @@ static constexpr float MNEM_NGATE_CLOSE_MS   = 250.f; // duck closes slowly so i
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_EDGE_DIV_GAIN = 0.85f;  // primary (division) line level
 static constexpr float MNEM_EDGE_SEC_GAIN = 0.50f;  // secondary line level — quieter
+// Telephone-line drive (2026-10-08): sprawl's SW1-UP wavefolder at K4 ~2:30
+// (fold amount 0.5), fixed, on the FRESH input before the telephone band-pass
+// (outside the feedback). out = x (1 - AMT) + sin(x (1 + AMT DRIVE) pi/2) LEVEL AMT.
+static constexpr float MNEM_EDGE_FOLD_AMT   = 0.5f;
+static constexpr float MNEM_EDGE_FOLD_DRIVE = 30.f;   // (sprawl: 1 + amt x 30)
+static constexpr float MNEM_EDGE_FOLD_LEVEL = 0.15f;  // (sprawl: sin(...) x 0.15)
 
 // Secondary line voice: a clean lo-fi "telephone" delay for rhythmic counterpoint.
 // Just a mid band-pass on the fresh input (outside its feedback loop) — the band
