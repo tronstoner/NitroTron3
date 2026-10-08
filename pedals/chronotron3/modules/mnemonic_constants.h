@@ -429,9 +429,15 @@ static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
 static constexpr float MNEM_PLL_CLEAN_MIX = 1.5f;
 // Tempo-synced HARD tremolo in the outermost PLL zones (1 + 13), applied AFTER
 // the delay on the wet only (pre-delay it smeared through the feedback,
-// 2026-10-08): cycle = the DELAY TIME x TREM_DIV (a cross-rhythm to the
+// 2026-10-08): cycle = MNEM_PLL_TREM_Q per K2 stop (a cross-rhythm to the
 // repeats), 50 % duty, full depth; downbeat = the tap or the gate opening.
-static constexpr float MNEM_PLL_TREM_DIV = 0.1875f;   // 3/16 of the delay: still a 4-against-3 cross-rhythm to the repeats, fast
+// Its cycle per K2 division stop, in quarters (2026-10-08): musical values, a
+// x4 range, each deliberately NOT dividing its delay evenly (a counter-rhythm).
+//   stop:   1/16   1/8T  1/8    1/4T   1/8.   1/4    1/2T   1/4.   1/2    1/2.   1/1
+//   trem:   1/64.  1/32  1/32.  1/32.  1/16T  1/32.  1/16   1/8T   1/16.  1/8q5  1/16.
+static constexpr float MNEM_PLL_TREM_Q[MNEM_DIV_COUNT] = {
+    3.f / 32.f, 1.f / 8.f, 3.f / 16.f, 3.f / 16.f, 1.f / 6.f, 3.f / 16.f,
+    1.f / 4.f, 1.f / 3.f, 3.f / 8.f, 2.f / 5.f, 3.f / 8.f};
 // Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
 // DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's
 // loop filter x 2^(LF_OCT (2d-1)) — hard playing faster / fuzzier, soft slower
