@@ -412,9 +412,9 @@ static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_S1_ZONES] = {3.f, 5.f, 5.
     30.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f, 15.f,
     15.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f};
 static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_S1_ZONES]     = {};   // all square (2026-10-08: K1 tone does the mellowing)
-// Tremolo speed scale on the TREM counts (0.5 = every cycle twice as long:
-// straight = one chop per delay, triplet = 3 per two delays — 2026-10-08).
-static constexpr float MNEM_PLL_TREM_SPEED = 0.5f;
+// Tremolo speed scale on the TREM counts (2 = twice as fast as the plain counts:
+// straight = 4 chops per delay, triplet = 6 per delay — 2026-10-08).
+static constexpr float MNEM_PLL_TREM_SPEED = 2.f;
 static constexpr int   MNEM_PLL_S1_TREM[MNEM_PLL_S1_ZONES]    = {3, 2, 0, 0, 0,   0, 0, 0, 0, 0,   0, 0, 0, 2, 3};
 static constexpr int   MNEM_PLL_S0_TREM[MNEM_PLL_S0_ZONES]    = {};   // (SET 0 predates the tremolo)
 // The active set (what mnemonic.h reads).
