@@ -159,6 +159,19 @@ class Mnemonic : public Module {
     pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
+    // Sprawl's voicing of the shared engine (2026-10-08).
+    degrade_.SetFoldScale(MNEM_DEG_BBD_FOLD_SCALE);
+    degrade_.SetBbdLpfScale(MNEM_DEG_BBD_LPF_SCALE);
+    degrade_.SetTapeDriveScale(MNEM_DEG_TAPE_DRIVE_SCALE);
+    degrade_.SetTapeLevel(MNEM_DEG_TAPE_LEVEL);
+    degrade_.SetBbdLevel(MNEM_DEG_BBD_LEVEL);
+    degrade_.SetTapeDepthScale(MNEM_DEG_TAPE_DEPTH_SCALE);
+    degrade_.SetBbdSlip(MNEM_DEG_BBD_SLIP);
+    degrade_.SetBbdReplayMix(MNEM_DEG_BBD_REPLAY_MIX);
+    degrade_.SetBbdCrush(MNEM_DEG_BBD_CRUSH);
+    degrade_.SetBbdDrift(MNEM_DEG_BBD_DRIFT);
+    degrade_.SetBbdDepthComp(MNEM_DEG_BBD_DEPTH_COMP);
+    degrade_.SetTapeDepthComp(MNEM_DEG_TAPE_DEPTH_COMP);
   }
 
   void Activate() override {
@@ -314,6 +327,7 @@ class Mnemonic : public Module {
                             (float)MNEM_DELAY_SAMPLES - 2.f);
     base_delay2_ = MnemClamp(base_delay2_, 0.001f * MNEM_TIME_MIN_MS * sr_,
                              (float)MNEM_DELAY_SAMPLES - 2.f);
+    degrade_.SetBbdSlipTimeRef(base_delay_ * 1000.f / sr_, MNEM_DEG_SLIP_SYNC);   // slips scale to the delay time
     if (snap_) {                                   // first Controls after Activate: no ramp-in
       read_delay_ = base_delay_; base_delay_sm_ = base_delay_;
       read_delay2_ = base_delay2_; base_delay2_sm_ = base_delay2_;

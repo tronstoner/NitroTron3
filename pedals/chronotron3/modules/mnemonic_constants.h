@@ -89,7 +89,23 @@ static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // always-on base warmth (K3 d
 // KNEE is in BBD-depth units (0 = centre .. 1 = full CCW); nudge to align with
 // the 9:00 spot. MAX = gain at full CCW (drastic per taste). Volume only, no EQ.
 static constexpr float MNEM_BBD_OUT_KNEE = 0.33f; // BBD depth where the boost starts (~9:00)
-static constexpr float MNEM_BBD_OUT_MAX  = 1.6f;  // output gain at full CCW (1 = off)
+static constexpr float MNEM_BBD_OUT_MAX  = 1.0f;  // output gain at full CCW (1 = off) — OFF since 2026-10-08: the sprawl voicing's depth comp replaces it (was 1.6)
+// Degrade engine voicing (2026-10-08): ported 1:1 from sprawl (the benchmark,
+// SPRAWL_BBD_* / SPRAWL_TAPE_* in sprawl_constants.h). Own constants so the
+// levels can be matched to mnemonic separately.
+static constexpr float MNEM_DEG_BBD_FOLD_SCALE  = 0.8f;
+static constexpr float MNEM_DEG_BBD_LPF_SCALE   = 2.0f;
+static constexpr float MNEM_DEG_TAPE_DRIVE_SCALE = 2.5f;
+static constexpr float MNEM_DEG_TAPE_LEVEL      = 1.30f;
+static constexpr float MNEM_DEG_BBD_LEVEL       = 0.87f;
+static constexpr float MNEM_DEG_TAPE_DEPTH_SCALE = 1.5f;
+static constexpr float MNEM_DEG_BBD_SLIP        = 1.0f;
+static constexpr float MNEM_DEG_BBD_REPLAY_MIX  = 0.0f;
+static constexpr float MNEM_DEG_BBD_CRUSH       = 0.30f;
+static constexpr float MNEM_DEG_BBD_DRIFT       = 0.0f;
+static constexpr float MNEM_DEG_BBD_DEPTH_COMP  = 1.45f;
+static constexpr float MNEM_DEG_TAPE_DEPTH_COMP = 1.52f;
+static constexpr float MNEM_DEG_SLIP_SYNC       = 1.0f;   // slip length follows the delay time (sprawl: echo time)
 // Dedicated feedback-path saturator (analog bloom): compresses the RECIRCULATION
 // only, so repeats warm + even out while the fresh input (first repeat) stays
 // present. Higher = compresses earlier / more. Unity small-signal, bounded.
