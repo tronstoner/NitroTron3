@@ -189,6 +189,7 @@ class Mnemonic : public Module {
     // physical knob it reads. Hardware index in the comment.
     const float knob_tilt    = RemapKnob(cs.Knob(0));  // K1 (was K4)
     const float knob_time    = RemapKnob(cs.Knob(1));  // K2 (was K1)
+    const float knob_k3      = RemapKnob(cs.Knob(2));  // K3: PLL mode (SW2 DOWN only)
     const float knob_degrade = RemapKnob(cs.Knob(3));  // K4 (was K3)
     const float knob_fb      = RemapKnob(cs.Knob(4));  // K5 (was K2)
 
