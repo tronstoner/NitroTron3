@@ -558,7 +558,7 @@ class Mnemonic : public Module {
         // hot square down to the playing's level.
         // (+ the zone-1/13 tremolo on the wet only: post-delay, nothing of it
         //  goes back into the loop — pre-delay it smeared through the feedback)
-        delayed = pll_mode_ ? ds * MNEM_PLL_OUT_TRIM * trem_val_ : ds;
+        delayed = pll_mode_ ? ds * MNEM_PLL_OUT_TRIM : ds;   // (tremolo: after the reverb, below)
       }
 
       // Freeze voice: 2 half-overlapped full-Hann grains loop the captured
@@ -574,9 +574,11 @@ class Mnemonic : public Module {
       // it ringing. Recirculation is still throttled by panic_env_ inside the
       // loop (the FbSat terms above), which is what guarantees true silence.
       wet[i] = delayed * bbd_out_sm_ + fz;
-      panic_blk_[i] = panic_env_;
+      panic_blk_[i] = panic_env_ * (pll_mode_ ? trem_val_ : 1.f);   // + the PLL tremolo, post-reverb
     }
 
+    // (panic_blk_ also carries the PLL tremolo: it chops the whole wet AFTER the
+    //  reverb, freeze voice included — the builder, 2026-10-08.)
     // K5-CCW reverb: parallel to the delay, OUTSIDE the feedback loop (it must
     // not recirculate — G6). Run unconditionally so the tail never snaps off
     // when the knob leaves the reverb zone; the blend is gated by reverb_amt_
