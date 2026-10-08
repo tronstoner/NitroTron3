@@ -249,14 +249,16 @@ class Mnemonic : public Module {
     tape_drive_ = MNEM_TAPE_DRIVE;                  // constant base warmth
     float p3 = (knob_degrade - 0.5f) * 2.f;         // p in [-1,+1]
     degrade_.SetDepth(p3);                          // (dead-zone in engine)
-    // BBD output makeup (K4 CCW only): the BBD LPF rolloff drops perceived
-    // loudness as you go deeper. Compensate on the WET OUTPUT (post-loop — the
-    // feedback / rolloff / ducking balance is NOT touched). Unity up to the knee
-    // (~9:00), rising to MAX at full CCW. Volume only; no EQ (K1/K3 handles tone).
-    float d_bbd = (p3 < -MNEMD_DEADZONE) ? (-p3 - MNEMD_DEADZONE) / (1.f - MNEMD_DEADZONE) : 0.f;
-    bbd_out_gain_ = (d_bbd > MNEM_BBD_OUT_KNEE)
-        ? 1.f + (d_bbd - MNEM_BBD_OUT_KNEE) / (1.f - MNEM_BBD_OUT_KNEE) * (MNEM_BBD_OUT_MAX - 1.f)
-        : 1.f;
+    // Degrade output makeup (both K4 sides): the colour loses level as K4 goes
+    // deeper. Compensate on the WET OUTPUT (post-loop — the feedback / rolloff /
+    // ducking balance is NOT touched): MNEM_DEG_MAKEUP_DB over the K4 travel,
+    // linearly interpolated. Volume only; no EQ.
+    {
+      const float kp = knob_degrade * (float)(MNEM_DEG_MAKEUP_N - 1);
+      int ki = (int)kp; if (ki > MNEM_DEG_MAKEUP_N - 2) ki = MNEM_DEG_MAKEUP_N - 2;
+      const float db = MNEM_DEG_MAKEUP_DB[ki] + (MNEM_DEG_MAKEUP_DB[ki + 1] - MNEM_DEG_MAKEUP_DB[ki]) * (kp - (float)ki);
+      bbd_out_gain_ = powf(10.f, db / 20.f);
+    }
 
     // ---- K1 tilt/center + narrow (converging 24 dB HP+LP), all SW2 modes --
     // Wide band edges from K1: CCW lowers the LP (dark), CW raises the HP

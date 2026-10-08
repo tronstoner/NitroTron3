@@ -83,13 +83,13 @@ static constexpr float MNEM_DIV_HYST = 0.015f;  // knob margin to change divisio
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_FB_MAX      = 1.30f;  // >1: oscillates; tanh bounds level
 static constexpr float MNEM_TAPE_DRIVE  = 1.4f;   // always-on base warmth (K3 degrade engine adds colour on top)
-// BBD output makeup (K3 CCW): the BBD LPF rolloff drops perceived loudness as K3
-// goes deeper. This lifts the WET OUTPUT only (post feedback loop — balance
-// untouched), unity up to KNEE (~9:00 sweetspot) then rising to MAX at full CCW.
-// KNEE is in BBD-depth units (0 = centre .. 1 = full CCW); nudge to align with
-// the 9:00 spot. MAX = gain at full CCW (drastic per taste). Volume only, no EQ.
-static constexpr float MNEM_BBD_OUT_KNEE = 0.33f; // BBD depth where the boost starts (~9:00)
-static constexpr float MNEM_BBD_OUT_MAX  = 1.0f;  // output gain at full CCW (1 = off) — OFF since 2026-10-08: the sprawl voicing's depth comp replaces it (was 1.6)
+// Degrade output makeup (2026-10-08, both K4 sides, wet output only — AFTER the
+// loop, so the feedback is untouched): dB at K4 = 0, 0.1 .. 1.0 (7:00 .. 17:00),
+// linearly interpolated. Measured on the host (plucked guitar + bass, one
+// repeat): the level each K4 position lost against noon, averaged over both.
+static constexpr int   MNEM_DEG_MAKEUP_N = 11;
+static constexpr float MNEM_DEG_MAKEUP_DB[MNEM_DEG_MAKEUP_N] = {
+    2.3f, 2.3f, 2.05f, 0.95f, 0.75f,   0.f,   0.2f, 0.6f, 1.25f, 2.25f, 3.05f};
 // Degrade engine voicing (2026-10-08): ported 1:1 from sprawl (the benchmark,
 // SPRAWL_BBD_* / SPRAWL_TAPE_* in sprawl_constants.h). Own constants so the
 // levels can be matched to mnemonic separately.
