@@ -542,7 +542,7 @@ class Mnemonic : public Module {
           // as vestige's capture onset; legato keeps the running phase.
           if (trem_reset_ || (gate > 0.f && !trem_gate_prev_)) { trem_ph_ = 0.f; trem_reset_ = false; }
           trem_gate_prev_ = gate > 0.f;
-          if (trem_k_ > 0 && trem_delay_s_ > 0.f) { trem_ph_ += (float)trem_k_ / trem_delay_s_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f; }
+          if (trem_k_ > 0 && trem_delay_s_ > 0.f) { trem_ph_ += (float)trem_k_ * MNEM_PLL_TREM_SPEED / trem_delay_s_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f; }
           const bool trem_on = trem_k_ > 0;
           const float trem = (trem_on && trem_ph_ >= 0.5f) ? 0.f : 1.f;
           trem_val_ = trem;                                 // applied AFTER the delay (wet only)
