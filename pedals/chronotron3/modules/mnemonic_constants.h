@@ -427,6 +427,10 @@ static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
 // A little of the clean playing written into the delay alongside the PLL (so the
 // PLL adds to the note instead of swallowing it): input x CLEAN_MIX (~-10 dB under the PLL).
 static constexpr float MNEM_PLL_CLEAN_MIX = 1.5f;
+// Tempo-synced HARD tremolo on the PLL square in the outermost zones (1 + 13),
+// right after the PLL (before the delay/feedback): cycle = quarter x TREM_DIV
+// (0.5 = 1/8), 50 % duty, full depth; the tap is its downbeat.
+static constexpr float MNEM_PLL_TREM_DIV = 0.5f;
 // Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
 // DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's
 // loop filter x 2^(LF_OCT (2d-1)) — hard playing faster / fuzzier, soft slower

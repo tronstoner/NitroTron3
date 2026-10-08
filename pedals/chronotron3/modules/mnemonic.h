@@ -302,6 +302,7 @@ class Mnemonic : public Module {
       // leading edge. 1:1 = quarter.
       float q_ms = have_tempo_ ? quarter_ms_ : KnobTimeMs(knob_time) * MNEM_TAP_INIT_RATIO;
       base_delay_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
+      trem_inc_ = 1.f / (q_ms * MNEM_PLL_TREM_DIV * 0.001f * sr_);   // PLL tremolo: one cycle per 1/8
       if (edge_)                                       // + companion line
         base_delay2_ = q_ms * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_;
     }
@@ -333,6 +334,7 @@ class Mnemonic : public Module {
       f1_gesture_committed_ = false;
       loop_committed_this_press_ = false;
       clock_next_ms_ = now;                  // re-align the LED clock blink to this tap (fires now)
+      trem_reset_ = true;                    // PLL tremolo: the tap is its downbeat
       if (f1_mode_ == 1) {                   // MID: start scratch recording now
         loop_scratch_recording_ = true;
         loop_rec_write_ = 0;
@@ -533,7 +535,13 @@ class Mnemonic : public Module {
           float d = (20.f * log10f(ev + 1e-9f) - MNEM_PLL_DYN_DB_LO) / (MNEM_PLL_DYN_DB_HI - MNEM_PLL_DYN_DB_LO);
           d = d < 0.f ? 0.f : (d > 1.f ? 1.f : d);
           pll_dyn_ = d;
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate
+          // Tempo-synced HARD tremolo on the PLL (zones 1 + 13 only): on for the
+          // first half of every 1/8, off for the second, full depth.
+          if (trem_reset_) { trem_ph_ = 0.f; trem_reset_ = false; }
+          trem_ph_ += trem_inc_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f;
+          const bool trem_on = (pll_zone_ == 0 || pll_zone_ == MNEM_PLL_ZONES - 1);
+          const float trem = (trem_on && trem_ph_ >= 0.5f) ? 0.f : 1.f;
+          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate * trem
               + in[i] * MNEM_PLL_CLEAN_MIX;
         }
         float x = src * send_gain_ + loop_s + fb;
@@ -887,6 +895,8 @@ class Mnemonic : public Module {
   bool  pll_mode_ = false;
   Pll4046 pll_;
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
+  float trem_ph_ = 0.f, trem_inc_ = 0.f;          // PLL tremolo phase (cycles) + step
+  volatile bool trem_reset_ = false;
   int   pll_zone_ = -1;                              // K3 zone (its loop filter, set per block)
   EnvFollower pll_envf_;                             // PLL dynamics: input envelope (MoogerFooger)
   float pll_dyn_ = 0.f;                              //  -> 0..1
