@@ -377,10 +377,6 @@ static constexpr float MNEM_PLL_LF_HZ = 2000.f;
 // The TRI zones play a TRAPEZOID: the triangle x this gain, clipped (1 = the
 // pure triangle — too muffled; higher = toward the square).
 static constexpr float MNEM_PLL_TRAP_GAIN = 3.f;
-// The "TRI" zones of SET 1 now play the SQUARE through a one-pole low-pass at
-// SOFT_LP_HZ (just takes the edge off; the trapezoid was still too mellow).
-static constexpr bool  MNEM_PLL_SOFT_AS_LP = true;
-static constexpr float MNEM_PLL_SOFT_LP_HZ = 3000.f;
 static constexpr int MNEM_PLL_SET = 1;
 static constexpr int MNEM_PLL_ZONES = 13;
 // SET 0 — 13 zones (2026-10-07): the 7 modes at the fast fuzz filter in the middle,
@@ -401,10 +397,10 @@ static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_ZONES]     = {false, false, fals
 static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1, 1,   1, 1, 1, 2, 3,   2, 3, 3, 3};
 static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1, 2,   1, 2, 1, 1, 2,   1, 2, 1, 1};
 static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_ZONES]     = {false, true, false, false,   false, false, false, false, false,   false, false, false, false};
-static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f, 25.f,   // (zone 1: PC2 back at 5 Hz — the old sweet spot)
+static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f, 25.f,   // (zone 1: PC2 back at 5 Hz — the old sweet spot, to try)
     30.f, 60.f, 60.f, 60.f, 30.f,
     15.f, 25.f, MNEM_PLL_LF_HZ, 4.f};
-static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_ZONES]     = {false, false, false, false,   true, true, true, true, true,   false, false, false, false};
+static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_ZONES]     = {false, false, false, false,   false, false, false, false, false,   false, false, false, false};   // all square (2026-10-08: K1 tone does the mellowing)
 // The active set (what mnemonic.h reads).
 static constexpr const int*   MNEM_PLL_FB_DIV     = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_FB_DIV     : MNEM_PLL_S1_FB_DIV;
 static constexpr const int*   MNEM_PLL_OUT_DIV    = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_OUT_DIV    : MNEM_PLL_S1_OUT_DIV;
