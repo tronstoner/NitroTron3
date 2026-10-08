@@ -302,7 +302,7 @@ class Mnemonic : public Module {
       // leading edge. 1:1 = quarter.
       float q_ms = have_tempo_ ? quarter_ms_ : KnobTimeMs(knob_time) * MNEM_TAP_INIT_RATIO;
       base_delay_ = q_ms * MNEM_DIV_RATIOS[d] * 0.001f * sr_;
-      trem_inc_ = 1.f / (q_ms * MNEM_PLL_TREM_DIV * 0.001f * sr_);   // PLL tremolo: one cycle per 1/8
+      trem_inc_ = 1.f / (q_ms * MNEM_DIV_RATIOS[d] * MNEM_PLL_TREM_DIV * 0.001f * sr_);   // PLL tremolo: half the delay time
       if (edge_)                                       // + companion line
         base_delay2_ = q_ms * MNEM_EDGE_SECONDARY_RATIOS[d] * 0.001f * sr_;
     }
