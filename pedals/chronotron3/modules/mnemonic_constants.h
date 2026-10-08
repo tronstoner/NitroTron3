@@ -96,15 +96,15 @@ static constexpr float MNEM_BBD_OUT_MAX  = 1.0f;  // output gain at full CCW (1 
 static constexpr float MNEM_DEG_BBD_FOLD_SCALE  = 0.8f;
 static constexpr float MNEM_DEG_BBD_LPF_SCALE   = 2.0f;
 static constexpr float MNEM_DEG_TAPE_DRIVE_SCALE = 2.5f;
-static constexpr float MNEM_DEG_TAPE_LEVEL      = 1.30f;
-static constexpr float MNEM_DEG_BBD_LEVEL       = 0.87f;
+static constexpr float MNEM_DEG_TAPE_LEVEL      = 1.0f;    // sprawl 1.30 — IN mnemonic's loop it tipped the feedback into self-oscillation
+static constexpr float MNEM_DEG_BBD_LEVEL       = 1.0f;    // sprawl 0.87 (same reason: loudness is made up AFTER the loop here)
 static constexpr float MNEM_DEG_TAPE_DEPTH_SCALE = 1.5f;
 static constexpr float MNEM_DEG_BBD_SLIP        = 1.0f;
 static constexpr float MNEM_DEG_BBD_REPLAY_MIX  = 0.0f;
 static constexpr float MNEM_DEG_BBD_CRUSH       = 0.30f;
 static constexpr float MNEM_DEG_BBD_DRIFT       = 0.0f;
-static constexpr float MNEM_DEG_BBD_DEPTH_COMP  = 1.45f;
-static constexpr float MNEM_DEG_TAPE_DEPTH_COMP = 1.52f;
+static constexpr float MNEM_DEG_BBD_DEPTH_COMP  = 1.0f;    // sprawl 1.45 (in-loop gain -> runaway at K5 ~14:30)
+static constexpr float MNEM_DEG_TAPE_DEPTH_COMP = 1.0f;    // sprawl 1.52 (same)
 static constexpr float MNEM_DEG_SLIP_SYNC       = 1.0f;   // slip length follows the delay time (sprawl: echo time)
 // Dedicated feedback-path saturator (analog bloom): compresses the RECIRCULATION
 // only, so repeats warm + even out while the fresh input (first repeat) stays
