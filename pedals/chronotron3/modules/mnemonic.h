@@ -153,7 +153,8 @@ class Mnemonic : public Module {
     pll_.Init(sr_, MNEM_PLL_VCO_MIN_HZ, MNEM_PLL_VCO_CENTRE_HZ, MNEM_PLL_VCO_MAX_HZ);
     pll_.SetLoopFilterHz(MNEM_PLL_LF_HZ);
     pll_envf_.Init(sr_);
-    pll_.SetTriGain(MNEM_PLL_TRAP_GAIN);              // the "triangle" zones play a trapezoid
+    pll_.SetTriGain(MNEM_PLL_TRAP_GAIN);              // the "triangle" zones play a trapezoid (if not SOFT_AS_LP)
+    pll_lp_a_ = 1.f - expf(-2.f * 3.14159265f * MNEM_PLL_SOFT_LP_HZ / sr_);
     pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
@@ -258,7 +259,8 @@ class Mnemonic : public Module {
     {
       int z = (int)(knob_k3 * (float)MNEM_PLL_ZONES);
       if (z > MNEM_PLL_ZONES - 1) z = MNEM_PLL_ZONES - 1;
-      pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z], MNEM_PLL_TRI[z]);
+      pll_.SetMode(MNEM_PLL_FB_DIV[z], MNEM_PLL_OUT_DIV[z], MNEM_PLL_PC2[z], MNEM_PLL_TRI[z] && !MNEM_PLL_SOFT_AS_LP);
+      pll_soft_ = MNEM_PLL_TRI[z] && MNEM_PLL_SOFT_AS_LP;   // soft zones: square + low-pass
       pll_zone_ = z;                                     // (its loop filter: set per block with the dynamics)
     }
 
@@ -531,7 +533,10 @@ class Mnemonic : public Module {
           float d = (20.f * log10f(ev + 1e-9f) - MNEM_PLL_DYN_DB_LO) / (MNEM_PLL_DYN_DB_HI - MNEM_PLL_DYN_DB_LO);
           d = d < 0.f ? 0.f : (d > 1.f ? 1.f : d);
           pll_dyn_ = d;
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate;
+          float p = pll_.Process(in[i]);
+          pll_lp_z_ += (p - pll_lp_z_) * pll_lp_a_;          // (one-pole, always tracking: no jump on a zone change)
+          if (pll_soft_) p = pll_lp_z_;
+          src = p * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate;
         }
         float x = src * send_gain_ + loop_s + fb;
         x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
@@ -887,6 +892,8 @@ class Mnemonic : public Module {
   int   pll_zone_ = -1;                              // K3 zone (its loop filter, set per block)
   EnvFollower pll_envf_;                             // PLL dynamics: input envelope (MoogerFooger)
   float pll_dyn_ = 0.f;                              //  -> 0..1
+  bool  pll_soft_ = false;                           // soft zone: the square through the LP
+  float pll_lp_a_ = 0.f, pll_lp_z_ = 0.f;
 
   // modes / leds
   int sw1_ = 0, sw2_ = 0;
