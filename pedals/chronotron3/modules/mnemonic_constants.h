@@ -403,12 +403,14 @@ static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_S0_ZONES]     = {false, false, f
 // 2026-10-08: 15 zones — the outer zone at each end became TWO with the same
 // PLL (CCW /4 XOR@3, CW x8 XOR@15), each with a post-delay tremolo (TREM:
 // 2 = straight, half the delay; 3 = triplet, a third of the delay — outermost).
-static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_S1_ZONES]  = {1, 1, 1, 1, 4,   1, 5, 2, 3, 5,   2, 7, 3, 8, 8};
-static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_S1_ZONES] = {4, 4, 1, 1, 1,   1, 1, 1, 1, 1,   1, 1, 1, 1, 1};
-static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_S1_ZONES]     = {false, false, true, false, false,   false, false, false, false, false,   false, false, false, false, false};
-static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_S1_ZONES] = {3.f, 3.f, 5.f, 15.f, 15.f,
+// (the straight-tremolo zones 2 / 14 take the PLL of their INNER neighbour:
+//  zone 2 = PC2@5 like zone 3, zone 14 = x3@2k like zone 13 — the builder)
+static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_S1_ZONES]  = {1, 1, 1, 1, 4,   1, 5, 2, 3, 5,   2, 7, 3, 3, 8};
+static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_S1_ZONES] = {4, 1, 1, 1, 1,   1, 1, 1, 1, 1,   1, 1, 1, 1, 1};
+static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_S1_ZONES]     = {false, true, true, false, false,   false, false, false, false, false,   false, false, false, false, false};
+static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_S1_ZONES] = {3.f, 5.f, 5.f, 15.f, 15.f,
     30.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f, 15.f,
-    15.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f, 15.f};
+    15.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f};
 static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_S1_ZONES]     = {};   // all square (2026-10-08: K1 tone does the mellowing)
 static constexpr int   MNEM_PLL_S1_TREM[MNEM_PLL_S1_ZONES]    = {3, 2, 0, 0, 0,   0, 0, 0, 0, 0,   0, 0, 0, 2, 3};
 static constexpr int   MNEM_PLL_S0_TREM[MNEM_PLL_S0_ZONES]    = {};   // (SET 0 predates the tremolo)
