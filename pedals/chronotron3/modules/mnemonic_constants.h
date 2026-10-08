@@ -427,10 +427,10 @@ static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
 // A little of the clean playing written into the delay alongside the PLL (so the
 // PLL adds to the note instead of swallowing it): input x CLEAN_MIX (~-10 dB under the PLL).
 static constexpr float MNEM_PLL_CLEAN_MIX = 1.5f;
-// Tempo-synced HARD tremolo on the PLL square in the outermost zones (1 + 13),
-// right after the PLL (before the delay/feedback): cycle = the DELAY TIME x
-// TREM_DIV (0.75: a cross-rhythm to the repeats on every K2 stop), 50 % duty,
-// full depth; the tap is its downbeat.
+// Tempo-synced HARD tremolo in the outermost PLL zones (1 + 13), applied AFTER
+// the delay on the wet only (pre-delay it smeared through the feedback,
+// 2026-10-08): cycle = the DELAY TIME x TREM_DIV (a cross-rhythm to the
+// repeats), 50 % duty, full depth; downbeat = the tap or the gate opening.
 static constexpr float MNEM_PLL_TREM_DIV = 0.1875f;   // 3/16 of the delay: still a 4-against-3 cross-rhythm to the repeats, fast
 // Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
 // DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's

@@ -544,7 +544,8 @@ class Mnemonic : public Module {
           trem_ph_ += trem_inc_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f;
           const bool trem_on = (pll_zone_ == 0 || pll_zone_ == MNEM_PLL_ZONES - 1);
           const float trem = (trem_on && trem_ph_ >= 0.5f) ? 0.f : 1.f;
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate * trem
+          trem_val_ = trem;                                 // applied AFTER the delay (wet only)
+          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate
               + in[i] * MNEM_PLL_CLEAN_MIX;
         }
         float x = src * send_gain_ + loop_s + fb;
@@ -554,7 +555,9 @@ class Mnemonic : public Module {
         delay_.Write(x);
         // PLL mode: a fixed trim on the WET only (after the loop) brings the
         // hot square down to the playing's level.
-        delayed = pll_mode_ ? ds * MNEM_PLL_OUT_TRIM : ds;
+        // (+ the zone-1/13 tremolo on the wet only: post-delay, nothing of it
+        //  goes back into the loop — pre-delay it smeared through the feedback)
+        delayed = pll_mode_ ? ds * MNEM_PLL_OUT_TRIM * trem_val_ : ds;
       }
 
       // Freeze voice: 2 half-overlapped full-Hann grains loop the captured
@@ -900,7 +903,8 @@ class Mnemonic : public Module {
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
   float trem_ph_ = 0.f, trem_inc_ = 0.f;          // PLL tremolo phase (cycles) + step
   volatile bool trem_reset_ = false;
-  bool  trem_gate_prev_ = false;                     // the PLL gate one sample ago (tremolo downbeat)
+  bool  trem_gate_prev_ = false;
+  float trem_val_ = 1.f;                             // this sample's tremolo gain (post-delay)                     // the PLL gate one sample ago (tremolo downbeat)
   int   pll_zone_ = -1;                              // K3 zone (its loop filter, set per block)
   EnvFollower pll_envf_;                             // PLL dynamics: input envelope (MoogerFooger)
   float pll_dyn_ = 0.f;                              //  -> 0..1
