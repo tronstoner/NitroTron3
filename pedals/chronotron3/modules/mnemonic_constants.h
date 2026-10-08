@@ -431,7 +431,7 @@ static constexpr float MNEM_PLL_CLEAN_MIX = 1.5f;
 // right after the PLL (before the delay/feedback): cycle = the DELAY TIME x
 // TREM_DIV (0.75: a cross-rhythm to the repeats on every K2 stop), 50 % duty,
 // full depth; the tap is its downbeat.
-static constexpr float MNEM_PLL_TREM_DIV = 0.75f;   // 3/4 of the delay: 4-against-3 cross-rhythm to the repeats (0.375 = an octave faster)
+static constexpr float MNEM_PLL_TREM_DIV = 0.375f;   // 3/4 of the delay: 4-against-3 cross-rhythm to the repeats (0.375 = an octave faster)
 // Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
 // DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's
 // loop filter x 2^(LF_OCT (2d-1)) — hard playing faster / fuzzier, soft slower
