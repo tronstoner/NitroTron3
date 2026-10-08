@@ -544,7 +544,7 @@ class Mnemonic : public Module {
           trem_gate_prev_ = gate > 0.f;
           if (trem_k_ > 0 && trem_delay_s_ > 0.f) { trem_ph_ += (float)trem_k_ * MNEM_PLL_TREM_SPEED / trem_delay_s_; if (trem_ph_ >= 1.f) trem_ph_ -= 1.f; }
           const bool trem_on = trem_k_ > 0;
-          const float trem = (trem_on && trem_ph_ >= 0.5f) ? 0.f : 1.f;
+          const float trem = (trem_on && trem_ph_ >= 0.5f) ? MNEM_PLL_TREM_FLOOR : 1.f;   // off phase: attenuated, not silent
           trem_val_ = trem;                                 // applied AFTER the delay (wet only)
           // Level (A): proportional to the playing's envelope, no floor / cap —
           // REF (guitar-ish level) = the old fixed level; bass comes out louder
