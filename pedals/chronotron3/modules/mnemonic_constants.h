@@ -477,7 +477,7 @@ static constexpr float MNEM_PLL_VCO_MIN_HZ    = 30.f;
 static constexpr float MNEM_PLL_VCO_CENTRE_HZ = 200.f;
 static constexpr float MNEM_PLL_VCO_MAX_HZ    = 4000.f;
 // Wet-only trim in PLL mode (after the delay): the hot square down to the playing's level.
-static constexpr float MNEM_PLL_OUT_TRIM = 0.15f;   // about -16 dB
+static constexpr float MNEM_PLL_OUT_TRIM = 0.30f;   // about -10 dB (2026-10-08: +6 dB, was 0.15 — builder: PLL mode too quiet against the other modes)
 // Fixed level of the bipolar VCO square written into the delay, gated by a
 // fast envelope on the INPUT (hard threshold, guitar-level).
 static constexpr float MNEM_PLL_LEVEL       = 0.1f;
