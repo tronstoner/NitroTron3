@@ -414,6 +414,8 @@ class Mnemonic : public Module {
   // -------------------------------------------------------------------------
   // Audio-rate: fill `wet` with the mono wet output (shell adds dry via K6).
   // -------------------------------------------------------------------------
+  // DIAG: the current PLL zone (0-based), -1 when not in PLL mode.
+  int DiagPllZone() const { return pll_mode_ ? pll_zone_ : -1; }
   void Process(const float* in, float* wet, size_t size) override {
     const float wp0  = (float)delay_.GetWritePos();
     const float wp2_0 = (float)delay2_.GetWritePos();   // Edge quarter line write base

@@ -311,6 +311,19 @@ int main() {
       }
     }
 
+    // Mnemonic DIAG: one line whenever the PLL zone (K3, SW2 DOWN) changes:
+    //   MN PLL t=<ms> zone=<1..N> raw=<K3 raw x1000> k3=<remapped x1000>
+    if (CT3_DIAG && g_active == CT3_MODE_MNEMONIC) {
+      static int mn_zone = -2;
+      const int z = mnemonic.DiagPllZone();
+      if (z != mn_zone) {
+        mn_zone = z;
+        if (z >= 0)
+          DiagLine("MN PLL t=%u zone=%d raw=%u k3=%u", (unsigned)System::GetNow(), z + 1,
+                   (unsigned)(cs.Knob(2) * 1000.f + 0.5f), (unsigned)(RemapKnob(cs.Knob(2)) * 1000.f + 0.5f));
+      }
+    }
+
     // Reserved gesture: both footswitches held → Daisy bootloader (DFU).
     // The pedal is sealed; this is the only entry path.
     if (cs.BothHeld(CT3_BOOTLOADER_HOLD_MS)) {
