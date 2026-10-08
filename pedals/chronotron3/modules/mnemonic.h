@@ -153,6 +153,7 @@ class Mnemonic : public Module {
     pll_.Init(sr_, MNEM_PLL_VCO_MIN_HZ, MNEM_PLL_VCO_CENTRE_HZ, MNEM_PLL_VCO_MAX_HZ);
     pll_.SetLoopFilterHz(MNEM_PLL_LF_HZ);
     pll_envf_.Init(sr_);
+    pll_.SetTriGain(MNEM_PLL_TRAP_GAIN);              // the "triangle" zones play a trapezoid
     pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);

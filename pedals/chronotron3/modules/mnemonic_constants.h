@@ -374,6 +374,9 @@ static constexpr float MNEM_PLL_LF_HZ = 2000.f;
 //   6 feedback /3 + output /2 (fifth up, 3:2).
 // MNEM_PLL_SET picks the K3 zone set (both 13 zones, zone = min(12, k3*13)):
 //   0 = the 2026-10-07 set (below), unchanged;  1 = the triangle set (active).
+// The TRI zones play a TRAPEZOID: the triangle x this gain, clipped (1 = the
+// pure triangle — too muffled; higher = toward the square).
+static constexpr float MNEM_PLL_TRAP_GAIN = 3.f;
 static constexpr int MNEM_PLL_SET = 1;
 static constexpr int MNEM_PLL_ZONES = 13;
 // SET 0 — 13 zones (2026-10-07): the 7 modes at the fast fuzz filter in the middle,

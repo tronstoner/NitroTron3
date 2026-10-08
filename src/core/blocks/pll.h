@@ -59,6 +59,7 @@ class Pll4046 {
   // Feedback divider N (>= 1), output divider M (>= 1), comparator PC2 (else PC1),
   // output triangle (else square). Divider counters and the PFD state are kept
   // across changes (no reset).
+  void SetTriGain(float g) { tri_gain_ = g; }    // 1 = triangle, >1 = trapezoid
   void SetMode(int fb_div, int out_div, bool pc2, bool tri = false) {
     tri_ = tri;
     fb_div_  = fb_div  < 1 ? 1 : fb_div;
@@ -99,7 +100,10 @@ class Pll4046 {
       if (op > 1.f) op = 1.f;                    // (counter left above a reduced M: until it wraps)
       phase_ += freq_ / sr_;
       if (phase_ >= 1.f) phase_ -= 1.f;
-      return 4.f * fabsf(op - 0.5f) - 1.f;       // +1 at the square's rising edge, -1 mid-period
+      // Triangle (+1 at the square's rising edge, -1 mid-period) x tri_gain_,
+      // clipped: 1 = triangle, higher = a trapezoid toward the square.
+      float t = (4.f * fabsf(op - 0.5f) - 1.f) * tri_gain_;
+      return t > 1.f ? 1.f : (t < -1.f ? -1.f : t);
     }
     phase_ += freq_ / sr_;
     if (phase_ >= 1.f) phase_ -= 1.f;
@@ -115,6 +119,7 @@ class Pll4046 {
   float phase_ = 0.f, v_ = 0.5f, a_ = 0.f, freq_ = 200.f;
   int  fb_div_ = 1, out_div_ = 1;
   bool pc2_ = false, tri_ = false;
+  float tri_gain_ = 1.f;                         // triangle -> trapezoid (clip gain)
   bool vco_prev_ = true, fb_q_ = true, out_q_ = true, in_prev_ = false;
   int  fb_cnt_ = 0, out_cnt_ = 0, pfd_ = 0;
 };
