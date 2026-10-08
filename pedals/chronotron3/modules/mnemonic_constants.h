@@ -394,12 +394,16 @@ static constexpr bool  MNEM_PLL_S0_TRI[MNEM_PLL_ZONES]     = {false, false, fals
 //   zone:  0 /4 XOR@3 sq · 1 PC2@2000 sq · 2 XOR@15 sq · 3 /2 @25 sq ·
 //          4 1:1 @30 tri · 5 /2 @60 tri · 6 1:1 @60 tri · 7 x2 @60 tri · 8 x1.5 @30 tri ·
 //          9 x2 @15 sq · 10 x1.5 @25 sq · 11 x3 @2000 sq · 12 x3 @4 sq   (all XOR except zone 1)
-static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1, 1,   1, 1, 1, 2, 3,   2, 3, 3, 3};
-static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1, 2,   1, 2, 1, 1, 2,   1, 2, 1, 1};
+// 2026-10-08 (builder's DIAG zone rating): good zones 1 2 3 5 10 12 kept; the
+// garbled 25-60 Hz / 4 Hz ones (4 6 7 8 9 11 13) -> higher ratios at the filter
+// types that worked (15 Hz / 2 kHz): 4 x4@15 · 6 x5@2k · 7 x2@2k · 8 x3@15 ·
+// 9 x5@15 · 11 x7@2k · 13 x8@15.
+static constexpr int   MNEM_PLL_S1_FB_DIV[MNEM_PLL_ZONES]  = {1, 1, 1, 4,   1, 5, 2, 3, 5,   2, 7, 3, 8};
+static constexpr int   MNEM_PLL_S1_OUT_DIV[MNEM_PLL_ZONES] = {4, 1, 1, 1,   1, 1, 1, 1, 1,   1, 1, 1, 1};
 static constexpr bool  MNEM_PLL_S1_PC2[MNEM_PLL_ZONES]     = {false, true, false, false,   false, false, false, false, false,   false, false, false, false};
-static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f, 25.f,   // (zone 1: PC2 back at 5 Hz — the old sweet spot, to try)
-    30.f, 60.f, 60.f, 60.f, 30.f,
-    15.f, 25.f, MNEM_PLL_LF_HZ, 4.f};
+static constexpr float MNEM_PLL_S1_ZONE_LF_HZ[MNEM_PLL_ZONES] = {3.f, 5.f, 15.f, 15.f,
+    30.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f, 15.f,
+    15.f, MNEM_PLL_LF_HZ, MNEM_PLL_LF_HZ, 15.f};
 static constexpr bool  MNEM_PLL_S1_TRI[MNEM_PLL_ZONES]     = {false, false, false, false,   false, false, false, false, false,   false, false, false, false};   // all square (2026-10-08: K1 tone does the mellowing)
 // The active set (what mnemonic.h reads).
 static constexpr const int*   MNEM_PLL_FB_DIV     = MNEM_PLL_SET == 0 ? MNEM_PLL_S0_FB_DIV     : MNEM_PLL_S1_FB_DIV;
@@ -420,6 +424,9 @@ static constexpr float MNEM_PLL_LEVEL       = 0.1f;
 static constexpr float MNEM_PLL_GATE_THR    = 0.003f;
 static constexpr float MNEM_PLL_GATE_ATK_MS = 2.f;
 static constexpr float MNEM_PLL_GATE_REL_MS = 30.f;
+// A little of the clean playing written into the delay alongside the PLL (so the
+// PLL adds to the note instead of swallowing it): input x CLEAN_MIX (~-10 dB under the PLL).
+static constexpr float MNEM_PLL_CLEAN_MIX = 1.5f;
 // Dynamics (2026-10-07): the input envelope (MoogerFooger follower) in dB,
 // DB_LO .. DB_HI -> d = 0..1. (A) level x (FLOOR + (1-FLOOR) d); (B) the zone's
 // loop filter x 2^(LF_OCT (2d-1)) — hard playing faster / fuzzier, soft slower

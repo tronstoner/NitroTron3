@@ -533,7 +533,8 @@ class Mnemonic : public Module {
           float d = (20.f * log10f(ev + 1e-9f) - MNEM_PLL_DYN_DB_LO) / (MNEM_PLL_DYN_DB_HI - MNEM_PLL_DYN_DB_LO);
           d = d < 0.f ? 0.f : (d > 1.f ? 1.f : d);
           pll_dyn_ = d;
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate;
+          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (MNEM_PLL_DYN_FLOOR + (1.f - MNEM_PLL_DYN_FLOOR) * d) * gate
+              + in[i] * MNEM_PLL_CLEAN_MIX;
         }
         float x = src * send_gain_ + loop_s + fb;
         x = Filter(x);                                  // K4/K5 tone — IN the loop (ages repeats)
