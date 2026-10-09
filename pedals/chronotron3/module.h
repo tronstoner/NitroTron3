@@ -37,6 +37,12 @@ class Module {
   // module OwnsOutput() (below), in which case `wet` is taken as the final out.
   virtual void Process(const float* in, float* wet, size_t size) = 0;
 
+  // Optional pre-effect on the INPUT ("a pedal in front"): the shell applies it
+  // to the input block BEFORE both Process() and its own dry path, so dry and
+  // send are both processed. Default: none. In bypass the module must leave
+  // `buf` untouched (the clean-bypass guarantee below relies on it).
+  virtual void PreProcess(float* buf, size_t size) { (void)buf; (void)size; }
+
   // If true, the module has already routed the dry itself (e.g. looper volume +
   // dry bypass) and fills `wet` with the FINAL output; the shell outputs it
   // directly and skips the K6 crossfade. Default false = shell does the mix.

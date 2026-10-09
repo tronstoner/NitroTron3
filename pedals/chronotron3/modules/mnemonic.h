@@ -39,6 +39,8 @@
 #include "clouds_reverb_48k.h"  // core/blocks — K5-CCW reverb (shared with sprawl)
 #include "env_follower.h"       // core/blocks — MoogerFooger follower (PLL dynamics)
 #include "pll.h"                // core/blocks — CD4046-style PLL (SW2 DOWN)
+#include "phaser.h"             // core/blocks — Schism phaser (K3 pre-effect, SW2 UP CCW)
+#include "flanger.h"            // core/blocks — flanger (K3 pre-effect, SW2 UP CW)
 #include <math.h>
 #include <cstring>         // memset (kill)
 
@@ -159,6 +161,9 @@ class Mnemonic : public Module {
     pll_gate_atk_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_ATK_MS * 0.001f * sr_));
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
+    phaser_.Init(sr_);
+    flanger_.Init(sr_, MNEM_FLANGER_MIN_MS, MNEM_FLANGER_MAX_MS, MNEM_FLANGER_FB);
+    pre_step_ = 1.f / (MNEM_PRE_XFADE_MS * 0.001f * sr_);
     // Sprawl's voicing of the shared engine (2026-10-08).
     degrade_.SetFoldScale(MNEM_DEG_BBD_FOLD_SCALE);
     degrade_.SetBbdLpfScale(MNEM_DEG_BBD_LPF_SCALE);
@@ -272,6 +277,19 @@ class Mnemonic : public Module {
     float tilt = (eq_tilt - 0.5f) * 2.f * MNEM_K1_RANGE;   // -RANGE .. +RANGE (full K1 = old ~9:00 / 15:00)
     const float eq_narrow = MNEM_K1_NARROW_MAX *
         powf(tilt < 0.f ? -tilt : tilt, MNEM_K1_NARROW_CURVE);
+
+    // ---- K3 pre-effect (SW2 UP): CCW phaser · noon off · CW flanger ------
+    {
+      int kind = 0; float u = 0.f;
+      if (sw2_ == 0 && !bypassed_) {
+        const float c = knob_k3 - 0.5f, a = fabsf(c);
+        if (a > MNEM_PRE_DEADZONE) { kind = (c < 0.f) ? 1 : 2; u = (a - MNEM_PRE_DEADZONE) / (0.5f - MNEM_PRE_DEADZONE); }
+      }
+      if (u > 1.f) u = 1.f;
+      if (kind == 1) phaser_.SetParams(MNEM_PHASER_K1, MNEM_PHASER_K2, -(u > 1e-4f ? u : 1e-4f));   // triangle, rate from u
+      if (kind == 2) flanger_.SetRate(MNEM_PRE_RATE_MIN * powf(MNEM_PRE_RATE_MAX / MNEM_PRE_RATE_MIN, u));
+      pre_kind_tgt_ = kind;
+    }
 
     // ---- K3: PLL mode selector (SW2 DOWN), 7 stepped zones, no blending ---
     {
@@ -655,6 +673,23 @@ class Mnemonic : public Module {
   // attenuate the dry). Only the wet trail rings out; the dry is never processed.
   bool Bypassed() const override { return bypassed_; }
 
+  // K3 pre-effect ("a pedal in front", dry + send): click-free on/off — a
+  // kind change ramps the old effect out first, then the new one in.
+  void PreProcess(float* buf, size_t size) override {
+    for (size_t i = 0; i < size; i++) {
+      if (pre_kind_ != pre_kind_tgt_ && pre_g_ <= 0.f) pre_kind_ = pre_kind_tgt_;
+      const float tgt = (pre_kind_ != 0 && pre_kind_ == pre_kind_tgt_) ? 1.f : 0.f;
+      if (pre_g_ < tgt) { pre_g_ += pre_step_; if (pre_g_ > tgt) pre_g_ = tgt; }
+      else if (pre_g_ > tgt) { pre_g_ -= pre_step_; if (pre_g_ < tgt) pre_g_ = tgt; }
+      if (pre_g_ > 0.f) {
+        const float x = buf[i];
+        const float y = (pre_kind_ == 1) ? phaser_.Process(x) * MNEM_PHASER_MAKEUP
+                                         : flanger_.Process(x) * MNEM_FLANGER_MAKEUP;
+        buf[i] = x + (y - x) * pre_g_;
+      }
+    }
+  }
+
  private:
   // ---- tone filter (in the loop): 24 dB HP -> 24 dB LP -------------------
   void SetFilters(float lo, float hi) {
@@ -931,6 +966,11 @@ class Mnemonic : public Module {
   // PLL mode (SW2 DOWN): one line, gated PLL square written instead of the input
   bool  pll_mode_ = false;
   Pll4046 pll_;
+  Phaser  phaser_;                    // K3 pre-effect CCW (SW2 UP)
+  Flanger flanger_;                   // K3 pre-effect CW (SW2 UP)
+  volatile int pre_kind_tgt_ = 0;     // 0 off · 1 phaser · 2 flanger (set in Controls)
+  int   pre_kind_ = 0;                // the one currently running
+  float pre_g_ = 0.f, pre_step_ = 0.f;
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
   float trem_ph_ = 0.f, trem_delay_s_ = 0.f;       // PLL tremolo phase (cycles) + the delay time (samples)
   int   trem_k_ = 0;                                 // tremolo cycles per delay (0 off, 2, 3)

@@ -85,6 +85,7 @@ Module*  modules[CT3_MODE_COUNT] = { &vestige, &mnemonic, &sprawl };
 volatile int g_active = CT3_MODE_VESTIGE;
 
 static float wet_buf[CT3_BLOCK_SIZE];
+static float pre_buf[CT3_BLOCK_SIZE];   // input after the module's pre-effect (dry + send)
 static float mix_smoothed = 0.f;   // smoothed K6 target (0 = dry, 1 = wet)
 static float dry_bypass = 0.f;     // smoothed bypass dry-lift (0 = K6 mix, 1 = clean untouched)
 
@@ -103,7 +104,11 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   __set_FPSCR(__get_FPSCR() | (1UL << 24));
   hw.ProcessAllControls();
 
-  modules[g_active]->Process(in[0], wet_buf, size);
+  // Pre-effect ("a pedal in front"): processes the input for BOTH the module
+  // and the dry path below. Default modules leave it untouched.
+  for (size_t i = 0; i < size; i++) pre_buf[i] = in[0][i];
+  modules[g_active]->PreProcess(pre_buf, size);
+  modules[g_active]->Process(pre_buf, wet_buf, size);
 
   // Modules that own their output (e.g. vestige: looper volume + dry routing on
   // K6/SW2) have already produced the final signal — pass it straight through.
@@ -122,7 +127,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
     const float wg = sqrtf(mix_smoothed);
     float dg = sqrtf(1.f - mix_smoothed);
     dg += (1.f - dg) * dry_bypass;                 // ramp dry -> unity in bypass
-    out[0][i] = out[1][i] = in[0][i] * dg + wet_buf[i] * wg;
+    out[0][i] = out[1][i] = pre_buf[i] * dg + wet_buf[i] * wg;
   }
   if (CT3_DIAG) g_cpu.OnBlockEnd();
 }

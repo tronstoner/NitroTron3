@@ -516,3 +516,26 @@ static constexpr float MNEM_K1_RANGE = 0.65f;
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_K1_NARROW_MAX   = 0.5f;
 static constexpr float MNEM_K1_NARROW_CURVE = 1.0f;
+
+// ---------------------------------------------------------------------------
+// K3 pre-effect, SW2 UP only (2026-10-09): "a pedal in front" of the delay —
+// processes dry AND send (module PreProcess hook). Noon +-DEADZONE = off;
+// leaving / entering it switches with an XFADE_MS crossfade (no click, no
+// fade-in). CCW = phaser, CW = flanger; the distance past the dead zone sets
+// the rate, exponential RATE_MIN .. RATE_MAX. Fixed intensity. In bypass: off.
+// ---------------------------------------------------------------------------
+static constexpr float MNEM_PRE_DEADZONE  = 0.06f;   // of the knob travel (physical noon reads ~0.52)
+static constexpr float MNEM_PRE_XFADE_MS  = 5.f;
+static constexpr float MNEM_PRE_RATE_MIN  = 0.02f;   // Hz (50 s cycle) — = Schism's triangle range
+static constexpr float MNEM_PRE_RATE_MAX  = 80.f;    // Hz (near audio)
+// Phaser: the Schism block, frozen at K1 noon (sweep centre ~630 Hz) and K2
+// full CCW (full notch, sweep +-3 oct, feedback -0.4); Schism's makeup.
+static constexpr float MNEM_PHASER_K1     = 0.5f;
+static constexpr float MNEM_PHASER_K2     = 0.0f;
+static constexpr float MNEM_PHASER_MAKEUP = 1.4f;
+// Flanger (core/blocks/flanger.h): triangle sweep MIN..MAX ms, feedback FB.
+static constexpr float MNEM_FLANGER_MIN_MS = 0.5f;
+static constexpr float MNEM_FLANGER_MAX_MS = 8.f;
+static constexpr float MNEM_FLANGER_FB     = 0.5f;
+static constexpr float MNEM_FLANGER_MAKEUP = 1.36f;  // +2.7 dB: matched to the phaser (host, plucked guitar + bass)
+
