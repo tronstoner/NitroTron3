@@ -525,6 +525,12 @@ static constexpr float MNEM_PRE_DEADZONE  = 0.06f;   // of the knob travel (phys
 static constexpr float MNEM_PRE_XFADE_MS  = 5.f;
 static constexpr float MNEM_PRE_RATE_MIN  = 0.02f;   // Hz (50 s cycle) — = Schism's triangle range
 static constexpr float MNEM_PRE_RATE_MAX  = 80.f;    // Hz (near audio)
+// Rate taper (2026-10-09): rate = MIN (MAX/MIN)^(u^CURVE), u = 0..1 past the dead
+// zone — CURVE 2 puts ~90 % of the travel below ~16 Hz (audio rate = the last bit).
+static constexpr float MNEM_PRE_RATE_CURVE = 2.f;
+// Fade-in (2026-10-09): the effect blends in 0 -> full over the first FADE of u
+// (mix, the rate keeps running underneath).
+static constexpr float MNEM_PRE_FADE      = 0.1f;
 // Phaser: the Schism block, frozen at K1 noon (sweep centre ~630 Hz) and K2
 // full CCW (full notch, sweep +-3 oct, feedback -0.4); Schism's makeup.
 static constexpr float MNEM_PHASER_K1     = 0.5f;

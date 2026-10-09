@@ -164,6 +164,7 @@ class Mnemonic : public Module {
     phaser_.Init(sr_);
     flanger_.Init(sr_, MNEM_FLANGER_MIN_MS, MNEM_FLANGER_MAX_MS, MNEM_FLANGER_FB);
     pre_step_ = 1.f / (MNEM_PRE_XFADE_MS * 0.001f * sr_);
+    pre_mix_coef_ = 1.f - expf(-1.f / (MNEM_PRE_XFADE_MS * 0.001f * sr_));
     // Sprawl's voicing of the shared engine (2026-10-08).
     degrade_.SetFoldScale(MNEM_DEG_BBD_FOLD_SCALE);
     degrade_.SetBbdLpfScale(MNEM_DEG_BBD_LPF_SCALE);
@@ -284,8 +285,10 @@ class Mnemonic : public Module {
         if (a > MNEM_PRE_DEADZONE) { kind = (c < 0.f) ? 1 : 2; u = (a - MNEM_PRE_DEADZONE) / (0.5f - MNEM_PRE_DEADZONE); }
       }
       if (u > 1.f) u = 1.f;
-      if (kind == 1) phaser_.SetParams(MNEM_PHASER_K1, MNEM_PHASER_K2, -(u > 1e-4f ? u : 1e-4f));   // triangle, rate from u
-      if (kind == 2) flanger_.SetRate(MNEM_PRE_RATE_MIN * powf(MNEM_PRE_RATE_MAX / MNEM_PRE_RATE_MIN, u));
+      const float ur = powf(u, MNEM_PRE_RATE_CURVE);   // rate taper: most of the travel sub-audio
+      if (kind == 1) phaser_.SetParams(MNEM_PHASER_K1, MNEM_PHASER_K2, -(ur > 1e-4f ? ur : 1e-4f));   // triangle, rate from ur
+      if (kind == 2) flanger_.SetRate(MNEM_PRE_RATE_MIN * powf(MNEM_PRE_RATE_MAX / MNEM_PRE_RATE_MIN, ur));
+      pre_mix_tgt_ = (u < MNEM_PRE_FADE) ? u / MNEM_PRE_FADE : 1.f;      // fade-in over the first FADE
       pre_kind_tgt_ = kind;
     }
 
@@ -678,11 +681,12 @@ class Mnemonic : public Module {
       const float tgt = (pre_kind_ != 0 && pre_kind_ == pre_kind_tgt_) ? 1.f : 0.f;
       if (pre_g_ < tgt) { pre_g_ += pre_step_; if (pre_g_ > tgt) pre_g_ = tgt; }
       else if (pre_g_ > tgt) { pre_g_ -= pre_step_; if (pre_g_ < tgt) pre_g_ = tgt; }
+      pre_mix_ += (pre_mix_tgt_ - pre_mix_) * pre_mix_coef_;   // (smoothed: no zipper from the 10 ms knob tick)
       if (pre_g_ > 0.f) {
         const float x = buf[i];
         const float y = (pre_kind_ == 1) ? phaser_.Process(x) * MNEM_PHASER_MAKEUP
                                          : flanger_.Process(x) * MNEM_FLANGER_MAKEUP;
-        buf[i] = x + (y - x) * pre_g_;
+        buf[i] = x + (y - x) * pre_g_ * pre_mix_;
       }
     }
   }
@@ -967,6 +971,7 @@ class Mnemonic : public Module {
   volatile int pre_kind_tgt_ = 0;     // 0 off · 1 phaser · 2 flanger (set in Controls)
   int   pre_kind_ = 0;                // the one currently running
   float pre_g_ = 0.f, pre_step_ = 0.f;
+  float pre_mix_tgt_ = 0.f, pre_mix_ = 0.f, pre_mix_coef_ = 0.f;   // fade-in mix
   float pll_env_ = 0.f, pll_gate_atk_ = 0.f, pll_gate_rel_ = 0.f;
   float trem_ph_ = 0.f, trem_delay_s_ = 0.f;       // PLL tremolo phase (cycles) + the delay time (samples)
   int   trem_k_ = 0;                                 // tremolo cycles per delay (0 off, 2, 3)
