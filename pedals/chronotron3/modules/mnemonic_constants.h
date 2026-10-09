@@ -523,11 +523,12 @@ static constexpr float MNEM_K1_NARROW_CURVE = 1.0f;
 // ---------------------------------------------------------------------------
 static constexpr float MNEM_PRE_DEADZONE  = 0.06f;   // of the knob travel (physical noon reads ~0.52)
 static constexpr float MNEM_PRE_XFADE_MS  = 5.f;
-static constexpr float MNEM_PRE_RATE_MIN  = 0.02f;   // Hz (50 s cycle) — = Schism's triangle range
-static constexpr float MNEM_PRE_RATE_MAX  = 80.f;    // Hz (near audio)
-// Rate taper (2026-10-09): rate = MIN (MAX/MIN)^(u^CURVE), u = 0..1 past the dead
-// zone — CURVE 2 puts ~90 % of the travel below ~16 Hz (audio rate = the last bit).
-static constexpr float MNEM_PRE_RATE_CURVE = 2.f;
+static constexpr float MNEM_PRE_RATE_MIN  = 0.1f;    // Hz (10 s cycle) — 2026-10-09 (was 0.02, Schism's range)
+static constexpr float MNEM_PRE_RATE_MAX  = 20.f;    // Hz (starts to growl) — 2026-10-09 (was 80)
+// Rate taper: rate = MIN (MAX/MIN)^(u^CURVE), u = 0..1 past the dead zone.
+// CURVE 1 = plain exponential: the rate doubles every ~13 % of the travel (even
+// to the ear). (2 skewed it — huge slow stretch, then a rush; builder 2026-10-09.)
+static constexpr float MNEM_PRE_RATE_CURVE = 1.f;
 // Fade-in (2026-10-09): the effect blends in 0 -> full over the first FADE of u
 // (mix, the rate keeps running underneath).
 static constexpr float MNEM_PRE_FADE      = 0.1f;

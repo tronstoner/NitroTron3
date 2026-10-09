@@ -285,9 +285,13 @@ class Mnemonic : public Module {
         if (a > MNEM_PRE_DEADZONE) { kind = (c < 0.f) ? 1 : 2; u = (a - MNEM_PRE_DEADZONE) / (0.5f - MNEM_PRE_DEADZONE); }
       }
       if (u > 1.f) u = 1.f;
-      const float ur = powf(u, MNEM_PRE_RATE_CURVE);   // rate taper: most of the travel sub-audio
-      if (kind == 1) phaser_.SetParams(MNEM_PHASER_K1, MNEM_PHASER_K2, -(ur > 1e-4f ? ur : 1e-4f));   // triangle, rate from ur
-      if (kind == 2) flanger_.SetRate(MNEM_PRE_RATE_MIN * powf(MNEM_PRE_RATE_MAX / MNEM_PRE_RATE_MIN, ur));
+      const float rate = MNEM_PRE_RATE_MIN * powf(MNEM_PRE_RATE_MAX / MNEM_PRE_RATE_MIN, powf(u, MNEM_PRE_RATE_CURVE));
+      if (kind == 1) {   // the phaser maps its K3 magnitude over ITS range (PHASER_LFO_TRI_*): invert that
+        float mag = logf(rate / PHASER_LFO_TRI_HZ_MIN) / logf(PHASER_LFO_TRI_HZ_MAX / PHASER_LFO_TRI_HZ_MIN);
+        if (mag < 1e-4f) mag = 1e-4f;
+        phaser_.SetParams(MNEM_PHASER_K1, MNEM_PHASER_K2, -mag);   // triangle
+      }
+      if (kind == 2) flanger_.SetRate(rate);
       pre_mix_tgt_ = (u < MNEM_PRE_FADE) ? u / MNEM_PRE_FADE : 1.f;      // fade-in over the first FADE
       pre_kind_tgt_ = kind;
     }
