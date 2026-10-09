@@ -265,7 +265,7 @@ class Mnemonic : public Module {
       bbd_out_gain_ = powf(10.f, db / 20.f);
     }
     // PLL wet trim: TRIM at K4 noon, +TRIM_EDGE_DB at both ends (linear in dB).
-    pll_trim_ = MNEM_PLL_OUT_TRIM * powf(10.f, MNEM_PLL_TRIM_EDGE_DB * fabsf(p3) / 20.f);
+    pll_trim_ = powf(10.f, MNEM_PLL_TRIM_EDGE_DB * fabsf(p3) / 20.f);   // K4 boost only (the 0.15 trim sits before the delay)
 
     // ---- K1 tilt/center + narrow (converging 24 dB HP+LP), all SW2 modes --
     // Wide band edges from K1: CCW lowers the LP (dark), CW raises the HP
@@ -594,8 +594,8 @@ class Mnemonic : public Module {
           // Level (A): proportional to the playing's envelope, no floor / cap —
           // REF (guitar-ish level) = the old fixed level; bass comes out louder
           // in step with its dry signal.
-          src = pll_.Process(in[i]) * MNEM_PLL_LEVEL * (ev / MNEM_PLL_DYN_REF) * gate
-              + in[i] * MNEM_PLL_CLEAN_MIX;
+          src = (pll_.Process(in[i]) * MNEM_PLL_LEVEL * (ev / MNEM_PLL_DYN_REF) * gate
+              + in[i] * MNEM_PLL_CLEAN_MIX) * MNEM_PLL_OUT_TRIM;   // trimmed BEFORE the delay (#18: no jump on a mode switch)
         }
         float x = src * send_gain_ + loop_s + fb;
         delay_.Write(x);                                // (tone / warmth / colour: on the read side above)
@@ -932,7 +932,7 @@ class Mnemonic : public Module {
   float param_smooth_ = 0.004f;          // audio-rate smoother for K2-K5 params
   // BBD output makeup (K3 CCW): depth-dependent wet-output gain, post-loop
   float bbd_out_gain_ = 1.f, bbd_out_sm_ = 1.f;
-  float pll_trim_ = MNEM_PLL_OUT_TRIM, pll_trim_sm_ = MNEM_PLL_OUT_TRIM;
+  float pll_trim_ = 1.f, pll_trim_sm_ = 1.f;
 
   // loop (two-slab scratch/playback, pointer-swap commit; REPLACE not overdub)
   float* loop_play_buf_ = nullptr;
