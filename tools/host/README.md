@@ -71,3 +71,18 @@ slabs share SDRAM; on the host the linker decides what sits after them). The
 hardware is stubbed, the input is synthetic, and the harness only checks what it
 was told to check. A clean run is not proof — the serial log is the source of
 truth (`.agents/skills/serial-diag/SKILL.md`).
+
+- **`test_mnemonic.cpp`** — the real mnemonic module (locked 2026-10-09),
+  stubbed hardware, plucked-string input (guitar + bass ranges), Controls()
+  every 10 ms and PreProcess() + Process() every 48 samples like the shell.
+  K3 pre-effect (SW2 UP): bit-exact at the physical noon and in bypass, rate
+  0.1–20 Hz plain exponential for phaser and flanger, the 10 % fade-in, a
+  >= 4 ms switch ramp, no switching step above the playing's, levels within
+  +-1.5 dB of the input, the flanger's one-past-the-end read. K4 degrade
+  (sprawl voicing): the tail dies with feedback at every K4 position, wet level
+  within +-2 dB of the physical K4 noon. Read side: a K4 / K1 step is heard
+  within 230 ms on a 290 ms delay. PLL (#18): leaving PLL mode keeps the running
+  echo's level. Each check verified to fail on its regression (sprawl's in-loop
+  levels, K4 / K1 back on the write side, trim after the delay, no flanger
+  wrap mask, curve 2, no crossfade, no dead zone, bypass ignored).
+

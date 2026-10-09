@@ -69,5 +69,17 @@ else
 fi
 
 echo
+echo "== test_mnemonic (real mnemonic module: K3 pre-effect, K4 degrade, read-side K1/K4, PLL switch)"
+if g++ -O2 -std=c++17 -DCT3_DIAG_BUILD \
+     -I tools/host/stub -I pedals/chronotron3 -I pedals/chronotron3/modules \
+     -I src/core/blocks -I src/core/util \
+     -o /tmp/ct3_mnemonic tools/host/test_mnemonic.cpp \
+   && /tmp/ct3_mnemonic; then
+  echo "PASS  test_mnemonic"
+else
+  echo "FAIL  test_mnemonic"; fail=1
+fi
+
+echo
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "FAILURES"
 exit "$fail"
