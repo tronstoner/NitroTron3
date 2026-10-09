@@ -478,9 +478,6 @@ static constexpr float MNEM_PLL_VCO_CENTRE_HZ = 200.f;
 static constexpr float MNEM_PLL_VCO_MAX_HZ    = 4000.f;
 // PLL trim: the hot square down to the playing's level — BEFORE the delay since 2026-10-09 (#18).
 static constexpr float MNEM_PLL_OUT_TRIM = 0.15f;   // about -16 dB — applied BEFORE the delay since 2026-10-09 (#18; was on the wet output)
-// The K4 boost stays on the wet output (read side): 0 dB at noon, rising linearly in dB toward BOTH K4 ends to +EDGE_DB (2026-10-08: the
-// builder's +6 dB was right at the ends, too loud at noon).
-static constexpr float MNEM_PLL_TRIM_EDGE_DB = 6.f;
 // Fixed level of the bipolar VCO square written into the delay, gated by a
 // fast envelope on the INPUT (hard threshold, guitar-level).
 static constexpr float MNEM_PLL_LEVEL       = 0.1f;

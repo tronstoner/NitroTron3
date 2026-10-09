@@ -264,8 +264,6 @@ class Mnemonic : public Module {
       const float db = MNEM_DEG_MAKEUP_DB[ki] + (MNEM_DEG_MAKEUP_DB[ki + 1] - MNEM_DEG_MAKEUP_DB[ki]) * (kp - (float)ki);
       bbd_out_gain_ = powf(10.f, db / 20.f);
     }
-    // PLL wet trim: TRIM at K4 noon, +TRIM_EDGE_DB at both ends (linear in dB).
-    pll_trim_ = powf(10.f, MNEM_PLL_TRIM_EDGE_DB * fabsf(p3) / 20.f);   // K4 boost only (the 0.15 trim sits before the delay)
 
     // ---- K1 tilt/center + narrow (converging 24 dB HP+LP), all SW2 modes --
     // Wide band edges from K1: CCW lowers the LP (dark), CW raises the HP
@@ -473,7 +471,6 @@ class Mnemonic : public Module {
       drive_sm_  += (tape_drive_    - drive_sm_)  * param_smooth_;
       makeup_sm_ += (filter_makeup_ - makeup_sm_) * param_smooth_;
       bbd_out_sm_ += (bbd_out_gain_ - bbd_out_sm_) * param_smooth_;   // BBD output makeup (wet-only)
-      pll_trim_sm_ += (pll_trim_ - pll_trim_sm_) * param_smooth_;     // PLL wet trim (K4-dependent)
       lo_sm_     += (lo_ - lo_sm_) * param_smooth_;
       hi_sm_     += (hi_ - hi_sm_) * param_smooth_;
       base_delay_sm_  += (base_delay_  - base_delay_sm_)  * time_smooth_;  // de-jitter K1 before the glide
@@ -603,7 +600,7 @@ class Mnemonic : public Module {
         // hot square down to the playing's level.
         // (+ the zone-1/13 tremolo on the wet only: post-delay, nothing of it
         //  goes back into the loop — pre-delay it smeared through the feedback)
-        delayed = pll_mode_ ? ds * pll_trim_sm_ : ds;   // (tremolo: after the reverb, below)
+        delayed = ds;                                    // (PLL: trimmed before the delay; tremolo: after the reverb, below)
       }
 
       // Freeze voice: 2 half-overlapped full-Hann grains loop the captured
@@ -932,7 +929,6 @@ class Mnemonic : public Module {
   float param_smooth_ = 0.004f;          // audio-rate smoother for K2-K5 params
   // BBD output makeup (K3 CCW): depth-dependent wet-output gain, post-loop
   float bbd_out_gain_ = 1.f, bbd_out_sm_ = 1.f;
-  float pll_trim_ = 1.f, pll_trim_sm_ = 1.f;
 
   // loop (two-slab scratch/playback, pointer-swap commit; REPLACE not overdub)
   float* loop_play_buf_ = nullptr;
