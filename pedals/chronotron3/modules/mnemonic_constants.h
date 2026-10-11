@@ -532,6 +532,11 @@ static constexpr float MNEM_PRE_RATE_CURVE = 1.f;
 // Fade-in (2026-10-09): the effect blends in 0 -> full over the first FADE of u
 // (mix, the rate keeps running underneath).
 static constexpr float MNEM_PRE_FADE      = 0.1f;
+// LFO shape for both (2026-10-11, the builder's pick from the LFO-shapes sketch):
+// rise share of the cycle (0.5 = triangle) and RC bend (k = 5 x curve; 0 = straight,
+// negative = slow start, sharp turn). core/blocks/lfo_shape.h.
+static constexpr float MNEM_PRE_LFO_SYMMETRY = 0.36f;
+static constexpr float MNEM_PRE_LFO_CURVE    = -0.25f;
 // Phaser: the Schism block, frozen at K1 noon (sweep centre ~630 Hz) and K2
 // full CCW (full notch, sweep +-3 oct, feedback -0.4); Schism's makeup.
 static constexpr float MNEM_PHASER_K1     = 0.5f;

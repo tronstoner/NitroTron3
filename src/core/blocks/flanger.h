@@ -6,6 +6,7 @@
 // through-zero, no saturation, no filtering.
 //
 #include <math.h>
+#include "lfo_shape.h"
 
 class Flanger {
  public:
@@ -18,10 +19,13 @@ class Flanger {
     w_ = 0; ph_ = 0.f; inc_ = 0.f;
   }
   void SetRate(float hz) { inc_ = hz / sr_; }
+  // LFO shape (core/blocks/lfo_shape.h); default = the plain triangle.
+  void SetShape(float sym, float curve) { shaped_ = !(sym == 0.5f && curve == 0.f); if (shaped_) shape_.Set(sym, curve); }
 
   inline float Process(float x) {
     ph_ += inc_; if (ph_ >= 1.f) ph_ -= 1.f;
-    const float tri = ph_ < 0.5f ? 4.f * ph_ - 1.f : 3.f - 4.f * ph_;   // -1..+1
+    const float tri = shaped_ ? shape_.At(ph_)
+                              : (ph_ < 0.5f ? 4.f * ph_ - 1.f : 3.f - 4.f * ph_);   // -1..+1
     const float d = min_ + (max_ - min_) * (0.5f + 0.5f * tri);        // samples
     float rp = (float)w_ - d; if (rp < 0.f) rp += (float)kLen;
     const int   ri = (int)rp; const float fr = rp - (float)ri;
@@ -36,4 +40,6 @@ class Flanger {
   float buf_[kLen];
   float sr_ = 48000.f, fb_ = 0.f, min_ = 0.f, max_ = 0.f, ph_ = 0.f, inc_ = 0.f;
   int   w_ = 0;
+  bool  shaped_ = false;
+  LfoShape shape_;
 };

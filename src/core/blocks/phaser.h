@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include "constants.h"
+#include "lfo_shape.h"
 
 // First-order allpass phaser, voiced toward the EHX Small Stone but denser.
 // All stages share the same modulated allpass corner ω. The output mixes
@@ -107,6 +108,13 @@ class Phaser {
     if (!lfo_active_) UpdateAllpassCoeff(fc_center_);
   }
 
+  // Optional triangle reshaping (core/blocks/lfo_shape.h): rise share + RC
+  // curve. Default off = the plain triangle, bit-identical (NitroTron3 Schism).
+  void SetTriShape(float sym, float curve) {
+    shaped_ = !(sym == 0.5f && curve == 0.f);
+    if (shaped_) tri_shape_.Set(sym, curve);
+  }
+
   // Note attack (env onset, detected by the caller): restart the S&H random
   // LFO — fresh random value, phase reset — so each note owns its step and a
   // free-running switch can't fire rhythmically misaligned mid-note. No-op
@@ -139,11 +147,11 @@ class Phaser {
         for (int i = 0; i < kStages; ++i) {
           float p = lfo_phase_ + 0.5f * PHASER_STAGE_LFO_SPAN * stage_frac_[i];
           p -= floorf(p);
-          const float m = TriAt(p);
+          const float m = shaped_ ? tri_shape_.At(p) : TriAt(p);
           a_stage_[i] = CoeffFor(fc_center_ * FastExp2(m * sweep_oct));
         }
       } else {
-        const float mod = (shape_ == kTriangle) ? TriAt(lfo_phase_) : sh_value_;
+        const float mod = (shape_ == kTriangle) ? (shaped_ ? tri_shape_.At(lfo_phase_) : TriAt(lfo_phase_)) : sh_value_;
         // Apply mod directly: S&H stays as true steps, no slew between
         // values. Triangle is already smooth so no smoothing needed.
         UpdateAllpassCoeff(fc_center_ * FastExp2(mod * sweep_oct));
@@ -191,6 +199,9 @@ class Phaser {
   float sweep_mult_  = 1.f;  // LFO sweep-range scale, 1 … SWEEP_MAX_MULT (phase-2 travel)
   float stage_frac_[kStages] = {};  // −1 … +1 stage position, for LFO phase offsets
   float a_stage_[kStages]    = {};  // per-stage coefficient when LFO offsets active
+
+  bool     shaped_ = false;   // SetTriShape() active
+  LfoShape tri_shape_;
 
   static float TriAt(float p) {
     if (p < 0.25f) return p * 4.f;

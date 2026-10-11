@@ -163,6 +163,8 @@ class Mnemonic : public Module {
     degrade_.Init(sr_);
     phaser_.Init(sr_);
     flanger_.Init(sr_, MNEM_FLANGER_MIN_MS, MNEM_FLANGER_MAX_MS, MNEM_FLANGER_FB);
+    phaser_.SetTriShape(MNEM_PRE_LFO_SYMMETRY, MNEM_PRE_LFO_CURVE);
+    flanger_.SetShape(MNEM_PRE_LFO_SYMMETRY, MNEM_PRE_LFO_CURVE);
     pre_step_ = 1.f / (MNEM_PRE_XFADE_MS * 0.001f * sr_);
     pre_mix_coef_ = 1.f - expf(-1.f / (MNEM_PRE_XFADE_MS * 0.001f * sr_));
     // Sprawl's voicing of the shared engine (2026-10-08).
