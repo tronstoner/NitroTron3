@@ -1272,7 +1272,7 @@ static constexpr float  VESTIGE_FADE_MIN_S         = 0.003f; // K5 noon / CCW: d
 // knob units), like K4's.
 static constexpr float  VESTIGE_K5_DEADZONE        = 0.06f;
 // REPEATS (K5 CCW half): N = REPEAT_N_MAX just past the dead zone down to 1
-// at full CCW (whole numbers, log taper). The first repeat plays at full
+// at full CCW (whole numbers; LINEAR on the raw knob since 2026-10-11, was log). The first repeat plays at full
 // level, repeat k (0-based) at FLOOR_DB x (k / (N-1))^CURVE dB — a curve in
 // dB: gentle early, steeper later, the last repeat on the quiet floor so the
 // stop after it is not heard as a cut (N = 8: 0 / -0.6 / -2.4 / -5.5 / -9.8 /

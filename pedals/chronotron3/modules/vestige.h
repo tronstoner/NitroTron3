@@ -319,7 +319,21 @@ class Vestige : public Module {
     const float c5 = k5 - 0.5f, a5 = fabsf(c5);
     const float u5 = (a5 <= VESTIGE_K5_DEADZONE) ? 0.f : (a5 - VESTIGE_K5_DEADZONE) / (0.5f - VESTIGE_K5_DEADZONE);
     const float fade_u = (c5 > 0.f) ? u5 : 0.f;
-    rep_n_ = (c5 < 0.f && u5 > 0.f) ? (int)(powf(VESTIGE_REPEAT_N_MAX, 1.f - u5) + 0.5f) : 0;   // 0 = endless
+    // N (2026-10-11): from the RAW knob (no RemapKnob end zones — the last
+    // count is discrete anyway), LINEAR: every count gets the same share of the
+    // CCW half past the dead zone, N_MAX just past it down to 1 at full CCW.
+    {
+      float k5raw = cs.Knob(4); k5raw = k5raw < 0.f ? 0.f : (k5raw > 1.f ? 1.f : k5raw);
+      const float cr = k5raw - 0.5f, ar = fabsf(cr);
+      const int nmax = (int)VESTIGE_REPEAT_N_MAX;
+      if (cr < 0.f && ar > VESTIGE_K5_DEADZONE) {
+        const float ur = (ar - VESTIGE_K5_DEADZONE) / (0.5f - VESTIGE_K5_DEADZONE);   // 0..1
+        int nn = nmax - (int)(ur * (float)nmax);
+        rep_n_ = nn < 1 ? 1 : (nn > nmax ? nmax : nn);
+      } else {
+        rep_n_ = 0;                                                          // endless
+      }
+    }
     if (rep_n_ < 0) rep_n_ = 0;
     // Freeze side: K5 CCW = SUSTAIN TIME (s), log taper SUSTAIN_MAX_S just past
     // the dead zone -> SUSTAIN_MIN_S at full CCW; 0 = off (noon / CW).

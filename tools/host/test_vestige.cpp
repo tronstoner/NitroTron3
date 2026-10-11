@@ -3352,10 +3352,9 @@ static void TestFadeVoiceCap() {
 // K5 CCW half = number of repeats N: the first at full level, repeat k at
 // VESTIGE_REPEAT_FLOOR_DB x (k/(N-1))^CURVE dB, the last one ramps out on its pass end and
 // the loop is freed; FS2 hold pauses the count; noon keeps the level.
-static float K5Repeats(int nrep) {              // raw knob for N repeats
-  const float u = 1.f - logf((float)nrep) / logf(VESTIGE_REPEAT_N_MAX);
-  const float r = 0.5f - VESTIGE_K5_DEADZONE - u * (0.5f - VESTIGE_K5_DEADZONE);
-  return r * (KNOB_MAX - KNOB_MIN) + KNOB_MIN;
+static float K5Repeats(int nrep) {              // raw knob for N repeats (linear, raw; middle of N's step)
+  const float u = ((VESTIGE_REPEAT_N_MAX - (float)nrep) + 0.5f) / VESTIGE_REPEAT_N_MAX;
+  return 0.5f - VESTIGE_K5_DEADZONE - u * (0.5f - VESTIGE_K5_DEADZONE);
 }
 static void TestK5Repeats() {
   printf("-- K5 CCW: number of repeats\n");
