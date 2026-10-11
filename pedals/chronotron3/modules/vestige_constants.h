@@ -350,6 +350,10 @@ static_assert(VESTIGE_GATE_ENV_MODE == 0 || VESTIGE_GATE_ENV_MODE == 1,
 // pluck. Cost: a very soft note with no attack, played while the previous one
 // still rings faintly (above this level), does not start a capture.
 static constexpr bool  VESTIGE_REARM_EVERY_END = true;
+// 2026-10-11 (builder, studio): outside the K2 free zones a loop is exactly T
+// (the tapped / set value) — never a shorter division of it. A phrase that ends
+// early is recorded on to T (the round-up path). Free zones: unchanged.
+static constexpr bool  VESTIGE_LOOP_LEN_IS_T = true;
 static constexpr float VESTIGE_REARM_DEEP      = 0.3f;   // x close level
 // Capture open threshold: a constant — the builder's K4 setting (8:00-8:30,
 // bass and guitar alike) from when K4 was the sensitivity knob. K4 is the
@@ -1281,6 +1285,14 @@ static constexpr float  VESTIGE_REPEAT_N_MAX       = 16.f;
 static constexpr float  VESTIGE_REPEAT_CURVE       = 2.f;    // 1 = even dB steps, higher = flatter early
 static constexpr float  VESTIGE_REPEAT_FLOOR_DB    = -30.f;  // the last repeat's level
 static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
+// 2026-10-11 (builder, studio): K5 CCW = the MAXIMUM number of passes, then
+// re-arm. FLAT: every pass at full level (no delay-like decay; the last pass
+// still ramps to 0 over RAMP_MS at its end, then the loop stops). REARM: when
+// a loop has played its N passes, the capture re-arm block is lifted — if the
+// playing is still above the open level, that counts as a fresh onset and a
+// new capture starts at once; else the next onset / gate opening starts it.
+static constexpr bool   VESTIGE_REPEAT_FLAT        = true;
+static constexpr bool   VESTIGE_REPEAT_REARM       = true;
 // FREEZE side K5 CCW = SUSTAIN time (independent of T): MAX_S just past the dead
 // zone -> MIN_S at full CCW, log taper. Each freeze fades from its start over it
 // with the repeat dB curve above, ending silent, then retires.

@@ -4042,7 +4042,9 @@ class Vestige : public Module {
     // before the floor, then the loop floor (extended, like a round-up).
     // FREE-RUN: no grid. Q = the raw length; it becomes T (the loop is 1/1
     // of it: cap_T_ = Q, so IsrActivate derives division 0).
-    const size_t Q = tgrid_.DecideLen(raw, cap_T_[s], cap_free_, &cap_div_[s]);
+    // VESTIGE_LOOP_LEN_IS_T: on the grid every loop is T itself (1/1).
+    const size_t raw_q = (VESTIGE_LOOP_LEN_IS_T && !cap_free_) ? cap_T_[s] : raw;
+    const size_t Q = tgrid_.DecideLen(raw_q, cap_T_[s], cap_free_, &cap_div_[s]);
     if (cap_free_) {
       cap_T_[s] = Q;
       FreeSet(s, Q);
@@ -4654,7 +4656,7 @@ class Vestige : public Module {
   // FLOOR_DB x (k / (N-1))^CURVE — gentle early, steeper later, the last
   // repeat on the quiet floor, so the stop after it is not heard as a cut.
   static float RepeatLevel(int k, int N) {
-    if (k <= 0 || N <= 1) return 1.f;
+    if (VESTIGE_REPEAT_FLAT || k <= 0 || N <= 1) return 1.f;
     const float x = (float)k / (float)(N - 1);
     return powf(10.f, VESTIGE_REPEAT_FLOOR_DB * powf(x, VESTIGE_REPEAT_CURVE) / 20.f);
   }
@@ -4669,7 +4671,11 @@ class Vestige : public Module {
       }
       if (dying_[s]) continue;
       const int k = rep_k_[s];
-      if (k >= N) { StealVoice(s); continue; }              // after the last repeat (level already 0)
+      if (k >= N) {                                         // after the last repeat (level already 0)
+        StealVoice(s);
+        if (VESTIGE_REPEAT_REARM) rearm_block_ = false;     // N passes done: re-arm (still playing = a fresh onset)
+        continue;
+      }
       dec_t_[s] = dec_g_[s]; dec_step_[s] = 0.f;            // inside a repeat: the level holds
       if (held_) continue;
       const bool   rev = eng_[PoolOf(s)].rev && GuardReady(s);

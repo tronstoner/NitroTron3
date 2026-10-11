@@ -810,11 +810,17 @@ static void TestQuantisedCapture() {
     CapRec r{};
     const bool ok = OneCapture(c.burst, &r, c.name);
     all_corr = all_corr && ok;
-    const size_t q = GridQuantize::Quantize(r.raw, r.T);
+    const size_t q = VESTIGE_LOOP_LEN_IS_T ? r.T : GridQuantize::Quantize(r.raw, r.T);   // (loop = T on the grid)
     if (r.T != T || q != r.Q || GridQuantize::IndexOf(r.Q, r.T) < 0) div_ok = false;
+    if (VESTIGE_LOOP_LEN_IS_T) {
+      if (r.Q != T) dirs_ok = false;
+      if (r.Q > r.raw) saw_up = true;
+      saw_down = true;                       // (no rounding down any more: every loop is T)
+    } else {
     if (c.want > 0 && !(r.Q > r.raw)) dirs_ok = false;
     if (c.want < 0 && !(r.Q < r.raw)) dirs_ok = false;
     if (c.want == 0 && r.Q != T) dirs_ok = false;
+    }
     if (r.Q > r.raw) saw_up = true;
     if (r.Q < r.raw) saw_down = true;
     // On its grid: entered at phase (act - A) mod Q; on time = exactly A+Q, phase 0.
@@ -824,7 +830,7 @@ static void TestQuantisedCapture() {
     // instantly; with VESTIGE_GATE_ENV_MODE 1 the decision comes later.)
     const bool decided_early = (r.dec - r.A) <= (long)r.Q;
     if (decided_early && !(r.act == r.A + (long)r.Q && r.phase == 0)) on_time_ok = false;
-    if (c.want < 0) {
+    if (c.want < 0 && !VESTIGE_LOOP_LEN_IS_T) {
       // Truncated for real: nothing past Q is readable as loop — the cells a
       // grain can reach behind Q are the crossfaded seam and the head copy.
       const float* m = v.slab_[r.s];
@@ -898,7 +904,8 @@ static void TestQuantisedCapture() {
     printf("      voice slot %d: anchor %ld, Q %zu (%.4f of T)\n", slots[i], As[i], Qs[i], GridQuantize::DivisionOf(Qs[i], 48000));
   }
   Check(got == NV && live == NV, "MIDDLE: a full pool of captures, all live");
-  Check(anchors_distinct && nq >= 3 && divs, "full pool: distinct anchors, >= 3 different divisions of one T");
+  if (VESTIGE_LOOP_LEN_IS_T) Check(anchors_distinct && nq == 1 && qset[0] == 48000 && divs, "full pool: distinct anchors, every loop = T (VESTIGE_LOOP_LEN_IS_T)");
+  else Check(anchors_distinct && nq >= 3 && divs, "full pool: distinct anchors, >= 3 different divisions of one T");
   Check(heads_ok, "every voice's head sits on (now - its own anchor) mod its own Q, at every probe");
   // Freeze: nothing else sounding, one fragment. Its output must begin at its
   // activation sample (the first grain's Hann window is 0 at phase 0, so the
@@ -2333,7 +2340,8 @@ static void TestFollowRecut() {
   noise_from = noise_to = -1;
   RunFor(1.0f);
   Hold();
-  Taps({1300}); RunFor(3.0f);
+  if (VESTIGE_LOOP_LEN_IS_T) { v.tgrid_.tap_period_ = 62400; RunFor(3.0f); }
+  else { Taps({1300}); RunFor(3.0f); }
   bool divs_ok = true; int nv = 0;
   for (int q = 0; q < VESTIGE_VOICE_SLABS; q++) {
     if (!v.active_[q] || v.dying_[q]) continue;
@@ -3383,7 +3391,8 @@ static void TestK5Repeats() {
   Check(nn == 4, "K5 CCW maps to a whole number of repeats (N = 4 here)");
   bool lv_ok = true; float want[4]; for (int k = 0; k < 4; k++) want[k] = 20.f * log10f(Vestige::RepeatLevel(k, 4));
   for (int k = 0; k < 4; k++) if (fabsf(db[k] - want[k]) > 0.7f) lv_ok = false;
-  Check(lv_ok && fabsf(want[3] - VESTIGE_REPEAT_FLOOR_DB) < 0.01f && fabsf(want[1] + 3.333f) < 0.01f,
+  if (VESTIGE_REPEAT_FLAT) Check(lv_ok && fabsf(want[3]) < 0.01f, "VESTIGE_REPEAT_FLAT: all N passes at full level");
+  else Check(lv_ok && fabsf(want[3] - VESTIGE_REPEAT_FLOOR_DB) < 0.01f && fabsf(want[1] + 3.333f) < 0.01f,
         "repeat 1 at full level, then a dB curve down to the floor (0 / -3.3 / -13.3 / -30 for N = 4)");
   // (last 1 ms of a 10 ms linear ramp: <= 10% of the repeat's level, x ~3 noise crest)
   Check(tail < 0.35f * lv[3] && freed, "the last repeat ramps out on its pass end; the loop is freed");
@@ -3412,7 +3421,10 @@ static void TestK5Repeats() {
   Unhold(); pass_rms(nullptr); const float u1 = pass_rms(nullptr);   // counting again
   printf("      held: %.1f / %.1f / %.1f dB, then released: %.1f dB\n", 20.f * log10f(h1 / r0), 20.f * log10f(h2 / r0),
          20.f * log10f(h3 / r0), 20.f * log10f(u1 / r0));
-  Check(held_ok && u1 < h3 * 0.9f, "FS2 hold pauses the count (full level held); released, it counts on");
+  if (VESTIGE_REPEAT_FLAT) {
+    pass_rms(nullptr); pass_rms(nullptr); pass_rms(nullptr); RunFor(0.02f);   // the rest of the count
+    Check(held_ok && !v.active_[s], "FS2 hold pauses the count; released, it counts on and the loop stops after N");
+  } else Check(held_ok && u1 < h3 * 0.9f, "FS2 hold pauses the count (full level held); released, it counts on");
   // Noon keeps the level.
   setup(); to_pass(); cs.knob[4] = K5Repeats(4); RunFor(0.011f); pass_rms(nullptr);
   cs.knob[4] = 0.5f; RunFor(0.011f); const float a1 = pass_rms(nullptr);
@@ -5492,11 +5504,17 @@ static void TestLoopFloorModule() {
   CapRec r{}; noise_from = n + 7; noise_to = noise_from + 48; const bool ok = WaitActivation(1.f, &r); noise_from = noise_to = -1;
   const size_t Qm = GridQuantize::Quantize(r.raw, 960); const int dm = GridQuantize::IndexOf(Qm, 960);
   printf("      T 960: raw %zu -> nearest division %zu (index %d) -> played %zu, division %d\n", r.raw, Qm, dm, ok ? v.loop_len_[r.s] : 0, ok ? v.div_[r.s] : -9);
-  Check(ok && r.T == 960 && Qm < VESTIGE_LOOP_MIN_LEN, "setup: a capture whose nearest division of T is under the floor");
+  Check(ok && r.T == 960 && (VESTIGE_LOOP_LEN_IS_T || Qm < VESTIGE_LOOP_MIN_LEN), "setup: a capture whose nearest division of T is under the floor");
+  if (VESTIGE_LOOP_LEN_IS_T) {
+    Check(ok && v.loop_len_[r.s] == 960 && v.div_[r.s] == 0, "loop = T: a tiny phrase plays T itself (960), division 1/1");
+    v.tgrid_.tap_period_ = 4000; RunFor(0.05f);
+    Check(ok && v.FollowLen(r.s) == 4000, "loop = T: it follows T as 1/1");
+  } else {
   Check(ok && v.loop_len_[r.s] == VESTIGE_LOOP_MIN_LEN && v.div_[r.s] == dm, "loop floor: played at 240 samples, its division kept");
   v.tgrid_.tap_period_ = 4000; RunFor(0.05f);
   Check(ok && v.FollowLen(r.s) == std::max((size_t)VESTIGE_LOOP_MIN_LEN, GridQuantize::Boundary(dm, 4000)),
         "loop floor: the floored loop follows T by its division (Boundary(d, T), floored)");
+  }
   v.tgrid_.tap_period_ = 0; SetK4Thresh(0.1f); Reset();
 }
 // ---- the freeze as the phrase's tail ------------------------------------------
