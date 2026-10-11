@@ -537,10 +537,10 @@ static constexpr float MNEM_PRE_FADE      = 0.1f;
 // negative = slow start, sharp turn). core/blocks/lfo_shape.h.
 static constexpr float MNEM_PRE_LFO_SYMMETRY = 0.36f;
 static constexpr float MNEM_PRE_LFO_CURVE    = -0.25f;
-// Flanger's own LFO shape (2026-10-11; currently the same as the phaser's —
-// the pure triangle 0.5 / 0 did not sound right).
-static constexpr float MNEM_FLANGER_LFO_SYMMETRY = 0.36f;
-static constexpr float MNEM_FLANGER_LFO_CURVE    = -0.25f;
+// Flanger's own LFO shape (2026-10-11): the even triangle (0.5 / 0), with the
+// delay swept linearly in ms (MNEM_FLANGER_LOG_SWEEP false).
+static constexpr float MNEM_FLANGER_LFO_SYMMETRY = 0.5f;
+static constexpr float MNEM_FLANGER_LFO_CURVE    = 0.f;
 // Phaser: the Schism block, frozen at K1 noon (sweep centre ~630 Hz) and K2
 // full CCW (full notch, sweep +-3 oct, feedback -0.4); Schism's makeup.
 static constexpr float MNEM_PHASER_K1     = 0.5f;
