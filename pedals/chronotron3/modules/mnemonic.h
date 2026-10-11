@@ -284,7 +284,11 @@ class Mnemonic : public Module {
     {
       int kind = 0; float u = 0.f;
       if (sw2_ == 0 && !bypassed_) {
-        const float c = knob_k3 - 0.5f, a = fabsf(c);
+        // RAW K3 (no RemapKnob end zones): the full rotation is travel; the ends
+        // need not be reached exactly (2026-10-11).
+        float k3raw = cs.Knob(2);
+        k3raw = k3raw < 0.f ? 0.f : (k3raw > 1.f ? 1.f : k3raw);
+        const float c = k3raw - 0.5f, a = fabsf(c);
         if (a > MNEM_PRE_DEADZONE) { kind = (c < 0.f) ? 1 : 2; u = (a - MNEM_PRE_DEADZONE) / (0.5f - MNEM_PRE_DEADZONE); }
       }
       if (u > 1.f) u = 1.f;

@@ -111,7 +111,7 @@ struct Tr {
 // ---------------------------------------------------------------------------
 static void TestPreEffect() {
   printf("K3 pre-effect (SW2 UP)\n");
-  // Noon: bit-exact — at the PHYSICAL noon (a raw 0.5 reads ~0.52 after RemapKnob).
+  // Noon: bit-exact at the physical noon (K3 is read raw by the pre-effect).
   {
     Reset(0, 0.5f, 0.5f, 0.5f, 0.5f);
     cs.knob[2] = 0.5f;
@@ -145,8 +145,9 @@ static void TestPreEffect() {
   {
     auto rates = [](float u, float& ph, float& fl) {
       const float off = MNEM_PRE_DEADZONE + u * (0.5f - MNEM_PRE_DEADZONE);
-      Reset(0, 0.5f, 0.5f - off, 0.5f, 0.5f); m.Controls(cs, led1, led2); ph = m.phaser_.lfo_rate_hz_;
-      Reset(0, 0.5f, 0.5f + off, 0.5f, 0.5f); m.Controls(cs, led1, led2); fl = m.flanger_.inc_ * SR;
+      // (the pre-effect reads K3 RAW — no RemapKnob end zones)
+      Reset(0, 0.5f, 0.5f, 0.5f, 0.5f); cs.knob[2] = 0.5f - off; m.Controls(cs, led1, led2); ph = m.phaser_.lfo_rate_hz_;
+      Reset(0, 0.5f, 0.5f, 0.5f, 0.5f); cs.knob[2] = 0.5f + off; m.Controls(cs, led1, led2); fl = m.flanger_.inc_ * SR;
     };
     bool ok = true;
     for (float u : {0.001f, 0.25f, 0.5f, 0.75f, 0.85f, 0.925f, 1.f}) {
@@ -162,7 +163,8 @@ static void TestPreEffect() {
   // Fade-in over the first 10 % past the dead zone.
   {
     auto mix = [](float u) {
-      Reset(0, 0.5f, 0.5f - (MNEM_PRE_DEADZONE + u * (0.5f - MNEM_PRE_DEADZONE)), 0.5f, 0.5f);
+      Reset(0, 0.5f, 0.5f, 0.5f, 0.5f);
+      cs.knob[2] = 0.5f - (MNEM_PRE_DEADZONE + u * (0.5f - MNEM_PRE_DEADZONE));   // raw
       m.Controls(cs, led1, led2); return m.pre_mix_tgt_;
     };
     Check(fabsf(mix(0.05f) - 0.5f) < 0.02f && mix(0.2f) == 1.f && mix(0.001f) < 0.02f,
