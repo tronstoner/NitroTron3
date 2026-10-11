@@ -559,3 +559,14 @@ static constexpr float MNEM_FLANGER_FB     = 0.5f;
 static constexpr bool  MNEM_FLANGER_LOG_SWEEP = false;   // 2026-10-11: back to linear in ms (builder)
 static constexpr float MNEM_FLANGER_MAKEUP = 1.36f;  // +2.7 dB: matched to the phaser (host, plucked guitar + bass)
 
+// ---------------------------------------------------------------------------
+// SW2 MID (Edge): K3 = Bode frequency shift on the TELEPHONE line only
+// (2026-10-11). Sits on the line's OUTPUT branch after the read, NOT in its
+// feedback: every repeat is shifted once (no accumulation — the contrast to
+// sprawl's cascading shifter), and K3 is heard at once. K3 raw, full rotation.
+// Mapping = sprawl's K1 freq shift 1:1 (FREQ_SHIFT_*): +-MAX_HZ, exponential
+// taper around 0 Hz, dead zone at noon; CCW down, CW up.
+// ---------------------------------------------------------------------------
+static constexpr float MNEM_TEL_SHIFT_MAX_HZ   = 1000.f;
+static constexpr float MNEM_TEL_SHIFT_DEADZONE = 0.02f;   // of |k3 - 0.5| x 2
+static constexpr float MNEM_TEL_SHIFT_CURVE    = 6.f;

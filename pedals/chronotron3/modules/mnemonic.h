@@ -41,6 +41,7 @@
 #include "pll.h"                // core/blocks — CD4046-style PLL (SW2 DOWN)
 #include "phaser.h"             // core/blocks — Schism phaser (K3 pre-effect, SW2 UP CCW)
 #include "flanger.h"            // core/blocks — flanger (K3 pre-effect, SW2 UP CW)
+#include "freq_shifter.h"       // core/blocks — Bode shifter (K3, SW2 MID telephone line)
 #include <math.h>
 #include <cstring>         // memset (kill)
 
@@ -162,6 +163,7 @@ class Mnemonic : public Module {
     pll_gate_rel_ = 1.f - expf(-1.f / (MNEM_PLL_GATE_REL_MS * 0.001f * sr_));
     degrade_.Init(sr_);
     phaser_.Init(sr_);
+    tel_shift_.Init(sr_);
     flanger_.Init(sr_, MNEM_FLANGER_MIN_MS, MNEM_FLANGER_MAX_MS, MNEM_FLANGER_FB);
     phaser_.SetTriShape(MNEM_PRE_LFO_SYMMETRY, MNEM_PRE_LFO_CURVE);
     flanger_.SetShape(MNEM_FLANGER_LFO_SYMMETRY, MNEM_FLANGER_LFO_CURVE);
@@ -304,6 +306,20 @@ class Mnemonic : public Module {
       if (kind == 2) flanger_.SetRate(rate);
       pre_mix_tgt_ = (u < MNEM_PRE_FADE) ? u / MNEM_PRE_FADE : 1.f;      // fade-in over the first FADE
       pre_kind_tgt_ = kind;
+    }
+
+    // ---- K3 (SW2 MID): Bode frequency shift on the telephone line ---------
+    if (edge_) {
+      float k3raw = cs.Knob(2);
+      k3raw = k3raw < 0.f ? 0.f : (k3raw > 1.f ? 1.f : k3raw);
+      const float kn = (k3raw - 0.5f) * 2.f, ak = fabsf(kn);
+      float hz = 0.f;
+      if (ak > MNEM_TEL_SHIFT_DEADZONE) {
+        const float t = (ak - MNEM_TEL_SHIFT_DEADZONE) / (1.f - MNEM_TEL_SHIFT_DEADZONE);
+        hz = (expf(t * MNEM_TEL_SHIFT_CURVE) - 1.f) / (expf(MNEM_TEL_SHIFT_CURVE) - 1.f) * MNEM_TEL_SHIFT_MAX_HZ;
+        if (kn > 0.f) hz = -hz;   // (as in sprawl: CCW = down, CW = up with this shifter's sign)
+      }
+      tel_shift_.SetShiftHz(hz);
     }
 
     // ---- K3: PLL mode selector (SW2 DOWN), 7 stepped zones, no blending ---
@@ -571,7 +587,8 @@ class Mnemonic : public Module {
         float fbq = FbSat(dq * fb_eff * fbsc * panic_env_);
         delay2_.Write(si * send_gain_ + fbq);
 
-        delayed = dd * MNEM_EDGE_DIV_GAIN + dq * MNEM_EDGE_SEC_GAIN;
+        // telephone line: K3 frequency shift on its OUTPUT only (feedback above stays unshifted)
+        delayed = dd * MNEM_EDGE_DIV_GAIN + tel_shift_.Process(dq) * MNEM_EDGE_SEC_GAIN;
       } else {
         // Single line (SW2 UP tap-division / DOWN PLL).
         float ds = delay_.ReadFrac(wp - read_delay_ - wobble);
@@ -981,6 +998,7 @@ class Mnemonic : public Module {
   bool  pll_mode_ = false;
   Pll4046 pll_;
   Phaser  phaser_;                    // K3 pre-effect CCW (SW2 UP)
+  FreqShifter tel_shift_;             // K3 (SW2 MID): telephone-line frequency shift
   Flanger flanger_;                   // K3 pre-effect CW (SW2 UP)
   volatile int pre_kind_tgt_ = 0;     // 0 off · 1 phaser · 2 flanger (set in Controls)
   int   pre_kind_ = 0;                // the one currently running
