@@ -76,7 +76,7 @@ truth (`.agents/skills/serial-diag/SKILL.md`).
   stubbed hardware, plucked-string input (guitar + bass ranges), Controls()
   every 10 ms and PreProcess() + Process() every 48 samples like the shell.
   K3 pre-effect (SW2 UP): bit-exact at the physical noon and in bypass, rate
-  0.1–20 Hz plain exponential for phaser and flanger, the 10 % fade-in, a
+  0.1 → ~9 Hz plain exponential over 85 % then on to 200 Hz, for phaser and flanger, the 10 % fade-in, a
   >= 4 ms switch ramp, no switching step above the playing's, levels within
   +-1.5 dB of the input, the flanger's one-past-the-end read. K4 degrade
   (sprawl voicing): the tail dies with feedback at every K4 position, wet level

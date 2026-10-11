@@ -524,7 +524,11 @@ static constexpr float MNEM_K1_NARROW_CURVE = 1.0f;
 static constexpr float MNEM_PRE_DEADZONE  = 0.06f;   // of the knob travel (physical noon reads ~0.52)
 static constexpr float MNEM_PRE_XFADE_MS  = 5.f;
 static constexpr float MNEM_PRE_RATE_MIN  = 0.1f;    // Hz (10 s cycle) — 2026-10-09 (was 0.02, Schism's range)
-static constexpr float MNEM_PRE_RATE_MAX  = 20.f;    // Hz (starts to growl) — 2026-10-09 (was 80)
+static constexpr float MNEM_PRE_RATE_MAX  = 20.f;    // Hz — the base law's end point (2026-10-09; was 80)
+// Top section (2026-10-11): the base law runs up to TOP_KNEE of the travel
+// (0.1 -> ~9 Hz, unchanged), the rest goes exponentially on to TOP_HZ (audio rate).
+static constexpr float MNEM_PRE_RATE_TOP_KNEE = 0.85f;
+static constexpr float MNEM_PRE_RATE_TOP_HZ   = 200.f;
 // Rate taper: rate = MIN (MAX/MIN)^(u^CURVE), u = 0..1 past the dead zone.
 // CURVE 1 = plain exponential: the rate doubles every ~13 % of the travel (even
 // to the ear). (2 skewed it — huge slow stretch, then a rush; builder 2026-10-09.)

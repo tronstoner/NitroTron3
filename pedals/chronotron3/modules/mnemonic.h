@@ -288,7 +288,10 @@ class Mnemonic : public Module {
         if (a > MNEM_PRE_DEADZONE) { kind = (c < 0.f) ? 1 : 2; u = (a - MNEM_PRE_DEADZONE) / (0.5f - MNEM_PRE_DEADZONE); }
       }
       if (u > 1.f) u = 1.f;
-      const float rate = MNEM_PRE_RATE_MIN * powf(MNEM_PRE_RATE_MAX / MNEM_PRE_RATE_MIN, powf(u, MNEM_PRE_RATE_CURVE));
+      const float ub = (u < MNEM_PRE_RATE_TOP_KNEE) ? u : MNEM_PRE_RATE_TOP_KNEE;
+      float rate = MNEM_PRE_RATE_MIN * powf(MNEM_PRE_RATE_MAX / MNEM_PRE_RATE_MIN, powf(ub, MNEM_PRE_RATE_CURVE));
+      if (u > MNEM_PRE_RATE_TOP_KNEE)   // top section: on to TOP_HZ, exponential
+        rate *= powf(MNEM_PRE_RATE_TOP_HZ / rate, (u - MNEM_PRE_RATE_TOP_KNEE) / (1.f - MNEM_PRE_RATE_TOP_KNEE));
       if (kind == 1) {   // the phaser maps its K3 magnitude over ITS range (PHASER_LFO_TRI_*): invert that
         float mag = logf(rate / PHASER_LFO_TRI_HZ_MIN) / logf(PHASER_LFO_TRI_HZ_MAX / PHASER_LFO_TRI_HZ_MIN);
         if (mag < 1e-4f) mag = 1e-4f;

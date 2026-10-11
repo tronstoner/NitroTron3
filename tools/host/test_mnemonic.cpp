@@ -149,13 +149,15 @@ static void TestPreEffect() {
       Reset(0, 0.5f, 0.5f + off, 0.5f, 0.5f); m.Controls(cs, led1, led2); fl = m.flanger_.inc_ * SR;
     };
     bool ok = true;
-    for (float u : {0.001f, 0.25f, 0.5f, 0.75f, 1.f}) {
+    for (float u : {0.001f, 0.25f, 0.5f, 0.75f, 0.85f, 0.925f, 1.f}) {
       float ph, fl; rates(u, ph, fl);
-      const float want = 0.1f * powf(200.f, u);
+      const float knee = 0.1f * powf(200.f, 0.85f);   // ~9 Hz
+      const float want = (u <= 0.85f) ? 0.1f * powf(200.f, u)
+                                      : knee * powf(200.f / knee, (u - 0.85f) / 0.15f);
       if (fabsf(ph / want - 1.f) > 0.02f || fabsf(fl / want - 1.f) > 0.02f) ok = false;
       printf("        u=%.2f  want %.3f Hz  phaser %.3f  flanger %.3f\n", u, want, ph, fl);
     }
-    Check(ok, "rate: 0.1 -> 20 Hz, plain exponential, identical for phaser and flanger");
+    Check(ok, "rate: 0.1 -> ~9 Hz over 85 % (plain exponential), then on to 200 Hz; phaser = flanger");
   }
   // Fade-in over the first 10 % past the dead zone.
   {
