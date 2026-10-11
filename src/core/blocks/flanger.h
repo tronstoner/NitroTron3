@@ -15,10 +15,13 @@ class Flanger {
     sr_ = sr; fb_ = fb;
     min_ = min_ms * 0.001f * sr; max_ = max_ms * 0.001f * sr;
     if (max_ > (float)(kLen - 2)) max_ = (float)(kLen - 2);
+    lr_ = logf(max_ / min_);
     for (int i = 0; i < kLen; i++) buf_[i] = 0.f;
     w_ = 0; ph_ = 0.f; inc_ = 0.f;
   }
   void SetRate(float hz) { inc_ = hz / sr_; }
+  // Sweep the delay exponentially (evenly in pitch) instead of linearly in ms.
+  void SetLogSweep(bool on) { log_ = on; }
   // LFO shape (core/blocks/lfo_shape.h); default = the plain triangle.
   void SetShape(float sym, float curve) { shaped_ = !(sym == 0.5f && curve == 0.f); if (shaped_) shape_.Set(sym, curve); }
 
@@ -26,7 +29,9 @@ class Flanger {
     ph_ += inc_; if (ph_ >= 1.f) ph_ -= 1.f;
     const float tri = shaped_ ? shape_.At(ph_)
                               : (ph_ < 0.5f ? 4.f * ph_ - 1.f : 3.f - 4.f * ph_);   // -1..+1
-    const float d = min_ + (max_ - min_) * (0.5f + 0.5f * tri);        // samples
+    const float u = 0.5f + 0.5f * tri;                                  // 0..1
+    const float d = log_ ? min_ * expf(u * lr_)                         // samples (even in pitch)
+                         : min_ + (max_ - min_) * u;                    // samples (even in ms)
     float rp = (float)w_ - d; if (rp < 0.f) rp += (float)kLen;
     const int   ri = (int)rp; const float fr = rp - (float)ri;
     const int   i0 = ri & (kLen - 1);                // (rp can round up to exactly kLen)
@@ -40,6 +45,7 @@ class Flanger {
   float buf_[kLen];
   float sr_ = 48000.f, fb_ = 0.f, min_ = 0.f, max_ = 0.f, ph_ = 0.f, inc_ = 0.f;
   int   w_ = 0;
-  bool  shaped_ = false;
+  bool  shaped_ = false, log_ = false;
+  float lr_ = 0.f;                                 // ln(max / min) for the exponential sweep
   LfoShape shape_;
 };

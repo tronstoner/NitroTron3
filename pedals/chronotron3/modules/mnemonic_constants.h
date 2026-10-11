@@ -546,5 +546,8 @@ static constexpr float MNEM_PHASER_MAKEUP = 1.4f;
 static constexpr float MNEM_FLANGER_MIN_MS = 0.5f;
 static constexpr float MNEM_FLANGER_MAX_MS = 8.f;
 static constexpr float MNEM_FLANGER_FB     = 0.5f;
+// Delay swept exponentially = evenly in pitch, like the phaser (2026-10-11: linear
+// in ms zipped through the short-delay octaves and felt faster than the phaser).
+static constexpr bool  MNEM_FLANGER_LOG_SWEEP = true;
 static constexpr float MNEM_FLANGER_MAKEUP = 1.36f;  // +2.7 dB: matched to the phaser (host, plucked guitar + bass)
 
