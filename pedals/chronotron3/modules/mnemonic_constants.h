@@ -564,9 +564,12 @@ static constexpr float MNEM_FLANGER_MAKEUP = 1.36f;  // +2.7 dB: matched to the 
 // (2026-10-11). Sits on the line's OUTPUT branch after the read, NOT in its
 // feedback: every repeat is shifted once (no accumulation — the contrast to
 // sprawl's cascading shifter), and K3 is heard at once. K3 raw, full rotation.
-// Mapping = sprawl's K1 freq shift 1:1 (FREQ_SHIFT_*): +-MAX_HZ, exponential
-// taper around 0 Hz, dead zone at noon; CCW down, CW up.
+// 2026-10-11: QUANTISED — the shifter's oscillator steps chromatically:
+// noon (dead zone) = 0 Hz; each side = STEPS evenly spread steps, oscillator =
+// ROOT x 2^(n/12), n = 0..STEPS-1 (root .. its octave); CCW = down-shift,
+// CW = up-shift. HYST = step hysteresis (in steps). ROOT sets the key.
 // ---------------------------------------------------------------------------
-static constexpr float MNEM_TEL_SHIFT_MAX_HZ   = 1000.f;
 static constexpr float MNEM_TEL_SHIFT_DEADZONE = 0.02f;   // of |k3 - 0.5| x 2
-static constexpr float MNEM_TEL_SHIFT_CURVE    = 6.f;
+static constexpr float MNEM_TEL_SHIFT_ROOT_HZ  = 82.41f;  // E2 (A2 = 110.0)
+static constexpr int   MNEM_TEL_SHIFT_STEPS    = 13;      // root .. +12 semitones
+static constexpr float MNEM_TEL_SHIFT_HYST     = 0.3f;

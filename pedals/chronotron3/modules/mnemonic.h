@@ -313,11 +313,23 @@ class Mnemonic : public Module {
       float k3raw = cs.Knob(2);
       k3raw = k3raw < 0.f ? 0.f : (k3raw > 1.f ? 1.f : k3raw);
       const float kn = (k3raw - 0.5f) * 2.f, ak = fabsf(kn);
+      if (ak <= MNEM_TEL_SHIFT_DEADZONE) {
+        tel_step_ = 0;
+      } else {
+        const float t   = (ak - MNEM_TEL_SHIFT_DEADZONE) / (1.f - MNEM_TEL_SHIFT_DEADZONE);   // 0..1
+        const float pos = t * (float)MNEM_TEL_SHIFT_STEPS;                                   // 0..STEPS
+        const int   sgn = (kn < 0.f) ? -1 : 1;
+        int j = (int)ceilf(pos); if (j < 1) j = 1; if (j > MNEM_TEL_SHIFT_STEPS) j = MNEM_TEL_SHIFT_STEPS;
+        // hysteresis: keep the current step while K3 stays within HYST of it
+        const int cur = tel_step_ * sgn;   // > 0 when on the same side
+        if (cur > 0 && fabsf(pos - ((float)cur - 0.5f)) < 0.5f + MNEM_TEL_SHIFT_HYST) j = cur;
+        tel_step_ = sgn * j;
+      }
       float hz = 0.f;
-      if (ak > MNEM_TEL_SHIFT_DEADZONE) {
-        const float t = (ak - MNEM_TEL_SHIFT_DEADZONE) / (1.f - MNEM_TEL_SHIFT_DEADZONE);
-        hz = (expf(t * MNEM_TEL_SHIFT_CURVE) - 1.f) / (expf(MNEM_TEL_SHIFT_CURVE) - 1.f) * MNEM_TEL_SHIFT_MAX_HZ;
-        if (kn > 0.f) hz = -hz;   // (as in sprawl: CCW = down, CW = up with this shifter's sign)
+      if (tel_step_ != 0) {
+        const int n = (tel_step_ > 0 ? tel_step_ : -tel_step_) - 1;   // 0 .. STEPS-1 semitones
+        hz = MNEM_TEL_SHIFT_ROOT_HZ * exp2f((float)n / 12.f);
+        if (tel_step_ > 0) hz = -hz;   // (as in sprawl: CCW = down, CW = up with this shifter's sign)
       }
       tel_shift_.SetShiftHz(hz);
     }
@@ -999,6 +1011,7 @@ class Mnemonic : public Module {
   Pll4046 pll_;
   Phaser  phaser_;                    // K3 pre-effect CCW (SW2 UP)
   FreqShifter tel_shift_;             // K3 (SW2 MID): telephone-line frequency shift
+  int   tel_step_ = 0;                // its quantised step: 0 off, -13..-1 down, 1..13 up
   Flanger flanger_;                   // K3 pre-effect CW (SW2 UP)
   volatile int pre_kind_tgt_ = 0;     // 0 off · 1 phaser · 2 flanger (set in Controls)
   int   pre_kind_ = 0;                // the one currently running
