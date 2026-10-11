@@ -328,7 +328,7 @@ class Mnemonic : public Module {
       float hz = 0.f;
       if (tel_step_ != 0) {
         const int n = (tel_step_ > 0 ? tel_step_ : -tel_step_) - 1;   // 0 .. STEPS-1 semitones
-        hz = MNEM_TEL_SHIFT_ROOT_HZ * exp2f((float)n / 12.f);
+        hz = MNEM_TEL_SHIFT_ROOT_HZ * exp2f((float)n / 12.f + (tel_step_ > 0 ? MNEM_TEL_SHIFT_UP_OCT : 0.f));
         if (tel_step_ > 0) hz = -hz;   // (as in sprawl: CCW = down, CW = up with this shifter's sign)
       }
       tel_shift_.SetShiftHz(hz);

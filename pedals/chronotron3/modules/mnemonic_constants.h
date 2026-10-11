@@ -573,3 +573,5 @@ static constexpr float MNEM_TEL_SHIFT_DEADZONE = 0.02f;   // of |k3 - 0.5| x 2
 static constexpr float MNEM_TEL_SHIFT_ROOT_HZ  = 82.41f;  // E2 (A2 = 110.0)
 static constexpr int   MNEM_TEL_SHIFT_STEPS    = 13;      // root .. +12 semitones
 static constexpr float MNEM_TEL_SHIFT_HYST     = 0.3f;
+// CW (up-shift) side sits UP_OCT octaves higher (2026-10-11: CW = E3..E4; CCW stays E2..E3).
+static constexpr float MNEM_TEL_SHIFT_UP_OCT   = 1.f;
