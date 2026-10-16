@@ -1291,7 +1291,7 @@ static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
 // a loop has played its N passes, the capture re-arm block is lifted — if the
 // playing is still above the open level, that counts as a fresh onset and a
 // new capture starts at once; else the next onset / gate opening starts it.
-static constexpr bool   VESTIGE_REPEAT_FLAT        = false;   // 2026-10-16: the fade over the N passes back on (builder)
+static constexpr bool   VESTIGE_REPEAT_FLAT        = true;    // 2026-10-16: tried the fade again, back to flat (builder)
 static constexpr bool   VESTIGE_REPEAT_REARM       = true;
 // FREEZE side K5 CCW = SUSTAIN time (independent of T): MAX_S just past the dead
 // zone -> MIN_S at full CCW, log taper. Each freeze fades from its start over it
