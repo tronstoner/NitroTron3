@@ -3966,11 +3966,10 @@ class Vestige : public Module {
     const float Tf = (float)(tgrid_.T() ? tgrid_.T() : 1);
     const bool eu = (shut_kind_ == 2);
     if (eu && shut_pat_built_ != shut_pat_) ShutBuildPattern(shut_pat_);
-    const int   span = eu ? VESTIGE_SHUT_EU_SPAN[shut_pat_built_] : 1;
     // Cycles per pass (T): the unit U = UNIT_STEPS rhythm steps, G steps per T.
-    // CCW: ratio hits per U; CW: one pattern per U x span.
+    // CCW: ratio hits per U; CW: PER_U patterns per U.
     const float upp = (float)shut_G_ / (float)VESTIGE_SHUT_UNIT_STEPS;            // units per pass
-    const float cpp = eu ? upp / (float)span : upp * shut_ratio_;
+    const float cpp = eu ? upp * (float)VESTIGE_SHUT_EU_PER_U[shut_pat_built_] : upp * shut_ratio_;
     const float Pc = fmaxf(48.f, Tf / cpp);   // one cycle (samples): CCW one interval, CW one pattern
     // Phase: from the newest loop's own playhead (position in its pass + the
     // pass parity), so it sits on the loop's grid — through K3 changes, T
@@ -3999,9 +3998,9 @@ class Vestige : public Module {
       const float sl = Pc / (float)n;                       // one step (samples)
       const float sp = q * (float)n;
       int i = (int)sp; if (i > n - 1) i = n - 1;
-      const int h = shut_prev_[i];                          // last hit at or before step i
+      // steps back to the last hit (it may lie in the previous cycle) and its gap
       In = (float)shut_gap_[i] * sl;
-      t = (sp - (float)h) * sl;
+      t = (sp - (float)i + (float)shut_prev_[i]) * sl;
     }
     // ASR: attack (smoothstep) -> cubic decay to SUSTAIN -> held to GATE -> release (smoothstep) -> 0
     const float att = fminf(VESTIGE_SHUT_ATTACK_MS * 0.001f * sr_, 0.1f * In);
@@ -4027,17 +4026,19 @@ class Vestige : public Module {
     const float y = x * e;
     return x + (y - x) * shut_mix_;
   }
-  // CW pattern p: E(k, n) (Bjorklund, starting on a hit) -> per step the last
-  // hit at or before it and the distance from that hit to the next (wrapping).
+  // CW pattern p: E(k, n) (Bjorklund, starting on a hit), rotated by ROT
+  // (step i = Bjorklund step i + ROT) -> per step: how many steps back the last
+  // hit lies (wrapping into the previous cycle) and that hit's gap to the next.
   void ShutBuildPattern(int p) {
-    const int k = VESTIGE_SHUT_EU_K[p], n = VESTIGE_SHUT_EU_STEPS[p];
-    const uint32_t mk = Bjorklund(k, n);
-    int last = 0;
-    for (int i = 0; i < n; i++) { if (mk & (1u << i)) last = i; shut_prev_[i] = (uint8_t)last; }
+    const int k = VESTIGE_SHUT_EU_K[p], n = VESTIGE_SHUT_EU_STEPS[p], r = VESTIGE_SHUT_EU_ROT[p];
+    const uint32_t base = Bjorklund(k, n);
+    uint32_t mk = 0;
+    for (int i = 0; i < n; i++) if (base & (1u << ((i + r) % n))) mk |= (1u << i);
     for (int i = 0; i < n; i++) {
-      const int h = shut_prev_[i]; int d = 1;
+      int back = 0; while (back < n && !(mk & (1u << ((i - back + n) % n)))) back++;
+      const int h = (i - back + n) % n; int d = 1;
       while (d < n && !(mk & (1u << ((h + d) % n)))) d++;
-      shut_gap_[i] = (uint8_t)d;
+      shut_prev_[i] = (uint8_t)back; shut_gap_[i] = (uint8_t)d;
     }
     shut_pat_built_ = p;
   }
