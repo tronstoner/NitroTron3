@@ -6121,6 +6121,123 @@ static void TestLockIn() {
   TestMode1GradedRatchets();
 }
 
+
+// ---------------------------------------------------------------------------
+// Lock-in 2026-10-16 (the studio session): the K3 mode-3 SHUTTER (SW2 DOWN),
+// (kept light: these modes are still expected to change.)
+// ---------------------------------------------------------------------------
+static int ShutLoop(int tap_ms, CapRec* r) {   // SW2 DOWN, K3 noon, one loop captured at this tap
+  Reset(); cs.knob[4] = 0.5f; cs.sw[0] = 0; cs.sw[1] = 2; cs.knob[2] = 0.5f; Taps({tap_ms}); RunFor(0.6f);
+  seen_acts = v.act_count_;
+  noise_from = n; noise_to = n + (long)(tap_ms * 48 * 0.8); const bool ok = WaitActivation(5.f, r); noise_from = noise_to = -1;
+  blk = 48; return ok ? 1 : 0;
+}
+static float ShutK3(bool cw, int st, int nsteps) {   // raw K3 for a shutter step (the shutter reads K3 raw)
+  const float u = (st + 0.5f) / (float)nsteps;
+  const float a = VESTIGE_K3_DEADZONE + u * (0.5f - VESTIGE_K3_DEADZONE);
+  return cw ? 0.5f + a : 0.5f - a;
+}
+// Hit starts over `secs` (hysteresis on the shutter gain).
+static std::vector<long> ShutHits(float secs) {
+  std::vector<long> on; bool armed = false; long st = -1;
+  const long dur = (long)(secs * sr / 48.f);
+  for (long b = 0; b < dur; b++) {
+    const long k = b * 48;
+    RunFor(48.f / sr); const float e = v.shut_env_;      // (block resolution: fast enough for a host run)
+    if (e < 0.01f) { armed = true; st = -1; }
+    if (armed && e > 0.01f && st < 0) st = k;
+    if (armed && e > 0.3f) { on.push_back(st >= 0 ? st : k); armed = false; }
+  }
+  return on;
+}
+static void TestLockShutter() {
+  printf("-- lock-in 2026-10-16: shutter (K3 mode 3, SW2 DOWN)\n");
+  CapRec r{};
+  // 1. The rate is on the rhythm grid: a tapped quarter and a tapped bar give
+  //    the same hits per second (CCW ratios per U = 8 grid steps; CW patterns).
+  {
+    bool ok = true;
+    for (int tap : {500, 2000}) {
+      ShutLoop(tap, &r);
+      for (int st : {1, 4, 12}) {                     // x1, x4, x24
+        cs.knob[2] = ShutK3(false, st, VESTIGE_SHUT_N); RunFor(0.3f);
+        const double per_s = ShutHits(3.f).size() / 3.0;
+        const double want = VESTIGE_SHUT_RATIOS[st] * 48000.0 / (125.0 * 48.0 * VESTIGE_SHUT_UNIT_STEPS);   // U = 8 x 125 ms
+        printf("      tap %d ms: CCW x%g -> %.2f hits/s (want %.2f)\n", tap, VESTIGE_SHUT_RATIOS[st], per_s, want);
+        if (fabs(per_s - want) > 0.3) ok = false;
+      }
+    }
+    Check(ok, "shutter CCW: hits per U = the ratio, U = 8 rhythm-grid steps (a quarter tap = a bar tap)");
+  }
+  // 2. CW: each pattern plays its Euclid hits (rotation 0), every gap a whole
+  //    number of 16th steps, the right count per cycle — across many passes
+  //    (the polymetric cycle keeps running over the pass boundaries).
+  {
+    ShutLoop(500, &r);
+    bool ok = true;
+    for (int st : {0, VESTIGE_SHUT_EU_N / 2, VESTIGE_SHUT_EU_N - 1}) {
+      cs.knob[2] = ShutK3(true, st, VESTIGE_SHUT_EU_N); RunFor(0.3f);
+      const double stepl = 125.0 * 48.0 * VESTIGE_SHUT_EU_GRID[st] / VESTIGE_SHUT_EU_STEPS[st];
+      const double cyc = stepl * VESTIGE_SHUT_EU_STEPS[st];
+      const float secs = (float)(3.0 * cyc / 48000.0 + 0.5);
+      const std::vector<long> on = ShutHits(secs);
+      double worst = 0; for (size_t i = 1; i < on.size(); i++) { const double g = (on[i] - on[i - 1]) / stepl; worst = std::max(worst, fabs(g - std::round(g))); }
+      const double per_cyc = on.size() / (secs * 48000.0 / cyc);
+      if (worst > 2.0 * 48.0 / stepl || fabs(per_cyc - VESTIGE_SHUT_EU_K[st]) > 0.6) ok = false;   // (one block of slack)
+      printf("      CW %2d E(%d,%d): %.2f hits / cycle, worst gap off-grid %.3f steps\n", st + 1, VESTIGE_SHUT_EU_K[st], VESTIGE_SHUT_EU_STEPS[st], per_cyc, worst);
+    }
+    Check(ok, "shutter CW: every Euclid pattern plays k hits per cycle on its 16th grid, across the passes");
+  }
+  // 3. On the loop grid through K3 changes; a K3 change acts at once (no latch,
+  //    no waiting for the envelope); the gain only SLIDES (<= 1 ms full scale).
+  {
+    ShutLoop(500, &r);
+    int wraps = 0, bad = 0; float pe = v.shut_env_, maxstep = 0.f; int32_t pp = v.pass_[r.s];
+    bool immediate = true;
+    blk = 1;
+    for (int st : {3, 12, 1, 5}) {
+      cs.knob[2] = ShutK3(false, st, VESTIGE_SHUT_N);
+      RunFor(0.011f);                                   // one control tick
+      if (v.shut_ratio_ != VESTIGE_SHUT_RATIOS[st]) immediate = false;
+      pe = v.shut_env_;                                 // (per-sample steps only)
+      for (long k = 0; k < (long)(48000 * 1.1f); k++) {
+        RunFor(1.f / sr);
+        maxstep = std::max(maxstep, fabsf(v.shut_env_ - pe)); pe = v.shut_env_;
+        if (v.pass_[r.s] != pp) {
+          pp = v.pass_[r.s];
+          const float cpp = (float)v.shut_G_ / VESTIGE_SHUT_UNIT_STEPS * VESTIGE_SHUT_RATIOS[st];
+          const float x = (float)(pp % 48) * cpp;
+          if (fabsf(x - roundf(x)) < 1e-4f) { wraps++; const float q = v.shut_q_; if (std::min(q, 1.f - q) > 0.01f) bad++; }
+        }
+      }
+    }
+    const float lim = 1.f / (VESTIGE_SHUT_SLEW_MS * 0.001f * sr);
+    printf("      %d loop wraps on a hit, %d off-grid; largest gain step %.4f (1 ms slide %.4f)\n", wraps, bad, maxstep, lim);
+    blk = 48;
+    Check(wraps >= 5 && bad == 0, "shutter: phase from the loop playhead — on the loop grid through K3 changes");
+    Check(immediate, "shutter: a K3 change takes effect on the next control tick (no latch)");
+    Check(maxstep <= lim + 1e-4f && maxstep > lim * 0.5f, "shutter: the gain slides (1 ms), never a hard step");
+  }
+  // 4. Closed = silence (CCW and CW); SW2 not DOWN / K3 noon = untouched.
+  {
+    ShutLoop(500, &r);
+    bool silent_ok = true;
+    for (bool cw : {false, true}) {
+      cs.knob[2] = cw ? ShutK3(true, 3, VESTIGE_SHUT_EU_N) : ShutK3(false, 2, VESTIGE_SHUT_N); RunFor(0.3f);
+      blk = 48; hist_on = true; wet_hist.clear(); hist_n0 = n; RunFor(2.f); hist_on = false; blk = 1;
+      long zeros = 0; for (float w : wet_hist) if (w == 0.f) zeros++;
+      printf("      %s: %.0f %% of the wet exactly 0\n", cw ? "CW " : "CCW", 100.0 * zeros / wet_hist.size());
+      if (zeros < (long)(0.15 * wet_hist.size())) silent_ok = false;
+    }
+    Check(silent_ok, "shutter: closed = silence on both sides");
+    cs.knob[2] = 0.5f; RunFor(0.1f);
+    const bool noon_off = v.shut_kind_tgt_ == 0 && v.shut_mix_ == 0.f;
+    cs.knob[2] = ShutK3(false, 4, VESTIGE_SHUT_N); cs.sw[1] = 0; RunFor(0.1f);
+    Check(noon_off && v.shut_kind_tgt_ == 0 && v.shut_mix_ == 0.f, "shutter: off at K3 noon and outside SW2 DOWN");
+    cs.sw[1] = 0; cs.knob[2] = 0.5f;
+  }
+  blk = 48;
+}
 int main() {
   v.Init(sr);
   cs.sw[0] = 0; v.follow_mode_cfg_ = 0; cs.sw[2] = 0;
@@ -6159,6 +6276,7 @@ int main() {
   TestK4Degrade();
   TestFadeVoiceCap();
   TestK5Repeats();
+  TestLockShutter();
   TestFollowRecut();
   TestLockIn();
 
