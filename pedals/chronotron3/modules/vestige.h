@@ -250,10 +250,14 @@ class Vestige : public Module {
       rhy_side_  = side;
       rhy_level_ = rhy_on ? u3 : 0.f;
       // Mode 3 (SW2 DOWN): the SHUTTER — the step from u3, the kind by the side.
-      if (glitch_mode_ == 2 && u3 > 0.f) {
-        int st = (int)(u3 * (float)VESTIGE_SHUT_N); if (st > VESTIGE_SHUT_N - 1) st = VESTIGE_SHUT_N - 1;
+      // K3 read RAW here (no RemapKnob end zones): the last step is reachable at the stop.
+      float k3r = cs.Knob(2); k3r = k3r < 0.f ? 0.f : (k3r > 1.f ? 1.f : k3r);
+      const float c3r = k3r - 0.5f, a3r = fabsf(c3r);
+      if (glitch_mode_ == 2 && a3r > VESTIGE_K3_DEADZONE) {
+        const float u3r = (a3r - VESTIGE_K3_DEADZONE) / (0.5f - VESTIGE_K3_DEADZONE);
+        int st = (int)(u3r * (float)VESTIGE_SHUT_N); if (st > VESTIGE_SHUT_N - 1) st = VESTIGE_SHUT_N - 1;
         shut_ratio_ = VESTIGE_SHUT_RATIOS[st];
-        shut_kind_tgt_ = (c3 < 0.f) ? 1 : 2;     // 1 CCW volume · 2 CW lowpass gate
+        shut_kind_tgt_ = (c3r < 0.f) ? 1 : 2;    // 1 CCW volume · 2 CW lowpass gate
       } else {
         shut_kind_tgt_ = 0;
       }
