@@ -123,6 +123,8 @@ class Vestige : public Module {
     warble_int_  = 0.f;
     mute_inc_    = 1.f / (VESTIGE_TIMING_MUTE_MS * 0.001f * sr_);   // timing mode 2 rest fade step
     rhy_decim_inc_ = 1.f / (VESTIGE_TIMING_RHY_DECIM_FADE_MS * 0.001f * sr_);   // K3 mode 1 decimate fade step
+    shut_a_ = 1.f - expf(-6.2831853f * VESTIGE_SHUT_DAMP_HZ / sr_);            // K3 mode 3 CW: damped path LP
+    shut_damp_g_ = powf(10.f, VESTIGE_SHUT_DAMP_DB / 20.f);
     for (int k = 0; k < VESTIGE_TIMING_DECIM_N; k++) {                // DECIMATE post-hold low-passes
       float fc = VESTIGE_TIMING_DECIM_LP_MULT * 0.5f * sr_ / (float)VESTIGE_TIMING_DECIM_FACTORS[k];
       if (fc > 0.45f * sr_) fc = 0.45f * sr_;
@@ -4003,13 +4005,9 @@ class Vestige : public Module {
       shut_env_ += d; e = shut_env_;
     }
     float y = x * e;
-    if (shut_kind_ == 2) {                  // CW: + the lowpass gate (2 one-poles), coefficient every 8 samples
-      if ((shut_ctr_++ & 7) == 0) {
-        const float fc = VESTIGE_SHUT_LPG_CLOSED_HZ * powf(VESTIGE_SHUT_LPG_OPEN_HZ / VESTIGE_SHUT_LPG_CLOSED_HZ, e);
-        shut_a_ = 1.f - expf(-6.2831853f * fc / sr_);
-      }
-      shut_z1_ += shut_a_ * (y - shut_z1_); shut_z2_ += shut_a_ * (shut_z1_ - shut_z2_);
-      y = shut_z2_;
+    if (shut_kind_ == 2) {                  // CW: closed = the damped path (2-pole LP + level), not silence
+      shut_z1_ += shut_a_ * (x - shut_z1_); shut_z2_ += shut_a_ * (shut_z1_ - shut_z2_);
+      y += (1.f - e) * shut_z2_ * shut_damp_g_;
     }
     return x + (y - x) * shut_mix_;
   }
@@ -5108,8 +5106,7 @@ class Vestige : public Module {
   float    shut_ratio_eff_ = 1.f, shut_env_ = 0.f;   // latched ratio, slewed gain
   bool     shut_wait_ = false;           // after a latch: closed until the next hit
   float    shut_q_ = 0.f;                // last shutter phase (diagnostics)               // the loop slot whose playhead clocks the shutter
-  float    shut_mix_ = 0.f, shut_t_ = 0.f, shut_a_ = 1.f, shut_z1_ = 0.f, shut_z2_ = 0.f;
-  uint32_t shut_ctr_ = 0;
+  float    shut_mix_ = 0.f, shut_t_ = 0.f, shut_a_ = 1.f, shut_z1_ = 0.f, shut_z2_ = 0.f, shut_damp_g_ = 0.5f;
   volatile bool rep_fade_ = false;
   volatile int  rep_mult_ = 1;                        // K5 CCW: count multiplier (poly)                    // K5 CCW: passes fade (SW1 MIDDLE) / flat                            // K5 CCW: number of repeats (0 = endless)
   float      dec_g_[VESTIGE_VOICE_SLABS] = {};         // per loop voice repeat level (1 set in Init / activation)

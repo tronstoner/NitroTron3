@@ -1376,8 +1376,7 @@ static constexpr int    VESTIGE_FLASH_TICKS = 30; // clear-confirm flash duratio
 // wide steps of SHUT_RATIOS (hits per T, from the tempo grid); the phase restarts
 // on every capture start. Envelope = the freeze stabs' model-A ASR (attack,
 // cubic decay to SUSTAIN, open for GATE x the interval, RELEASE x it), but it
-// closes fully. CCW: volume only (closed = silence). CW: + a 2-pole lowpass
-// LPG_CLOSED_HZ (closed) .. LPG_OPEN_HZ (open) — to compare the two.
+// closes fully. CCW: closed = silence. CW: closed = the damped path below.
 // ---------------------------------------------------------------------------
 static constexpr int    VESTIGE_SHUT_N = 13;   // 2026-10-16: /3 /4 cut; x9 x10 x12 x16 x24 added; x32 x48 dropped (builder)
 static constexpr float  VESTIGE_SHUT_RATIOS[VESTIGE_SHUT_N] = {0.5f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 8.f, 9.f, 10.f, 12.f, 16.f, 24.f};
@@ -1386,8 +1385,10 @@ static constexpr float  VESTIGE_SHUT_GATE      = VESTIGE_FRZ_LPG_ASR_GATE;
 static constexpr float  VESTIGE_SHUT_RELEASE   = VESTIGE_FRZ_LPG_ASR_RELEASE;
 static constexpr float  VESTIGE_SHUT_DECAY     = VESTIGE_FRZ_LPG_ASR_DECAY;
 static constexpr float  VESTIGE_SHUT_SUSTAIN   = VESTIGE_FRZ_LPG_ASR_SUSTAIN;
-static constexpr float  VESTIGE_SHUT_LPG_CLOSED_HZ = VESTIGE_FRZ_LPG_B_BASE_HZ;   // 60 Hz
-static constexpr float  VESTIGE_SHUT_LPG_OPEN_HZ   = VESTIGE_FRZ_LPG_OPEN_HZ;     // 18 kHz
+// CW (2026-10-16, builder): the same shutter, but closed = a DAMPED path like the
+// freeze rests (-6 dB through a 600 Hz lowpass), never silent.
+static constexpr float  VESTIGE_SHUT_DAMP_DB = VESTIGE_FRZ_REST_DB;   // -6 dB
+static constexpr float  VESTIGE_SHUT_DAMP_HZ = VESTIGE_FRZ_REST_HZ;   // 600 Hz
 static constexpr float  VESTIGE_SHUT_SWITCH_MS = 5.f;   // on / off / CCW<->CW: click-free crossfade
 // Click safety (2026-10-16): a new K3 ratio is latched only while the shutter is
 // closed, and the next hit starts from its beginning; the gain never moves faster
