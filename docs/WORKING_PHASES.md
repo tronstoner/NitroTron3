@@ -76,12 +76,13 @@ phase decides the speed, the depth and what an agent does on its own.
   right away, say what the cause was in plain words.
 - **Don't:** auto-recover from unexplained faults; present a guess as the cause.
 
-### Lock-in — hardening a decision
-- **Signals:** "lock it in", "keep it", "that's the one" (when followed by
-  "lock it in").
-- **Do:** host tests that pin the approved behaviour, each verified to fail
-  on its regression; memory note of the approved state.
-- **Don't:** change the sound while doing it.
+### Lock-in — keeping a state
+- **Signals:** "lock it in", "keep it", "nice state".
+- **Do:** a SAVEPOINT — commit, note what is approved (memory / task list).
+  Tests only when the builder confirms the behaviour is final and asks for
+  them — if unsure, ask in one line: "Savepoint only, or tests too?". A mode
+  still in exploration gets no tests (they would be rewritten next week).
+- **Don't:** change the sound while doing it; write tests unasked.
 
 ### Docs — documentation and housekeeping
 - **Signals:** only an explicit instruction ("update the docs", "document…").
@@ -99,5 +100,5 @@ phase decides the speed, the depth and what an agent does on its own.
 | Tuning | yes, every round | existing suite only | no | a few lines + hash |
 | Studio | yes | existing suite only | no | one or two lines + hash |
 | Bug | when fixed | allowed | regression only if asked | cause in plain words |
-| Lock-in | if needed | yes | yes (mutation-checked) | what is pinned |
+| Lock-in | if needed | existing suite | only if confirmed | what is saved |
 | Docs | no | no | no | what was written |
