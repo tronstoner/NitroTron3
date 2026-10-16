@@ -1393,6 +1393,11 @@ static constexpr int    VESTIGE_SHUT_EU_K[VESTIGE_SHUT_EU_N]    = {3, 3, 5,  7, 
 static constexpr int    VESTIGE_SHUT_EU_STEPS[VESTIGE_SHUT_EU_N] = {8, 8, 8, 12, 16, 16, 16, 24, 24, 32};
 static constexpr int    VESTIGE_SHUT_EU_SPAN[VESTIGE_SHUT_EU_N]  = {2, 1, 1,  1,  1,  1,  1,  1,  1,  1};   // passes of T per cycle
 static constexpr float  VESTIGE_SHUT_SWITCH_MS = 5.f;   // on / off / CCW<->CW: click-free crossfade
+// Rate unit (2026-10-16, builder): the rhythm grid's step (StepCount, as K3 mode 1:
+// ~VESTIGE_TIMING_STEP_MS, growing past the knee) — so a tapped quarter and a
+// tapped bar give the same musical speed. U = UNIT_STEPS steps: CCW ratios are
+// hits per U, CW plays one pattern per U x SPAN.
+static constexpr int    VESTIGE_SHUT_UNIT_STEPS = 8;
 // Click safety (2026-10-16, builder): a K3 change / retrigger acts AT ONCE; any
 // jump of the envelope value just SLIDES there in SLEW_MS (the minimum that
 // avoids the click; the normal 3 ms attack is not slowed by it). No latching,

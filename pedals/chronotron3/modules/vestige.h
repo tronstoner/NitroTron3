@@ -253,6 +253,7 @@ class Vestige : public Module {
       // K3 read RAW here (no RemapKnob end zones): the last step is reachable at the stop.
       float k3r = cs.Knob(2); k3r = k3r < 0.f ? 0.f : (k3r > 1.f ? 1.f : k3r);
       const float c3r = k3r - 0.5f, a3r = fabsf(c3r);
+      shut_G_ = tgrid_.StepCount((double)tgrid_.T(), 1.0);   // the rhythm grid's steps per T (as mode 1)
       if (glitch_mode_ == 2 && a3r > VESTIGE_K3_DEADZONE) {
         const float u3r = (a3r - VESTIGE_K3_DEADZONE) / (0.5f - VESTIGE_K3_DEADZONE);
         if (c3r < 0.f) {                         // CCW: straight ratios of T
@@ -3966,9 +3967,11 @@ class Vestige : public Module {
     const bool eu = (shut_kind_ == 2);
     if (eu && shut_pat_built_ != shut_pat_) ShutBuildPattern(shut_pat_);
     const int   span = eu ? VESTIGE_SHUT_EU_SPAN[shut_pat_built_] : 1;
-    // cycles per two passes: CCW ratio x 2 (the pass parity serves /2); CW 2 / span
-    const float per2 = eu ? 2.f / (float)span : 2.f * shut_ratio_;
-    const float Pc = fmaxf(48.f, 2.f * Tf / per2);   // one cycle (samples): CCW one interval, CW one pattern
+    // Cycles per pass (T): the unit U = UNIT_STEPS rhythm steps, G steps per T.
+    // CCW: ratio hits per U; CW: one pattern per U x span.
+    const float upp = (float)shut_G_ / (float)VESTIGE_SHUT_UNIT_STEPS;            // units per pass
+    const float cpp = eu ? upp / (float)span : upp * shut_ratio_;
+    const float Pc = fmaxf(48.f, Tf / cpp);   // one cycle (samples): CCW one interval, CW one pattern
     // Phase: from the newest loop's own playhead (position in its pass + the
     // pass parity), so it sits on the loop's grid — through K3 changes, T
     // changes, half speed, reverse. No loop playing (freeze only): the free
@@ -3981,7 +3984,8 @@ class Vestige : public Module {
       const bool rev = eng_[PoolOf(rs)].rev && GuardReady(rs);
       float pos = rev ? (L - fwd_[rs]) : fwd_[rs];
       pos = pos < 0.f ? 0.f : (pos > L ? L : pos);
-      q = ((float)(pass_[rs] & 1) + pos / (L > 1.f ? L : 1.f)) * 0.5f * per2;
+      // (pass count mod 48: every cycles-per-pass here is a multiple of 1/16)
+      q = ((float)(pass_[rs] % 48) + pos / (L > 1.f ? L : 1.f)) * cpp;
       q -= floorf(q);
     } else {
       q = shut_t_ / Pc;
@@ -5133,6 +5137,7 @@ class Vestige : public Module {
   float    shut_q_ = 0.f;                // last shutter phase (diagnostics)               // the loop slot whose playhead clocks the shutter
   float    shut_mix_ = 0.f, shut_t_ = 0.f;
   volatile int shut_pat_ = 0;            // CW: Euclidean pattern index (Controls)
+  volatile int shut_G_ = 8;              // rhythm-grid steps per T (Controls)
   int      shut_pat_built_ = -1;
   uint8_t  shut_prev_[32] = {}, shut_gap_[32] = {};
   volatile bool rep_fade_ = false;
