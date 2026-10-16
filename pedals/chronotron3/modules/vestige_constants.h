@@ -1379,8 +1379,8 @@ static constexpr int    VESTIGE_FLASH_TICKS = 30; // clear-confirm flash duratio
 // closes fully. CCW: volume only (closed = silence). CW: + a 2-pole lowpass
 // LPG_CLOSED_HZ (closed) .. LPG_OPEN_HZ (open) — to compare the two.
 // ---------------------------------------------------------------------------
-static constexpr int    VESTIGE_SHUT_N = 15;   // 2026-10-16: /3 /4 cut, x9 x10 x12, then x16..x48 (audio rate) added (builder)
-static constexpr float  VESTIGE_SHUT_RATIOS[VESTIGE_SHUT_N] = {0.5f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 8.f, 9.f, 10.f, 12.f, 16.f, 24.f, 32.f, 48.f};
+static constexpr int    VESTIGE_SHUT_N = 13;   // 2026-10-16: /3 /4 cut; x9 x10 x12 x16 x24 added; x32 x48 dropped (builder)
+static constexpr float  VESTIGE_SHUT_RATIOS[VESTIGE_SHUT_N] = {0.5f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 8.f, 9.f, 10.f, 12.f, 16.f, 24.f};
 static constexpr float  VESTIGE_SHUT_ATTACK_MS = VESTIGE_FRZ_LPG_ATTACK_MS;
 static constexpr float  VESTIGE_SHUT_GATE      = VESTIGE_FRZ_LPG_ASR_GATE;
 static constexpr float  VESTIGE_SHUT_RELEASE   = VESTIGE_FRZ_LPG_ASR_RELEASE;
@@ -1389,4 +1389,8 @@ static constexpr float  VESTIGE_SHUT_SUSTAIN   = VESTIGE_FRZ_LPG_ASR_SUSTAIN;
 static constexpr float  VESTIGE_SHUT_LPG_CLOSED_HZ = VESTIGE_FRZ_LPG_B_BASE_HZ;   // 60 Hz
 static constexpr float  VESTIGE_SHUT_LPG_OPEN_HZ   = VESTIGE_FRZ_LPG_OPEN_HZ;     // 18 kHz
 static constexpr float  VESTIGE_SHUT_SWITCH_MS = 5.f;   // on / off / CCW<->CW: click-free crossfade
+// Click safety (2026-10-16): a new K3 ratio is latched only while the shutter is
+// closed, and the next hit starts from its beginning; the gain never moves faster
+// than 0 <-> 1 in SLEW_MS (catches any remaining discontinuity).
+static constexpr float  VESTIGE_SHUT_SLEW_MS = 2.f;
 

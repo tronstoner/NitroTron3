@@ -3955,8 +3955,11 @@ class Vestige : public Module {
     if (shut_mix_ < tgt) { shut_mix_ += stp; if (shut_mix_ > tgt) shut_mix_ = tgt; }
     else if (shut_mix_ > tgt) { shut_mix_ -= stp; if (shut_mix_ < tgt) shut_mix_ = tgt; }
     if (shut_kind_ == 0 && shut_mix_ <= 0.f) return x;
+    // A new K3 ratio takes over only while closed; the next hit then starts clean.
+    bool latched = false;
+    if (shut_ratio_eff_ != shut_ratio_ && shut_env_ <= 0.f) { shut_ratio_eff_ = shut_ratio_; shut_wait_ = true; latched = true; }
     const size_t T = tgrid_.T();
-    const float In = fmaxf(48.f, (float)(T ? T : 1) / shut_ratio_);   // interval (samples)
+    const float In = fmaxf(48.f, (float)(T ? T : 1) / shut_ratio_eff_);   // interval (samples)
     // Phase: from the newest loop's own playhead (position in its pass + the
     // pass parity, for /2), so every ratio sits on the loop's grid — through K3
     // changes, T changes, half speed, reverse. No loop playing (freeze only):
@@ -3969,12 +3972,14 @@ class Vestige : public Module {
       const bool rev = eng_[PoolOf(rs)].rev && GuardReady(rs);
       float pos = rev ? (L - fwd_[rs]) : fwd_[rs];
       pos = pos < 0.f ? 0.f : (pos > L ? L : pos);
-      q = ((float)(pass_[rs] & 1) + pos / (L > 1.f ? L : 1.f)) * shut_ratio_;
+      q = ((float)(pass_[rs] & 1) + pos / (L > 1.f ? L : 1.f)) * shut_ratio_eff_;
       q -= floorf(q);
     } else {
       q = shut_t_ / In;
     }
-    shut_q_ = q;                            // (diagnostics / host test)
+    // After a latch: stay closed until the phase wraps (the next hit's start).
+    if (shut_wait_ && !latched && q < shut_q_) shut_wait_ = false;
+    shut_q_ = q;                            // (also diagnostics / host test)
     // ASR: attack (smoothstep) -> cubic decay to SUSTAIN -> held to GATE -> release (smoothstep) -> 0
     const float att = fminf(VESTIGE_SHUT_ATTACK_MS * 0.001f * sr_, 0.1f * In);
     const float t = q * In;
@@ -3990,6 +3995,13 @@ class Vestige : public Module {
       const float e0 = VESTIGE_SHUT_SUSTAIN + (1.f - VESTIGE_SHUT_SUSTAIN) * r0 * r0 * r0;   // level at the gate end
       e = e0 * (1.f - sm);
     } else e = 0.f;
+    if (shut_wait_) e = 0.f;
+    // Slew limit (click safety): the gain never jumps faster than SLEW_MS full scale.
+    {
+      const float mx = 1.f / (VESTIGE_SHUT_SLEW_MS * 0.001f * sr_);
+      float d = e - shut_env_; d = d > mx ? mx : (d < -mx ? -mx : d);
+      shut_env_ += d; e = shut_env_;
+    }
     float y = x * e;
     if (shut_kind_ == 2) {                  // CW: + the lowpass gate (2 one-poles), coefficient every 8 samples
       if ((shut_ctr_++ & 7) == 0) {
@@ -5093,6 +5105,8 @@ class Vestige : public Module {
   volatile float shut_ratio_ = 1.f;      // hits per T
   int      shut_kind_ = 0;
   int      shut_ref_ = -1;
+  float    shut_ratio_eff_ = 1.f, shut_env_ = 0.f;   // latched ratio, slewed gain
+  bool     shut_wait_ = false;           // after a latch: closed until the next hit
   float    shut_q_ = 0.f;                // last shutter phase (diagnostics)               // the loop slot whose playhead clocks the shutter
   float    shut_mix_ = 0.f, shut_t_ = 0.f, shut_a_ = 1.f, shut_z1_ = 0.f, shut_z2_ = 0.f;
   uint32_t shut_ctr_ = 0;
