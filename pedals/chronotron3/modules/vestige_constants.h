@@ -1295,6 +1295,8 @@ static constexpr bool   VESTIGE_REPEAT_FLAT        = true;    // 2026-10-16: tri
 // ... except in SW1 MIDDLE (the 6-voice poly mode): there the N passes fade
 // along the dB curve (builder 2026-10-16: more useful on the poly mode).
 static constexpr bool   VESTIGE_REPEAT_FADE_POLY   = true;
+// Poly: the K5 count x POLY_MULT passes (2026-10-16 trial: the fade was too short).
+static constexpr int    VESTIGE_REPEAT_POLY_MULT   = 2;
 static constexpr bool   VESTIGE_REPEAT_REARM       = true;
 // FREEZE side K5 CCW = SUSTAIN time (independent of T): MAX_S just past the dead
 // zone -> MIN_S at full CCW, log taper. Each freeze fades from its start over it

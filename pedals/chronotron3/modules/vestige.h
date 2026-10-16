@@ -309,6 +309,7 @@ class Vestige : public Module {
     // so it has ONE owner and can never race a sample-accurate activation.
     target_voices_ = (sw1 == 1) ? VESTIGE_MAX_VOICES : 1;
     rep_fade_ = !VESTIGE_REPEAT_FLAT || (VESTIGE_REPEAT_FADE_POLY && sw1 == 1);   // K5 CCW: the passes fade (poly)
+    rep_mult_ = (sw1 == 1) ? VESTIGE_REPEAT_POLY_MULT : 1;                         // poly: more passes
 
     // ---- K5, bipolar: CCW decay · noon endless · CW fade ---------------------
     // Within VESTIGE_K5_DEADZONE of noon: endless repeats, shortest crossfade.
@@ -4676,7 +4677,7 @@ class Vestige : public Module {
     return powf(10.f, VESTIGE_REPEAT_FLOOR_DB * powf(x, VESTIGE_REPEAT_CURVE) / 20.f);
   }
   void UpdateRepeats() {
-    const int N = rep_n_;
+    const int N = rep_n_ * rep_mult_;
     const float ramp = VESTIGE_REPEAT_RAMP_MS * 0.001f * sr_;
     for (int s = 0; s < VESTIGE_VOICE_SLABS; s++) {
       if (!active_[s]) continue;
@@ -5016,7 +5017,8 @@ class Vestige : public Module {
   bool       stolen_[VESTIGE_SLOTS] = {false}; // dying voice being fast-released (voice-steal)
   float      steal_inc_ = 1.f;                        // fast-release phase step for stolen voices
   volatile int rep_n_ = 0;
-  volatile bool rep_fade_ = false;                    // K5 CCW: passes fade (SW1 MIDDLE) / flat                            // K5 CCW: number of repeats (0 = endless)
+  volatile bool rep_fade_ = false;
+  volatile int  rep_mult_ = 1;                        // K5 CCW: count multiplier (poly)                    // K5 CCW: passes fade (SW1 MIDDLE) / flat                            // K5 CCW: number of repeats (0 = endless)
   float      dec_g_[VESTIGE_VOICE_SLABS] = {};         // per loop voice repeat level (1 set in Init / activation)
   float      dec_t_[VESTIGE_VOICE_SLABS] = {};         // its target
   float      dec_step_[VESTIGE_VOICE_SLABS] = {};      // its ramp step per sample
