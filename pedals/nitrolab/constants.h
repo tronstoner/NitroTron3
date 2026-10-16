@@ -4,9 +4,9 @@
 //
 // NitroLab is a test-bench pedal target scaffolded from the ChronoTron3 shell
 // (SW3 mode select, K6 equal-power dry/wet, bootloader gesture, DIAG switch,
-// CPU boost). It carries armitage (SW3 UP, the module archived from ChronoTron3
-// since 6e0afbb — see docs/ChronoTron3/impulse resonator - armitage/
-// ARMITAGE_ARCHIVED.md) plus two empty pass-through placeholder slots. Only
+// CPU boost). It carries armitage (SW3 UP, a polyphonic feedback-FM voice on
+// a private copy of the POG band engine — see modules/armitage.h) plus two
+// empty pass-through placeholder slots. Only
 // things that are genuinely shell-wide live here. Per-module tuning lives in
 // each module's own constants file (modules/<name>_constants.h).
 
@@ -21,7 +21,7 @@ static constexpr uint32_t NL_BOOTLOADER_HOLD_MS = 2000;
 
 // Mode slots on SW3 (UP / MIDDLE / DOWN).
 enum NlMode {
-  NL_MODE_ARMITAGE  = 0,  // SW3 UP   — impulse-synth / chord-detect resonator
+  NL_MODE_ARMITAGE  = 0,  // SW3 UP   — polyphonic feedback-FM band voice
   NL_MODE_EMPTY_B   = 1,  // SW3 MIDDLE — pass-through placeholder
   NL_MODE_EMPTY_C   = 2,  // SW3 DOWN   — pass-through placeholder
   NL_MODE_COUNT     = 3

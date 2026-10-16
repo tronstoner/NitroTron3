@@ -6,10 +6,9 @@
 // active module owns everything else on the surface — including both
 // footswitches. Build: `make PEDAL=nitrolab`.
 //
-// SW3 UP     = armitage   (impulse-synth / chord-detect resonator, ported
-//                          from ChronoTron3's archived SW3-DOWN slot — see
-//                          docs/ChronoTron3/impulse resonator - armitage/
-//                          ARMITAGE_ARCHIVED.md)
+// SW3 UP     = armitage   (polyphonic feedback-FM voice on a private copy of
+//                          the 80-band POG engine — see modules/armitage.h;
+//                          unrelated to ChronoTron3's archived armitage)
 // SW3 MIDDLE = empty      (pass-through placeholder)
 // SW3 DOWN   = empty      (pass-through placeholder)
 
