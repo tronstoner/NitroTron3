@@ -1385,17 +1385,16 @@ static constexpr float  VESTIGE_SHUT_GATE      = VESTIGE_FRZ_LPG_ASR_GATE;
 static constexpr float  VESTIGE_SHUT_RELEASE   = VESTIGE_FRZ_LPG_ASR_RELEASE;
 static constexpr float  VESTIGE_SHUT_DECAY     = VESTIGE_FRZ_LPG_ASR_DECAY;
 static constexpr float  VESTIGE_SHUT_SUSTAIN   = VESTIGE_FRZ_LPG_ASR_SUSTAIN;
-// CW (2026-10-16, builder): EUCLIDEAN shutter — the 10 coprime E(k, n), rotation
-// 0 (the rhythms as first built), each pattern STEP = one note value on the rhythm
-// grid: a cycle spans GRID rhythm-grid steps (16ths): 8 = 16ths for an 8-step
-// pattern, 16 = 8ths for 8 steps / 8th triplets for 12 / 16ths for 16 / 16th
-// triplets for 24 / 32nds for 32. Denser up to E(13,16), faster only above.
-// Each hit's envelope interval = the distance to the next hit; closes to silence.
+// CW (2026-10-16, builder): POLYMETRIC Euclidean shutter — odd step counts, so a
+// cycle does not divide the bar and drifts against the 4/4 loop. Each pattern step
+// = one note value on the rhythm grid: GRID = rhythm-grid steps (16ths) per cycle
+// (n x 2 = 8ths for the first three, n = 16ths, E(23,32) as 32nds over a bar).
+// Rotation 0; each hit's envelope interval = the distance to the next hit; silence.
 static constexpr int    VESTIGE_SHUT_EU_N = 10;
-static constexpr int    VESTIGE_SHUT_EU_K[VESTIGE_SHUT_EU_N]     = { 3, 3, 5,  7,  9, 11, 13, 17, 19, 23};
-static constexpr int    VESTIGE_SHUT_EU_STEPS[VESTIGE_SHUT_EU_N] = { 8, 8, 8, 12, 16, 16, 16, 24, 24, 32};
-static constexpr int    VESTIGE_SHUT_EU_ROT[VESTIGE_SHUT_EU_N]   = { 0, 0, 0,  0,  0,  0,  0,  0,  0,  0};
-static constexpr int    VESTIGE_SHUT_EU_GRID[VESTIGE_SHUT_EU_N]  = {16, 8, 8, 16, 16, 16, 16, 16, 16, 16};   // grid steps per cycle
+static constexpr int    VESTIGE_SHUT_EU_K[VESTIGE_SHUT_EU_N]     = { 2,  3,  4, 3, 4, 5,  7,  8, 11, 23};
+static constexpr int    VESTIGE_SHUT_EU_STEPS[VESTIGE_SHUT_EU_N] = { 5,  7,  9, 5, 7, 9, 11, 13, 15, 32};
+static constexpr int    VESTIGE_SHUT_EU_ROT[VESTIGE_SHUT_EU_N]   = { 0,  0,  0, 0, 0, 0,  0,  0,  0,  0};
+static constexpr int    VESTIGE_SHUT_EU_GRID[VESTIGE_SHUT_EU_N]  = {10, 14, 18, 5, 7, 9, 11, 13, 15, 16};   // grid steps per cycle
 static constexpr float  VESTIGE_SHUT_SWITCH_MS = 5.f;   // on / off / CCW<->CW: click-free crossfade
 // Rate unit (2026-10-16, builder): the rhythm grid's step (StepCount, as K3 mode 1:
 // ~VESTIGE_TIMING_STEP_MS, growing past the knee) — so a tapped quarter and a

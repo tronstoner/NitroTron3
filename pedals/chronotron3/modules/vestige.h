@@ -3983,8 +3983,11 @@ class Vestige : public Module {
       const bool rev = eng_[PoolOf(rs)].rev && GuardReady(rs);
       float pos = rev ? (L - fwd_[rs]) : fwd_[rs];
       pos = pos < 0.f ? 0.f : (pos > L ? L : pos);
-      // (pass count mod 48: every cycles-per-pass here is a multiple of 1/16)
-      q = ((float)(pass_[rs] % 48) + pos / (L > 1.f ? L : 1.f)) * cpp;
+      // pass count modulo a whole number of cycles: CCW 48 (every rate here is a
+      // multiple of 1/16 per pass); CW its GRID (GRID passes = G whole cycles), so
+      // a polymetric cycle keeps running across the passes.
+      const int M = eu ? VESTIGE_SHUT_EU_GRID[shut_pat_built_] : 48;
+      q = ((float)(pass_[rs] % M) + pos / (L > 1.f ? L : 1.f)) * cpp;
       q -= floorf(q);
     } else {
       q = shut_t_ / Pc;
