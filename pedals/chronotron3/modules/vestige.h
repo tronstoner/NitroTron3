@@ -123,8 +123,6 @@ class Vestige : public Module {
     warble_int_  = 0.f;
     mute_inc_    = 1.f / (VESTIGE_TIMING_MUTE_MS * 0.001f * sr_);   // timing mode 2 rest fade step
     rhy_decim_inc_ = 1.f / (VESTIGE_TIMING_RHY_DECIM_FADE_MS * 0.001f * sr_);   // K3 mode 1 decimate fade step
-    shut_a_ = 1.f - expf(-6.2831853f * VESTIGE_SHUT_DAMP_HZ / sr_);            // K3 mode 3 CW: damped path LP
-    shut_damp_g_ = powf(10.f, VESTIGE_SHUT_DAMP_DB / 20.f);
     for (int k = 0; k < VESTIGE_TIMING_DECIM_N; k++) {                // DECIMATE post-hold low-passes
       float fc = VESTIGE_TIMING_DECIM_LP_MULT * 0.5f * sr_ / (float)VESTIGE_TIMING_DECIM_FACTORS[k];
       if (fc > 0.45f * sr_) fc = 0.45f * sr_;
@@ -257,9 +255,15 @@ class Vestige : public Module {
       const float c3r = k3r - 0.5f, a3r = fabsf(c3r);
       if (glitch_mode_ == 2 && a3r > VESTIGE_K3_DEADZONE) {
         const float u3r = (a3r - VESTIGE_K3_DEADZONE) / (0.5f - VESTIGE_K3_DEADZONE);
-        int st = (int)(u3r * (float)VESTIGE_SHUT_N); if (st > VESTIGE_SHUT_N - 1) st = VESTIGE_SHUT_N - 1;
-        shut_ratio_ = VESTIGE_SHUT_RATIOS[st];
-        shut_kind_tgt_ = (c3r < 0.f) ? 1 : 2;    // 1 CCW volume · 2 CW lowpass gate
+        if (c3r < 0.f) {                         // CCW: straight ratios of T
+          int st = (int)(u3r * (float)VESTIGE_SHUT_N); if (st > VESTIGE_SHUT_N - 1) st = VESTIGE_SHUT_N - 1;
+          shut_ratio_ = VESTIGE_SHUT_RATIOS[st];
+          shut_kind_tgt_ = 1;
+        } else {                                 // CW: Euclidean patterns
+          int st = (int)(u3r * (float)VESTIGE_SHUT_EU_N); if (st > VESTIGE_SHUT_EU_N - 1) st = VESTIGE_SHUT_EU_N - 1;
+          shut_pat_ = st;
+          shut_kind_tgt_ = 2;
+        }
       } else {
         shut_kind_tgt_ = 0;
       }
@@ -1602,20 +1606,21 @@ class Vestige : public Module {
   // Bjorklund's spreading of k hits over n steps (the standard recursive
   // form), rotated to start on a hit. Init only.
   static uint32_t Bjorklund(int k, int n) {
-    int counts[VESTIGE_TIMING_MAX_STEPS + 2] = {0}, rem[VESTIGE_TIMING_MAX_STEPS + 2] = {0};
+    constexpr int kBj = 32;   // (own bound: the shutter uses up to 32 steps; masks are 32-bit)
+    int counts[kBj + 2] = {0}, rem[kBj + 2] = {0};
     int div = n - k, lv = 0; rem[0] = k;
     for (;;) {
       counts[lv] = div / rem[lv]; rem[lv + 1] = div % rem[lv]; div = rem[lv]; lv++;
       if (rem[lv] <= 1) break;
     }
     counts[lv] = div;
-    int bits[VESTIGE_TIMING_MAX_STEPS]; int nb = 0;
+    int bits[kBj]; int nb = 0;
     // Iterative expansion of build(level): an explicit stack of levels.
     int stack[256]; int sp = 0; stack[sp++] = lv;
     while (sp > 0) {
       const int l = stack[--sp];
-      if (l == -1) { if (nb < VESTIGE_TIMING_MAX_STEPS) bits[nb++] = 0; continue; }
-      if (l == -2) { if (nb < VESTIGE_TIMING_MAX_STEPS) bits[nb++] = 1; continue; }
+      if (l == -1) { if (nb < kBj) bits[nb++] = 0; continue; }
+      if (l == -2) { if (nb < kBj) bits[nb++] = 1; continue; }
       // build(l) = counts[l] x build(l-1), then build(l-2) if rem[l] != 0;
       // pushed in reverse so they pop in order.
       if (rem[l] != 0) stack[sp++] = l - 2;
@@ -3957,13 +3962,18 @@ class Vestige : public Module {
     if (shut_mix_ < tgt) { shut_mix_ += stp; if (shut_mix_ > tgt) shut_mix_ = tgt; }
     else if (shut_mix_ > tgt) { shut_mix_ -= stp; if (shut_mix_ < tgt) shut_mix_ = tgt; }
     if (shut_kind_ == 0 && shut_mix_ <= 0.f) return x;
-    const size_t T = tgrid_.T();
-    const float In = fmaxf(48.f, (float)(T ? T : 1) / shut_ratio_);   // interval (samples)
+    const float Tf = (float)(tgrid_.T() ? tgrid_.T() : 1);
+    const bool eu = (shut_kind_ == 2);
+    if (eu && shut_pat_built_ != shut_pat_) ShutBuildPattern(shut_pat_);
+    const int   span = eu ? VESTIGE_SHUT_EU_SPAN[shut_pat_built_] : 1;
+    // cycles per two passes: CCW ratio x 2 (the pass parity serves /2); CW 2 / span
+    const float per2 = eu ? 2.f / (float)span : 2.f * shut_ratio_;
+    const float Pc = fmaxf(48.f, 2.f * Tf / per2);   // one cycle (samples): CCW one interval, CW one pattern
     // Phase: from the newest loop's own playhead (position in its pass + the
-    // pass parity, for /2), so every ratio sits on the loop's grid — through K3
-    // changes, T changes, half speed, reverse. No loop playing (freeze only):
-    // the free counter, anchored at the capture start.
-    shut_t_ += 1.f; if (shut_t_ >= In) shut_t_ -= In;
+    // pass parity), so it sits on the loop's grid — through K3 changes, T
+    // changes, half speed, reverse. No loop playing (freeze only): the free
+    // counter, anchored at the capture start.
+    shut_t_ += 1.f; if (shut_t_ >= Pc) shut_t_ -= Pc;
     float q;
     const int rs = shut_ref_;
     if (rs >= 0 && rs < VESTIGE_VOICE_SLABS && active_[rs] && !dying_[rs]) {
@@ -3971,15 +3981,26 @@ class Vestige : public Module {
       const bool rev = eng_[PoolOf(rs)].rev && GuardReady(rs);
       float pos = rev ? (L - fwd_[rs]) : fwd_[rs];
       pos = pos < 0.f ? 0.f : (pos > L ? L : pos);
-      q = ((float)(pass_[rs] & 1) + pos / (L > 1.f ? L : 1.f)) * shut_ratio_;
+      q = ((float)(pass_[rs] & 1) + pos / (L > 1.f ? L : 1.f)) * 0.5f * per2;
       q -= floorf(q);
     } else {
-      q = shut_t_ / In;
+      q = shut_t_ / Pc;
     }
     shut_q_ = q;                            // (diagnostics / host test)
+    // The current hit: CCW = the whole cycle; CW = from the last hit to the next.
+    float t, In;
+    if (!eu) { In = Pc; t = q * Pc; }
+    else {
+      const int n = VESTIGE_SHUT_EU_STEPS[shut_pat_built_];
+      const float sl = Pc / (float)n;                       // one step (samples)
+      const float sp = q * (float)n;
+      int i = (int)sp; if (i > n - 1) i = n - 1;
+      const int h = shut_prev_[i];                          // last hit at or before step i
+      In = (float)shut_gap_[i] * sl;
+      t = (sp - (float)h) * sl;
+    }
     // ASR: attack (smoothstep) -> cubic decay to SUSTAIN -> held to GATE -> release (smoothstep) -> 0
     const float att = fminf(VESTIGE_SHUT_ATTACK_MS * 0.001f * sr_, 0.1f * In);
-    const float t = q * In;
     const float gate = fmaxf(att, VESTIGE_SHUT_GATE * In), dec = fmaxf(1.f, VESTIGE_SHUT_DECAY * In), rel = fmaxf(1.f, VESTIGE_SHUT_RELEASE * In);
     float e;
     if (t < att) { const float q = t / att; e = q * q * (3.f - 2.f * q); }
@@ -3999,12 +4020,22 @@ class Vestige : public Module {
       float d = e - shut_env_; d = d > mx ? mx : (d < -mx ? -mx : d);
       shut_env_ += d; e = shut_env_;
     }
-    float y = x * e;
-    if (shut_kind_ == 2) {                  // CW: closed = the damped path (2-pole LP + level), not silence
-      shut_z1_ += shut_a_ * (x - shut_z1_); shut_z2_ += shut_a_ * (shut_z1_ - shut_z2_);
-      y += (1.f - e) * shut_z2_ * shut_damp_g_;
-    }
+    const float y = x * e;
     return x + (y - x) * shut_mix_;
+  }
+  // CW pattern p: E(k, n) (Bjorklund, starting on a hit) -> per step the last
+  // hit at or before it and the distance from that hit to the next (wrapping).
+  void ShutBuildPattern(int p) {
+    const int k = VESTIGE_SHUT_EU_K[p], n = VESTIGE_SHUT_EU_STEPS[p];
+    const uint32_t mk = Bjorklund(k, n);
+    int last = 0;
+    for (int i = 0; i < n; i++) { if (mk & (1u << i)) last = i; shut_prev_[i] = (uint8_t)last; }
+    for (int i = 0; i < n; i++) {
+      const int h = shut_prev_[i]; int d = 1;
+      while (d < n && !(mk & (1u << ((h + d) % n)))) d++;
+      shut_gap_[i] = (uint8_t)d;
+    }
+    shut_pat_built_ = p;
   }
 
   void IsrStart(int s, uint32_t now) {
@@ -5100,7 +5131,10 @@ class Vestige : public Module {
   int      shut_ref_ = -1;
   float    shut_env_ = 0.f;              // slewed shutter gain
   float    shut_q_ = 0.f;                // last shutter phase (diagnostics)               // the loop slot whose playhead clocks the shutter
-  float    shut_mix_ = 0.f, shut_t_ = 0.f, shut_a_ = 1.f, shut_z1_ = 0.f, shut_z2_ = 0.f, shut_damp_g_ = 0.5f;
+  float    shut_mix_ = 0.f, shut_t_ = 0.f;
+  volatile int shut_pat_ = 0;            // CW: Euclidean pattern index (Controls)
+  int      shut_pat_built_ = -1;
+  uint8_t  shut_prev_[32] = {}, shut_gap_[32] = {};
   volatile bool rep_fade_ = false;
   volatile int  rep_mult_ = 1;                        // K5 CCW: count multiplier (poly)                    // K5 CCW: passes fade (SW1 MIDDLE) / flat                            // K5 CCW: number of repeats (0 = endless)
   float      dec_g_[VESTIGE_VOICE_SLABS] = {};         // per loop voice repeat level (1 set in Init / activation)
