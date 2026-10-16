@@ -21,7 +21,7 @@ static constexpr size_t VESTIGE_VOICE_CAP        = VESTIGE_LOOP_MAX_SAMPLES + VE
 // ---------------------------------------------------------------------------
 // Topology (SW1: UP = 1 voice · MIDDLE = 6 voices · DOWN = freeze)
 // ---------------------------------------------------------------------------
-static constexpr int    VESTIGE_MAX_VOICES   = 3;   // voiced pool ceiling (SW1 MIDDLE). Was 6, then 4.
+static constexpr int    VESTIGE_MAX_VOICES   = 2;   // voiced pool ceiling (SW1 MIDDLE). Was 6, then 4, then 3 (2026-10-16: 2, builder).
 // 2026-09-29: at 4 voices with K1 toward the upper octave, the pedal showed
 // digital distortion and glitches (suspected CPU overload). 3 voices also fits the
 // grain cap in every state, including a voice fading out during a replacement.
