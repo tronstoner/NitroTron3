@@ -38,6 +38,17 @@ tasks:
       - make PEDAL=chronotron3
       - make PEDAL=chronotron3 program-dfu
 
+  build-nitrolab:
+    desc: Build the NitroLab test-bench bundle
+    cmds:
+      - make PEDAL=nitrolab
+
+  flash-nitrolab:
+    desc: Build + flash the NitroLab test-bench bundle via DFU
+    cmds:
+      - make PEDAL=nitrolab
+      - make PEDAL=nitrolab program-dfu
+
   clean:
     desc: Remove build output
     cmds:

@@ -1,0 +1,57 @@
+#pragma once
+//
+// NitroLab — Module interface (the swappable unit).
+//
+// A module = one selectable mode (armitage / empty B / empty C). It owns its
+// control mapping, its footswitch policy, and its DSP. The shell (main.cpp)
+// owns: SW3 mode selection, the K6 dry/wet mix (equal-power), and the reserved
+// both-footswitch bootloader gesture. Everything else on the surface is the
+// active module's to define.
+//
+// Requires daisy.h + hothouse.h + control_surface.h included before this file.
+//
+// Two rates:
+//   Controls() — control-rate, called from the main loop each Tick (~10 ms),
+//                after the shell has Tick()'d the ControlSurface. Read knobs /
+//                switches / footswitch events, update LEDs, set params.
+//   Process()  — audio-rate, called from the audio callback each block. Produce
+//                mono WET output; the shell crossfades dry/wet via K6.
+
+class Module {
+ public:
+  virtual ~Module() {}
+
+  // One-time setup. sr = audio sample rate (Hz).
+  virtual void Init(float sr) = 0;
+
+  // Mode transitions (SW3). Default no-op; override to reset/seed state.
+  virtual void Activate() {}
+  virtual void Deactivate() {}
+
+  // Control-rate hook (main loop). `cs` is already Tick()'d this pass.
+  virtual void Controls(const ControlSurface& cs,
+                        daisy::Led& led1, daisy::Led& led2) = 0;
+
+  // Audio-rate hook. `in` = mono input block, `wet` = mono wet output block to
+  // fill (size samples). The shell mixes wet against dry via K6 — unless the
+  // module OwnsOutput() (below), in which case `wet` is taken as the final out.
+  virtual void Process(const float* in, float* wet, size_t size) = 0;
+
+  // Optional pre-effect on the INPUT ("a pedal in front"): the shell applies it
+  // to the input block BEFORE both Process() and its own dry path, so dry and
+  // send are both processed. Default: none. In bypass the module must leave
+  // `buf` untouched (the clean-bypass guarantee below relies on it).
+  virtual void PreProcess(float* buf, size_t size) { (void)buf; (void)size; }
+
+  // If true, the module has already routed the dry itself (e.g. looper volume +
+  // dry bypass) and fills `wet` with the FINAL output; the shell outputs it
+  // directly and skips the K6 crossfade. Default false = shell does the mix.
+  virtual bool OwnsOutput() const { return false; }
+
+  // If true, the module is bypassed: the shell must pass the CLEAN signal fully
+  // UNTOUCHED (dry gain forced to unity, ignoring the K6 mix) — there is no
+  // hardware bypass on this pedal, so this is the only guarantee that the clean
+  // path is never attenuated/processed in bypass. Wet (any ringing trail) is
+  // still mixed as usual. Only consulted when OwnsOutput() is false.
+  virtual bool Bypassed() const { return false; }
+};
