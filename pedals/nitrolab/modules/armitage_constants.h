@@ -7,21 +7,29 @@ namespace armitage_k {
 
 // --- Feedback amount (K1) -------------------------------------------------
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
-constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; hard ceiling on any band's beta_k (2 x ARM_BETA_MAX)
+constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
 
-// --- Fold-back (K4): beta_k = beta * (ARM_F_REF / f_played)^p, p = 1 - k4 --
-constexpr float ARM_F_REF      = 200.f;   // Hz; played frequency where beta_k == beta (below gets MORE, clamped)
+// --- Shaping tilt (K4): beta_k = beta * min(1, (ARM_SHAPE_REF / f'_k)^p) ---
+constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full beta (never more)
+constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = beta on every band)
 
-// --- High-band roll-off (K2): w_k = min(1, (f_k / ARM_TILT_REF)^-gamma) ----
-constexpr float ARM_TILT_MAX   = 3.f;     // roll-off exponent gamma at K2 full CW (~ -18 dB/oct above the ref)
-constexpr float ARM_TILT_REF   = 200.f;   // Hz; roll-off corner (on the band's input centre f_k), never boosts
+// --- Roll-off (K2): w_k = min(1, (f_k / ARM_TILT_REF)^-gamma) ---------------
+constexpr float ARM_TILT_MAX   = 1.f;     // roll-off exponent gamma at K2 full CW (~ -6 dB/oct above the ref)
+constexpr float ARM_TILT_REF   = 100.f;   // Hz; roll-off corner (on the band's INPUT centre f_k), never boosts
 
-// --- Feedback smoothing (K5): one-pole LP on yprev at 8 kHz ----------------
-constexpr float ARM_SMOOTH_HZ_MAX = 4000.f;  // Hz; K5 CCW cutoff (= effectively none, raw chatter stays)
-constexpr float ARM_SMOOTH_HZ_MIN = 100.f;   // Hz; K5 CW cutoff (very smooth), exponential in between
+// --- Feedback smoothing (K5): per-band one-pole LP on yprev at 8 kHz --------
+// cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
+constexpr float ARM_SMOOTH_REL_MAX = 8.f;     // c at K5 CCW (cutoff 8 x band freq = little damping)
+constexpr float ARM_SMOOTH_REL_MIN = 0.5f;    // c at K5 CW (cutoff half the band freq = strong damping)
+constexpr float ARM_SMOOTH_HZ_LO   = 20.f;    // Hz; lower clamp of any band's cutoff
+constexpr float ARM_SMOOTH_HZ_HI   = 3800.f;  // Hz; upper clamp of any band's cutoff (below Nyquist of the 8 kHz rate)
 
-// --- Feedback signal (always raw since step 2) -----------------------------
-constexpr float ARM_RAW_GAIN   = 100.f;   // yprev = out * this; loudest band ~0.0005 soft gtr -> 0.05 (sine), ~0.012 hard bass -> 1 (clamped, saw/noise)
+// --- Feedback signal blend (SW1): yprev = out * ((1 - a) * 1/|z| + a * ARM_RAW_GAIN)
+constexpr float ARM_RAW_GAIN   = 100.f;   // raw path gain: loudest band ~0.0005 soft gtr -> 0.05 (sine), ~0.012 hard bass -> 1 (clamped, saw/noise)
+constexpr float ARM_BLEND_UP   = 0.f;     // a at SW1 UP   (normalised: out / |z|, level-independent)
+constexpr float ARM_BLEND_MID  = 0.5f;    // a at SW1 MID  (half normalised, half raw)
+constexpr float ARM_BLEND_DOWN = 1.f;     // a at SW1 DOWN (raw, level-dependent)
+constexpr float ARM_BLEND_MS   = 10.f;    // ms; linear ramp of a on an SW1 change (full 0 -> 1 in this time)
 
 // --- Cross-modulation (K3): theta_k += beta_x * m --------------------------
 constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k below this form the root modulator m (bands 0..9)
@@ -36,7 +44,7 @@ constexpr float ARM_GAIN_DOWN  = 0.38f;   // octave-down makeup: unity-gain DOWN
 constexpr float ARM_SILENCE    = 1e-10f;  // |z|^2 below this -> band output 0, yprev reset (FastInvSqrt(0) guard)
 constexpr float ARM_DENORM     = 1e-12f;  // |yprev| below this is flushed to 0
 
-// --- Control smoothing (anti-zipper on K1/K2/K3/K4/K5 targets) --------------
+// --- Control smoothing (anti-zipper on the K1/K2/K3/K4/K5 targets) ----------
 constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the 8 kHz rate
 
 // --- Output -----------------------------------------------------------------

@@ -16,32 +16,39 @@
 //             on every phase crossing of pi)
 //   theta_k = b_k * yprev_k + beta_x * m_prev
 //   out_k   = Re(z'_k e^{j theta_k})                       (|z'| kept)
-//   yprev_k = onepole_K5(out_k * ARM_RAW_GAIN), clamped to [-1, 1], flushed below ARM_DENORM
+//   yprev_k = onepole_K5,k(out_k * g_k), clamped to [-1, 1], flushed below ARM_DENORM
+//   g_k     = (1 - a) / |z_k| + a * ARM_RAW_GAIN        (SW1 blend: a = 0 normalised, 1 raw)
 //   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / sum_{f_k < ARM_ROOT_HZ} |z'_k|   (in [-1, 1], silence -> 0)
 //             m_prev = m of the previous 8 kHz sample (one-sample delay, like yprev)
 //   silence guard: |z|^2 < ARM_SILENCE -> out_k = 0, yprev_k = 0
 //
-//   b_k = min(ARM_BETA_CLAMP, beta * (ARM_F_REF / (r f_k))^p),  r = 2 / 1 / 0.5 (UP/MID/DOWN)
-//   w_k = min(1, (f_k / ARM_TILT_REF)^-gamma)           (on the input centre f_k)
+//   f'_k = r f_k,  r = 2 / 1 / 0.5 (SW2 UP/MID/DOWN)      (transposed band frequency)
+//   b_k = min(ARM_BETA_CLAMP, beta * min(1, (ARM_SHAPE_REF / f'_k)^p))
+//   w_k = min(1, (f_k / ARM_TILT_REF)^-gamma)           (on the INPUT centre f_k)
+//   K5 one-pole cutoff_k = clamp(c * f'_k, ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI)
 //   wet = interpolate( ARM_OUT_GAIN * g_oct * sum_k w_k * out_k )
 //
 // K1 = 0, K3 = 0, SW2 MID -> theta = 0 -> out_k = yr: the plain band sum.
 //
 // OCTAVE SWITCH: two processing slots (each: octave, yprev[], smoothed b_k[],
-// m_prev). Normally only one runs. On an SW2 change the idle slot starts at the
-// new octave (yprev = 0, m_prev = 0, b_k = target) and the two are crossfaded
+// smoothed K5 coefficients[], m_prev). Normally only one runs. On an SW2 change the idle slot starts at the
+// new octave (yprev = 0, m_prev = 0, b_k and K5 coefficients = target) and the two are crossfaded
 // linearly over ARM_XFADE_MS; then the old one stops. An SW2 change during a
 // fade is picked up when that fade ends.
 //
 // CONTROL MAP
 //   K1  feedback amount     beta = ARM_BETA_MAX * k1^2
-//   K2  high-band roll-off  gamma = ARM_TILT_MAX * k2 (bands above ARM_TILT_REF fall;
-//                           after the shaping: w_k scales level only)
+//   K2  roll-off            gamma = ARM_TILT_MAX * k2 (bands above ARM_TILT_REF fall,
+//                           ~-6 dB/oct at CW; after the shaping: w_k scales level only)
 //   K3  cross-modulation    beta_x = ARM_XMOD_MAX * k3^2 (bass root m modulates all bands)
-//   K4  fold-back           p = 1 - k4 (CCW: high bands gentler; CW: same beta on all)
-//   K5  feedback smoothing  one-pole cutoff ARM_SMOOTH_HZ_MAX (CCW) -> _MIN (CW), exp.
+//   K4  shaping tilt        p = ARM_SHAPE_P_MAX * (1 - k4) (CCW: only bands below
+//                           ARM_SHAPE_REF get the full beta, upper bands much less =
+//                           warm; CW: p = 0, every band gets beta = nasal, gritty)
+//   K5  feedback smoothing  c = ARM_SMOOTH_REL_MAX (CCW, little) -> _MIN (CW, strong),
+//                           exponential; cutoff relative to each band's f'_k
 //   K6  dry/wet             (shell)
-//   SW1 unused
+//   SW1 feedback signal     UP = normalised (a = 0), MID = half (0.5), DOWN = raw (1);
+//                           a ramps linearly over ARM_BLEND_MS
 //   SW2 octave              UP = octave up, MID = as played, DOWN = octave down
 //   FS1/FS2 unused. LED1 on, LED2 off.
 //
@@ -79,19 +86,22 @@ class Armitage : public Module {
     for (int k = 0; k < kBands; k++) {
       const float f = armbands::ArmCenterFreq(k);
       bands_[k].Init(f, sr8_, armbands::ArmBandwidth(k));
-      ln_fref_[k] = logf(ARM_F_REF / f);
+      ln_fref_[k] = logf(ARM_SHAPE_REF / f);
+      f_k_[k] = f;
       ln_tilt_[k] = logf(f / ARM_TILT_REF);
       if (f < ARM_ROOT_HZ) n_root_ = k + 1;   // centres rise with k
       w_[k] = w_t_[k] = 1.f;
       for (int o = 0; o < 3; o++) fb_t_[o][k] = 0.f;
     }
+    SetSmoothTargets(ARM_SMOOTH_REL_MAX);
     for (int s = 0; s < 2; s++) ResetSlot(slot_[s], kMid);
     act_ = 0;
     fade_n_ = 0;
     xfade_len_ = (int)(ARM_XFADE_MS * 0.001f * sr8_ + 0.5f);
     if (xfade_len_ < 1) xfade_len_ = 1;
     ctrl_a_ = 1.f - expf(-1000.f / (ARM_CTRL_SMOOTH_MS * sr8_));
-    a5_ = a5_t_ = SmoothCoef(ARM_SMOOTH_HZ_MAX);
+    blend_ = blend_t_ = ARM_BLEND_UP;
+    blend_step_ = 1.f / (ARM_BLEND_MS * 0.001f * sr8_);
     bx_ = bx_t_ = 0.f;
     oct_t_ = kMid;
   }
@@ -106,17 +116,21 @@ class Armitage : public Module {
     const float k5 = RemapKnob(cs.Knob(4));
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
+    const int sw1 = cs.Switch(0);
+    blend_t_ = (sw1 == 0) ? ARM_BLEND_UP : (sw1 == 2) ? ARM_BLEND_DOWN : ARM_BLEND_MID;
 
     const float beta  = ARM_BETA_MAX * k1 * k1;
-    const float p     = 1.f - k4;
+    const float p     = ARM_SHAPE_P_MAX * (1.f - k4);
     const float gamma = ARM_TILT_MAX * k2;
-    // (ARM_F_REF / (r f_k))^p = (ARM_F_REF / f_k)^p * r^-p
+    // (ARM_SHAPE_REF / (r f_k))^p = (ARM_SHAPE_REF / f_k)^p * r^-p
     const float ln2   = 0.693147181f;
     const float rp[3] = { expf(-p * ln2), 1.f, expf(p * ln2) };   // UP r=2, MID, DOWN r=1/2
     for (int k = 0; k < kBands; k++) {
-      const float b1 = beta * expf(p * ln_fref_[k]);       // beta * (F_REF/f_k)^p
+      const float t1 = expf(p * ln_fref_[k]);              // (SHAPE_REF/f_k)^p
       for (int o = 0; o < 3; o++) {
-        float bk = b1 * rp[o];
+        float t = t1 * rp[o];                              // (SHAPE_REF/f'_k)^p
+        if (t > 1.f) t = 1.f;                              // never more than beta
+        float bk = beta * t;
         if (bk > ARM_BETA_CLAMP) bk = ARM_BETA_CLAMP;
         fb_t_[o][k] = bk;
       }
@@ -125,7 +139,7 @@ class Armitage : public Module {
       w_t_[k] = w;
     }
     bx_t_ = ARM_XMOD_MAX * k3 * k3;
-    a5_t_ = SmoothCoef(ARM_SMOOTH_HZ_MAX * powf(ARM_SMOOTH_HZ_MIN / ARM_SMOOTH_HZ_MAX, k5));
+    SetSmoothTargets(ARM_SMOOTH_REL_MAX * powf(ARM_SMOOTH_REL_MIN / ARM_SMOOTH_REL_MAX, k5));
     oct_t_ = oct;
 
     led1.Set(1.f);
@@ -137,7 +151,11 @@ class Armitage : public Module {
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       const float d = dec_(in + i);
-      a5_ += (a5_t_ - a5_) * ca;
+      {
+        const float db = blend_t_ - blend_;        // SW1 blend: linear ramp
+        const float st = blend_step_;
+        blend_ += (db > st) ? st : (db < -st) ? -st : db;
+      }
       bx_ += (bx_t_ - bx_) * ca;
 
       // Start a crossfade when SW2 changed and no fade is running.
@@ -145,7 +163,7 @@ class Armitage : public Module {
       if (fade_n_ == 0 && ot != slot_[act_].oct) {
         Slot& ns = slot_[act_ ^ 1];
         ResetSlot(ns, ot);
-        for (int k = 0; k < kBands; k++) ns.fb[k] = fb_t_[ot][k];
+        for (int k = 0; k < kBands; k++) ns.fb[k] = fb_t_[ot][k];   // a5 set by ResetSlot
         fade_n_ = xfade_len_;
       }
 
@@ -169,12 +187,29 @@ class Armitage : public Module {
     float m;                 // root modulator of the previous 8 kHz sample
     float yprev[kBands];     // feedback state per band
     float fb[kBands];        // effective feedback beta (smoothed toward fb_t_[oct])
+    float a5[kBands];        // K5 one-pole coefficient per band (smoothed toward a5_t_[oct])
   };
 
   void ResetSlot(Slot& s, int oct) {
     s.oct = oct;
     s.m   = 0.f;
-    for (int k = 0; k < kBands; k++) s.yprev[k] = s.fb[k] = 0.f;
+    for (int k = 0; k < kBands; k++) {
+      s.yprev[k] = s.fb[k] = 0.f;
+      s.a5[k] = a5_t_[oct][k];
+    }
+  }
+
+  // K5 targets: per octave and band, cutoff = c * f'_k (f'_k = r f_k), clamped.
+  void SetSmoothTargets(float c) {
+    using namespace armitage_k;
+    static const float r[3] = { 2.f, 1.f, 0.5f };   // UP / MID / DOWN
+    for (int o = 0; o < 3; o++)
+      for (int k = 0; k < kBands; k++) {
+        float hz = c * r[o] * f_k_[k];
+        if (hz < ARM_SMOOTH_HZ_LO) hz = ARM_SMOOTH_HZ_LO;
+        if (hz > ARM_SMOOTH_HZ_HI) hz = ARM_SMOOTH_HZ_HI;
+        a5_t_[o][k] = SmoothCoef(hz);
+      }
   }
 
   // One 8 kHz sample of one slot, returns sum_k w_k * out_k * g_oct.
@@ -200,7 +235,10 @@ class Armitage : public Module {
   float Run(Slot& s, float d) {
     using namespace armitage_k;
     const float ca  = ctrl_a_;
-    const float a5  = a5_;
+    const float gn  = 1.f - blend_;              // normalised share (x 1/|z|)
+    const float gr  = blend_ * ARM_RAW_GAIN;     // raw share
+    const float* __restrict a5t = a5_t_[O];
+    float* __restrict sa5 = s.a5;
     const float xm  = bx_ * s.m;                 // cross-mod phase, previous sample's m
     const float* __restrict fbt = fb_t_[O];
     float* __restrict sfb = s.fb;
@@ -215,27 +253,28 @@ class Armitage : public Module {
         w[k] += (wt[k] - w[k]) * ca;
       }
       sfb[k] += (fbt[k] - sfb[k]) * ca;
+      sa5[k] += (a5t[k] - sa5[k]) * ca;
       const float yr = bands_[k].Re();
       const float yi = bands_[k].Im();
       const float n  = yr * yr + yi * yi;
       if (n < ARM_SILENCE) { syp[k] = 0.f; continue; }
-      float zr, zi, inv = 0.f;
+      const float inv = armbands::ArmFastInvSqrt(n);   // 1/|z| = 1/|z'|
+      float zr, zi;
       if (O == kMid) {
         zr = yr; zi = yi;
+      } else if (O == kUp) {
+        bands_[k].ArmUp1(inv, zr, zi);
       } else {
-        inv = armbands::ArmFastInvSqrt(n);
-        if (O == kUp) bands_[k].ArmUp1(inv, zr, zi);
-        else          bands_[k].ArmDown1(inv, zr, zi);
+        bands_[k].ArmDown1(inv, zr, zi);
       }
       if (k < nroot) {
-        if (O == kMid) inv = armbands::ArmFastInvSqrt(n);
         mnum += zr;
         mden += n * inv;                         // |z'| = |z|
       }
       float sn, cs;
       SinCos(sfb[k] * syp[k] + xm, sn, cs);
       const float out = zr * cs - zi * sn;
-      float y = syp[k] + (out * ARM_RAW_GAIN - syp[k]) * a5;
+      float y = syp[k] + (out * (gn * inv + gr) - syp[k]) * sa5[k];
       if (y > 1.f) y = 1.f;
       if (y < -1.f) y = -1.f;
       if (fabsf(y) < ARM_DENORM) y = 0.f;
@@ -273,7 +312,9 @@ class Armitage : public Module {
   armbands::ArmDecimator    dec_;
   armbands::ArmInterpolator int_;
 
-  float ln_fref_[kBands];          // ln(ARM_F_REF / f_k)
+  float ln_fref_[kBands];          // ln(ARM_SHAPE_REF / f_k)
+  float f_k_[kBands];              // band input centre f_k (Hz)
+  float a5_t_[3][kBands];          // K5 one-pole coefficient target per octave (UP / MID / DOWN)
   float ln_tilt_[kBands];          // ln(f_k / ARM_TILT_REF)
   float fb_t_[3][kBands];          // beta_k target per octave (UP / MID / DOWN)
   float w_[kBands], w_t_[kBands];  // output weight (smoothed / target)
@@ -285,7 +326,8 @@ class Armitage : public Module {
 
   float sr8_    = 8000.f;
   float ctrl_a_ = 0.f;                 // control-smoothing coefficient (8 kHz)
-  float a5_ = 1.f, a5_t_ = 1.f;        // K5 feedback-smoothing coefficient
+  float blend_ = 0.f, blend_t_ = 0.f;  // SW1 feedback blend a (ramped / target)
+  float blend_step_ = 0.0125f;         // max change of a per 8 kHz sample
   float bx_ = 0.f, bx_t_ = 0.f;        // K3 cross-mod depth beta_x (smoothed / target)
   volatile int oct_t_ = kMid;          // SW2 target octave
 };
