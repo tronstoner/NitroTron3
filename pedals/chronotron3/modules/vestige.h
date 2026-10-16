@@ -3967,9 +3967,9 @@ class Vestige : public Module {
     const bool eu = (shut_kind_ == 2);
     if (eu && shut_pat_built_ != shut_pat_) ShutBuildPattern(shut_pat_);
     // Cycles per pass (T): the unit U = UNIT_STEPS rhythm steps, G steps per T.
-    // CCW: ratio hits per U; CW: PER_U patterns per U.
+    // CCW: ratio hits per U; CW: one pattern per GRID rhythm-grid steps.
     const float upp = (float)shut_G_ / (float)VESTIGE_SHUT_UNIT_STEPS;            // units per pass
-    const float cpp = eu ? upp * (float)VESTIGE_SHUT_EU_PER_U[shut_pat_built_] : upp * shut_ratio_;
+    const float cpp = eu ? (float)shut_G_ / (float)VESTIGE_SHUT_EU_GRID[shut_pat_built_] : upp * shut_ratio_;
     const float Pc = fmaxf(48.f, Tf / cpp);   // one cycle (samples): CCW one interval, CW one pattern
     // Phase: from the newest loop's own playhead (position in its pass + the
     // pass parity), so it sits on the loop's grid — through K3 changes, T
