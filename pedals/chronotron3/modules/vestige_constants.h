@@ -1390,8 +1390,9 @@ static constexpr float  VESTIGE_SHUT_SUSTAIN   = VESTIGE_FRZ_LPG_ASR_SUSTAIN;
 static constexpr float  VESTIGE_SHUT_DAMP_DB = VESTIGE_FRZ_REST_DB;   // -6 dB
 static constexpr float  VESTIGE_SHUT_DAMP_HZ = VESTIGE_FRZ_REST_HZ;   // 600 Hz
 static constexpr float  VESTIGE_SHUT_SWITCH_MS = 5.f;   // on / off / CCW<->CW: click-free crossfade
-// Click safety (2026-10-16): a new K3 ratio is latched only while the shutter is
-// closed, and the next hit starts from its beginning; the gain never moves faster
-// than 0 <-> 1 in SLEW_MS (catches any remaining discontinuity).
-static constexpr float  VESTIGE_SHUT_SLEW_MS = 2.f;
+// Click safety (2026-10-16, builder): a K3 change / retrigger acts AT ONCE; any
+// jump of the envelope value just SLIDES there in SLEW_MS (the minimum that
+// avoids the click; the normal 3 ms attack is not slowed by it). No latching,
+// no waiting for the envelope.
+static constexpr float  VESTIGE_SHUT_SLEW_MS = 1.f;
 
