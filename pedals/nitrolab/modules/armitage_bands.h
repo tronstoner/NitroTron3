@@ -5,8 +5,9 @@
 // analytic bandpass, interpolator 8->48 kHz, FastInvSqrt). Copied, not
 // included, so armitage can change it freely without touching the POG.
 // Classes renamed (Arm*) and in their own namespace to avoid ODR clashes.
-// Coefficients verbatim. The octave voices (Up1/Up2/Down1) are NOT copied —
-// ArmBand exposes only the band's analytic signal z = (Re, Im).
+// Coefficients verbatim. Of the octave voices, Up1 and Down1 are copied
+// (renamed ArmUp1 / ArmDown1, step 2) and return the COMPLEX shifted signal
+// (POG itself only sums the real parts); Up2 is not copied.
 //
 // Origin: schult/terrarium-poly-octave (MIT License, Copyright (c) 2024
 // Steven Schulteis); see poly_octave.h for the full reference list.
@@ -27,6 +28,7 @@ static inline float ArmFastInvSqrt(float x) {
   memcpy(&y, &xi, sizeof(y));
   return y * (0.703952253f * (2.38924456f - (x * y * y)));
 }
+static inline float ArmFastSqrt(float x) { return ArmFastInvSqrt(x) * x; }
 
 // Ring buffer with cycfi::q semantics: push() overwrites the oldest slot;
 // operator[](i) indexes oldest -> newest as i grows (i = N-1 is the newest).
@@ -208,8 +210,10 @@ class ArmInterpolator {
 };
 
 // One analytic (complex) bandpass filter (verbatim from poly_octave.h
-// BandShifter::Init / the biquad half of Update). Prototype LPF from the
-// Audio EQ Cookbook, rotated into a complex bandpass as in Noga sec. 3.1.
+// BandShifter::Init / Update) + POG's per-band octave shifts (Up1 / Down1,
+// verbatim maths, evaluated on demand). Prototype LPF from the Audio EQ
+// Cookbook, rotated into a complex bandpass as in Noga sec. 3.1; phase
+// scaling per Thuillier.
 class ArmBand {
  public:
   void Init(float center, float sample_rate, float bw) {
@@ -244,16 +248,55 @@ class ArmBand {
     //   y  = s2 + d0*x
     //   s2 = s1 + d1*x - c1*y
     //   s1 =      d2*x - c2*y
+    const float pyi = yi_;
     yr_ = s2r_ + d0_ * x;
     yi_ = s2i_;
     s2r_ = s1r_ + d1r_ * x - (c1r_ * yr_ - c1i_ * yi_);
     s2i_ = s1i_ + d1i_ * x - (c1r_ * yi_ + c1i_ * yr_);
     s1r_ = d2r_ * x - (c2r_ * yr_ - c2i_ * yi_);
     s1i_ = d2i_ * x - (c2r_ * yi_ + c2i_ * yr_);
+
+    // Octave-down sign bookkeeping (verbatim from BandShifter::Update): the
+    // half-phase signal flips sign each time the analytic signal's phase
+    // crosses pi (Re < 0, Im sign change). Runs every sample whatever octave
+    // is selected, so the state is valid the moment DOWN is switched in.
+    // Same condition as POG's `if ((yr_ < 0) && signbit(yi_) != signbit(pyi))
+    // down1_sign_ = -down1_sign_`, written branchless on the sign bits (the
+    // branch mispredicts on real signals; differs only for yr_ == -0.0f).
+    {
+      uint32_t ur, ui, up, us;
+      memcpy(&ur, &yr_, 4);
+      memcpy(&ui, &yi_, 4);
+      memcpy(&up, &pyi, 4);
+      memcpy(&us, &down1_sign_, 4);
+      us ^= ur & (ui ^ up) & 0x80000000u;
+      memcpy(&down1_sign_, &us, 4);
+    }
   }
 
   inline float Re() const { return yr_; }
   inline float Im() const { return yi_; }
+
+  // POG Up1, complex: z^2 / |z| — phase doubled, amplitude preserved.
+  // inv = ArmFastInvSqrt(|z|^2) (caller computes it once).
+  inline void ArmUp1(float inv, float& r, float& i) const {
+    const float a = yr_, b = yi_;
+    r = (a * a - b * b) * inv;
+    i = (2.f * a * b) * inv;
+  }
+
+  // POG Down1, complex: complex square root (half phase) via half-angle
+  // identities, |z| kept, sign continuation via down1_sign_. POG's Down1()
+  // returns only the real part; the imaginary part is POG's own dn1i_.
+  inline void ArmDown1(float inv, float& r, float& i) const {
+    const float a = yr_, b = yi_;
+    const float b_sign = (b < 0.f) ? -1.f : 1.f;
+    const float xh     = 0.5f * a * inv;
+    const float c      = ArmFastSqrt(0.5f + xh);
+    const float d      = b_sign * ArmFastSqrt(0.5f - xh);
+    r = down1_sign_ * (a * c + b * d);
+    i = down1_sign_ * (b * c - a * d);
+  }
 
  private:
   float d0_ = 0.f;
@@ -265,6 +308,7 @@ class ArmBand {
   float s1r_ = 0.f, s1i_ = 0.f;
   float s2r_ = 0.f, s2i_ = 0.f;
   float yr_ = 0.f, yi_ = 0.f;
+  float down1_sign_ = 1.f;
 };
 
 // Band layout (verbatim from PolyOctave): quasi-log centres, ~60 Hz (n=0) to
