@@ -3953,10 +3953,27 @@ class Vestige : public Module {
     if (shut_kind_ == 0 && shut_mix_ <= 0.f) return x;
     const size_t T = tgrid_.T();
     const float In = fmaxf(48.f, (float)(T ? T : 1) / shut_ratio_);   // interval (samples)
+    // Phase: from the newest loop's own playhead (position in its pass + the
+    // pass parity, for /2), so every ratio sits on the loop's grid — through K3
+    // changes, T changes, half speed, reverse. No loop playing (freeze only):
+    // the free counter, anchored at the capture start.
     shut_t_ += 1.f; if (shut_t_ >= In) shut_t_ -= In;
+    float q;
+    const int rs = shut_ref_;
+    if (rs >= 0 && rs < VESTIGE_VOICE_SLABS && active_[rs] && !dying_[rs]) {
+      const float L = (float)PlayLen(rs);
+      const bool rev = eng_[PoolOf(rs)].rev && GuardReady(rs);
+      float pos = rev ? (L - fwd_[rs]) : fwd_[rs];
+      pos = pos < 0.f ? 0.f : (pos > L ? L : pos);
+      q = ((float)(pass_[rs] & 1) + pos / (L > 1.f ? L : 1.f)) * shut_ratio_;
+      q -= floorf(q);
+    } else {
+      q = shut_t_ / In;
+    }
+    shut_q_ = q;                            // (diagnostics / host test)
     // ASR: attack (smoothstep) -> cubic decay to SUSTAIN -> held to GATE -> release (smoothstep) -> 0
     const float att = fminf(VESTIGE_SHUT_ATTACK_MS * 0.001f * sr_, 0.1f * In);
-    const float t = shut_t_;
+    const float t = q * In;
     const float gate = fmaxf(att, VESTIGE_SHUT_GATE * In), dec = fmaxf(1.f, VESTIGE_SHUT_DECAY * In), rel = fmaxf(1.f, VESTIGE_SHUT_RELEASE * In);
     float e;
     if (t < att) { const float q = t / att; e = q * q * (3.f - 2.f * q); }
@@ -4190,6 +4207,7 @@ class Vestige : public Module {
   // happens here in one place, at the same sample.
   void IsrActivate(int s, uint32_t now) {
     pend_[s] = false; npend_--;
+    if (s < VESTIGE_VOICE_SLABS) shut_ref_ = s;   // K3 mode 3: the shutter follows the newest loop's playhead
     const size_t L = cap_len_[s];
     // Freeze: the window was cut at the phrase end (FzVirtEnd): L = its
     // length, frz_base_ = its offset in the ring (the attack skip included).
@@ -5070,6 +5088,8 @@ class Vestige : public Module {
   volatile int   shut_kind_tgt_ = 0;     // 0 off · 1 CCW volume · 2 CW lowpass gate (Controls)
   volatile float shut_ratio_ = 1.f;      // hits per T
   int      shut_kind_ = 0;
+  int      shut_ref_ = -1;
+  float    shut_q_ = 0.f;                // last shutter phase (diagnostics)               // the loop slot whose playhead clocks the shutter
   float    shut_mix_ = 0.f, shut_t_ = 0.f, shut_a_ = 1.f, shut_z1_ = 0.f, shut_z2_ = 0.f;
   uint32_t shut_ctr_ = 0;
   volatile bool rep_fade_ = false;
