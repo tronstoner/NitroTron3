@@ -1281,7 +1281,7 @@ static constexpr float  VESTIGE_K5_DEADZONE        = 0.06f;
 // last one ramps to 0), so every repeat starts at its own level; then the loop
 // is freed. N = 1: the loop plays once. Turning K5 CCW on a playing loop counts
 // from then; FS2 hold pauses the count; back at noon the loop keeps its level.
-static constexpr float  VESTIGE_REPEAT_N_MAX       = 16.f;
+static constexpr float  VESTIGE_REPEAT_N_MAX       = 8.f;    // 2026-10-16: 1..8, linear (4 at ~9:00); was 16
 static constexpr float  VESTIGE_REPEAT_CURVE       = 2.f;    // 1 = even dB steps, higher = flatter early
 static constexpr float  VESTIGE_REPEAT_FLOOR_DB    = -30.f;  // the last repeat's level
 static constexpr float  VESTIGE_REPEAT_RAMP_MS     = 10.f;
