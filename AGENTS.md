@@ -12,6 +12,7 @@ Before starting any work, agents must:
 2. Read any other docs relevant to the topic at hand (see "Read for specific tasks" below).
 3. Read `agents-instructions.md` — hard rules for agent behavior, git, documentation, decision-making. **Non-negotiable.**
 4. Read `docs/DESIGN_PHILOSOPHY.md` — how sound design works here (the ear decides, no precautionary processing, nothing hidden, discuss before building). **Non-negotiable.**
+5. Read `docs/WORKING_PHASES.md` — recognise the development phase (Concept / Research / Planning / Tuning / Studio / Bug / Lock-in / Docs), tag every working reply with it, behave accordingly; if unsure which phase, ask. **Non-negotiable.**
 
 Do not jump into code or propose changes without first understanding the project context and the relevant spec.
 

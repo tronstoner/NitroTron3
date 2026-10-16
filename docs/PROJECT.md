@@ -327,6 +327,9 @@ points). Each entry is marked **current** (trust it as a reference) or
 banner says how). Keep this list complete: a doc that isn't listed here is a doc
 nobody will find.
 
+- `WORKING_PHASES.md` — **current.** How agents recognise the development phase
+  (Concept / Research / Planning / Tuning / Studio / Bug / Lock-in / Docs) and
+  what they do and don't do in each; mandatory reading (AGENTS.md).
 - `IDEAS.md` — running notepad of platform / product-direction ideas (module
   interchangeability, UI surface economy, one-module firmwares + presets, the
   footswitch budget). Provisional by definition — nothing there is decided until

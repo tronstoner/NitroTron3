@@ -132,6 +132,9 @@ Consolidated 2026-10-03 from the agents' notes; open points settled 2026-10-07.
 
 ## 10. Working rhythm
 
+- The development PHASE decides speed and depth — see `WORKING_PHASES.md`
+  (name the phase in every working reply; if unsure, ask).
+
 - Short replies, one step at a time (ADHD). Confirm intent on pasted content.
 - While he tests on hardware, the flashable binary does not change; name the
   exact build (hash) to flash. Minimal messages during tests.
