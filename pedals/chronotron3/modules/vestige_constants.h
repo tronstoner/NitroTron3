@@ -1390,12 +1390,13 @@ static constexpr float  VESTIGE_SHUT_SUSTAIN   = VESTIGE_FRZ_LPG_ASR_SUSTAIN;
 // = one note value on the rhythm grid: GRID = rhythm-grid steps (16ths) per cycle
 // (n x 2 = 8ths for the first three, n = 16ths, E(23,32) as 32nds over a bar).
 // Rotation 0; each hit's envelope interval = the distance to the next hit; silence.
-// 2026-10-16: only the 16th patterns, widened — 12 odd bases sorted by density (k/n).
-static constexpr int    VESTIGE_SHUT_EU_N = 12;
-static constexpr int    VESTIGE_SHUT_EU_K[VESTIGE_SHUT_EU_N]     = {2, 2, 3, 4,  5, 5, 4, 3,  8,  7, 11, 13};
-static constexpr int    VESTIGE_SHUT_EU_STEPS[VESTIGE_SHUT_EU_N] = {7, 5, 7, 9, 11, 9, 7, 5, 13, 11, 15, 15};
-static constexpr int    VESTIGE_SHUT_EU_ROT[VESTIGE_SHUT_EU_N]   = {0, 0, 0, 0,  0, 0, 0, 0,  0,  0,  0,  0};
-static constexpr int    VESTIGE_SHUT_EU_GRID[VESTIGE_SHUT_EU_N]  = {7, 5, 7, 9, 11, 9, 7, 5, 13, 11, 15, 15};   // grid steps per cycle (16ths)
+// 2026-10-16: 16th patterns — base 5 (liked), 8 and 12 in between, 9 and 15; the
+// primes 7 / 11 / 13 dropped (too much). Sorted by density (k/n).
+static constexpr int    VESTIGE_SHUT_EU_N = 11;
+static constexpr int    VESTIGE_SHUT_EU_K[VESTIGE_SHUT_EU_N]     = {3, 2,  5, 4, 5,  7, 3, 5, 11, 7, 13};
+static constexpr int    VESTIGE_SHUT_EU_STEPS[VESTIGE_SHUT_EU_N] = {8, 5, 12, 9, 9, 12, 5, 8, 15, 9, 15};
+static constexpr int    VESTIGE_SHUT_EU_ROT[VESTIGE_SHUT_EU_N]   = {0, 0,  0, 0, 0,  0, 0, 0,  0, 0,  0};
+static constexpr int    VESTIGE_SHUT_EU_GRID[VESTIGE_SHUT_EU_N]  = {8, 5, 12, 9, 9, 12, 5, 8, 15, 9, 15};   // grid steps per cycle (16ths)
 static constexpr float  VESTIGE_SHUT_SWITCH_MS = 5.f;   // on / off / CCW<->CW: click-free crossfade
 // Rate unit (2026-10-16, builder): the rhythm grid's step (StepCount, as K3 mode 1:
 // ~VESTIGE_TIMING_STEP_MS, growing past the knee) — so a tapped quarter and a
