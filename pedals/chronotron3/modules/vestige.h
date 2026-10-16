@@ -234,7 +234,7 @@ class Vestige : public Module {
       const float u3 = (a3 <= VESTIGE_K3_DEADZONE) ? 0.f : fminf(1.f, (a3 - VESTIGE_K3_DEADZONE) / (half3 - VESTIGE_K3_DEADZONE));
       // SW2 = the K3 MODE (each bipolar): UP 1 Euclidean (CCW traditional
       // timelines, CW academic odd-cycle Euclids), MIDDLE 2 random (CW the
-      // three glitch layers, CCW degrade), DOWN 3 straight tremolo / shutter (tbd).
+      // three glitch layers, CCW degrade), DOWN 3 SHUTTER (Shutter(): CCW volume, CW lowpass gate, ratios of T).
       // A half that is not built yet is clean.
       glitch_mode_ = (sw2 == 0) ? 0 : (sw2 == 1) ? 1 : 2;
       const float cw = (c3 > 0.f && glitch_mode_ == 1) ? u3 : 0.f;
@@ -249,6 +249,14 @@ class Vestige : public Module {
       const bool rhy_on = glitch_mode_ == 0 && (side == kRhyCcw || VESTIGE_TIMING_RHY_ENGINE != 1);   // (engine 1: CCW only)
       rhy_side_  = side;
       rhy_level_ = rhy_on ? u3 : 0.f;
+      // Mode 3 (SW2 DOWN): the SHUTTER — the step from u3, the kind by the side.
+      if (glitch_mode_ == 2 && u3 > 0.f) {
+        int st = (int)(u3 * (float)VESTIGE_SHUT_N); if (st > VESTIGE_SHUT_N - 1) st = VESTIGE_SHUT_N - 1;
+        shut_ratio_ = VESTIGE_SHUT_RATIOS[st];
+        shut_kind_tgt_ = (c3 < 0.f) ? 1 : 2;     // 1 CCW volume · 2 CW lowpass gate
+      } else {
+        shut_kind_tgt_ = 0;
+      }
     }
     if (CT3_DIAG) DiagRhyTick(k3, sw2);     // DIAG builds: the K3 mode-1 rhythm log line (CCW# / CW#)
 
@@ -861,7 +869,7 @@ class Vestige : public Module {
       // with k6_vol_ (K6 looper volume 0 → unity at noon → VESTIGE_LOOP_BOOST_MAX)
       // and dry_gain_ (SW2: UP clean · MID cut while recording/armed · DOWN off),
       // both one-pole smoothed at VESTIGE_ROUTING_SMOOTH. Revive with OwnsOutput().
-      wet[i] = y;
+      wet[i] = Shutter(y);
     }
     sample_clock_ = clk0 + (uint32_t)size;
     if (diag_clock_) {                                    // DIAG: block time + grain peak
@@ -3933,6 +3941,46 @@ class Vestige : public Module {
     IsrFillGuards();
   }
 
+  // K3 mode 3 (SW2 DOWN): the shutter, per output sample. Interval In = T /
+  // ratio (from the tempo grid); ASR as the freeze stabs, closing fully. A kind
+  // change (off / CCW / CW) crossfades through "open" over SHUT_SWITCH_MS.
+  float Shutter(float x) {
+    if (shut_kind_ != shut_kind_tgt_ && shut_mix_ <= 0.f) { shut_kind_ = shut_kind_tgt_; shut_t_ = 0.f; }
+    const float tgt = (shut_kind_ != 0 && shut_kind_ == shut_kind_tgt_) ? 1.f : 0.f;
+    const float stp = 1.f / (VESTIGE_SHUT_SWITCH_MS * 0.001f * sr_);
+    if (shut_mix_ < tgt) { shut_mix_ += stp; if (shut_mix_ > tgt) shut_mix_ = tgt; }
+    else if (shut_mix_ > tgt) { shut_mix_ -= stp; if (shut_mix_ < tgt) shut_mix_ = tgt; }
+    if (shut_kind_ == 0 && shut_mix_ <= 0.f) return x;
+    const size_t T = tgrid_.T();
+    const float In = fmaxf(48.f, (float)(T ? T : 1) / shut_ratio_);   // interval (samples)
+    shut_t_ += 1.f; if (shut_t_ >= In) shut_t_ -= In;
+    // ASR: attack (smoothstep) -> cubic decay to SUSTAIN -> held to GATE -> release (smoothstep) -> 0
+    const float att = fminf(VESTIGE_SHUT_ATTACK_MS * 0.001f * sr_, 0.1f * In);
+    const float t = shut_t_;
+    const float gate = fmaxf(att, VESTIGE_SHUT_GATE * In), dec = fmaxf(1.f, VESTIGE_SHUT_DECAY * In), rel = fmaxf(1.f, VESTIGE_SHUT_RELEASE * In);
+    float e;
+    if (t < att) { const float q = t / att; e = q * q * (3.f - 2.f * q); }
+    else if (t < gate) {
+      const float q = fminf(1.f, (t - att) / dec); const float r = 1.f - q;
+      e = VESTIGE_SHUT_SUSTAIN + (1.f - VESTIGE_SHUT_SUSTAIN) * r * r * r;
+    } else if (t < gate + rel) {
+      const float q = (t - gate) / rel; const float sm = q * q * (3.f - 2.f * q);
+      const float q0 = fminf(1.f, (gate - att) / dec); const float r0 = 1.f - q0;
+      const float e0 = VESTIGE_SHUT_SUSTAIN + (1.f - VESTIGE_SHUT_SUSTAIN) * r0 * r0 * r0;   // level at the gate end
+      e = e0 * (1.f - sm);
+    } else e = 0.f;
+    float y = x * e;
+    if (shut_kind_ == 2) {                  // CW: + the lowpass gate (2 one-poles), coefficient every 8 samples
+      if ((shut_ctr_++ & 7) == 0) {
+        const float fc = VESTIGE_SHUT_LPG_CLOSED_HZ * powf(VESTIGE_SHUT_LPG_OPEN_HZ / VESTIGE_SHUT_LPG_CLOSED_HZ, e);
+        shut_a_ = 1.f - expf(-6.2831853f * fc / sr_);
+      }
+      shut_z1_ += shut_a_ * (y - shut_z1_); shut_z2_ += shut_a_ * (shut_z1_ - shut_z2_);
+      y = shut_z2_;
+    }
+    return x + (y - x) * shut_mix_;
+  }
+
   void IsrStart(int s, uint32_t now) {
     if (CT3_DIAG) DiagPush(GateDiag{'S', diag_why_, (uint8_t)PoolOf(s), now, env_, env_gate_,
                                     auto_thresh_, auto_thresh_ * VESTIGE_AUTO_HYST, (uint32_t)tgrid_.T(), 0u});
@@ -3946,6 +3994,7 @@ class Vestige : public Module {
     sil_run_   = 0; sil_onset_ = 0; last_loud_ = 0;
     end_req_   = false;                 // a stale request must not end this capture
     cap_start_[s] = now;
+    shut_t_ = 0.f;                      // K3 mode 3: the shutter's "one" = this capture's onset
     const bool loop = (PoolOf(s) == kPoolLoop);
     cap_T_[s]  = loop ? tgrid_.T() : 0; // T latched at the START: K2 / a tap cannot move this grid
     cap_ceil_  = loop ? tgrid_.T() : max_loop_len_;
@@ -5017,6 +5066,12 @@ class Vestige : public Module {
   bool       stolen_[VESTIGE_SLOTS] = {false}; // dying voice being fast-released (voice-steal)
   float      steal_inc_ = 1.f;                        // fast-release phase step for stolen voices
   volatile int rep_n_ = 0;
+  // K3 mode 3 (SW2 DOWN) shutter
+  volatile int   shut_kind_tgt_ = 0;     // 0 off · 1 CCW volume · 2 CW lowpass gate (Controls)
+  volatile float shut_ratio_ = 1.f;      // hits per T
+  int      shut_kind_ = 0;
+  float    shut_mix_ = 0.f, shut_t_ = 0.f, shut_a_ = 1.f, shut_z1_ = 0.f, shut_z2_ = 0.f;
+  uint32_t shut_ctr_ = 0;
   volatile bool rep_fade_ = false;
   volatile int  rep_mult_ = 1;                        // K5 CCW: count multiplier (poly)                    // K5 CCW: passes fade (SW1 MIDDLE) / flat                            // K5 CCW: number of repeats (0 = endless)
   float      dec_g_[VESTIGE_VOICE_SLABS] = {};         // per loop voice repeat level (1 set in Init / activation)
