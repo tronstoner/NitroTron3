@@ -28,7 +28,18 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full shaping (never more)
 constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = full shaping on every band)
 
-// --- K2: unused (the roll-off it used to drive was removed 2026-10-17; w_k = 1) ---
+// --- K2 = detune ("unison"): two extra copies per band, c_k rotated by +phi_A and -phi_B ---
+// cents = ARM_DET_MAX_CENTS * k2^2, eps = 2^(cents/1200) - 1; copy A runs at +eps f'_k Hz,
+// copy B at -ARM_DET_B_RATIO eps f'_k Hz; g = min(1, k2 / ARM_DET_FADE); band output
+// (Re c + g (Re c e^{j phi_A} + Re c e^{-j phi_B})) * (1 + 2 G^2 g^2)^-ARM_DET_COMP_EXP, G^2 = 1 (SW2 UP / DOWN) or ARM_DET_COPY_POW_MID.
+constexpr float ARM_DET_MAX_CENTS = 25.f;   // cents at K2 full CW (squared taper)
+constexpr float ARM_DET_B_RATIO   = 0.8f;   // copy B's rate vs copy A's (asymmetric -> chorus beating, not pure AM)
+constexpr float ARM_DET_FADE      = 0.1f;   // K2 travel over which the copies fade in (g 0 -> 1)
+constexpr float ARM_DET_COMP_EXP  = 0.5f;   // level compensation exponent on (1 + 2 G^2 g^2) (0.5 = incoherent sum)
+constexpr float ARM_DET_COPY_POW_MID = 7.2f;   // G^2 in SW2 MID (1 in UP / DOWN): a copy's power vs the plain band sum.
+                                               // The plain MID band sum partly cancels across bands, the per-band
+                                               // phase-shifted copies do not (measured KS plucks: +7 dB uncompensated)
+constexpr float ARM_DET_ON        = 1e-4f;  // smoothed K2 below this: detune skipped entirely (g < 0.001, -60 dB)
 
 // --- Feedback smoothing (K5, FB model only): per-band one-pole LP on yprev at 8 kHz
 // cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
@@ -84,7 +95,7 @@ constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-17: was 0.38 before the in
 constexpr float ARM_SILENCE    = 1e-10f;  // |z|^2 below this -> band output 0, yprev reset (FastInvSqrt(0) guard)
 constexpr float ARM_DENORM     = 1e-12f;  // |yprev| below this is flushed to 0
 
-// --- Control smoothing (anti-zipper on the K1/K2/K3/K4/K5 targets) ----------
+// --- Control smoothing (anti-zipper on the K1/K2/K3/K4/K5 targets; K2 = detune) ----------
 constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the 8 kHz rate
 
 // --- Output -----------------------------------------------------------------

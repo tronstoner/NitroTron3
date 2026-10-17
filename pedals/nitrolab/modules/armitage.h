@@ -60,9 +60,30 @@
 //   silence guard: |z|^2 < ARM_SILENCE -> out_k = 0, yprev_k = 0
 //
 //   f'_k = r f_k,  r = 2 / 1 / 0.5 (SW2 UP/MID/DOWN)      (transposed band frequency)
-//   w_k = 1 (K2 roll-off removed 2026-10-17; K2 is unused)
+//   w_k = 1 (K2 roll-off removed 2026-10-17)
 //   K5 one-pole cutoff_k = clamp(c * f'_k, ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI)   (FB only)
-//   wet = interpolate( ARM_OUT_GAIN * g_oct * g_model * sum_k w_k * out_k )
+//
+//   COMPLEX BAND OUTPUT c_k (out_k = Re c_k, bit-identical to the real-only path):
+//     FB:  c_k = z'_k e^{j theta_k}
+//     ADD: c_k = |z'_k| [ u' + amt_k sum_m g_m h_mk u'^m / m^s ]
+//     PD:  c_k = |z'_k| e^{j 2 pi phi_w}                 (cos and sin from the table)
+//   K2 DETUNE ("unison", two extra copies per band):
+//     cents = ARM_DET_MAX_CENTS k2^2,  eps = 2^(cents/1200) - 1,  g = min(1, k2 / ARM_DET_FADE)
+//     phi_A,k += 2 pi eps f'_k / 8000,  phi_B,k += 2 pi ARM_DET_B_RATIO eps f'_k / 8000
+//     band_k  = Re c_k + g [ Re(c_k e^{j phi_A,k}) + Re(c_k e^{-j phi_B,k}) ]
+//     sum     * (1 + 2 G^2 g^2)^-ARM_DET_COMP_EXP per slot (0.5 = incoherent sum), G^2 = copy
+//             power vs the plain sum: 1 in SW2 UP / DOWN, ARM_DET_COPY_POW_MID (7.2) in MID,
+//             where the plain band sum partly cancels across bands but the per-band
+//             phase-shifted copies do not (measured +7 dB on KS plucks with G^2 = 1)
+//     Phases are complex phasors per slot and band, advanced by one complex multiply
+//     per copy per 8 kHz sample (step e^{j x} by its 3rd-order Taylor series,
+//     |x| <= 0.04 rad) and renormalised every sample (one Newton step toward |p| = 1).
+//     Seeded at golden-ratio-spread phases (not all in phase with the original).
+//     A copy is a constant-Hz shift of the WHOLE band (eps f'_k Hz): in ADD / PD the
+//     band's harmonics all move by the same Hz (not m eps f'_k) -> same beat rate on
+//     every harmonic of a band. The FB feedback state uses Re c_k only (copies never
+//     feed back). Smoothed K2 < ARM_DET_ON: no detune work at all (phasors frozen).
+//   wet = interpolate( ARM_OUT_GAIN * g_oct * g_model * sum_k w_k * band_k )
 //         g_model = ARM_GAIN_FB / ARM_GAIN_ADD / ARM_GAIN_PD
 //
 // K1 = 0, K3 = 0, SW2 MID -> out_k = yr in every model: the plain band sum.
@@ -75,7 +96,10 @@
 // during a fade is picked up when that fade ends. Independent of the SW2 crossfade (both can run).
 //
 // OCTAVE SWITCH: two processing slots (each: octave, yprev[], smoothed b_k[],
-// smoothed K5 coefficients[], smoothed tilt_k[], m_prev, L_ref). Normally only one runs. On an SW2 change the idle slot starts at the
+// smoothed K5 coefficients[], smoothed tilt_k[], m_prev, L_ref, detune phasors).
+// The detune phasors are per slot and never reset: the entering slot continues from
+// wherever its phasors stopped (rate = its own octave's f'_k); a slot's two models
+// in a model crossfade share that slot's phasors. Normally only one runs. On an SW2 change the idle slot starts at the
 // new octave (yprev = 0, m_prev = 0, b_k and K5 coefficients = target, L_ref = the
 // active slot's L_ref, since |z'| = |z| in every octave) and the two are crossfaded
 // linearly over ARM_XFADE_MS; then the old one stops. An SW2 change during a
@@ -89,7 +113,8 @@
 //                           weight 1/m^s, s = 1 -> 0.6 over v); PD: knee 0.5 -> 0.05
 //                           over u, 0.05 -> 0.01 over v (anti-fold corner 500 -> 1000 Hz
 //                           with v)
-//   K2  unused              (roll-off removed 2026-10-17; raw knob value still logged in DIAG)
+//   K2  detune (unison)     cents = ARM_DET_MAX_CENTS * k2^2 (0 .. 25 c); copies fade in
+//                           over the first ARM_DET_FADE (10 %) of the travel; all models
 //   K3  cross-modulation    beta_x = ARM_XMOD_MAX * k3^2 (bass root m modulates all bands)
 //   K4  shaping tilt        p = ARM_SHAPE_P_MAX * (1 - k4) (CCW: only bands below
 //                           ARM_SHAPE_REF get the full shaping, upper bands much less =
@@ -163,10 +188,25 @@ class Armitage : public Module {
         // PD knee floor pd_dfl_[o][k]: depends on v (time-varying via K1), so it
         // is recomputed every 8 kHz sample in Process(); just seed it here at v = 0.
         pd_dfl_[o][k] = (0.5f - ARM_PD_DEPTH);
+        det_w0_[o][k] = 6.283185307f * fp / sr8_;           // 2 pi f'_k / 8000 (rad per sample at eps = 1)
       }
     }
     SetSmoothTargets(ARM_SMOOTH_REL_MAX);
-    for (int s = 0; s < 2; s++) ResetSlot(slot_[s], kMid);
+    for (int s = 0; s < 2; s++) {
+      ResetSlot(slot_[s], kMid);
+      // Detune phasors: seeded once at golden-ratio-spread phases (never reset), so
+      // the copies do not start in phase with the original (no coherent level bump).
+      for (int k = 0; k < kBands; k++) {
+        float fa = 0.618034f * (float)k + 0.29f * (float)s;
+        float fb = 0.381966f * (float)k + 0.5f + 0.29f * (float)s;
+        fa -= floorf(fa);
+        fb -= floorf(fb);
+        slot_[s].pAr[k] = cosf(6.283185307f * fa);
+        slot_[s].pAi[k] = sinf(6.283185307f * fa);
+        slot_[s].pBr[k] = cosf(6.283185307f * fb);
+        slot_[s].pBi[k] = sinf(6.283185307f * fb);
+      }
+    }
     act_ = 0;
     fade_n_ = 0;
     xfade_len_ = (int)(ARM_XFADE_MS * 0.001f * sr8_ + 0.5f);
@@ -177,6 +217,7 @@ class Armitage : public Module {
     mfade_len_ = (int)(ARM_MODEL_XFADE_MS * 0.001f * sr8_ + 0.5f);
     if (mfade_len_ < 1) mfade_len_ = 1;
     k1s_ = k1_t_ = 0.f;
+    k2s_ = k2_t_ = 0.f;
     rel_a_ = 1.f - expf(-1000.f / (ARM_REL_RELEASE_MS * sr8_));
     bx_ = bx_t_ = 0.f;
     oct_t_ = kMid;
@@ -186,7 +227,7 @@ class Armitage : public Module {
                 daisy::Led& led1, daisy::Led& led2) override {
     using namespace armitage_k;
     const float k1 = RemapKnob(cs.Knob(0));
-    const float k2 = RemapKnob(cs.Knob(1));   // unused by the engine; read only for the DIAG log
+    const float k2 = RemapKnob(cs.Knob(1));   // detune
     const float k3 = RemapKnob(cs.Knob(2));
     const float k4 = RemapKnob(cs.Knob(3));
     const float k5 = RemapKnob(cs.Knob(4));
@@ -196,6 +237,7 @@ class Armitage : public Module {
     if (sw1 < kFB || sw1 > kPD) sw1 = kADD;
     mdl_t_ = sw1;                                          // UP FB / MID ADD / DOWN PD
     k1_t_ = k1;
+    k2_t_ = k2;
 
     const float beta  = ARM_BETA_MAX * k1 * k1;
     const float p     = ARM_SHAPE_P_MAX * (1.f - k4);
@@ -240,6 +282,7 @@ class Armitage : public Module {
     float k[5];              // K1..K5, the module's remapped 0..1 values
     int   sw1, sw2;          // 0 UP, 1 MID, 2 DOWN
     float beta, p, c, xmod;  // derived values the engine runs toward
+    float det;               // K2 detune target (cents)
     int   oct;               // 0 up, 1 played, 2 down
   };
   void Activate() override {
@@ -259,6 +302,16 @@ class Armitage : public Module {
       const float d = dec_(in + i);
       bx_  += (bx_t_ - bx_) * ca;
       k1s_ += (k1_t_ - k1s_) * ca;
+      k2s_ += (k2_t_ - k2s_) * ca;
+      const bool det = (k2s_ >= ARM_DET_ON);     // below: no detune work at all
+      if (det) {
+        float g = k2s_ * (1.f / ARM_DET_FADE);
+        det_g_ = (g > 1.f) ? 1.f : g;
+        det_eps_ = exp2f(ARM_DET_MAX_CENTS * k2s_ * k2s_ * (1.f / 1200.f)) - 1.f;
+        const float g2 = 2.f * det_g_ * det_g_;
+        det_norm_     = powf(1.f + g2, -ARM_DET_COMP_EXP);                          // SW2 UP / DOWN
+        det_norm_mid_ = powf(1.f + ARM_DET_COPY_POW_MID * g2, -ARM_DET_COMP_EXP);   // SW2 MID
+      }
       // K1 split at ARM_K1_SPLIT into u (lower 60% of travel, scaled 0..1) and
       // v (upper 40%, scaled 0..1); u alone reproduces the old ADD/PD law.
       const float u = (k1s_ < ARM_K1_SPLIT) ? (k1s_ / ARM_K1_SPLIT) : 1.f;
@@ -329,11 +382,11 @@ class Armitage : public Module {
       }
 
       Slot& sa = slot_[act_];
-      float acc = RunSlot(sa, d, true, kern);    // updates the bands + w_k
+      float acc = RunSlot(sa, d, true, kern, det);   // updates the bands + w_k
       if (fade_n_ > 0) {
         Slot& sn = slot_[act_ ^ 1];
         const float g = 1.f - (float)fade_n_ / (float)(xfade_len_ + 1);   // new-path gain, rises to 1
-        acc = acc * (1.f - g) + RunSlot(sn, d, false, kern) * g;
+        acc = acc * (1.f - g) + RunSlot(sn, d, false, kern, det) * g;
         if (--fade_n_ == 0) act_ ^= 1;           // new path takes over
       }
       if (mfade_n_ > 0) --mfade_n_;
@@ -352,6 +405,8 @@ class Armitage : public Module {
     float fb[kBands];        // effective feedback beta (smoothed toward fb_t_[oct])
     float a5[kBands];        // K5 one-pole coefficient per band (smoothed toward a5_t_[oct])
     float tl[kBands];        // tilt_k per band (smoothed toward tl_t_[oct]; ADD / PD)
+    float pAr[kBands], pAi[kBands];   // detune copy A phasor e^{j phi_A,k} (never reset)
+    float pBr[kBands], pBi[kBands];   // detune copy B phasor e^{j phi_B,k} (applied conjugated)
   };
 
   void ResetSlot(Slot& s, int oct) {
@@ -382,29 +437,42 @@ class Armitage : public Module {
   // update = true: also clocks the band filters and the w_k smoothers (the
   // first slot of the sample does it; the second, during a fade, reads them).
   // kern = kFB / kADD / kPD, or kFade (old mfrom_ and new mdl_ crossfaded).
-  float RunSlot(Slot& s, float d, bool update, int kern) {
+  // det = K2 detune active (copies + phasor advance); false = the plain path.
+  float RunSlot(Slot& s, float d, bool update, int kern, bool det) {
     using namespace armitage_k;
+    // Detune level compensation (1 + 2 G^2 g^2)^-ARM_DET_COMP_EXP per slot octave.
+    const float gu = det ? det_norm_ : 1.f, gm = det ? det_norm_mid_ : 1.f;
     if (update) {
       switch (s.oct) {
-        case kUp:   return ARM_GAIN_UP   * RunK<kUp,   true>(s, d, kern);
-        case kDown: return ARM_GAIN_DOWN * RunK<kDown, true>(s, d, kern);
-        default:    return                 RunK<kMid,  true>(s, d, kern);
+        case kUp:   return ARM_GAIN_UP   * gu * RunK<kUp,   true>(s, d, kern, det);
+        case kDown: return ARM_GAIN_DOWN * gu * RunK<kDown, true>(s, d, kern, det);
+        default:    return det ? gm * RunK<kMid, true>(s, d, kern, det)
+                               :      RunK<kMid, true>(s, d, kern, det);
       }
     }
     switch (s.oct) {
-      case kUp:   return ARM_GAIN_UP   * RunK<kUp,   false>(s, d, kern);
-      case kDown: return ARM_GAIN_DOWN * RunK<kDown, false>(s, d, kern);
-      default:    return                 RunK<kMid,  false>(s, d, kern);
+      case kUp:   return ARM_GAIN_UP   * gu * RunK<kUp,   false>(s, d, kern, det);
+      case kDown: return ARM_GAIN_DOWN * gu * RunK<kDown, false>(s, d, kern, det);
+      default:    return det ? gm * RunK<kMid, false>(s, d, kern, det)
+                             :      RunK<kMid, false>(s, d, kern, det);
     }
   }
 
   template <int O, bool kUpdate>
-  float RunK(Slot& s, float d, int kern) {
+  float RunK(Slot& s, float d, int kern, bool det) {
+    if (det) {
+      switch (kern) {
+        case kFB:  return Run<O, kUpdate, kFB,   true>(s, d);
+        case kADD: return Run<O, kUpdate, kADD,  true>(s, d);
+        case kPD:  return Run<O, kUpdate, kPD,   true>(s, d);
+        default:   return Run<O, kUpdate, kFade, true>(s, d);
+      }
+    }
     switch (kern) {
-      case kFB:  return Run<O, kUpdate, kFB>(s, d);
-      case kADD: return Run<O, kUpdate, kADD>(s, d);
-      case kPD:  return Run<O, kUpdate, kPD>(s, d);
-      default:   return Run<O, kUpdate, kFade>(s, d);
+      case kFB:  return Run<O, kUpdate, kFB,   false>(s, d);
+      case kADD: return Run<O, kUpdate, kADD,  false>(s, d);
+      case kPD:  return Run<O, kUpdate, kPD,   false>(s, d);
+      default:   return Run<O, kUpdate, kFade, false>(s, d);
     }
   }
 
@@ -422,14 +490,16 @@ class Armitage : public Module {
   };
 
   // One band of model M (kFB / kADD / kPD). zr, zi = z'_k; mag = |z'_k|; inv = 1/|z'_k|.
-  template <int M, int O>
+  // Returns out_k = Re c_k; with D (detune active) also writes ci = Im c_k.
+  template <int M, int O, bool D>
   inline float BandOut(Slot& s, int k, float zr, float zi, float mag, float inv,
-                       const Ctx& c) {
+                       const Ctx& c, float& ci) {
     using namespace armitage_k;
     if (M == kFB) {
       float sn, cs;
       SinCos(s.fb[k] * s.yprev[k] + c.xm, sn, cs);
       const float out = zr * cs - zi * sn;
+      if (D) ci = zr * sn + zi * cs;             // Im(z' e^{j theta})
       float y = s.yprev[k] + (out * c.g - s.yprev[k]) * s.a5[k];
       if (y > 1.f) y = 1.f;
       if (y < -1.f) y = -1.f;
@@ -446,14 +516,17 @@ class Armitage : public Module {
       const float vi = ur * c.xs + ui * c.xc;
       int top = add_nh_[O][k];
       if (top > mtop_) top = mtop_;
-      float sum = 0.f, pr = vr, pi = vi;
+      float sum = 0.f, sumi = 0.f, pr = vr, pi = vi;
       const float* __restrict fw = add_fw_[O][k];
       for (int m = 2; m <= top; m++) {           // u^m by repeated complex multiplication
         const float t = pr * vr - pi * vi;
         pi = pr * vi + pi * vr;
         pr = t;
-        sum += gm_[m] * fw[m] * pr;              // g_m h_mk Re(u^m) / m
+        const float wm = gm_[m] * fw[m];
+        sum += wm * pr;                          // g_m h_mk Re(u^m) / m^s
+        if (D) sumi += wm * pi;                  // ... Im(u^m)
       }
+      if (D) ci = mag * (vi + amt * sumi);
       return mag * (vr + amt * sum);
     }
     // kPD
@@ -461,14 +534,23 @@ class Armitage : public Module {
     const float wi = zr * c.xs + zi * c.xc;
     float dk = 0.5f - pd_d0_ * amt;
     if (dk < pd_dfl_[O][k]) dk = pd_dfl_[O][k];
-    if (dk >= 0.5f) return wr;                   // no distortion: |z'| cos(phi) = Re
+    if (dk >= 0.5f) {                            // no distortion: |z'| e^{j phi} = z' e^{j xm}
+      if (D) ci = wi;
+      return wr;
+    }
     const float ph = FastAtan2Cycles(wi, wr);    // [0, 1)
     const float pw = (ph < dk) ? ph * (0.5f / dk)
                                : 0.5f + (ph - dk) * (0.5f / (1.f - dk));
+    if (D) {
+      float co, si;
+      CosSin01(pw, co, si);
+      ci = mag * si;
+      return mag * co;
+    }
     return mag * Cos01(pw);
   }
 
-  template <int O, bool kUpdate, int M>
+  template <int O, bool kUpdate, int M, bool D>
   float Run(Slot& s, float d) {
     using namespace armitage_k;
     const float ca  = ctrl_a_;
@@ -488,11 +570,33 @@ class Armitage : public Module {
     float* __restrict w   = w_;
     const float* __restrict wt = w_t_;
     const int nroot = n_root_;
+    const float dg = det_g_, deps = det_eps_;
+    const float* __restrict dw0 = det_w0_[O];
     float acc = 0.f, acc2 = 0.f, mnum = 0.f, mden = 0.f, nmax = 0.f;
     for (int k = 0; k < kBands; k++) {
       if (kUpdate) {
         bands_[k].Update(d);
         w[k] += (wt[k] - w[k]) * ca;
+      }
+      float dP = 0.f, dQ = 0.f;                  // detune: Re(c e^{jA}) + Re(c e^{-jB}) = cr dP + ci dQ
+      if (D) {
+        // Advance both phasors: step e^{j x}, x = eps 2 pi f'_k / 8000 (A) and
+        // ARM_DET_B_RATIO x (B); |x| <= ~0.04 rad, 3rd-order Taylor. Then one
+        // Newton step toward |p| = 1 (renormalise every sample, no drift).
+        const float xa = deps * dw0[k];
+        const float xb = ARM_DET_B_RATIO * xa;
+        const float ca_ = 1.f - 0.5f * xa * xa, sa_ = xa - (1.f / 6.f) * xa * xa * xa;
+        const float cb_ = 1.f - 0.5f * xb * xb, sb_ = xb - (1.f / 6.f) * xb * xb * xb;
+        float ar = s.pAr[k] * ca_ - s.pAi[k] * sa_;
+        float ai = s.pAr[k] * sa_ + s.pAi[k] * ca_;
+        float br = s.pBr[k] * cb_ - s.pBi[k] * sb_;
+        float bi = s.pBr[k] * sb_ + s.pBi[k] * cb_;
+        const float na = 1.5f - 0.5f * (ar * ar + ai * ai);
+        const float nb = 1.5f - 0.5f * (br * br + bi * bi);
+        ar *= na; ai *= na; br *= nb; bi *= nb;
+        s.pAr[k] = ar; s.pAi[k] = ai; s.pBr[k] = br; s.pBi[k] = bi;
+        dP = dg * (ar + br);                     // Re: cos A + cos B
+        dQ = dg * (bi - ai);                     // Im: -sin A + sin B
       }
       if (M == kFB || M == kFade) {              // FB state: smoothed only while FB runs
         sfb[k] += (fbt[k] - sfb[k]) * ca;
@@ -518,11 +622,21 @@ class Armitage : public Module {
         mnum += zr;
         mden += mag;
       }
+      float ci = 0.f, ci2 = 0.f;
       if (M != kFade) {
-        acc += w[k] * BandOut<M, O>(s, k, zr, zi, mag, inv, c);
-      } else {                                   // model crossfade: old (acc) and new (acc2)
-        acc  += w[k] * BandOutRT<O>(mf, s, k, zr, zi, mag, inv, c);
-        acc2 += w[k] * BandOutRT<O>(mt, s, k, zr, zi, mag, inv, c);
+        const float cr = BandOut<M, O, D>(s, k, zr, zi, mag, inv, c, ci);
+        if (D) acc += w[k] * (cr + cr * dP + ci * dQ);
+        else   acc += w[k] * cr;
+      } else {                                   // model crossfade: old (acc) and new (acc2), same phasors
+        const float cr  = BandOutRT<O, D>(mf, s, k, zr, zi, mag, inv, c, ci);
+        const float cr2 = BandOutRT<O, D>(mt, s, k, zr, zi, mag, inv, c, ci2);
+        if (D) {
+          acc  += w[k] * (cr  + cr  * dP + ci  * dQ);
+          acc2 += w[k] * (cr2 + cr2 * dP + ci2 * dQ);
+        } else {
+          acc  += w[k] * cr;
+          acc2 += w[k] * cr2;
+        }
       }
     }
     s.m = (mden > 0.f) ? mnum / mden : 0.f;
@@ -537,12 +651,12 @@ class Armitage : public Module {
   }
 
   // Runtime-dispatched BandOut (model crossfade only).
-  template <int O>
+  template <int O, bool D>
   inline float BandOutRT(int m, Slot& s, int k, float zr, float zi, float mag,
-                         float inv, const Ctx& c) {
-    if (m == kFB)  return BandOut<kFB,  O>(s, k, zr, zi, mag, inv, c);
-    if (m == kADD) return BandOut<kADD, O>(s, k, zr, zi, mag, inv, c);
-    return BandOut<kPD, O>(s, k, zr, zi, mag, inv, c);
+                         float inv, const Ctx& c, float& ci) {
+    if (m == kFB)  return BandOut<kFB,  O, D>(s, k, zr, zi, mag, inv, c, ci);
+    if (m == kADD) return BandOut<kADD, O, D>(s, k, zr, zi, mag, inv, c, ci);
+    return BandOut<kPD, O, D>(s, k, zr, zi, mag, inv, c, ci);
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
@@ -554,6 +668,7 @@ class Armitage : public Module {
     for (int i = 0; i < 5; i++) s.k[i] = kv[i];
     s.sw1 = sw1; s.sw2 = oct; s.oct = oct;
     s.beta = beta; s.p = p; s.c = c; s.xmod = bx_t_;
+    s.det = ARM_DET_MAX_CENTS * kv[1] * kv[1];
 
     // FS1 tap: numbered line + LED1 blink-off.
     if (cs.Foot(0).rising) {
@@ -621,6 +736,21 @@ class Armitage : public Module {
     return c0 + fr * (c1 - c0);
   }
 
+  // cos and sin of 2 pi x for x in [0, 1] (same table and interpolation as Cos01).
+  static inline void CosSin01(float x, float& c, float& s) {
+    using namespace armitage_k;
+    constexpr int kMask = ARM_SIN_SIZE - 1;
+    const float xi = x * (float)ARM_SIN_SIZE;
+    const int   ix = (int)xi;
+    const float fr = xi - (float)ix;
+    const int   i0 = ix & kMask;
+    const int   q  = (ix + ARM_SIN_SIZE / 4) & kMask;
+    const float c0 = armitage_sin_tab[q],  c1 = armitage_sin_tab[(q + 1) & kMask];
+    const float s0 = armitage_sin_tab[i0], s1 = armitage_sin_tab[(i0 + 1) & kMask];
+    c = c0 + fr * (c1 - c0);
+    s = s0 + fr * (s1 - s0);
+  }
+
   // atan2(y, x) / 2 pi wrapped to [0, 1). Octant reduction + atan(a) ~
   // a (0.97239411 - 0.19194795 a^2) on a = min/max in [0, 1]: max error
   // ~0.005 rad (0.0008 cycles). One division. (0, 0) -> 0.
@@ -654,6 +784,12 @@ class Armitage : public Module {
   float pd_dfl_[3][kBands];        // PD knee floor dfloor_k per octave (recomputed every 8 kHz sample from v)
   float gm_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD g_m / m^s (per 8 kHz sample, from smoothed K1)
   int   mtop_ = 1;                 // ADD highest harmonic with g_m > 0
+  float det_w0_[3][kBands];        // detune: 2 pi f'_k / 8000 per octave (rad per sample per unit eps)
+  float k2s_ = 0.f, k2_t_ = 0.f;   // K2 detune (smoothed / target)
+  float det_g_ = 0.f;              // copy gain g = min(1, k2 / ARM_DET_FADE) (per 8 kHz sample)
+  float det_eps_ = 0.f;            // 2^(cents/1200) - 1
+  float det_norm_ = 1.f;           // (1 + 2 g^2)^-ARM_DET_COMP_EXP (SW2 UP / DOWN slots)
+  float det_norm_mid_ = 1.f;       // (1 + 2 ARM_DET_COPY_POW_MID g^2)^-ARM_DET_COMP_EXP (SW2 MID slot)
   float pd_d0_ = 0.f;              // PD depth coefficient (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) before amt_k
   float w_[kBands], w_t_[kBands];  // output weight (always 1; K2 roll-off removed, kept for the smoother call site)
   Slot  slot_[2];                  // active + crossfade-in path

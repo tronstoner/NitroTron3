@@ -174,8 +174,8 @@ int main() {
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         hw.seed.PrintLine("beta" D2F " rad, tilt p" D2F ", smooth c" D2F
-                          ", xmod" D2F " rad, octave %s, cpu %u %%",
-                          D2V(d.beta), D2V(d.p), D2V(d.c), D2V(d.xmod),
+                          ", xmod" D2F " rad, det" D2F " c, octave %s, cpu %u %%",
+                          D2V(d.beta), D2V(d.p), D2V(d.c), D2V(d.xmod), D2V(d.det),
                           oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
                           (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
