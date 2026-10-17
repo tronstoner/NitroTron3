@@ -7,11 +7,12 @@
 
 namespace armitage_k {
 
-// --- Feedback amount (K1) -------------------------------------------------
+// --- Shape amount (K1) -----------------------------------------------------
+// FB: beta = ARM_BETA_MAX * k1^2. ADD: M_eff = 1 + k1 (ARM_ADD_MMAX - 1). PD: knee depth k1.
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
 
-// --- Anti-fold limit (always on): beta_k <= max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1) ---
+// --- FB anti-fold limit (always on): beta_k <= max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1) ---
 // Carson's rule: a feedback-FM band at f'_k with index beta_k spreads to about
 // (beta_k + 1) f'_k; capping beta_k keeps the generated overtones below the
 // 8 kHz engine's Nyquist instead of folding back. Applied to the final per-band
@@ -19,31 +20,44 @@ constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's b
 constexpr bool  ARM_ANTIFOLD      = true;     // false = no cap (for A/B comparison)
 constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band engine
 
-// --- Shaping tilt (K4): beta_k = beta * min(1, (ARM_SHAPE_REF / f'_k)^p) ---
-constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full beta (never more)
-constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = beta on every band)
+// --- Shaping tilt (K4): tilt_k = min(1, (ARM_SHAPE_REF / f'_k)^p), all models ---
+// FB: beta_k = beta * tilt_k. ADD / PD: amt_k = s_k * tilt_k.
+constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full shaping (never more)
+constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = full shaping on every band)
 
 // --- Roll-off (K2): w_k = min(1, (f_k / ARM_TILT_REF)^-gamma) ---------------
 constexpr float ARM_TILT_MAX   = 1.f;     // roll-off exponent gamma at K2 full CW (~ -6 dB/oct above the ref)
 constexpr float ARM_TILT_REF   = 100.f;   // Hz; roll-off corner (on the band's INPUT centre f_k), never boosts
 
-// --- Feedback smoothing (K5): per-band one-pole LP on yprev at 8 kHz --------
+// --- Feedback smoothing (K5, FB model only): per-band one-pole LP on yprev at 8 kHz
 // cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
 constexpr float ARM_SMOOTH_REL_MAX = 8.f;     // c at K5 CCW (cutoff 8 x band freq = little damping)
 constexpr float ARM_SMOOTH_REL_MIN = 0.5f;    // c at K5 CW (cutoff half the band freq = strong damping)
 constexpr float ARM_SMOOTH_HZ_LO   = 20.f;    // Hz; lower clamp of any band's cutoff
 constexpr float ARM_SMOOTH_HZ_HI   = 3800.f;  // Hz; upper clamp of any band's cutoff (below Nyquist of the 8 kHz rate)
 
-// --- Feedback signal blend (SW1): yprev = out * ((1 - a) / L_ref + a * ARM_RAW_GAIN)
+// --- Relative reference (feedback signal + ADD/PD saw amount) ---------------
 // L_ref = loudest band |z'| of the slot (instant attack, ARM_REL_RELEASE_MS release,
-// floored at ARM_REL_FLOOR): the loudest band gets out/|z|, a band at -20 dB 1/10.
-constexpr float ARM_RAW_GAIN   = 100.f;   // raw path gain: loudest band ~0.0005 soft gtr -> 0.05 (sine), ~0.012 hard bass -> 1 (clamped, saw/noise)
+// floored at ARM_REL_FLOOR). FB: yprev = out / L_ref (loudest band full, a band at
+// -20 dB 1/10). ADD/PD: per-band share s_k = min(1, |z'_k| / L_ref).
 constexpr float ARM_REL_RELEASE_MS = 50.f;    // ms; one-pole release of L_ref (attack is instant)
 constexpr float ARM_REL_FLOOR  = 1e-5f;   // L_ref floor = sqrt(ARM_SILENCE): silence never divides by ~0
-constexpr float ARM_BLEND_UP   = 0.f;     // a at SW1 UP   (relative: out / L_ref, level-independent)
-constexpr float ARM_BLEND_MID  = 0.5f;    // a at SW1 MID  (half relative, half raw)
-constexpr float ARM_BLEND_DOWN = 1.f;     // a at SW1 DOWN (raw, level-dependent)
-constexpr float ARM_BLEND_MS   = 10.f;    // ms; linear ramp of a on an SW1 change (full 0 -> 1 in this time)
+
+// --- Shaping model (SW1): UP = FB, MID = ADD, DOWN = PD ----------------------
+constexpr float ARM_MODEL_XFADE_MS = 10.f;  // ms; linear crossfade old -> new model output on an SW1 change
+constexpr float ARM_GAIN_FB    = 1.f;     // FB makeup: the approved relative-feedback level, unchanged (KS gtr G3, K1 = 1, K4/K5 noon: +7.2 dB over K1 = 0)
+constexpr float ARM_GAIN_ADD   = 1.95f;   // ADD makeup +5.8 dB: unity ADD at K1 = 1 measured 5.8 dB under FB (KS gtr G3) -> matched at K1 = 1
+constexpr float ARM_GAIN_PD    = 2.8f;    // PD makeup +8.9 dB: unity PD at K1 = 1 measured 8.9 dB under FB (KS gtr G3) -> matched at K1 = 1
+
+// ADD (SW1 MID): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|
+constexpr int   ARM_ADD_MMAX   = 8;       // highest harmonic; K1 fades in m = 2..8 (M_eff = 1 + K1 * 7)
+constexpr float ARM_ADD_FMAX   = 3800.f;  // Hz; a harmonic at m f'_k above this is dropped (anti-fold)
+constexpr float ARM_ADD_FEDGE  = 400.f;   // Hz; fade width below ARM_ADD_FMAX (weight 1 at 3400 Hz -> 0 at 3800 Hz)
+
+// PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - ARM_PD_DEPTH * K1 * amt_k
+constexpr float ARM_PD_DEPTH    = 0.45f;  // knee travel: d = 0.5 (sine) .. 0.05 (saw-like) at K1 full, amt_k = 1
+constexpr float ARM_PD_FOLD_HZ  = 500.f;  // Hz; f'_k at/below this: no anti-fold limit on the knee
+constexpr float ARM_PD_FOLD_TOP = 3800.f; // Hz; f'_k at/above this: knee floor 0.5 = sine (linear floor in between)
 
 // --- Cross-modulation (K3): theta_k += beta_x * m --------------------------
 constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k below this form the root modulator m (bands 0..9)
