@@ -34,10 +34,14 @@ constexpr float ARM_SMOOTH_REL_MIN = 0.5f;    // c at K5 CW (cutoff half the ban
 constexpr float ARM_SMOOTH_HZ_LO   = 20.f;    // Hz; lower clamp of any band's cutoff
 constexpr float ARM_SMOOTH_HZ_HI   = 3800.f;  // Hz; upper clamp of any band's cutoff (below Nyquist of the 8 kHz rate)
 
-// --- Feedback signal blend (SW1): yprev = out * ((1 - a) * 1/|z| + a * ARM_RAW_GAIN)
+// --- Feedback signal blend (SW1): yprev = out * ((1 - a) / L_ref + a * ARM_RAW_GAIN)
+// L_ref = loudest band |z'| of the slot (instant attack, ARM_REL_RELEASE_MS release,
+// floored at ARM_REL_FLOOR): the loudest band gets out/|z|, a band at -20 dB 1/10.
 constexpr float ARM_RAW_GAIN   = 100.f;   // raw path gain: loudest band ~0.0005 soft gtr -> 0.05 (sine), ~0.012 hard bass -> 1 (clamped, saw/noise)
-constexpr float ARM_BLEND_UP   = 0.f;     // a at SW1 UP   (normalised: out / |z|, level-independent)
-constexpr float ARM_BLEND_MID  = 0.5f;    // a at SW1 MID  (half normalised, half raw)
+constexpr float ARM_REL_RELEASE_MS = 50.f;    // ms; one-pole release of L_ref (attack is instant)
+constexpr float ARM_REL_FLOOR  = 1e-5f;   // L_ref floor = sqrt(ARM_SILENCE): silence never divides by ~0
+constexpr float ARM_BLEND_UP   = 0.f;     // a at SW1 UP   (relative: out / L_ref, level-independent)
+constexpr float ARM_BLEND_MID  = 0.5f;    // a at SW1 MID  (half relative, half raw)
 constexpr float ARM_BLEND_DOWN = 1.f;     // a at SW1 DOWN (raw, level-dependent)
 constexpr float ARM_BLEND_MS   = 10.f;    // ms; linear ramp of a on an SW1 change (full 0 -> 1 in this time)
 

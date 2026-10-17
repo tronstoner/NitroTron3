@@ -17,7 +17,9 @@
 //   theta_k = b_k * yprev_k + beta_x * m_prev
 //   out_k   = Re(z'_k e^{j theta_k})                       (|z'| kept)
 //   yprev_k = onepole_K5,k(out_k * g_k), clamped to [-1, 1], flushed below ARM_DENORM
-//   g_k     = (1 - a) / |z_k| + a * ARM_RAW_GAIN        (SW1 blend: a = 0 normalised, 1 raw)
+//   g       = (1 - a) / L_ref + a * ARM_RAW_GAIN        (SW1 blend: a = 0 relative, 1 raw; same g for all bands)
+//   L_ref   = max_k |z'_k| of the slot, instant attack, one-pole release ARM_REL_RELEASE_MS,
+//             floor ARM_REL_FLOOR; the value of the PREVIOUS 8 kHz sample is used (one-sample lag)
 //   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / sum_{f_k < ARM_ROOT_HZ} |z'_k|   (in [-1, 1], silence -> 0)
 //             m_prev = m of the previous 8 kHz sample (one-sample delay, like yprev)
 //   silence guard: |z|^2 < ARM_SILENCE -> out_k = 0, yprev_k = 0
@@ -33,8 +35,9 @@
 // K1 = 0, K3 = 0, SW2 MID -> theta = 0 -> out_k = yr: the plain band sum.
 //
 // OCTAVE SWITCH: two processing slots (each: octave, yprev[], smoothed b_k[],
-// smoothed K5 coefficients[], m_prev). Normally only one runs. On an SW2 change the idle slot starts at the
-// new octave (yprev = 0, m_prev = 0, b_k and K5 coefficients = target) and the two are crossfaded
+// smoothed K5 coefficients[], m_prev, L_ref). Normally only one runs. On an SW2 change the idle slot starts at the
+// new octave (yprev = 0, m_prev = 0, b_k and K5 coefficients = target, L_ref = the
+// active slot's L_ref, since |z'| = |z| in every octave) and the two are crossfaded
 // linearly over ARM_XFADE_MS; then the old one stops. An SW2 change during a
 // fade is picked up when that fade ends.
 //
@@ -49,7 +52,8 @@
 //   K5  feedback smoothing  c = ARM_SMOOTH_REL_MAX (CCW, little) -> _MIN (CW, strong),
 //                           exponential; cutoff relative to each band's f'_k
 //   K6  dry/wet             (shell)
-//   SW1 feedback signal     UP = normalised (a = 0), MID = half (0.5), DOWN = raw (1);
+//   SW1 feedback signal     UP = relative (a = 0: out / L_ref, loudest band = full,
+//                           weaker bands in proportion), MID = half (0.5), DOWN = raw (1);
 //                           a ramps linearly over ARM_BLEND_MS
 //   SW2 octave              UP = octave up, MID = as played, DOWN = octave down
 //   FS1/FS2 unused. LED1 on, LED2 off.
@@ -108,6 +112,7 @@ class Armitage : public Module {
     ctrl_a_ = 1.f - expf(-1000.f / (ARM_CTRL_SMOOTH_MS * sr8_));
     blend_ = blend_t_ = ARM_BLEND_UP;
     blend_step_ = 1.f / (ARM_BLEND_MS * 0.001f * sr8_);
+    rel_a_ = 1.f - expf(-1000.f / (ARM_REL_RELEASE_MS * sr8_));
     bx_ = bx_t_ = 0.f;
     oct_t_ = kMid;
   }
@@ -200,6 +205,7 @@ class Armitage : public Module {
         Slot& ns = slot_[act_ ^ 1];
         ResetSlot(ns, ot);
         for (int k = 0; k < kBands; k++) ns.fb[k] = fb_t_[ot][k];   // a5 set by ResetSlot
+        ns.lref = slot_[act_].lref;              // |z'| = |z|: same reference in every octave
         fade_n_ = xfade_len_;
       }
 
@@ -221,6 +227,7 @@ class Armitage : public Module {
   struct Slot {
     int   oct;
     float m;                 // root modulator of the previous 8 kHz sample
+    float lref;              // SW1 relative reference L_ref (loudest band |z'|, smoothed)
     float yprev[kBands];     // feedback state per band
     float fb[kBands];        // effective feedback beta (smoothed toward fb_t_[oct])
     float a5[kBands];        // K5 one-pole coefficient per band (smoothed toward a5_t_[oct])
@@ -229,6 +236,7 @@ class Armitage : public Module {
   void ResetSlot(Slot& s, int oct) {
     s.oct = oct;
     s.m   = 0.f;
+    s.lref = armitage_k::ARM_REL_FLOOR;
     for (int k = 0; k < kBands; k++) {
       s.yprev[k] = s.fb[k] = 0.f;
       s.a5[k] = a5_t_[oct][k];
@@ -271,8 +279,8 @@ class Armitage : public Module {
   float Run(Slot& s, float d) {
     using namespace armitage_k;
     const float ca  = ctrl_a_;
-    const float gn  = 1.f - blend_;              // normalised share (x 1/|z|)
-    const float gr  = blend_ * ARM_RAW_GAIN;     // raw share
+    const float gn  = (1.f - blend_) / s.lref;   // relative share (x 1/L_ref, previous sample's)
+    const float g   = gn + blend_ * ARM_RAW_GAIN;   // + raw share: one gain for every band
     const float* __restrict a5t = a5_t_[O];
     float* __restrict sa5 = s.a5;
     const float xm  = bx_ * s.m;                 // cross-mod phase, previous sample's m
@@ -282,7 +290,7 @@ class Armitage : public Module {
     float* __restrict w   = w_;
     const float* __restrict wt = w_t_;
     const int nroot = n_root_;
-    float acc = 0.f, mnum = 0.f, mden = 0.f;
+    float acc = 0.f, mnum = 0.f, mden = 0.f, nmax = 0.f;
     for (int k = 0; k < kBands; k++) {
       if (kUpdate) {
         bands_[k].Update(d);
@@ -294,6 +302,7 @@ class Armitage : public Module {
       const float yi = bands_[k].Im();
       const float n  = yr * yr + yi * yi;
       if (n < ARM_SILENCE) { syp[k] = 0.f; continue; }
+      if (n > nmax) nmax = n;                    // loudest band |z|^2 (= |z'|^2)
       const float inv = armbands::ArmFastInvSqrt(n);   // 1/|z| = 1/|z'|
       float zr, zi;
       if (O == kMid) {
@@ -310,7 +319,7 @@ class Armitage : public Module {
       float sn, cs;
       SinCos(sfb[k] * syp[k] + xm, sn, cs);
       const float out = zr * cs - zi * sn;
-      float y = syp[k] + (out * (gn * inv + gr) - syp[k]) * sa5[k];
+      float y = syp[k] + (out * g - syp[k]) * sa5[k];
       if (y > 1.f) y = 1.f;
       if (y < -1.f) y = -1.f;
       if (fabsf(y) < ARM_DENORM) y = 0.f;
@@ -318,6 +327,12 @@ class Armitage : public Module {
       acc += w[k] * out;
     }
     s.m = (mden > 0.f) ? mnum / mden : 0.f;
+    {                                            // L_ref: instant attack, one-pole release, floor
+      const float lm = sqrtf(nmax);
+      float l = s.lref;
+      l = (lm > l) ? lm : l + (lm - l) * rel_a_;
+      s.lref = (l < ARM_REL_FLOOR) ? ARM_REL_FLOOR : l;
+    }
     return acc;
   }
 
@@ -405,6 +420,7 @@ class Armitage : public Module {
   float ctrl_a_ = 0.f;                 // control-smoothing coefficient (8 kHz)
   float blend_ = 0.f, blend_t_ = 0.f;  // SW1 feedback blend a (ramped / target)
   float blend_step_ = 0.0125f;         // max change of a per 8 kHz sample
+  float rel_a_ = 0.0025f;              // L_ref release coefficient (8 kHz)
   float bx_ = 0.f, bx_t_ = 0.f;        // K3 cross-mod depth beta_x (smoothed / target)
   volatile int oct_t_ = kMid;          // SW2 target octave
 

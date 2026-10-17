@@ -182,13 +182,14 @@ int main() {
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
         // first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
+        static const char* const sw1_name[3] = { "UP rel", "MID half", "DOWN raw" };
         const Armitage::DiagSnap& d = diag_snap;
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
         hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s SW2 %s | ",
                       tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
-                      sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
+                      sw1_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
                       sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
         diag_stage = 1;
       } else if (now - diag_hb >= 2000) {
