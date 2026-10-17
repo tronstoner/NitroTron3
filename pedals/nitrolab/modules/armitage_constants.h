@@ -28,18 +28,30 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full shaping (never more)
 constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = full shaping on every band)
 
-// --- K2 = detune ("unison"): two extra copies per band, c_k rotated by +phi_A and -phi_B ---
-// cents = ARM_DET_MAX_CENTS * k2^2, eps = 2^(cents/1200) - 1; copy A runs at +eps f'_k Hz,
-// copy B at -ARM_DET_B_RATIO eps f'_k Hz; g = min(1, k2 / ARM_DET_FADE); band output
-// (Re c + g (Re c e^{j phi_A} + Re c e^{-j phi_B})) * (1 + 2 G^2 g^2)^-ARM_DET_COMP_EXP, G^2 = 1 (SW2 UP / DOWN) or ARM_DET_COPY_POW_MID.
-constexpr float ARM_DET_MAX_CENTS = 25.f;   // cents at K2 full CW (squared taper)
-constexpr float ARM_DET_B_RATIO   = 0.8f;   // copy B's rate vs copy A's (asymmetric -> chorus beating, not pure AM)
-constexpr float ARM_DET_FADE      = 0.1f;   // K2 travel over which the copies fade in (g 0 -> 1)
-constexpr float ARM_DET_COMP_EXP  = 0.5f;   // level compensation exponent on (1 + 2 G^2 g^2) (0.5 = incoherent sum)
-constexpr float ARM_DET_COPY_POW_MID = 7.2f;   // G^2 in SW2 MID (1 in UP / DOWN): a copy's power vs the plain band sum.
-                                               // The plain MID band sum partly cancels across bands, the per-band
-                                               // phase-shifted copies do not (measured KS plucks: +7 dB uncompensated)
-constexpr float ARM_DET_ON        = 1e-4f;  // smoothed K2 below this: detune skipped entirely (g < 0.001, -60 dB)
+// --- K2 = supersaw detune (Schism / JP-8000 style): 4 extra voices per band, detuned BEFORE shaping ---
+// Voice v at ratio r_v = 2^(s_v D / 1200), s_v = +-ARM_SS_SPREAD_IN, +-ARM_SS_SPREAD_OUT; each
+// band's phase psi_{v,k} += (r_v - 1) dphi_k (dphi_k = the band's actual phase advance per 8 kHz
+// sample); the voice runs the SW1 model on z'_k e^{j psi_{v,k}}. Staging along smoothed K2:
+// g_in = clamp(k2 / ARM_SS_IN_END), g_out = clamp((k2 - ARM_SS_IN_END) / (ARM_SS_OUT_END - ARM_SS_IN_END)),
+// D = ARM_SS_D_MIN up to ARM_SS_OUT_END, then linear to ARM_SS_D_MAX at k2 = 1.
+// Sum (v0 + g_in (v+in + v-in) + g_out (v+out + v-out)) * (1 + 2 G^2 (g_in^2 + g_out^2))^-ARM_SS_COMP_EXP.
+constexpr float ARM_SS_SPREAD_IN  = 0.468f;  // inner pair spread x D (Schism 0.234 : 0.5, scaled so the outer pair = D)
+constexpr float ARM_SS_SPREAD_OUT = 1.0f;    // outer pair spread x D (outer voices at +-D cents)
+constexpr float ARM_SS_IN_END     = 0.3f;    // K2 at which the inner pair is fully in (g_in 0 -> 1 over 0 .. this)
+constexpr float ARM_SS_OUT_END    = 0.6f;    // K2 at which the outer pair is fully in (g_out 0 -> 1 from ARM_SS_IN_END); D widens above
+constexpr float ARM_SS_D_MIN      = 10.f;    // cents; outer-voice detune D for K2 <= ARM_SS_OUT_END (Schism's minimum)
+constexpr float ARM_SS_D_MAX      = 35.f;    // cents; outer-voice detune D at K2 full CW (Schism's maximum)
+constexpr float ARM_SS_COMP_EXP   = 0.5f;    // level compensation exponent on (1 + 2 G^2 (g_in^2 + g_out^2)) (0.5 = uncorrelated voices)
+// G^2 = one voice's power vs the centre's (measured, KS plucks gtr G3 + bass E1, geometric mean, K2 = 0.6).
+// Above 1 where the centre's band sum partly cancels across bands but a voice's does not (its psi drifts
+// apart across bands with the playing history): SW2 MID always, FB growing with beta. Index UP / MID / DOWN.
+// FB: G^2 = FB0 + (FB1 - FB0) * k1^2 (linear in beta); ADD / PD: G^2 = SAW (K1-independent within 0.5 dB).
+constexpr float ARM_SS_VPOW_FB0[3] = { 1.0f, 2.6f, 0.9f };   // FB at K1 = 0
+constexpr float ARM_SS_VPOW_FB1[3] = { 2.1f, 5.0f, 4.9f };   // FB at K1 = 1
+constexpr float ARM_SS_VPOW_SAW[3] = { 1.0f, 2.4f, 0.85f };  // ADD and PD
+constexpr float ARM_SS_ON         = 1e-4f;   // pair gain below this: that pair's whole computation is skipped (-80 dB)
+constexpr float ARM_SS_SEED[4]    = { 0.13f, 0.61f, 0.37f, 0.89f };   // cycles; initial psi of voices +in, -in, +out, -out
+                                                                       // (same for every band; never reset afterwards)
 
 // --- Feedback smoothing (K5, FB model only): per-band one-pole LP on yprev at 8 kHz
 // cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
@@ -96,7 +108,7 @@ constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-17: was 0.38 before the in
 constexpr float ARM_SILENCE    = 1e-10f;  // |z|^2 below this -> band output 0, yprev reset (FastInvSqrt(0) guard)
 constexpr float ARM_DENORM     = 1e-12f;  // |yprev| below this is flushed to 0
 
-// --- Control smoothing (anti-zipper on the K1/K2/K3/K4/K5 targets; K2 = detune) ----------
+// --- Control smoothing (anti-zipper on the K1/K2/K3/K4/K5 targets; K2 = supersaw detune) ---
 constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the 8 kHz rate
 
 // --- Output -----------------------------------------------------------------
