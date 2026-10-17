@@ -24,6 +24,8 @@
 //
 //   f'_k = r f_k,  r = 2 / 1 / 0.5 (SW2 UP/MID/DOWN)      (transposed band frequency)
 //   b_k = min(ARM_BETA_CLAMP, beta * min(1, (ARM_SHAPE_REF / f'_k)^p))
+//   b_k = min(b_k, max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1))   (anti-fold, Carson; ARM_ANTIFOLD)
+//         (the K3 cross-mod term beta_x * m is NOT capped)
 //   w_k = min(1, (f_k / ARM_TILT_REF)^-gamma)           (on the INPUT centre f_k)
 //   K5 one-pole cutoff_k = clamp(c * f'_k, ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI)
 //   wet = interpolate( ARM_OUT_GAIN * g_oct * sum_k w_k * out_k )
@@ -51,6 +53,10 @@
 //                           a ramps linearly over ARM_BLEND_MS
 //   SW2 octave              UP = octave up, MID = as played, DOWN = octave down
 //   FS1/FS2 unused. LED1 on, LED2 off.
+//   DIAG builds only: FS1 tap = "note this setting" (LED1 off ~ARM_DIAG_BLINK_MS,
+//   numbered line on the serial log); an `auto` line once the controls have
+//   settled after a change. The module only fills a snapshot (Controls(), main
+//   loop); pedals/nitrolab/main.cpp prints it.
 //
 // Control targets are computed per band at control rate (~10 ms) and
 // one-pole smoothed per 8 kHz sample (ARM_CTRL_SMOOTH_MS) — no zipper.
@@ -125,6 +131,7 @@ class Armitage : public Module {
     // (ARM_SHAPE_REF / (r f_k))^p = (ARM_SHAPE_REF / f_k)^p * r^-p
     const float ln2   = 0.693147181f;
     const float rp[3] = { expf(-p * ln2), 1.f, expf(p * ln2) };   // UP r=2, MID, DOWN r=1/2
+    static const float r[3] = { 2.f, 1.f, 0.5f };          // UP / MID / DOWN
     for (int k = 0; k < kBands; k++) {
       const float t1 = expf(p * ln_fref_[k]);              // (SHAPE_REF/f_k)^p
       for (int o = 0; o < 3; o++) {
@@ -132,6 +139,11 @@ class Armitage : public Module {
         if (t > 1.f) t = 1.f;                              // never more than beta
         float bk = beta * t;
         if (bk > ARM_BETA_CLAMP) bk = ARM_BETA_CLAMP;
+        if (ARM_ANTIFOLD) {                                // Carson: (b_k + 1) f'_k <= limit
+          float cap = ARM_FOLD_LIMIT_HZ / (r[o] * f_k_[k]) - 1.f;
+          if (cap < 0.f) cap = 0.f;
+          if (bk > cap) bk = cap;
+        }
         fb_t_[o][k] = bk;
       }
       float w = expf(-gamma * ln_tilt_[k]);                // (f_k/TILT_REF)^-gamma
@@ -139,11 +151,35 @@ class Armitage : public Module {
       w_t_[k] = w;
     }
     bx_t_ = ARM_XMOD_MAX * k3 * k3;
-    SetSmoothTargets(ARM_SMOOTH_REL_MAX * powf(ARM_SMOOTH_REL_MIN / ARM_SMOOTH_REL_MAX, k5));
+    const float c = ARM_SMOOTH_REL_MAX * powf(ARM_SMOOTH_REL_MIN / ARM_SMOOTH_REL_MAX, k5);
+    SetSmoothTargets(c);
     oct_t_ = oct;
 
     led1.Set(1.f);
     led2.Set(0.f);
+
+    if (NL_DIAG) {
+      const float kv[5] = { k1, k2, k3, k4, k5 };
+      DiagControls(cs, led1, kv, sw1, oct, beta, p, c);
+    }
+  }
+
+  // --- DIAG snapshot (written in Controls(), main loop; read by main.cpp) ---
+  struct DiagSnap {
+    int   n;                 // tap number (#n), 0 = automatic line
+    float k[5];              // K1..K5, the module's remapped 0..1 values
+    int   sw1, sw2;          // 0 UP, 1 MID, 2 DOWN
+    float beta, p, c, blend, xmod;   // derived values the engine runs toward
+    int   oct;               // 0 up, 1 played, 2 down
+  };
+  void Activate() override {
+    if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
+  }
+  // Takes the next pending line (tap first). Returns false when none.
+  bool DiagTake(DiagSnap& out) {
+    if (diag_tap_pend_)  { out = diag_tap_;  diag_tap_pend_ = false;  return true; }
+    if (diag_auto_pend_) { out = diag_auto_; diag_auto_pend_ = false; return true; }
+    return false;
   }
 
   void Process(const float* in, float* wet, size_t size) override {
@@ -285,6 +321,47 @@ class Armitage : public Module {
     return acc;
   }
 
+  void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
+                    int sw1, int oct, float beta, float p, float c) {
+    using namespace armitage_k;
+    const uint32_t now = daisy::System::GetNow();
+    DiagSnap s;
+    s.n = 0;
+    for (int i = 0; i < 5; i++) s.k[i] = kv[i];
+    s.sw1 = sw1; s.sw2 = oct; s.oct = oct;
+    s.beta = beta; s.p = p; s.c = c; s.blend = blend_t_; s.xmod = bx_t_;
+
+    // FS1 tap: numbered line + LED1 blink-off.
+    if (cs.Foot(0).rising) {
+      s.n = ++diag_n_;
+      diag_tap_ = s;
+      diag_tap_pend_ = true;
+      diag_blink_t_ = now;
+      diag_blink_ = true;
+    }
+    if (diag_blink_) {
+      if (now - diag_blink_t_ < ARM_DIAG_BLINK_MS) led1.Set(0.f);
+      else diag_blink_ = false;
+    }
+
+    // Settle detector: any knob > EPS away from the last reference, or a switch
+    // change, restarts the timer; one `auto` line once nothing changed for
+    // ARM_DIAG_SETTLE_MS.
+    bool moved = (sw1 != diag_ref_sw1_) || (oct != diag_ref_sw2_);
+    for (int i = 0; i < 5; i++) if (fabsf(kv[i] - diag_ref_k_[i]) > ARM_DIAG_KNOB_EPS) moved = true;
+    if (moved) {
+      for (int i = 0; i < 5; i++) diag_ref_k_[i] = kv[i];
+      diag_ref_sw1_ = sw1; diag_ref_sw2_ = oct;
+      diag_changed_ = true;
+      diag_t_ = now;
+    } else if (diag_changed_ && now - diag_t_ >= ARM_DIAG_SETTLE_MS) {
+      diag_changed_ = false;
+      s.n = 0;
+      diag_auto_ = s;
+      diag_auto_pend_ = true;
+    }
+  }
+
   float SmoothCoef(float hz) const { return 1.f - expf(-6.283185307f * hz / sr8_); }
 
   // sin/cos of theta (rad) from the shared table: linear interpolation, cos at
@@ -330,4 +407,15 @@ class Armitage : public Module {
   float blend_step_ = 0.0125f;         // max change of a per 8 kHz sample
   float bx_ = 0.f, bx_t_ = 0.f;        // K3 cross-mod depth beta_x (smoothed / target)
   volatile int oct_t_ = kMid;          // SW2 target octave
+
+  // DIAG (main loop only)
+  DiagSnap diag_tap_{}, diag_auto_{};
+  bool     diag_tap_pend_ = false, diag_auto_pend_ = false;
+  int      diag_n_ = 0;
+  bool     diag_blink_ = false;
+  uint32_t diag_blink_t_ = 0;
+  bool     diag_changed_ = true;             // first settle -> one `auto` line with the start state
+  uint32_t diag_t_ = 0;
+  float    diag_ref_k_[5] = { -1.f, -1.f, -1.f, -1.f, -1.f };
+  int      diag_ref_sw1_ = -1, diag_ref_sw2_ = -1;
 };

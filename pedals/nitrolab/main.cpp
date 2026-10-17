@@ -25,6 +25,15 @@
 #include "modules/empty.h"
 
 #include <math.h>
+#include <stdio.h>
+
+// DIAG float print, 2 decimals (newlib-nano has no %f): libDaisy's FLT_FMT(2)
+// = "%c%d.%02d" (sign slot, ' ' for positives - so the format has no space
+// before it). D2V feeds it like FLT_VAR, but rounded to the nearest hundredth
+// via integers (FLT_VAR truncates and relies on abs()); values are >= 0.
+#define D2F FLT_FMT(2)
+static inline int DiagHundredths(float x) { return (x > 0.f) ? (int)(x * 100.f + 0.5f) : 0; }
+#define D2V(x) ' ', DiagHundredths(x) / 100, DiagHundredths(x) % 100
 
 using namespace daisy;
 using clevelandmusicco::Hothouse;
@@ -130,6 +139,9 @@ int main() {
   hw.StartAudio(AudioCallback);
 
   uint32_t diag_hb = 0;
+  int      diag_stage = 0;          // 1 = second half of a setting line due
+  float    diag_cpu_last = 0.f;     // CPU peak of the last full 2 s window
+  Armitage::DiagSnap diag_snap{};
 
   while (true) {
     hw.DelayMs(10);
@@ -148,14 +160,41 @@ int main() {
     led1.Update();
     led2.Update();
 
-    // DIAG build: a plain CPU-load heartbeat every 2 s (no module-specific
-    // instrumentation — this is a test bench, not a tuned module needing a
-    // fault log). `make PEDAL=nitrolab DIAG=1`.
+    // DIAG build (`make PEDAL=nitrolab DIAG=1`): a CPU-load heartbeat every 2 s
+    // plus armitage's "note this setting" lines (FS1 tap = `#<n>`, settled
+    // controls = `auto`). Main loop only, at most ONE print per 10 ms tick: the
+    // logger's line buffer is 128 bytes, so a setting line goes out in two
+    // halves on consecutive ticks (Print, then PrintLine = one terminal line).
     if (NL_DIAG) {
       const uint32_t now = System::GetNow();
-      if (now - diag_hb >= 2000) {
+      if (diag_stage == 1) {
+        // second half of a setting line
+        static const char* const oct_name[3] = { "up", "played", "down" };
+        const Armitage::DiagSnap& d = diag_snap;
+        float cpu_pk = g_cpu.GetMaxCpuLoad();
+        if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
+        hw.seed.PrintLine("beta" D2F " rad, tilt p" D2F ", smooth c" D2F ", blend a" D2F
+                          ", xmod" D2F " rad, octave %s, cpu %u %%",
+                          D2V(d.beta), D2V(d.p), D2V(d.c), D2V(d.blend), D2V(d.xmod),
+                          oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
+                          (unsigned)(cpu_pk * 100.f + 0.5f));
+        diag_stage = 0;
+      } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
+        // first half: number / auto, knobs, switches
+        static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
+        const Armitage::DiagSnap& d = diag_snap;
+        char tag[12];
+        if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
+        else         snprintf(tag, sizeof(tag), "auto");
+        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s SW2 %s | ",
+                      tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
+                      sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
+                      sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
+        diag_stage = 1;
+      } else if (now - diag_hb >= 2000) {
         diag_hb = now;
-        const unsigned cpu = (unsigned)(g_cpu.GetMaxCpuLoad() * 1000.f + 0.5f);
+        diag_cpu_last = g_cpu.GetMaxCpuLoad();
+        const unsigned cpu = (unsigned)(diag_cpu_last * 1000.f + 0.5f);
         g_cpu.Reset();
         hw.seed.PrintLine("NL HB t=%u cpu=%u mode=%d", (unsigned)now, cpu, g_active);
       }

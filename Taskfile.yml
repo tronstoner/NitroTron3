@@ -49,6 +49,13 @@ tasks:
       - make PEDAL=nitrolab
       - make PEDAL=nitrolab program-dfu
 
+  flash-nitrolab-diag:
+    desc: Build + flash the NitroLab DIAG firmware via DFU (serial log; capture with NAME=nitrolab tools/diag/capture.sh)
+    cmds:
+      # DIAG=1 on EVERY make call, or the profile stamp wipes build/ and flashes a rebuild without DIAG
+      - make PEDAL=nitrolab DIAG=1
+      - make PEDAL=nitrolab DIAG=1 program-dfu
+
   clean:
     desc: Remove build output
     cmds:

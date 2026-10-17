@@ -3,11 +3,21 @@
 // armitage — tuning constants (source of truth). See armitage.h for the
 // per-band formula and the control map.
 
+#include <cstdint>
+
 namespace armitage_k {
 
 // --- Feedback amount (K1) -------------------------------------------------
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
+
+// --- Anti-fold limit (always on): beta_k <= max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1) ---
+// Carson's rule: a feedback-FM band at f'_k with index beta_k spreads to about
+// (beta_k + 1) f'_k; capping beta_k keeps the generated overtones below the
+// 8 kHz engine's Nyquist instead of folding back. Applied to the final per-band
+// beta_k (min with the K4 law). The K3 cross-mod term is NOT capped.
+constexpr bool  ARM_ANTIFOLD      = true;     // false = no cap (for A/B comparison)
+constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band engine
 
 // --- Shaping tilt (K4): beta_k = beta * min(1, (ARM_SHAPE_REF / f'_k)^p) ---
 constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full beta (never more)
@@ -52,5 +62,10 @@ constexpr float ARM_OUT_GAIN   = 8.f;     // wet trim: K1 = 0 band sum (Re of an
 
 // --- Sin table ----------------------------------------------------------------
 constexpr int   ARM_SIN_SIZE   = 1024;    // entries per period (power of two; mask wrap)
+
+// --- DIAG "note this setting" log (DIAG builds only; no effect otherwise) ---
+constexpr float    ARM_DIAG_KNOB_EPS  = 0.02f;  // knob move (remapped 0..1) that counts as a change
+constexpr uint32_t ARM_DIAG_SETTLE_MS = 600;    // ms without change before an `auto` line
+constexpr uint32_t ARM_DIAG_BLINK_MS  = 150;    // ms LED1 goes off to confirm an FS1 tap
 
 }  // namespace armitage_k
