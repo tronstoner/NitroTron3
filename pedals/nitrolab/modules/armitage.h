@@ -26,20 +26,33 @@
 //     yprev_k = onepole_K5,k(out_k / L_ref), clamped to [-1, 1], flushed below ARM_DENORM
 //     b_k     = min(ARM_BETA_CLAMP, beta * tilt_k), then min(b_k, max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1))
 //               (anti-fold, Carson; ARM_ANTIFOLD; the K3 term xm is NOT capped)
+//   K1 is split at ARM_K1_SPLIT (0.6) for ADD and PD (FB uses K1 over its full
+//   travel, unchanged): u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)
+//   / (1-ARM_K1_SPLIT), 0). u covers today's old law over the lower 60% of the
+//   travel; v extends it over the top 40%.
+//
 //   SW1 MID = ADD (additive saw, harmonics by repeated complex multiplication, no atan2):
-//     u       = (z'_k / |z'_k|) e^{j xm}                (cross-mod rotation BEFORE the harmonics)
-//     out_k   = |z'_k| * [ Re(u) + amt_k * sum_{m=2..ARM_ADD_MMAX} g_m h_mk Re(u^m) / m ]
+//     u'      = (z'_k / |z'_k|) e^{j xm}                (cross-mod rotation BEFORE the harmonics)
+//     out_k   = |z'_k| * [ Re(u') + amt_k * sum_{m=2..ARM_ADD_MMAX} g_m h_mk Re(u'^m) / m^s ]
 //     amt_k   = s_k * tilt_k
-//     g_m     = clamp(M_eff - m + 1, 0, 1), M_eff = 1 + K1 (ARM_ADD_MMAX - 1)   (K1 = 0: sine only;
-//               the top harmonic fades in continuously)
+//     g_m     = clamp(M_eff - m + 1, 0, 1)
+//     M_eff   = 1 + u (ARM_ADD_MID - 1) + v (ARM_ADD_MMAX - ARM_ADD_MID)   (1 -> 8 -> 16;
+//               K1 = 0: sine only; the top harmonic fades in continuously)
+//     s       = 1 - (1 - ARM_ADD_S_MIN) v                                 (1 -> 1 -> 0.6;
+//               only the upper 40% of K1 brightens the per-harmonic weight)
 //     h_mk    = clamp((ARM_ADD_FMAX - m f'_k) / ARM_ADD_FEDGE, 0, 1)   (anti-fold: harmonics at
 //               m f'_k >= 3800 Hz dropped, linear fade from 3400 Hz)
 //   SW1 DOWN = PD (Casio-CZ phase-distortion saw):
 //     phi     = arg(z'_k e^{j xm}) / 2 pi in [0, 1)     (polynomial atan2, max error ~0.005 rad)
-//     d_k     = max(0.5 - ARM_PD_DEPTH * K1 * amt_k, dfloor_k)      (0.5 = sine, 0.05 = saw-like)
-//     dfloor_k = 0.05 + 0.45 * clamp((f'_k - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ), 0, 1)
-//               (anti-fold: full depth up to 500 Hz, linearly back to sine at 3.8 kHz)
+//     d_k     = max(0.5 - (ARM_PD_DEPTH u + ARM_PD_DEPTH_HI v) * amt_k, dfloor_k)
+//               (0.5 = sine, 0.05 = saw-like at u=1, 0.01 at u=1,v=1, amt_k = 1)
+//     fold_k  = ARM_PD_FOLD_HZ_LO + (ARM_PD_FOLD_HZ_HI - ARM_PD_FOLD_HZ_LO) v   (500 -> 1000 Hz with v)
+//     dfloor_k = floor_min + (0.5 - floor_min) clamp((f'_k - fold_k) / (ARM_PD_FOLD_TOP - fold_k), 0, 1),
+//               floor_min = (0.5 - ARM_PD_DEPTH) - ARM_PD_DEPTH_HI v        (0.05 -> 0.01 with v)
+//               (anti-fold: full depth up to fold_k, linearly back to sine at 3.8 kHz;
+//               recomputed every 8 kHz sample from v, since fold_k/floor_min move with K1)
 //     phi_w   = phi / (2 d_k) for phi < d_k, else 0.5 + (phi - d_k) / (2 (1 - d_k))
+//               (d_k >= 0.01 always: finite, no overflow)
 //     out_k   = |z'_k| cos(2 pi phi_w)                  (sin table)
 //
 //   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / sum_{f_k < ARM_ROOT_HZ} |z'_k|   (in [-1, 1], silence -> 0)
@@ -47,7 +60,7 @@
 //   silence guard: |z|^2 < ARM_SILENCE -> out_k = 0, yprev_k = 0
 //
 //   f'_k = r f_k,  r = 2 / 1 / 0.5 (SW2 UP/MID/DOWN)      (transposed band frequency)
-//   w_k = min(1, (f_k / ARM_TILT_REF)^-gamma)           (on the INPUT centre f_k, after the shaping)
+//   w_k = 1 (K2 roll-off removed 2026-10-17; K2 is unused)
 //   K5 one-pole cutoff_k = clamp(c * f'_k, ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI)   (FB only)
 //   wet = interpolate( ARM_OUT_GAIN * g_oct * g_model * sum_k w_k * out_k )
 //         g_model = ARM_GAIN_FB / ARM_GAIN_ADD / ARM_GAIN_PD
@@ -69,10 +82,14 @@
 // fade is picked up when that fade ends.
 //
 // CONTROL MAP
-//   K1  shape amount        FB: beta = ARM_BETA_MAX * k1^2; ADD: M_eff = 1 + 7 k1
-//                           (harmonics 2..8 fade in one by one); PD: knee 0.5 -> 0.05
-//   K2  roll-off            gamma = ARM_TILT_MAX * k2 (bands above ARM_TILT_REF fall,
-//                           ~-6 dB/oct at CW; after the shaping: w_k scales level only)
+//   K1  shape amount        FB: beta = ARM_BETA_MAX * k1^2 (full travel, unchanged).
+//                           ADD / PD split at ARM_K1_SPLIT = 0.6 into u (0..0.6 of
+//                           travel) and v (0.6..1): ADD: M_eff = 1 + u*7 + v*8
+//                           (harmonics 2..8 fade in over u, 9..16 over v; harmonic
+//                           weight 1/m^s, s = 1 -> 0.6 over v); PD: knee 0.5 -> 0.05
+//                           over u, 0.05 -> 0.01 over v (anti-fold corner 500 -> 1000 Hz
+//                           with v)
+//   K2  unused              (roll-off removed 2026-10-17; raw knob value still logged in DIAG)
 //   K3  cross-modulation    beta_x = ARM_XMOD_MAX * k3^2 (bass root m modulates all bands)
 //   K4  shaping tilt        p = ARM_SHAPE_P_MAX * (1 - k4) (CCW: only bands below
 //                           ARM_SHAPE_REF get the full shaping, upper bands much less =
@@ -121,15 +138,15 @@ class Armitage : public Module {
     sr8_ = sr / (float)kFactor;
     for (int i = 0; i < ARM_SIN_SIZE; i++)
       armitage_sin_tab[i] = sinf(6.283185307f * (float)i / (float)ARM_SIN_SIZE);
+    for (int m = 2; m <= kMM; m++) ln_m_[m] = logf((float)m);   // ADD harmonic weight: 1/m^s = expf(-s*ln_m_[m])
     n_root_ = 0;
     for (int k = 0; k < kBands; k++) {
       const float f = armbands::ArmCenterFreq(k);
       bands_[k].Init(f, sr8_, armbands::ArmBandwidth(k));
       ln_fref_[k] = logf(ARM_SHAPE_REF / f);
       f_k_[k] = f;
-      ln_tilt_[k] = logf(f / ARM_TILT_REF);
       if (f < ARM_ROOT_HZ) n_root_ = k + 1;   // centres rise with k
-      w_[k] = w_t_[k] = 1.f;
+      w_[k] = w_t_[k] = 1.f;                  // K2 roll-off removed: output weight always 1
       static const float r[3] = { 2.f, 1.f, 0.5f };          // UP / MID / DOWN
       for (int o = 0; o < 3; o++) {
         fb_t_[o][k] = 0.f;
@@ -143,10 +160,9 @@ class Armitage : public Module {
           add_fw_[o][k][m] = (m >= 2) ? h : 0.f;
           if (m >= 2 && h > 0.f) add_nh_[o][k] = m;
         }
-        // PD knee floor: 0.5 - ARM_PD_DEPTH up to ARM_PD_FOLD_HZ, linearly to 0.5 at ARM_PD_FOLD_TOP.
-        float x = (fp - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ);
-        x = (x < 0.f) ? 0.f : (x > 1.f) ? 1.f : x;
-        pd_dfl_[o][k] = (0.5f - ARM_PD_DEPTH) + ARM_PD_DEPTH * x;
+        // PD knee floor pd_dfl_[o][k]: depends on v (time-varying via K1), so it
+        // is recomputed every 8 kHz sample in Process(); just seed it here at v = 0.
+        pd_dfl_[o][k] = (0.5f - ARM_PD_DEPTH);
       }
     }
     SetSmoothTargets(ARM_SMOOTH_REL_MAX);
@@ -170,7 +186,7 @@ class Armitage : public Module {
                 daisy::Led& led1, daisy::Led& led2) override {
     using namespace armitage_k;
     const float k1 = RemapKnob(cs.Knob(0));
-    const float k2 = RemapKnob(cs.Knob(1));
+    const float k2 = RemapKnob(cs.Knob(1));   // unused by the engine; read only for the DIAG log
     const float k3 = RemapKnob(cs.Knob(2));
     const float k4 = RemapKnob(cs.Knob(3));
     const float k5 = RemapKnob(cs.Knob(4));
@@ -183,7 +199,6 @@ class Armitage : public Module {
 
     const float beta  = ARM_BETA_MAX * k1 * k1;
     const float p     = ARM_SHAPE_P_MAX * (1.f - k4);
-    const float gamma = ARM_TILT_MAX * k2;
     // (ARM_SHAPE_REF / (r f_k))^p = (ARM_SHAPE_REF / f_k)^p * r^-p
     const float ln2   = 0.693147181f;
     const float rp[3] = { expf(-p * ln2), 1.f, expf(p * ln2) };   // UP r=2, MID, DOWN r=1/2
@@ -203,9 +218,7 @@ class Armitage : public Module {
         }
         fb_t_[o][k] = bk;
       }
-      float w = expf(-gamma * ln_tilt_[k]);                // (f_k/TILT_REF)^-gamma
-      if (w > 1.f) w = 1.f;
-      w_t_[k] = w;
+      // w_t_[k] stays 1 (K2 roll-off removed); set once in Init, never touched here.
     }
     bx_t_ = ARM_XMOD_MAX * k3 * k3;
     const float c = ARM_SMOOTH_REL_MAX * powf(ARM_SMOOTH_REL_MIN / ARM_SMOOTH_REL_MAX, k5);
@@ -246,17 +259,38 @@ class Armitage : public Module {
       const float d = dec_(in + i);
       bx_  += (bx_t_ - bx_) * ca;
       k1s_ += (k1_t_ - k1s_) * ca;
-      {                                          // ADD harmonic weights g_m / m (shared by all bands)
-        const float me = 1.f + k1s_ * (float)(kMM - 1);
+      // K1 split at ARM_K1_SPLIT into u (lower 60% of travel, scaled 0..1) and
+      // v (upper 40%, scaled 0..1); u alone reproduces the old ADD/PD law.
+      const float u = (k1s_ < ARM_K1_SPLIT) ? (k1s_ / ARM_K1_SPLIT) : 1.f;
+      const float v = (k1s_ > ARM_K1_SPLIT) ? (k1s_ - ARM_K1_SPLIT) / (1.f - ARM_K1_SPLIT) : 0.f;
+      {                                          // ADD harmonic weights g_m / m^s (shared by all bands)
+        const float me = 1.f + u * (float)(ARM_ADD_MID - 1) + v * (float)(kMM - ARM_ADD_MID);
+        const float s_exp = 1.f - (1.f - ARM_ADD_S_MIN) * v;   // 1 (u-range) -> ARM_ADD_S_MIN at v = 1
         mtop_ = 1;
         for (int m = 2; m <= kMM; m++) {
           float g = me - (float)m + 1.f;
           g = (g < 0.f) ? 0.f : (g > 1.f) ? 1.f : g;
-          gm_[m] = g / (float)m;
+          // 1/m^s = expf(-s * ln m); at s = 1 (v = 0) this is exactly the old 1/m.
+          gm_[m] = g * expf(-s_exp * ln_m_[m]);
           if (g > 0.f) mtop_ = m;
         }
       }
-      pd_d0_ = armitage_k::ARM_PD_DEPTH * k1s_;   // PD knee depth before amt_k
+      pd_d0_ = ARM_PD_DEPTH * u + ARM_PD_DEPTH_HI * v;   // PD knee depth coefficient before amt_k
+      {                                          // PD anti-fold knee floor pd_dfl_[o][k]: depends on
+        // v (fold corner 500->1000 Hz, floor 0.05->0.01), so recomputed every 8 kHz sample.
+        const float floor_min = (0.5f - ARM_PD_DEPTH) - ARM_PD_DEPTH_HI * v;
+        const float fold_hz = ARM_PD_FOLD_HZ_LO + (ARM_PD_FOLD_HZ_HI - ARM_PD_FOLD_HZ_LO) * v;
+        const float inv_span = 1.f / (ARM_PD_FOLD_TOP - fold_hz);
+        static const float rr[3] = { 2.f, 1.f, 0.5f };    // UP / MID / DOWN
+        for (int o = 0; o < 3; o++) {
+          for (int k = 0; k < kBands; k++) {
+            const float fp = rr[o] * f_k_[k];
+            float x = (fp - fold_hz) * inv_span;
+            x = (x < 0.f) ? 0.f : (x > 1.f) ? 1.f : x;
+            pd_dfl_[o][k] = floor_min + (0.5f - floor_min) * x;
+          }
+        }
+      }
 
       // Start a model crossfade when SW1 changed and no model fade is running.
       if (mfade_n_ == 0 && mdl_t_ != mdl_) {
@@ -612,16 +646,16 @@ class Armitage : public Module {
   float ln_fref_[kBands];          // ln(ARM_SHAPE_REF / f_k)
   float f_k_[kBands];              // band input centre f_k (Hz)
   float a5_t_[3][kBands];          // K5 one-pole coefficient target per octave (UP / MID / DOWN)
-  float ln_tilt_[kBands];          // ln(f_k / ARM_TILT_REF)
+  float ln_m_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ln(m), m = 2..kMM (ADD harmonic weight exponent)
   float fb_t_[3][kBands];          // beta_k target per octave (UP / MID / DOWN)
   float tl_t_[3][kBands];          // tilt_k target per octave (ADD / PD amount)
   float add_fw_[3][kBands][armitage_k::ARM_ADD_MMAX + 1];   // ADD anti-fold weight h_mk per octave
   int   add_nh_[3][kBands];        // ADD highest harmonic with h_mk > 0 (1 = none)
-  float pd_dfl_[3][kBands];        // PD knee floor dfloor_k per octave
-  float gm_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD g_m / m (per 8 kHz sample, from smoothed K1)
+  float pd_dfl_[3][kBands];        // PD knee floor dfloor_k per octave (recomputed every 8 kHz sample from v)
+  float gm_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD g_m / m^s (per 8 kHz sample, from smoothed K1)
   int   mtop_ = 1;                 // ADD highest harmonic with g_m > 0
-  float pd_d0_ = 0.f;              // PD ARM_PD_DEPTH * smoothed K1
-  float w_[kBands], w_t_[kBands];  // output weight (smoothed / target)
+  float pd_d0_ = 0.f;              // PD depth coefficient (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) before amt_k
+  float w_[kBands], w_t_[kBands];  // output weight (always 1; K2 roll-off removed, kept for the smoother call site)
   Slot  slot_[2];                  // active + crossfade-in path
   int   act_ = 0;                  // index of the active slot
   int   fade_n_ = 0;               // crossfade samples left (0 = no fade)

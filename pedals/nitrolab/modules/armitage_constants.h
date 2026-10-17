@@ -8,9 +8,12 @@
 namespace armitage_k {
 
 // --- Shape amount (K1) -----------------------------------------------------
-// FB: beta = ARM_BETA_MAX * k1^2. ADD: M_eff = 1 + k1 (ARM_ADD_MMAX - 1). PD: knee depth k1.
+// FB: beta = ARM_BETA_MAX * k1^2 (unchanged, full K1 travel). ADD / PD: K1 is
+// split at ARM_K1_SPLIT into u (0..split, scaled to 0..1) and v (split..1,
+// scaled to 0..1) — see armitage.h Process() and the ADD/PD sections below.
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
+constexpr float ARM_K1_SPLIT   = 0.6f;    // K1 split point: below = today's ADD/PD law (scaled), above = extended range
 
 // --- FB anti-fold limit (always on): beta_k <= max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1) ---
 // Carson's rule: a feedback-FM band at f'_k with index beta_k spreads to about
@@ -25,9 +28,7 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full shaping (never more)
 constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = full shaping on every band)
 
-// --- Roll-off (K2): w_k = min(1, (f_k / ARM_TILT_REF)^-gamma) ---------------
-constexpr float ARM_TILT_MAX   = 1.f;     // roll-off exponent gamma at K2 full CW (~ -6 dB/oct above the ref)
-constexpr float ARM_TILT_REF   = 100.f;   // Hz; roll-off corner (on the band's INPUT centre f_k), never boosts
+// --- K2: unused (the roll-off it used to drive was removed 2026-10-17; w_k = 1) ---
 
 // --- Feedback smoothing (K5, FB model only): per-band one-pole LP on yprev at 8 kHz
 // cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
@@ -49,15 +50,24 @@ constexpr float ARM_GAIN_FB    = 1.f;     // FB makeup: the approved relative-fe
 constexpr float ARM_GAIN_ADD   = 1.95f;   // ADD makeup +5.8 dB: unity ADD at K1 = 1 measured 5.8 dB under FB (KS gtr G3) -> matched at K1 = 1
 constexpr float ARM_GAIN_PD    = 2.8f;    // PD makeup +8.9 dB: unity PD at K1 = 1 measured 8.9 dB under FB (KS gtr G3) -> matched at K1 = 1
 
-// ADD (SW1 MID): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|
-constexpr int   ARM_ADD_MMAX   = 8;       // highest harmonic; K1 fades in m = 2..8 (M_eff = 1 + K1 * 7)
+// ADD (SW1 MID): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
+// u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
+// M_eff = 1 + u*(ARM_ADD_MID-1) + v*(ARM_ADD_MMAX-ARM_ADD_MID)   (1 -> 8 -> 16)
+// harmonic weight = g_m / m^s, s = 1 - (1-ARM_ADD_S_MIN)*v       (1 -> 1 -> 0.6)
+constexpr int   ARM_ADD_MID    = 8;       // highest harmonic at K1 = ARM_K1_SPLIT (today's old ceiling)
+constexpr int   ARM_ADD_MMAX   = 16;      // highest harmonic at K1 = 1 (extended upper range)
+constexpr float ARM_ADD_S_MIN  = 0.6f;    // harmonic-weight exponent s at K1 = 1 (1/m -> 1/m^0.6: brighter top)
 constexpr float ARM_ADD_FMAX   = 3800.f;  // Hz; a harmonic at m f'_k above this is dropped (anti-fold)
 constexpr float ARM_ADD_FEDGE  = 400.f;   // Hz; fade width below ARM_ADD_FMAX (weight 1 at 3400 Hz -> 0 at 3800 Hz)
 
-// PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - ARM_PD_DEPTH * K1 * amt_k
-constexpr float ARM_PD_DEPTH    = 0.45f;  // knee travel: d = 0.5 (sine) .. 0.05 (saw-like) at K1 full, amt_k = 1
-constexpr float ARM_PD_FOLD_HZ  = 500.f;  // Hz; f'_k at/below this: no anti-fold limit on the knee
-constexpr float ARM_PD_FOLD_TOP = 3800.f; // Hz; f'_k at/above this: knee floor 0.5 = sine (linear floor in between)
+// PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) * amt_k
+// (u, v as above). At K1 <= ARM_K1_SPLIT this is exactly the old law scaled onto u.
+// At K1 = 1, amt_k = 1: d = 0.5 - (0.45 + 0.04) = 0.01.
+constexpr float ARM_PD_DEPTH     = 0.45f;  // knee travel vs u: d = 0.5 (sine) .. 0.05 (saw-like) at u = 1, amt_k = 1
+constexpr float ARM_PD_DEPTH_HI  = 0.04f;  // extra knee travel vs v: pushes the floor 0.05 -> 0.01 at v = 1, amt_k = 1
+constexpr float ARM_PD_FOLD_HZ_LO = 500.f;   // Hz; full-depth anti-fold corner at v = 0
+constexpr float ARM_PD_FOLD_HZ_HI = 1000.f;  // Hz; full-depth anti-fold corner at v = 1 (moves 500 -> 1000 with v)
+constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine (linear floor in between)
 
 // --- Cross-modulation (K3): theta_k += beta_x * m --------------------------
 constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k below this form the root modulator m (bands 0..9)
