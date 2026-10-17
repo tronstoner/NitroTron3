@@ -38,10 +38,8 @@
 //     g_m     = clamp(M_eff - m + 1, 0, 1)
 //     M_eff   = 1 + u (ARM_ADD_MID - 1) + v (ARM_ADD_MMAX - ARM_ADD_MID)   (1 -> 8 -> 16;
 //               K1 = 0: sine only; the top harmonic fades in continuously)
-//     top     = ARM_ADD_MMAX for the centre voice; min(M_eff, ARM_ADD_SIDE_MMAX) = 4 for the
-//               K2 supersaw side voices (CPU cut, 2026-10-17: gm_side_/mtop_side_, same M_eff/s
-//               law, separate table from the centre's gm_/mtop_)
-//     s       = 1 - (1 - ARM_ADD_S_MIN) v                                 (1 -> 1 -> 0.6;
+//     top     = ARM_ADD_MMAX
+//     s      = 1 - (1 - ARM_ADD_S_MIN) v                                 (1 -> 1 -> 0.6;
 //               only the upper 40% of K1 brightens the per-harmonic weight)
 //     h_mk    = clamp((ARM_ADD_FMAX - m f'_k) / ARM_ADD_FEDGE, 0, 1)   (anti-fold: harmonics at
 //               m f'_k >= 3800 Hz dropped, linear fade from 3400 Hz)
@@ -67,43 +65,30 @@
 //   w_k = 1 (K2 roll-off removed 2026-10-17)
 //   K5 one-pole cutoff_k = clamp(c * f'_k, ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI)   (FB only)
 //
-//   K2 SUPERSAW DETUNE (Schism / JP-8000 style, detuned BEFORE shaping):
-//     5 voices per band: centre v0 = the plain path above (unshifted), pairs +-in / +-out.
-//     ADD is the exception (CPU cut, 2026-10-17: 5 voices was far over budget): only 3 voices
-//     (centre + the +-out pair, spread ARM_SS_SPREAD_OUT = D); the +-in pair is never computed.
-//     That pair fades in over the INNER law's range (gain = g_in, not g_out — see Staging below),
-//     so D still runs its normal 10 -> 35 c law (ARM_SS_D_MIN/MAX, breakpoint ARM_SS_OUT_END).
-//     dphi_k  = arg(z'_n conj(z'_{n-1})) / 2 pi in (-0.5, 0.5] cycles      (the band's ACTUAL phase
-//               advance per 8 kHz sample, FastAtan2Cycles; silent band (|z|^2 < ARM_SILENCE) or
-//               first sample after a reset: previous z' = 0 -> dphi_k = 0)
-//     r_v     = 2^(s_v D / 1200),  s_v = +-ARM_SS_SPREAD_IN (0.468), +-ARM_SS_SPREAD_OUT (1)
-//     psi_v,k += (r_v - 1) dphi_k  (cycles, wrapped to [0, 1))
-//     z'_v,k  = z'_k e^{j 2 pi psi_v,k}        (all bands carrying one partial shift by the same
-//               ratio: the voice is the whole note r_v times higher, not a per-band Hz shift)
-//     Each voice runs the current SW1 model on z'_v,k, with the same per-sample controls as the
-//     centre (b_k, K5 coefficients, tilt_k, xm from the CENTRE's m, s_k from the CENTRE's L_ref):
-//       FB:  theta_v = b_k yprev_v,k + xm + 2 pi psi_v,k  (own yprev_v,k per voice, same K5 one-pole)
-//       ADD: u'_v = u' e^{j 2 pi psi_v,k}, then the same harmonic sum
-//       PD:  phi_v = frac(phi + psi_v,k) (= arg(z'_v e^{j xm}); phi taken from the centre: one atan2
-//            per band, not per voice); knee d_k is the centre's (|z'_v| = |z'|); d_k >= 0.5:
-//            out = Re(z' e^{j xm} e^{j 2 pi psi_v,k})
+//   wet = interpolate( ARM_OUT_GAIN * g_oct * g_model * band sum )      (48 kHz)
+//         g_model = ARM_GAIN_FB / ARM_GAIN_ADD / ARM_GAIN_PD
+//
+//   K2 MICRO PITCH SHIFT DETUNE ("Eventide micro pitch" style, on the final 48 kHz wet, so
+//   for every SW1 model and SW2 octave alike; model / octave crossfades are upstream of it):
+//     The wet is written every sample into one circular buffer (ARM_MP_BUF, power of two,
+//     in D2 SRAM; written even at K2 = 0 so turning K2 up has history). 4 delay-based
+//     pitch shifters read it, voice v = -out, -in, +in, +out:
+//       r_v   = 2^(s_v D / 1200),  s_v = ARM_MP_SPREAD[v] = -1, -0.468, +0.468, +1
+//               (Schism / JP-8000 0.234 : 0.5, scaled so the outer pair = D)
+//       W_v   = ARM_MP_WIN_MS[v] = 41 / 47 / 53 / 59 ms (different, so the crossfades don't line up)
+//       p_v  += (1 - r_v) / W_v per sample, wrapped to [0, 1)
+//       tap A delay = p_v W_v, tap B delay = frac(p_v + 0.5) W_v   (each ramps by 1 - r_v per sample)
+//       sh_v  = sin^2(pi p_v) A + cos^2(pi p_v) B   (complementary, sum of window gains = 1;
+//               a tap is silent exactly where its delay wraps; linear interpolation for the
+//               fractional read; window from the shared sin table)
 //     Staging (smoothed K2): g_in  = clamp(k2 / ARM_SS_IN_END, 0, 1)
 //                            g_out = clamp((k2 - ARM_SS_IN_END) / (ARM_SS_OUT_END - ARM_SS_IN_END), 0, 1)
 //                            D = ARM_SS_D_MIN (10 c) for k2 <= ARM_SS_OUT_END, then linear to ARM_SS_D_MAX (35 c)
-//     band sum = sum_k [ v0 + g_in (v+in + v-in) + g_out (v+out + v-out) ] * (1 + 2 G^2 (g_in^2 + g_out^2))^-ARM_SS_COMP_EXP
-//               (ADD: band sum = sum_k [ v0 + g_in (v+out + v-out) ] * (1 + 2 G^2 g_in^2)^-ARM_SS_COMP_EXP,
-//               i.e. the v0 + g_in*v0 + g_out*v1 formula with v0's g_in term dropped and v1 (the
-//               only pair ADD computes) weighted by g_in instead of g_out; PairSum() in Run())
-//               G^2 = one voice's power vs the centre's, measured per octave and model (ARM_SS_VPOW_*;
-//               FB linear in beta): the centre's band sum partly cancels across bands, a voice's
-//               does not (psi drifts apart across bands with the playing history), so G^2 > 1 in
-//               SW2 MID and in FB at high K1. ADD has its own ARM_SS_VPOW_ADD (its voice set
-//               shrank); PD keeps the old ARM_SS_VPOW_PD. Per model in a model crossfade.
-//     A pair with gain < ARM_SS_ON is not computed at all (K2 = 0: exactly the plain centre path).
-//     psi starts at ARM_SS_SEED[v] (same for every band) and is never reset. A pair's yprev_v
-//     is zeroed when it switches on; the stored previous z' is zeroed when the first pair switches on.
-//   wet = interpolate( ARM_OUT_GAIN * g_oct * g_model * band sum )
-//         g_model = ARM_GAIN_FB / ARM_GAIN_ADD / ARM_GAIN_PD
+//     out = (wet + g_in (sh_-in + sh_+in) + g_out (sh_-out + sh_+out)) * (1 + 2 g_in^2 + 2 g_out^2)^-ARM_MP_COMP_EXP
+//     Gains / D are taken once per audio block from the smoothed K2 (gains ramped linearly
+//     across the block). A pair with gain < ARM_SS_ON over the whole block is not computed
+//     (K2 = 0: the wet is returned untouched). The detuned voices lag by ~W_v / 2 (~20-30 ms);
+//     the centre stays undelayed.
 //
 // K1 = 0, K2 = 0, K3 = 0, SW2 MID -> out_k = yr in every model: the plain band sum.
 //
@@ -115,15 +100,12 @@
 // during a fade is picked up when that fade ends. Independent of the SW2 crossfade (both can run).
 //
 // OCTAVE SWITCH: two processing slots (each: octave, yprev[], smoothed b_k[],
-// smoothed K5 coefficients[], smoothed tilt_k[], m_prev, L_ref, supersaw voice
-// state: psi[4][], yprev_v[4][], previous z'[]). Normally only one runs. On an SW2
-// change the idle slot starts at the new octave (yprev = yprev_v = 0, previous z' = 0
-// (first dphi = 0), m_prev = 0, b_k and K5 coefficients = target, L_ref = the active
-// slot's L_ref, since |z'| = |z| in every octave; its voice phases psi continue from
-// wherever that slot stopped, never reset) and the two are crossfaded linearly over
+// smoothed K5 coefficients[], smoothed tilt_k[], m_prev, L_ref). Normally only one
+// runs. On an SW2 change the idle slot starts at the new octave (yprev = 0,
+// m_prev = 0, b_k and K5 coefficients = target, L_ref = the active slot's L_ref,
+// since |z'| = |z| in every octave) and the two are crossfaded linearly over
 // ARM_XFADE_MS; then the old one stops. An SW2 change during a fade is picked up
-// when that fade ends. In a model crossfade both models of a slot share its psi;
-// the entering FB model starts from yprev = yprev_v = 0.
+// when that fade ends.
 //
 // CONTROL MAP
 //   K1  shape amount        FB: beta = ARM_BETA_MAX * k1^2 (full travel, unchanged).
@@ -133,12 +115,9 @@
 //                           weight 1/m^s, s = 1 -> 0.6 over v); PD: knee 0.5 -> 0.05
 //                           over u, 0.05 -> 0.01 over v (anti-fold corner 500 -> 1000 Hz
 //                           with v)
-//   K2  supersaw detune     0 -> 0.3: inner pair (+-0.468 D) fades in; 0.3 -> 0.6: outer
-//                           pair (+-D) fades in, D = 10 c; 0.6 -> 1: D 10 -> 35 c; FB/PD.
-//                           ADD (CPU cut): only the +-D pair, 3 voices total, <= 4
-//                           harmonics on the side voices; it fades in 0 -> 0.3 (the
-//                           inner law's range, reused) and D still runs 10 c up to
-//                           0.6 then 10 -> 35 c as above; the inner pair is unused.
+//   K2  micro pitch detune  4 pitch shifters on the final wet: 0 -> 0.3: inner pair
+//                           (+-0.468 D) fades in; 0.3 -> 0.6: outer pair (+-D) fades in,
+//                           D = 10 c; 0.6 -> 1: D 10 -> 35 c. All models / octaves.
 //   K3  cross-modulation    beta_x = ARM_XMOD_MAX * k3^2 (bass root m modulates all bands)
 //   K4  shaping tilt        p = ARM_SHAPE_P_MAX * (1 - k4) (CCW: only bands below
 //                           ARM_SHAPE_REF get the full shaping, upper bands much less =
@@ -173,6 +152,17 @@
 
 // Shared read-only sin table (filled in Init; DTCM = zero-wait-state reads).
 static float DTCM_MEM_SECTION armitage_sin_tab[armitage_k::ARM_SIN_SIZE];
+
+// K2 micro-pitch circular buffer of the 48 kHz wet: ARM_MP_BUF floats = 16 KB in
+// D2 SRAM (RAM_D2, cached), placed via libDaisy's `.heap` output section like
+// ChronoTron3's vestige ring (the only linker-script route into RAM_D2; NOLOAD,
+// so Init() zeroes it). Not DTCM: keeps the stack headroom of the DIAG build.
+#if defined(__arm__)
+#define ARM_MP_BSS __attribute__((section(".heap")))
+#else
+#define ARM_MP_BSS                     // host builds: plain static
+#endif
+static float ARM_MP_BSS armitage_mp_buf[armitage_k::ARM_MP_BUF];
 
 class Armitage : public Module {
  public:
@@ -215,14 +205,17 @@ class Armitage : public Module {
       }
     }
     SetSmoothTargets(ARM_SMOOTH_REL_MAX);
-    for (int s = 0; s < 2; s++) {
-      ResetSlot(slot_[s], kMid);
-      // Supersaw voice phases: seeded once (same for every band, so the bands of one
-      // partial start coherent), never reset afterwards.
-      for (int v = 0; v < 4; v++)
-        for (int k = 0; k < kBands; k++) slot_[s].psi[v][k] = ARM_SS_SEED[v];
+    for (int s = 0; s < 2; s++) ResetSlot(slot_[s], kMid);
+    // K2 micro pitch: buffer zeroed (NOLOAD section), window lengths in samples.
+    for (int i = 0; i < ARM_MP_BUF; i++) armitage_mp_buf[i] = 0.f;
+    mp_wp_ = 0;
+    for (int v = 0; v < 4; v++) {
+      mp_w_[v]  = ARM_MP_WIN_MS[v] * 0.001f * sr;
+      mp_iw_[v] = 1.f / mp_w_[v];
+      mp_p_[v]  = 0.25f * (float)v;              // staggered start phases (wrap points apart)
+      mp_inc_[v] = 0.f;
     }
-    ss_on_[0] = ss_on_[1] = false;
+    mp_gi_ = mp_go_ = 0.f;
     act_ = 0;
     fade_n_ = 0;
     xfade_len_ = (int)(ARM_XFADE_MS * 0.001f * sr8_ + 0.5f);
@@ -243,7 +236,7 @@ class Armitage : public Module {
                 daisy::Led& led1, daisy::Led& led2) override {
     using namespace armitage_k;
     const float k1 = RemapKnob(cs.Knob(0));
-    const float k2 = RemapKnob(cs.Knob(1));   // supersaw detune
+    const float k2 = RemapKnob(cs.Knob(1));   // micro pitch detune
     const float k3 = RemapKnob(cs.Knob(2));
     const float k4 = RemapKnob(cs.Knob(3));
     const float k5 = RemapKnob(cs.Knob(4));
@@ -298,7 +291,7 @@ class Armitage : public Module {
     float k[5];              // K1..K5, the module's remapped 0..1 values
     int   sw1, sw2;          // 0 UP, 1 MID, 2 DOWN
     float beta, p, c, xmod;  // derived values the engine runs toward
-    float ss_d, ss_in, ss_out;   // K2 supersaw target: outer detune D (cents), inner / outer pair gain
+    float ss_d, ss_in, ss_out;   // K2 micro-pitch target: outer detune D (cents), inner / outer pair gain
     int   oct;               // 0 up, 1 played, 2 down
   };
   void Activate() override {
@@ -318,32 +311,7 @@ class Armitage : public Module {
       const float d = dec_(in + i);
       bx_  += (bx_t_ - bx_) * ca;
       k1s_ += (k1_t_ - k1s_) * ca;
-      k2s_ += (k2_t_ - k2s_) * ca;
-      // K2 supersaw staging: pair gains, detune D, voice ratios, level compensation.
-      float ss_d;
-      SsStage(k2s_, ss_d, ss_gi_, ss_go_);
-      ss_g2_add_ = ss_gi_ * ss_gi_;             // ADD's own compensation term (its one pair, gain ss_gi_)
-      const bool on_i = (ss_gi_ >= ARM_SS_ON), on_o = (ss_go_ >= ARM_SS_ON);
-      const bool det = on_i || on_o;             // false: no supersaw work at all (plain centre path)
-      if (det) {
-        if (!ss_on_[0] && !ss_on_[1])            // first pair switches on: first dphi = 0
-          for (int s = 0; s < 2; s++)
-            for (int k = 0; k < kBands; k++) slot_[s].pzr[k] = slot_[s].pzi[k] = 0.f;
-        for (int p = 0; p < 2; p++) {
-          const bool on = p ? on_o : on_i;
-          if (on && !ss_on_[p])                  // pair switches on: its FB state from 0
-            for (int s = 0; s < 2; s++)
-              for (int v = 2 * p; v < 2 * p + 2; v++)
-                for (int k = 0; k < kBands; k++) slot_[s].yv[v][k] = 0.f;
-        }
-        const float ri = exp2f(ARM_SS_SPREAD_IN  * ss_d * (1.f / 1200.f));
-        const float ro = exp2f(ARM_SS_SPREAD_OUT * ss_d * (1.f / 1200.f));
-        ss_dr_[0] = ri - 1.f;  ss_dr_[1] = 1.f / ri - 1.f;   // r_v - 1: +in, -in
-        ss_dr_[2] = ro - 1.f;  ss_dr_[3] = 1.f / ro - 1.f;   //          +out, -out
-        ss_g2_ = ss_gi_ * ss_gi_ + ss_go_ * ss_go_;   // level compensation: see SsNorm()
-      }
-      ss_on_[0] = on_i;
-      ss_on_[1] = on_o;
+      k2s_ += (k2_t_ - k2s_) * ca;              // K2 micro pitch: staged per block below
       // K1 split at ARM_K1_SPLIT into u (lower 60% of travel, scaled 0..1) and
       // v (upper 40%, scaled 0..1); u alone reproduces the old ADD/PD law.
       const float u = (k1s_ < ARM_K1_SPLIT) ? (k1s_ / ARM_K1_SPLIT) : 1.f;
@@ -358,16 +326,6 @@ class Armitage : public Module {
           // 1/m^s = expf(-s * ln m); at s = 1 (v = 0) this is exactly the old 1/m.
           gm_[m] = g * expf(-s_exp * ln_m_[m]);
           if (g > 0.f) mtop_ = m;
-        }
-        // Side (supersaw) voices, ADD only: same brightness law, M_eff capped at
-        // ARM_ADD_SIDE_MMAX (CPU cut) — the centre keeps the full me/mtop_ above.
-        const float me_side = (me < (float)ARM_ADD_SIDE_MMAX) ? me : (float)ARM_ADD_SIDE_MMAX;
-        mtop_side_ = 1;
-        for (int m = 2; m <= ARM_ADD_SIDE_MMAX; m++) {
-          float g = me_side - (float)m + 1.f;
-          g = (g < 0.f) ? 0.f : (g > 1.f) ? 1.f : g;
-          gm_side_[m] = g * expf(-s_exp * ln_m_[m]);
-          if (g > 0.f) mtop_side_ = m;
         }
       }
       pd_d0_ = ARM_PD_DEPTH * u + ARM_PD_DEPTH_HI * v;   // PD knee depth coefficient before amt_k
@@ -398,7 +356,6 @@ class Armitage : public Module {
           for (int k = 0; k < kBands; k++) {
             if (mdl_ == kFB) {
               sl.yprev[k] = 0.f;
-              for (int v = 0; v < 4; v++) sl.yv[v][k] = 0.f;
               sl.fb[k] = fb_t_[sl.oct][k];
               sl.a5[k] = a5_t_[sl.oct][k];
             } else {
@@ -425,11 +382,11 @@ class Armitage : public Module {
       }
 
       Slot& sa = slot_[act_];
-      float acc = RunSlot(sa, d, true, kern, det);   // updates the bands + w_k
+      float acc = RunSlot(sa, d, true, kern);   // updates the bands + w_k
       if (fade_n_ > 0) {
         Slot& sn = slot_[act_ ^ 1];
         const float g = 1.f - (float)fade_n_ / (float)(xfade_len_ + 1);   // new-path gain, rises to 1
-        acc = acc * (1.f - g) + RunSlot(sn, d, false, kern, det) * g;
+        acc = acc * (1.f - g) + RunSlot(sn, d, false, kern) * g;
         if (--fade_n_ == 0) act_ ^= 1;           // new path takes over
       }
       if (mfade_n_ > 0) --mfade_n_;
@@ -437,6 +394,7 @@ class Armitage : public Module {
       // 1 multiply instead of 6.
       int_(acc * ARM_OUT_GAIN, wet + i);
     }
+    MicroPitch(wet, size);
   }
 
  private:
@@ -448,9 +406,6 @@ class Armitage : public Module {
     float fb[kBands];        // effective feedback beta (smoothed toward fb_t_[oct])
     float a5[kBands];        // K5 one-pole coefficient per band (smoothed toward a5_t_[oct])
     float tl[kBands];        // tilt_k per band (smoothed toward tl_t_[oct]; ADD / PD)
-    float psi[4][kBands];    // supersaw voice phase offset (cycles, [0, 1)): +in, -in, +out, -out (never reset)
-    float yv[4][kBands];     // supersaw voice FB state (own yprev per voice)
-    float pzr[kBands], pzi[kBands];   // previous 8 kHz sample's z'_k (for dphi_k; 0 = no history)
   };
 
   void ResetSlot(Slot& s, int oct) {
@@ -461,8 +416,6 @@ class Armitage : public Module {
       s.yprev[k] = s.fb[k] = 0.f;
       s.a5[k] = a5_t_[oct][k];
       s.tl[k] = tl_t_[oct][k];
-      s.pzr[k] = s.pzi[k] = 0.f;                 // first dphi = 0
-      for (int v = 0; v < 4; v++) s.yv[v][k] = 0.f;   // psi kept (never reset)
     }
   }
 
@@ -483,49 +436,30 @@ class Armitage : public Module {
   // update = true: also clocks the band filters and the w_k smoothers (the
   // first slot of the sample does it; the second, during a fade, reads them).
   // kern = kFB / kADD / kPD, or kFade (old mfrom_ and new mdl_ crossfaded).
-  // det = K2 supersaw active (at least one pair on); false = the plain centre path.
-  float RunSlot(Slot& s, float d, bool update, int kern, bool det) {
+  float RunSlot(Slot& s, float d, bool update, int kern) {
     using namespace armitage_k;
     if (update) {
       switch (s.oct) {
-        case kUp:   return ARM_GAIN_UP   * RunK<kUp,   true>(s, d, kern, det);
-        case kDown: return ARM_GAIN_DOWN * RunK<kDown, true>(s, d, kern, det);
-        default:    return                 RunK<kMid,  true>(s, d, kern, det);
+        case kUp:   return ARM_GAIN_UP   * RunK<kUp,   true>(s, d, kern);
+        case kDown: return ARM_GAIN_DOWN * RunK<kDown, true>(s, d, kern);
+        default:    return                 RunK<kMid,  true>(s, d, kern);
       }
     }
     switch (s.oct) {
-      case kUp:   return ARM_GAIN_UP   * RunK<kUp,   false>(s, d, kern, det);
-      case kDown: return ARM_GAIN_DOWN * RunK<kDown, false>(s, d, kern, det);
-      default:    return                 RunK<kMid,  false>(s, d, kern, det);
+      case kUp:   return ARM_GAIN_UP   * RunK<kUp,   false>(s, d, kern);
+      case kDown: return ARM_GAIN_DOWN * RunK<kDown, false>(s, d, kern);
+      default:    return                 RunK<kMid,  false>(s, d, kern);
     }
   }
 
   template <int O, bool kUpdate>
-  float RunK(Slot& s, float d, int kern, bool det) {
-    if (det) {
-      switch (kern) {
-        case kFB:  return Run<O, kUpdate, kFB,   true>(s, d);
-        case kADD: return Run<O, kUpdate, kADD,  true>(s, d);
-        case kPD:  return Run<O, kUpdate, kPD,   true>(s, d);
-        default:   return Run<O, kUpdate, kFade, true>(s, d);
-      }
-    }
+  float RunK(Slot& s, float d, int kern) {
     switch (kern) {
-      case kFB:  return Run<O, kUpdate, kFB,   false>(s, d);
-      case kADD: return Run<O, kUpdate, kADD,  false>(s, d);
-      case kPD:  return Run<O, kUpdate, kPD,   false>(s, d);
-      default:   return Run<O, kUpdate, kFade, false>(s, d);
+      case kFB:  return Run<O, kUpdate, kFB>(s, d);
+      case kADD: return Run<O, kUpdate, kADD>(s, d);
+      case kPD:  return Run<O, kUpdate, kPD>(s, d);
+      default:   return Run<O, kUpdate, kFade>(s, d);
     }
-  }
-
-  // Supersaw pair sum: ADD uses only the +-out pair (v1, gain g_in — the inner law's
-  // fade reused on the outer-spread voices); FB/PD use both pairs (v0 x g_in, v1 x g_out),
-  // unchanged. m is the real (runtime) model: the steady-state call passes M, the model-
-  // crossfade call passes mf/mt, so this also keeps a spurious ADD-model v0 contribution
-  // (computed only during the brief kFade instantiation, which still runs all 4 voices)
-  // out of the sum.
-  static inline float PairSum(int m, float acc, float g_in, float g_out, float v0, float v1) {
-    return (m == kADD) ? (acc + g_in * v1) : (acc + g_in * v0 + g_out * v1);
   }
 
   static float ModelGain(int m) {
@@ -541,12 +475,11 @@ class Armitage : public Module {
     float xc, xs;    // cos / sin of xm (ADD / PD rotation)
   };
 
-  // One band of model M (kFB / kADD / kPD), centre voice. zr, zi = z'_k; mag = |z'_k|;
-  // inv = 1/|z'_k|. Returns out_k. PD also writes ph = arg(z' e^{j xm}) in cycles
-  // (-1 when d_k >= 0.5, i.e. no distortion) for the supersaw voices.
+  // One band of model M (kFB / kADD / kPD). zr, zi = z'_k; mag = |z'_k|;
+  // inv = 1/|z'_k|. Returns out_k.
   template <int M, int O>
   inline float BandOut(Slot& s, int k, float zr, float zi, float mag, float inv,
-                       const Ctx& c, float& ph) {
+                       const Ctx& c) {
     using namespace armitage_k;
     if (M == kFB) {
       float sn, cs;
@@ -566,31 +499,27 @@ class Armitage : public Module {
       const float ur = zr * inv, ui = zi * inv;  // u = z' / |z'|
       const float vr = ur * c.xc - ui * c.xs;    // u e^{j xm}
       const float vi = ur * c.xs + ui * c.xc;
-      return mag * (vr + amt * AddSum<O>(k, vr, vi, gm_, mtop_));   // centre: full harmonic law
+      return mag * (vr + amt * AddSum<O>(k, vr, vi));
     }
     // kPD
     const float wr = zr * c.xc - zi * c.xs;      // z' e^{j xm}
     const float wi = zr * c.xs + zi * c.xc;
     float dk = 0.5f - pd_d0_ * amt;
     if (dk < pd_dfl_[O][k]) dk = pd_dfl_[O][k];
-    if (dk >= 0.5f) {                            // no distortion: |z'| e^{j phi} = z' e^{j xm}
-      ph = -1.f;
-      return wr;
-    }
-    ph = FastAtan2Cycles(wi, wr);                // [0, 1)
+    if (dk >= 0.5f) return wr;                   // no distortion: |z'| e^{j phi} = z' e^{j xm}
+    const float ph = FastAtan2Cycles(wi, wr);    // [0, 1)
     const float pw = (ph < dk) ? ph * (0.5f / dk)
                                : 0.5f + (ph - dk) * (0.5f / (1.f - dk));
     return mag * Cos01(pw);
   }
 
   // ADD harmonic sum sum_{m=2..top} g_m h_mk Re(v^m) / m^s for the unit phasor v.
-  // gm / topCap select the harmonic-weight table: gm_/mtop_ (centre, full law) or
-  // gm_side_/mtop_side_ (supersaw side voices, capped at ARM_ADD_SIDE_MMAX).
   template <int O>
-  inline float AddSum(int k, float vr, float vi, const float* __restrict gm, int topCap) const {
+  inline float AddSum(int k, float vr, float vi) const {
     int top = add_nh_[O][k];
-    if (top > topCap) top = topCap;
+    if (top > mtop_) top = mtop_;
     float sum = 0.f, pr = vr, pi = vi;
+    const float* __restrict gm = gm_;
     const float* __restrict fw = add_fw_[O][k];
     for (int m = 2; m <= top; m++) {             // v^m by repeated complex multiplication
       const float t = pr * vr - pi * vi;
@@ -601,57 +530,7 @@ class Armitage : public Module {
     return sum;
   }
 
-  // One band of model M for supersaw voice v (z'_v = z' e^{j 2 pi psi}, psi in cycles).
-  // ph = the centre's PD phase (BandOut), -1 = no distortion.
-  template <int M, int O>
-  inline float VoiceOut(Slot& s, int v, int k, float zr, float zi, float mag, float inv,
-                        const Ctx& c, float psi, float ph) {
-    using namespace armitage_k;
-    if (M == kFB) {
-      float* yp = &s.yv[v][k];
-      float sn, cs;
-      SinCos(s.fb[k] * *yp + c.xm + 6.283185307f * psi, sn, cs);
-      const float out = zr * cs - zi * sn;       // Re(z' e^{j psi} e^{j theta_v})
-      float y = *yp + (out * c.g - *yp) * s.a5[k];
-      if (y > 1.f) y = 1.f;
-      if (y < -1.f) y = -1.f;
-      if (fabsf(y) < ARM_DENORM) y = 0.f;
-      *yp = y;
-      return out;
-    }
-    if (M == kADD) {
-      float sh = mag * c.invl;
-      if (sh > 1.f) sh = 1.f;
-      const float amt = sh * s.tl[k];
-      const float ur = zr * inv, ui = zi * inv;
-      const float ar = ur * c.xc - ui * c.xs;    // u e^{j xm}
-      const float ai = ur * c.xs + ui * c.xc;
-      float cp, sp;
-      CosSin01(psi, cp, sp);
-      const float vr = ar * cp - ai * sp;        // u e^{j xm} e^{j psi}
-      const float vi = ar * sp + ai * cp;
-      return mag * (vr + amt * AddSum<O>(k, vr, vi, gm_side_, mtop_side_));   // side: capped harmonics
-    }
-    // kPD: same knee as the centre (|z'_v| = |z'|), phase shifted by psi
-    if (ph < 0.f) {                              // no distortion: Re(z' e^{j xm} e^{j psi})
-      const float wr = zr * c.xc - zi * c.xs;
-      const float wi = zr * c.xs + zi * c.xc;
-      float cp, sp;
-      CosSin01(psi, cp, sp);
-      return wr * cp - wi * sp;
-    }
-    float sh = mag * c.invl;
-    if (sh > 1.f) sh = 1.f;
-    float dk = 0.5f - pd_d0_ * sh * s.tl[k];
-    if (dk < pd_dfl_[O][k]) dk = pd_dfl_[O][k];
-    float pv = ph + psi;
-    if (pv >= 1.f) pv -= 1.f;
-    const float pw = (pv < dk) ? pv * (0.5f / dk)
-                               : 0.5f + (pv - dk) * (0.5f / (1.f - dk));
-    return mag * Cos01(pw);
-  }
-
-  template <int O, bool kUpdate, int M, bool D>
+  template <int O, bool kUpdate, int M>
   float Run(Slot& s, float d) {
     using namespace armitage_k;
     const float ca  = ctrl_a_;
@@ -671,16 +550,7 @@ class Armitage : public Module {
     float* __restrict w   = w_;
     const float* __restrict wt = w_t_;
     const int nroot = n_root_;
-    // Supersaw: voices 0..3 = +in, -in, +out, -out; pair p = v >> 1. D => inner pair on
-    // (g_out > 0 needs k2 > ARM_SS_IN_END, where g_in = 1); outer pair only when g_out is on.
-    // ADD (CPU cut, 2026-10-17): only the +-out pair (ARM_SS_SPREAD_OUT = D), enabled on
-    // ss_gi_ (the inner law's threshold/fade, reused) instead of ss_go_; the inner pair
-    // (v 0,1) is never computed for ADD.
-    const int v_lo = (M == kADD) ? 2 : 0;
-    const int v_hi = (M == kADD) ? ((D && ss_gi_ >= ARM_SS_ON) ? 4 : 2)
-                                  : ((D && ss_go_ >= ARM_SS_ON) ? 4 : 2);
     float acc = 0.f, acc2 = 0.f, mnum = 0.f, mden = 0.f, nmax = 0.f;
-    float vacc[2] = { 0.f, 0.f }, vacc2[2] = { 0.f, 0.f };   // per pair (old / new model)
     for (int k = 0; k < kBands; k++) {
       if (kUpdate) {
         bands_[k].Update(d);
@@ -696,10 +566,6 @@ class Armitage : public Module {
       const float n  = yr * yr + yi * yi;
       if (n < ARM_SILENCE) {
         syp[k] = 0.f;
-        if (D) {                                 // voices: state 0, no phase history (dphi 0)
-          s.pzr[k] = s.pzi[k] = 0.f;
-          for (int v = 0; v < v_hi; v++) s.yv[v][k] = 0.f;
-        }
         continue;
       }
       if (n > nmax) nmax = n;                    // loudest band |z|^2 (= |z'|^2)
@@ -717,32 +583,11 @@ class Armitage : public Module {
         mnum += zr;
         mden += mag;
       }
-      float ph = -1.f, ph2 = -1.f;
       if (M != kFade) {
-        acc += w[k] * BandOut<M, O>(s, k, zr, zi, mag, inv, c, ph);
+        acc += w[k] * BandOut<M, O>(s, k, zr, zi, mag, inv, c);
       } else {                                   // model crossfade: old (acc) and new (acc2)
-        acc  += w[k] * BandOutRT<O>(mf, s, k, zr, zi, mag, inv, c, ph);
-        acc2 += w[k] * BandOutRT<O>(mt, s, k, zr, zi, mag, inv, c, ph2);
-      }
-      if (D) {
-        // The band's actual phase advance: dphi = arg(z'_n conj(z'_{n-1})) in cycles.
-        const float pr = s.pzr[k], pi = s.pzi[k];
-        float dp = FastAtan2Cycles(zi * pr - zr * pi, zr * pr + zi * pi);   // [0, 1); (0, 0) -> 0
-        if (dp > 0.5f) dp -= 1.f;                // (-0.5, 0.5]
-        s.pzr[k] = zr;
-        s.pzi[k] = zi;
-        for (int v = v_lo; v < v_hi; v++) {
-          float ps = s.psi[v][k] + ss_dr_[v] * dp;
-          if (ps >= 1.f) ps -= 1.f;
-          else if (ps < 0.f) ps += 1.f;
-          s.psi[v][k] = ps;
-          if (M != kFade) {
-            vacc[v >> 1] += w[k] * VoiceOut<M, O>(s, v, k, zr, zi, mag, inv, c, ps, ph);
-          } else {
-            vacc[v >> 1]  += w[k] * VoiceOutRT<O>(mf, s, v, k, zr, zi, mag, inv, c, ps, ph);
-            vacc2[v >> 1] += w[k] * VoiceOutRT<O>(mt, s, v, k, zr, zi, mag, inv, c, ps, ph2);
-          }
-        }
+        acc  += w[k] * BandOutRT<O>(mf, s, k, zr, zi, mag, inv, c);
+        acc2 += w[k] * BandOutRT<O>(mt, s, k, zr, zi, mag, inv, c);
       }
     }
     {                                            // L_ref: instant attack, one-pole release, floor
@@ -758,47 +603,91 @@ class Armitage : public Module {
       const float den = (mden > ARM_XMOD_DEN_FLOOR * s.lref) ? mden : ARM_XMOD_DEN_FLOOR * s.lref;
       s.m = mnum / den;
     }
-    if (!D) {
-      if (M != kFade) return ModelGain(M) * acc;
-      return ModelGain(mf) * (1.f - mg_) * acc + ModelGain(mt) * mg_ * acc2;
-    }
-    if (M != kFade) {
-      const float sum = PairSum(M, acc, ss_gi_, ss_go_, vacc[0], vacc[1]);
-      return ModelGain(M) * SsNorm(O, M) * sum;
-    }
-    const float sum  = PairSum(mf, acc,  ss_gi_, ss_go_, vacc[0],  vacc[1]);
-    const float sum2 = PairSum(mt, acc2, ss_gi_, ss_go_, vacc2[0], vacc2[1]);
-    return ModelGain(mf) * SsNorm(O, mf) * (1.f - mg_) * sum + ModelGain(mt) * SsNorm(O, mt) * mg_ * sum2;
+    if (M != kFade) return ModelGain(M) * acc;
+    return ModelGain(mf) * (1.f - mg_) * acc + ModelGain(mt) * mg_ * acc2;
   }
 
-  // Supersaw level compensation (1 + 2 G^2 (g_in^2 + g_out^2))^-ARM_SS_COMP_EXP; G^2 = one
-  // voice's power vs the centre's per octave o and model m (FB: linear in beta ~ k1^2).
-  // ADD (one pair only): (1 + 2 G^2 g_in^2)^-ARM_SS_COMP_EXP, its own re-measured G^2.
-  float SsNorm(int o, int m) const {
-    using namespace armitage_k;
-    if (m == kADD) return powf(1.f + 2.f * ARM_SS_VPOW_ADD[o] * ss_g2_add_, -ARM_SS_COMP_EXP);
-    const float g2 = (m == kFB) ? ARM_SS_VPOW_FB0[o] + (ARM_SS_VPOW_FB1[o] - ARM_SS_VPOW_FB0[o]) * k1s_ * k1s_
-                                : ARM_SS_VPOW_PD[o];
-    return powf(1.f + 2.f * g2 * ss_g2_, -ARM_SS_COMP_EXP);
-  }
-
-  // Runtime-dispatched BandOut / VoiceOut (model crossfade only).
+  // Runtime-dispatched BandOut (model crossfade only).
   template <int O>
   inline float BandOutRT(int m, Slot& s, int k, float zr, float zi, float mag,
-                         float inv, const Ctx& c, float& ph) {
-    if (m == kFB)  return BandOut<kFB,  O>(s, k, zr, zi, mag, inv, c, ph);
-    if (m == kADD) return BandOut<kADD, O>(s, k, zr, zi, mag, inv, c, ph);
-    return BandOut<kPD, O>(s, k, zr, zi, mag, inv, c, ph);
-  }
-  template <int O>
-  inline float VoiceOutRT(int m, Slot& s, int v, int k, float zr, float zi, float mag,
-                          float inv, const Ctx& c, float psi, float ph) {
-    if (m == kFB)  return VoiceOut<kFB,  O>(s, v, k, zr, zi, mag, inv, c, psi, ph);
-    if (m == kADD) return VoiceOut<kADD, O>(s, v, k, zr, zi, mag, inv, c, psi, ph);
-    return VoiceOut<kPD, O>(s, v, k, zr, zi, mag, inv, c, psi, ph);
+                         float inv, const Ctx& c) {
+    if (m == kFB)  return BandOut<kFB,  O>(s, k, zr, zi, mag, inv, c);
+    if (m == kADD) return BandOut<kADD, O>(s, k, zr, zi, mag, inv, c);
+    return BandOut<kPD, O>(s, k, zr, zi, mag, inv, c);
   }
 
-  // K2 supersaw staging (k2 = 0..1): outer detune D (cents), inner / outer pair gain.
+  // K2 micro pitch shift detune on the final 48 kHz wet (in place). The wet is
+  // always written to the buffer; a pair is computed only while its gain is on.
+  void MicroPitch(float* wet, size_t size) {
+    using namespace armitage_k;
+    constexpr int kMask = ARM_MP_BUF - 1;
+    float dc, gi, go;
+    SsStage(k2s_, dc, gi, go);                   // smoothed K2, once per block
+    const float gi0 = mp_gi_, go0 = mp_go_;      // previous block's gains (ramp start)
+    mp_gi_ = gi;
+    mp_go_ = go;
+    const bool on_i = (gi >= ARM_SS_ON) || (gi0 >= ARM_SS_ON);
+    const bool on_o = (go >= ARM_SS_ON) || (go0 >= ARM_SS_ON);
+    float* __restrict buf = armitage_mp_buf;
+    int wp = mp_wp_;
+    if (!on_i && !on_o) {                        // K2 off: history only, wet untouched
+      for (size_t n = 0; n < size; n++) {
+        buf[wp] = wet[n];
+        wp = (wp + 1) & kMask;
+      }
+      mp_wp_ = wp;
+      return;
+    }
+    for (int v = 0; v < 4; v++) {                // p_v += (1 - r_v) / W_v per sample
+      const float r = exp2f(ARM_MP_SPREAD[v] * dc * (1.f / 1200.f));
+      mp_inc_[v] = (1.f - r) * mp_iw_[v];
+    }
+    const float n0 = powf(1.f + 2.f * gi0 * gi0 + 2.f * go0 * go0, -ARM_MP_COMP_EXP);
+    const float n1 = powf(1.f + 2.f * gi * gi + 2.f * go * go, -ARM_MP_COMP_EXP);
+    const float inv_sz = 1.f / (float)size;
+    const float dgi = (gi - gi0) * inv_sz, dgo = (go - go0) * inv_sz, dn = (n1 - n0) * inv_sz;
+    for (size_t n = 0; n < size; n++) {
+      const float x = wet[n];
+      buf[wp] = x;
+      const float t = (float)(n + 1);
+      float y = x;
+      if (on_i) y += (gi0 + dgi * t) * (Shift(1, wp) + Shift(2, wp));   // -in, +in
+      if (on_o) y += (go0 + dgo * t) * (Shift(0, wp) + Shift(3, wp));   // -out, +out
+      wet[n] = y * (n0 + dn * t);
+      wp = (wp + 1) & kMask;
+    }
+    mp_wp_ = wp;
+  }
+
+  // One output sample of pitch shifter v; wp = index of the sample just written.
+  inline float Shift(int v, int wp) {
+    float p = mp_p_[v] + mp_inc_[v];
+    if (p >= 1.f) p -= 1.f;
+    else if (p < 0.f) p += 1.f;
+    if (p >= 1.f) p = 0.f;                       // rounding guard (p tiny negative + 1)
+    mp_p_[v] = p;
+    float q = p + 0.5f;                          // tap B: half a window apart
+    if (q >= 1.f) q -= 1.f;
+    const float ga = 0.5f - 0.5f * Cos01(p);     // sin^2(pi p): 0 where tap A wraps
+    const float w = mp_w_[v];
+    const float a = ReadBuf(wp, p * w);
+    const float b = ReadBuf(wp, q * w);
+    return b + ga * (a - b);                     // ga A + (1 - ga) B
+  }
+
+  // Buffer value d samples (fractional, 0 <= d < ARM_MP_BUF - 1) before index wp.
+  static inline float ReadBuf(int wp, float d) {
+    using namespace armitage_k;
+    constexpr int kMask = ARM_MP_BUF - 1;
+    const float pos = (float)(wp + ARM_MP_BUF) - d;   // > 0: truncation == floor
+    const int   ip  = (int)pos;
+    const float fr  = pos - (float)ip;
+    const float x0 = armitage_mp_buf[ip & kMask];
+    const float x1 = armitage_mp_buf[(ip + 1) & kMask];
+    return x0 + fr * (x1 - x0);
+  }
+
+  // K2 micro-pitch staging (k2 = 0..1): outer detune D (cents), inner / outer pair gain.
   static void SsStage(float k2, float& dc, float& gi, float& go) {
     using namespace armitage_k;
     gi = k2 * (1.f / ARM_SS_IN_END);
@@ -934,14 +823,12 @@ class Armitage : public Module {
   float pd_dfl_[3][kBands];        // PD knee floor dfloor_k per octave (recomputed every 8 kHz sample from v)
   float gm_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD g_m / m^s (per 8 kHz sample, from smoothed K1)
   int   mtop_ = 1;                 // ADD highest harmonic with g_m > 0
-  float gm_side_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD side (supersaw) voices: g_m / m^s, M_eff capped at ARM_ADD_SIDE_MMAX
-  int   mtop_side_ = 1;             // ADD side voices: highest harmonic with gm_side_ > 0 (<= ARM_ADD_SIDE_MMAX)
-  float k2s_ = 0.f, k2_t_ = 0.f;   // K2 supersaw (smoothed / target)
-  float ss_gi_ = 0.f, ss_go_ = 0.f;   // inner / outer pair gain (per 8 kHz sample)
-  float ss_dr_[4] = {};            // r_v - 1 for voices +in, -in, +out, -out
-  float ss_g2_ = 0.f;              // g_in^2 + g_out^2 (FB / PD compensation)
-  float ss_g2_add_ = 0.f;          // g_in^2 alone (ADD compensation: its one pair, gain ss_gi_)
-  bool  ss_on_[2] = { false, false };   // pair (inner, outer) computed in the previous 8 kHz sample
+  float k2s_ = 0.f, k2_t_ = 0.f;   // K2 micro pitch (smoothed / target)
+  int   mp_wp_ = 0;                // micro-pitch buffer write index
+  float mp_p_[4] = {};             // shifter window phase p_v in [0, 1): -out, -in, +in, +out
+  float mp_inc_[4] = {};           // (1 - r_v) / W_v per sample (per block, from D)
+  float mp_w_[4] = {}, mp_iw_[4] = {};   // window W_v (samples) and 1 / W_v
+  float mp_gi_ = 0.f, mp_go_ = 0.f;   // inner / outer pair gain of the previous block
   float pd_d0_ = 0.f;              // PD depth coefficient (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) before amt_k
   float w_[kBands], w_t_[kBands];  // output weight (always 1; K2 roll-off removed, kept for the smoother call site)
   Slot  slot_[2];                  // active + crossfade-in path

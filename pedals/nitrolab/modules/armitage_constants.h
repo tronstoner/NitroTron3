@@ -28,36 +28,24 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full shaping (never more)
 constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = full shaping on every band)
 
-// --- K2 = supersaw detune (Schism / JP-8000 style): up to 4 extra voices per band, detuned BEFORE shaping ---
-// (ADD, SW1 MID, is the exception: CPU cut 2026-10-17 to a single pair at the
-// +-ARM_SS_SPREAD_OUT spread, fading in over the INNER law's range (0..ARM_SS_IN_END);
-// see armitage.h Process()/Run() and ARM_ADD_SIDE_MMAX above. FB and PD keep all 4 voices.)
-// Voice v at ratio r_v = 2^(s_v D / 1200), s_v = +-ARM_SS_SPREAD_IN, +-ARM_SS_SPREAD_OUT; each
-// band's phase psi_{v,k} += (r_v - 1) dphi_k (dphi_k = the band's actual phase advance per 8 kHz
-// sample); the voice runs the SW1 model on z'_k e^{j psi_{v,k}}. Staging along smoothed K2:
+// --- K2 = micro pitch shift detune ("Eventide micro pitch" style) on the final 48 kHz wet ---
+// 4 delay-based pitch shifters (voices -out, -in, +in, +out) read one circular buffer of
+// the wet; voice v at ratio r_v = 2^(ARM_MP_SPREAD[v] D / 1200), two taps half a window
+// apart, sin^2 / cos^2 crossfade (see armitage.h MicroPitch()). Staging along smoothed K2:
 // g_in = clamp(k2 / ARM_SS_IN_END), g_out = clamp((k2 - ARM_SS_IN_END) / (ARM_SS_OUT_END - ARM_SS_IN_END)),
 // D = ARM_SS_D_MIN up to ARM_SS_OUT_END, then linear to ARM_SS_D_MAX at k2 = 1.
-// Sum (v0 + g_in (v+in + v-in) + g_out (v+out + v-out)) * (1 + 2 G^2 (g_in^2 + g_out^2))^-ARM_SS_COMP_EXP.
-constexpr float ARM_SS_SPREAD_IN  = 0.468f;  // inner pair spread x D (Schism 0.234 : 0.5, scaled so the outer pair = D)
-constexpr float ARM_SS_SPREAD_OUT = 1.0f;    // outer pair spread x D (outer voices at +-D cents)
+// out = (wet + g_in (sh_-in + sh_+in) + g_out (sh_-out + sh_+out)) * (1 + 2 g_in^2 + 2 g_out^2)^-ARM_MP_COMP_EXP.
 constexpr float ARM_SS_IN_END     = 0.3f;    // K2 at which the inner pair is fully in (g_in 0 -> 1 over 0 .. this)
 constexpr float ARM_SS_OUT_END    = 0.6f;    // K2 at which the outer pair is fully in (g_out 0 -> 1 from ARM_SS_IN_END); D widens above
 constexpr float ARM_SS_D_MIN      = 10.f;    // cents; outer-voice detune D for K2 <= ARM_SS_OUT_END (Schism's minimum)
 constexpr float ARM_SS_D_MAX      = 35.f;    // cents; outer-voice detune D at K2 full CW (Schism's maximum)
-constexpr float ARM_SS_COMP_EXP   = 0.5f;    // level compensation exponent on (1 + 2 G^2 (g_in^2 + g_out^2)) (0.5 = uncorrelated voices)
-// G^2 = one voice's power vs the centre's (measured, KS plucks gtr G3 + bass E1, geometric mean, K2 = 0.6).
-// Above 1 where the centre's band sum partly cancels across bands but a voice's does not (its psi drifts
-// apart across bands with the playing history): SW2 MID always, FB growing with beta. Index UP / MID / DOWN.
-// FB: G^2 = FB0 + (FB1 - FB0) * k1^2 (linear in beta); ADD / PD: G^2 = SAW (K1-independent within 0.5 dB).
-constexpr float ARM_SS_VPOW_FB0[3] = { 1.0f, 2.6f, 0.9f };   // FB at K1 = 0
-constexpr float ARM_SS_VPOW_FB1[3] = { 2.1f, 5.0f, 4.9f };   // FB at K1 = 1
-constexpr float ARM_SS_VPOW_PD[3]  = { 1.0f, 2.4f, 0.85f };  // PD (K1-independent within 0.5 dB; unchanged, was ARM_SS_VPOW_SAW)
-// ADD (2026-10-17 CPU cut, 1 pair / <=4 side harmonics): re-measured for the new voice set
-// (KS gtr G3 + bass E1, geometric mean, K2 = 0.6; K1-independent within 0.5 dB, same as PD).
-constexpr float ARM_SS_VPOW_ADD[3] = { 1.0f, 1.9f, 0.97f };  // UP / MID / DOWN
-constexpr float ARM_SS_ON         = 1e-4f;   // pair gain below this: that pair's whole computation is skipped (-80 dB)
-constexpr float ARM_SS_SEED[4]    = { 0.13f, 0.61f, 0.37f, 0.89f };   // cycles; initial psi of voices +in, -in, +out, -out
-                                                                       // (same for every band; never reset afterwards)
+constexpr float ARM_SS_ON         = 1e-4f;   // pair gain below this (whole block): that pair's shifters are skipped (-80 dB)
+constexpr float ARM_MP_SPREAD[4]  = { -1.0f, -0.468f, 0.468f, 1.0f };   // x D: -out, -in, +in, +out (Schism 0.234 : 0.5, outer = D)
+constexpr float ARM_MP_WIN_MS[4]  = { 41.f, 47.f, 53.f, 59.f };         // ms; window W_v of -out, -in, +in, +out (all different: crossfades do not line up)
+constexpr float ARM_MP_COMP_EXP   = 0.5f;    // level compensation exponent on (1 + 2 g_in^2 + 2 g_out^2) (0.5 = uncorrelated voices)
+constexpr int   ARM_MP_BUF        = 4096;    // samples (power of two, 85 ms at 48 kHz = 16 KB, D2 SRAM): longest window + margin
+static_assert((ARM_MP_BUF & (ARM_MP_BUF - 1)) == 0, "ARM_MP_BUF: power of two");
+static_assert(ARM_MP_WIN_MS[3] * 48.f + 2.f < (float)ARM_MP_BUF, "ARM_MP_BUF: longest window (ARM_MP_WIN_MS[3], at 48 kHz) + interpolation margin");
 
 // --- Feedback smoothing (K5, FB model only): per-band one-pole LP on yprev at 8 kHz
 // cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
@@ -88,10 +76,6 @@ constexpr int   ARM_ADD_MMAX   = 16;      // highest harmonic at K1 = 1 (extende
 constexpr float ARM_ADD_S_MIN  = 0.6f;    // harmonic-weight exponent s at K1 = 1 (1/m -> 1/m^0.6: brighter top)
 constexpr float ARM_ADD_FMAX   = 3800.f;  // Hz; a harmonic at m f'_k above this is dropped (anti-fold)
 constexpr float ARM_ADD_FEDGE  = 400.f;   // Hz; fade width below ARM_ADD_FMAX (weight 1 at 3400 Hz -> 0 at 3800 Hz)
-// K2 supersaw side (detuned) voices, ADD only (CPU cut, 2026-10-17): the K1 morph
-// M_eff is clamped to this many harmonics for the +-D pair; the centre voice keeps
-// the full 1..ARM_ADD_MMAX law above. See armitage.h Process()/AddSum().
-constexpr int   ARM_ADD_SIDE_MMAX = 4;
 
 // PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) * amt_k
 // (u, v as above). At K1 <= ARM_K1_SPLIT this is exactly the old law scaled onto u.
@@ -118,7 +102,7 @@ constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-17: was 0.38 before the in
 constexpr float ARM_SILENCE    = 1e-10f;  // |z|^2 below this -> band output 0, yprev reset (FastInvSqrt(0) guard)
 constexpr float ARM_DENORM     = 1e-12f;  // |yprev| below this is flushed to 0
 
-// --- Control smoothing (anti-zipper on the K1/K2/K3/K4/K5 targets; K2 = supersaw detune) ---
+// --- Control smoothing (anti-zipper on the K1/K2/K3/K4/K5 targets) ---
 constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the 8 kHz rate
 
 // --- Output -----------------------------------------------------------------

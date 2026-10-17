@@ -34,7 +34,7 @@
 #define D2F FLT_FMT(2)
 static inline int DiagHundredths(float x) { return (x > 0.f) ? (int)(x * 100.f + 0.5f) : 0; }
 #define D2V(x) ' ', DiagHundredths(x) / 100, DiagHundredths(x) % 100
-// Same with 1 decimal (armitage supersaw detune D in cents).
+// Same with 1 decimal (armitage K2 micro-pitch detune D in cents).
 #define D1F FLT_FMT(1)
 static inline int DiagTenths(float x) { return (x > 0.f) ? (int)(x * 10.f + 0.5f) : 0; }
 #define D1V(x) ' ', DiagTenths(x) / 10, DiagTenths(x) % 10
