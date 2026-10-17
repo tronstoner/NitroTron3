@@ -30,16 +30,20 @@ static inline float ArmFastInvSqrt(float x) {
 }
 static inline float ArmFastSqrt(float x) { return ArmFastInvSqrt(x) * x; }
 
-// Ring buffer with cycfi::q semantics: push() overwrites the oldest slot;
-// operator[](i) indexes oldest -> newest as i grows (i = N-1 is the newest).
-// The FIR tap tables below were written against exactly this ordering.
+// Ring buffer with cycfi::q semantics: push() DECREMENTS the position, so
+// operator[](0) is the NEWEST sample and [N-1] the oldest. The FIR tap tables
+// below were written against exactly this ordering. (2026-10-17 fix: the port —
+// and POG's RingBuf in src/core/blocks/poly_octave.h — incremented instead, which
+// ran every FIR time-reversed; harmless for the decimator, but it swapped the
+// interpolator's polyphase branches -> a mirror image of the wet at ~16 kHz +- f,
+// only 12-36 dB down: the constant high-pitched frizz.)
 template <size_t N>
 class ArmRingBuf {
  public:
   static_assert((N & (N - 1)) == 0, "power of two");
   inline void push(float v) {
+    pos_--;
     data_[pos_ & (N - 1)] = v;
-    pos_++;
   }
   inline float operator[](size_t i) const {
     return data_[(pos_ + i) & (N - 1)];

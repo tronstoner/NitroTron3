@@ -47,8 +47,10 @@ constexpr float ARM_XMOD_MAX   = 6.f;     // rad; beta_x at K3 full CW (squared 
 
 // --- Octave (SW2) ------------------------------------------------------------
 constexpr float ARM_XFADE_MS   = 10.f;    // ms; linear crossfade old -> new octave path on an SW2 change
-constexpr float ARM_GAIN_UP    = 0.36f;   // octave-up makeup: unity-gain UP measured +8.3..+9.2 dB over MID (KS gtr+bass) -> -8.9 dB
-constexpr float ARM_GAIN_DOWN  = 0.38f;   // octave-down makeup: unity-gain DOWN measured +8.1..+8.5 dB over MID -> -8.4 dB
+constexpr float ARM_GAIN_UP    = 0.30f;   // (2026-10-17: was 0.36 before the interpolator fix, which raised UP by +1.6 dB vs MID)
+//    // octave-up makeup: unity-gain UP measured +8.3..+9.2 dB over MID (KS gtr+bass) -> -8.9 dB
+constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-17: was 0.38 before the interpolator fix, which lowered DOWN by -0.4 dB vs MID)
+//    // octave-down makeup: unity-gain DOWN measured +8.1..+8.5 dB over MID -> -8.4 dB
 
 // --- Guards -----------------------------------------------------------------
 constexpr float ARM_SILENCE    = 1e-10f;  // |z|^2 below this -> band output 0, yprev reset (FastInvSqrt(0) guard)
@@ -58,7 +60,8 @@ constexpr float ARM_DENORM     = 1e-12f;  // |yprev| below this is flushed to 0
 constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the 8 kHz rate
 
 // --- Output -----------------------------------------------------------------
-constexpr float ARM_OUT_GAIN   = 8.f;     // wet trim: K1 = 0 band sum (Re of analytic bands, band-limited) is ~0.125 x input RMS on KS plucks
+constexpr float ARM_OUT_GAIN   = 7.4f;    // (2026-10-17: was 8 before the interpolator fix, which raised MID by +0.7 dB)
+//     // wet trim: K1 = 0 band sum (Re of analytic bands, band-limited) is ~0.125 x input RMS on KS plucks
 
 // --- Sin table ----------------------------------------------------------------
 constexpr int   ARM_SIN_SIZE   = 1024;    // entries per period (power of two; mask wrap)
