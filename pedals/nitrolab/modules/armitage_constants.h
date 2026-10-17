@@ -83,6 +83,7 @@ constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee flo
 // --- Cross-modulation (K3): theta_k += beta_x * m --------------------------
 constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k below this form the root modulator m (bands 0..9)
 constexpr float ARM_XMOD_MAX   = 6.f;     // rad; beta_x at K3 full CW (squared taper), Ensemble "Up"-mode depth
+constexpr float ARM_XMOD_DEN_FLOOR = 0.1f; // K3 modulator denominator floor as a share of the loudest band: root-band leakage near silence no longer jumps m (clicks); 1.0 = stronger, also tames K3 on notes without root content
 
 // --- Octave (SW2) ------------------------------------------------------------
 constexpr float ARM_XFADE_MS   = 10.f;    // ms; linear crossfade old -> new octave path on an SW2 change

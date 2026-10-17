@@ -55,7 +55,8 @@
 //               (d_k >= 0.01 always: finite, no overflow)
 //     out_k   = |z'_k| cos(2 pi phi_w)                  (sin table)
 //
-//   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / sum_{f_k < ARM_ROOT_HZ} |z'_k|   (in [-1, 1], silence -> 0)
+//   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / max(sum_{f_k < ARM_ROOT_HZ} |z'_k|, ARM_XMOD_DEN_FLOOR * L_ref)
+//             (in [-1, 1], silence -> 0; denominator floor stops near-silent root leakage flickering m)
 //             m_prev = m of the previous 8 kHz sample (one-sample delay, like yprev)
 //   silence guard: |z|^2 < ARM_SILENCE -> out_k = 0, yprev_k = 0
 //
@@ -639,12 +640,18 @@ class Armitage : public Module {
         }
       }
     }
-    s.m = (mden > 0.f) ? mnum / mden : 0.f;
     {                                            // L_ref: instant attack, one-pole release, floor
       const float lm = sqrtf(nmax);
       float l = s.lref;
       l = (lm > l) ? lm : l + (lm - l) * rel_a_;
       s.lref = (l < ARM_REL_FLOOR) ? ARM_REL_FLOOR : l;
+    }
+    {                                            // K3 modulator denominator floor as a share of the
+                                                  // loudest band: root-band leakage near silence no
+                                                  // longer jumps m (clicks); 1.0 = stronger, also
+                                                  // tames K3 on notes without root content
+      const float den = (mden > ARM_XMOD_DEN_FLOOR * s.lref) ? mden : ARM_XMOD_DEN_FLOOR * s.lref;
+      s.m = mnum / den;
     }
     if (M != kFade) return ModelGain(M) * acc;
     return ModelGain(mf) * (1.f - mg_) * acc + ModelGain(mt) * mg_ * acc2;
