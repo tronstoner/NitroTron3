@@ -33,11 +33,14 @@
 //
 //   SW1 MID = ADD (additive saw, harmonics by repeated complex multiplication, no atan2):
 //     u'      = (z'_k / |z'_k|) e^{j xm}                (cross-mod rotation BEFORE the harmonics)
-//     out_k   = |z'_k| * [ Re(u') + amt_k * sum_{m=2..ARM_ADD_MMAX} g_m h_mk Re(u'^m) / m^s ]
+//     out_k   = |z'_k| * [ Re(u') + amt_k * sum_{m=2..top} g_m h_mk Re(u'^m) / m^s ]
 //     amt_k   = s_k * tilt_k
 //     g_m     = clamp(M_eff - m + 1, 0, 1)
 //     M_eff   = 1 + u (ARM_ADD_MID - 1) + v (ARM_ADD_MMAX - ARM_ADD_MID)   (1 -> 8 -> 16;
 //               K1 = 0: sine only; the top harmonic fades in continuously)
+//     top     = ARM_ADD_MMAX for the centre voice; min(M_eff, ARM_ADD_SIDE_MMAX) = 4 for the
+//               K2 supersaw side voices (CPU cut, 2026-10-17: gm_side_/mtop_side_, same M_eff/s
+//               law, separate table from the centre's gm_/mtop_)
 //     s       = 1 - (1 - ARM_ADD_S_MIN) v                                 (1 -> 1 -> 0.6;
 //               only the upper 40% of K1 brightens the per-harmonic weight)
 //     h_mk    = clamp((ARM_ADD_FMAX - m f'_k) / ARM_ADD_FEDGE, 0, 1)   (anti-fold: harmonics at
@@ -66,6 +69,10 @@
 //
 //   K2 SUPERSAW DETUNE (Schism / JP-8000 style, detuned BEFORE shaping):
 //     5 voices per band: centre v0 = the plain path above (unshifted), pairs +-in / +-out.
+//     ADD is the exception (CPU cut, 2026-10-17: 5 voices was far over budget): only 3 voices
+//     (centre + the +-out pair, spread ARM_SS_SPREAD_OUT = D); the +-in pair is never computed.
+//     That pair fades in over the INNER law's range (gain = g_in, not g_out — see Staging below),
+//     so D still runs its normal 10 -> 35 c law (ARM_SS_D_MIN/MAX, breakpoint ARM_SS_OUT_END).
 //     dphi_k  = arg(z'_n conj(z'_{n-1})) / 2 pi in (-0.5, 0.5] cycles      (the band's ACTUAL phase
 //               advance per 8 kHz sample, FastAtan2Cycles; silent band (|z|^2 < ARM_SILENCE) or
 //               first sample after a reset: previous z' = 0 -> dphi_k = 0)
@@ -84,10 +91,14 @@
 //                            g_out = clamp((k2 - ARM_SS_IN_END) / (ARM_SS_OUT_END - ARM_SS_IN_END), 0, 1)
 //                            D = ARM_SS_D_MIN (10 c) for k2 <= ARM_SS_OUT_END, then linear to ARM_SS_D_MAX (35 c)
 //     band sum = sum_k [ v0 + g_in (v+in + v-in) + g_out (v+out + v-out) ] * (1 + 2 G^2 (g_in^2 + g_out^2))^-ARM_SS_COMP_EXP
+//               (ADD: band sum = sum_k [ v0 + g_in (v+out + v-out) ] * (1 + 2 G^2 g_in^2)^-ARM_SS_COMP_EXP,
+//               i.e. the v0 + g_in*v0 + g_out*v1 formula with v0's g_in term dropped and v1 (the
+//               only pair ADD computes) weighted by g_in instead of g_out; PairSum() in Run())
 //               G^2 = one voice's power vs the centre's, measured per octave and model (ARM_SS_VPOW_*;
 //               FB linear in beta): the centre's band sum partly cancels across bands, a voice's
 //               does not (psi drifts apart across bands with the playing history), so G^2 > 1 in
-//               SW2 MID and in FB at high K1. Per model in a model crossfade.
+//               SW2 MID and in FB at high K1. ADD has its own ARM_SS_VPOW_ADD (its voice set
+//               shrank); PD keeps the old ARM_SS_VPOW_PD. Per model in a model crossfade.
 //     A pair with gain < ARM_SS_ON is not computed at all (K2 = 0: exactly the plain centre path).
 //     psi starts at ARM_SS_SEED[v] (same for every band) and is never reset. A pair's yprev_v
 //     is zeroed when it switches on; the stored previous z' is zeroed when the first pair switches on.
@@ -123,7 +134,11 @@
 //                           over u, 0.05 -> 0.01 over v (anti-fold corner 500 -> 1000 Hz
 //                           with v)
 //   K2  supersaw detune     0 -> 0.3: inner pair (+-0.468 D) fades in; 0.3 -> 0.6: outer
-//                           pair (+-D) fades in, D = 10 c; 0.6 -> 1: D 10 -> 35 c; all models
+//                           pair (+-D) fades in, D = 10 c; 0.6 -> 1: D 10 -> 35 c; FB/PD.
+//                           ADD (CPU cut): only the +-D pair, 3 voices total, <= 4
+//                           harmonics on the side voices; it fades in 0 -> 0.3 (the
+//                           inner law's range, reused) and D still runs 10 c up to
+//                           0.6 then 10 -> 35 c as above; the inner pair is unused.
 //   K3  cross-modulation    beta_x = ARM_XMOD_MAX * k3^2 (bass root m modulates all bands)
 //   K4  shaping tilt        p = ARM_SHAPE_P_MAX * (1 - k4) (CCW: only bands below
 //                           ARM_SHAPE_REF get the full shaping, upper bands much less =
@@ -307,6 +322,7 @@ class Armitage : public Module {
       // K2 supersaw staging: pair gains, detune D, voice ratios, level compensation.
       float ss_d;
       SsStage(k2s_, ss_d, ss_gi_, ss_go_);
+      ss_g2_add_ = ss_gi_ * ss_gi_;             // ADD's own compensation term (its one pair, gain ss_gi_)
       const bool on_i = (ss_gi_ >= ARM_SS_ON), on_o = (ss_go_ >= ARM_SS_ON);
       const bool det = on_i || on_o;             // false: no supersaw work at all (plain centre path)
       if (det) {
@@ -342,6 +358,16 @@ class Armitage : public Module {
           // 1/m^s = expf(-s * ln m); at s = 1 (v = 0) this is exactly the old 1/m.
           gm_[m] = g * expf(-s_exp * ln_m_[m]);
           if (g > 0.f) mtop_ = m;
+        }
+        // Side (supersaw) voices, ADD only: same brightness law, M_eff capped at
+        // ARM_ADD_SIDE_MMAX (CPU cut) — the centre keeps the full me/mtop_ above.
+        const float me_side = (me < (float)ARM_ADD_SIDE_MMAX) ? me : (float)ARM_ADD_SIDE_MMAX;
+        mtop_side_ = 1;
+        for (int m = 2; m <= ARM_ADD_SIDE_MMAX; m++) {
+          float g = me_side - (float)m + 1.f;
+          g = (g < 0.f) ? 0.f : (g > 1.f) ? 1.f : g;
+          gm_side_[m] = g * expf(-s_exp * ln_m_[m]);
+          if (g > 0.f) mtop_side_ = m;
         }
       }
       pd_d0_ = ARM_PD_DEPTH * u + ARM_PD_DEPTH_HI * v;   // PD knee depth coefficient before amt_k
@@ -492,6 +518,16 @@ class Armitage : public Module {
     }
   }
 
+  // Supersaw pair sum: ADD uses only the +-out pair (v1, gain g_in — the inner law's
+  // fade reused on the outer-spread voices); FB/PD use both pairs (v0 x g_in, v1 x g_out),
+  // unchanged. m is the real (runtime) model: the steady-state call passes M, the model-
+  // crossfade call passes mf/mt, so this also keeps a spurious ADD-model v0 contribution
+  // (computed only during the brief kFade instantiation, which still runs all 4 voices)
+  // out of the sum.
+  static inline float PairSum(int m, float acc, float g_in, float g_out, float v0, float v1) {
+    return (m == kADD) ? (acc + g_in * v1) : (acc + g_in * v0 + g_out * v1);
+  }
+
   static float ModelGain(int m) {
     using namespace armitage_k;
     return (m == kFB) ? ARM_GAIN_FB : (m == kADD) ? ARM_GAIN_ADD : ARM_GAIN_PD;
@@ -530,7 +566,7 @@ class Armitage : public Module {
       const float ur = zr * inv, ui = zi * inv;  // u = z' / |z'|
       const float vr = ur * c.xc - ui * c.xs;    // u e^{j xm}
       const float vi = ur * c.xs + ui * c.xc;
-      return mag * (vr + amt * AddSum<O>(k, vr, vi));
+      return mag * (vr + amt * AddSum<O>(k, vr, vi, gm_, mtop_));   // centre: full harmonic law
     }
     // kPD
     const float wr = zr * c.xc - zi * c.xs;      // z' e^{j xm}
@@ -548,17 +584,19 @@ class Armitage : public Module {
   }
 
   // ADD harmonic sum sum_{m=2..top} g_m h_mk Re(v^m) / m^s for the unit phasor v.
+  // gm / topCap select the harmonic-weight table: gm_/mtop_ (centre, full law) or
+  // gm_side_/mtop_side_ (supersaw side voices, capped at ARM_ADD_SIDE_MMAX).
   template <int O>
-  inline float AddSum(int k, float vr, float vi) const {
+  inline float AddSum(int k, float vr, float vi, const float* __restrict gm, int topCap) const {
     int top = add_nh_[O][k];
-    if (top > mtop_) top = mtop_;
+    if (top > topCap) top = topCap;
     float sum = 0.f, pr = vr, pi = vi;
     const float* __restrict fw = add_fw_[O][k];
     for (int m = 2; m <= top; m++) {             // v^m by repeated complex multiplication
       const float t = pr * vr - pi * vi;
       pi = pr * vi + pi * vr;
       pr = t;
-      sum += gm_[m] * fw[m] * pr;
+      sum += gm[m] * fw[m] * pr;
     }
     return sum;
   }
@@ -592,7 +630,7 @@ class Armitage : public Module {
       CosSin01(psi, cp, sp);
       const float vr = ar * cp - ai * sp;        // u e^{j xm} e^{j psi}
       const float vi = ar * sp + ai * cp;
-      return mag * (vr + amt * AddSum<O>(k, vr, vi));
+      return mag * (vr + amt * AddSum<O>(k, vr, vi, gm_side_, mtop_side_));   // side: capped harmonics
     }
     // kPD: same knee as the centre (|z'_v| = |z'|), phase shifted by psi
     if (ph < 0.f) {                              // no distortion: Re(z' e^{j xm} e^{j psi})
@@ -635,7 +673,12 @@ class Armitage : public Module {
     const int nroot = n_root_;
     // Supersaw: voices 0..3 = +in, -in, +out, -out; pair p = v >> 1. D => inner pair on
     // (g_out > 0 needs k2 > ARM_SS_IN_END, where g_in = 1); outer pair only when g_out is on.
-    const int v_hi = (D && ss_go_ >= ARM_SS_ON) ? 4 : 2;
+    // ADD (CPU cut, 2026-10-17): only the +-out pair (ARM_SS_SPREAD_OUT = D), enabled on
+    // ss_gi_ (the inner law's threshold/fade, reused) instead of ss_go_; the inner pair
+    // (v 0,1) is never computed for ADD.
+    const int v_lo = (M == kADD) ? 2 : 0;
+    const int v_hi = (M == kADD) ? ((D && ss_gi_ >= ARM_SS_ON) ? 4 : 2)
+                                  : ((D && ss_go_ >= ARM_SS_ON) ? 4 : 2);
     float acc = 0.f, acc2 = 0.f, mnum = 0.f, mden = 0.f, nmax = 0.f;
     float vacc[2] = { 0.f, 0.f }, vacc2[2] = { 0.f, 0.f };   // per pair (old / new model)
     for (int k = 0; k < kBands; k++) {
@@ -688,7 +731,7 @@ class Armitage : public Module {
         if (dp > 0.5f) dp -= 1.f;                // (-0.5, 0.5]
         s.pzr[k] = zr;
         s.pzi[k] = zi;
-        for (int v = 0; v < v_hi; v++) {
+        for (int v = v_lo; v < v_hi; v++) {
           float ps = s.psi[v][k] + ss_dr_[v] * dp;
           if (ps >= 1.f) ps -= 1.f;
           else if (ps < 0.f) ps += 1.f;
@@ -719,18 +762,23 @@ class Armitage : public Module {
       if (M != kFade) return ModelGain(M) * acc;
       return ModelGain(mf) * (1.f - mg_) * acc + ModelGain(mt) * mg_ * acc2;
     }
-    const float sum  = acc  + ss_gi_ * vacc[0]  + ss_go_ * vacc[1];
-    if (M != kFade) return ModelGain(M) * SsNorm(O, M) * sum;
-    const float sum2 = acc2 + ss_gi_ * vacc2[0] + ss_go_ * vacc2[1];
+    if (M != kFade) {
+      const float sum = PairSum(M, acc, ss_gi_, ss_go_, vacc[0], vacc[1]);
+      return ModelGain(M) * SsNorm(O, M) * sum;
+    }
+    const float sum  = PairSum(mf, acc,  ss_gi_, ss_go_, vacc[0],  vacc[1]);
+    const float sum2 = PairSum(mt, acc2, ss_gi_, ss_go_, vacc2[0], vacc2[1]);
     return ModelGain(mf) * SsNorm(O, mf) * (1.f - mg_) * sum + ModelGain(mt) * SsNorm(O, mt) * mg_ * sum2;
   }
 
   // Supersaw level compensation (1 + 2 G^2 (g_in^2 + g_out^2))^-ARM_SS_COMP_EXP; G^2 = one
   // voice's power vs the centre's per octave o and model m (FB: linear in beta ~ k1^2).
+  // ADD (one pair only): (1 + 2 G^2 g_in^2)^-ARM_SS_COMP_EXP, its own re-measured G^2.
   float SsNorm(int o, int m) const {
     using namespace armitage_k;
+    if (m == kADD) return powf(1.f + 2.f * ARM_SS_VPOW_ADD[o] * ss_g2_add_, -ARM_SS_COMP_EXP);
     const float g2 = (m == kFB) ? ARM_SS_VPOW_FB0[o] + (ARM_SS_VPOW_FB1[o] - ARM_SS_VPOW_FB0[o]) * k1s_ * k1s_
-                                : ARM_SS_VPOW_SAW[o];
+                                : ARM_SS_VPOW_PD[o];
     return powf(1.f + 2.f * g2 * ss_g2_, -ARM_SS_COMP_EXP);
   }
 
@@ -886,10 +934,13 @@ class Armitage : public Module {
   float pd_dfl_[3][kBands];        // PD knee floor dfloor_k per octave (recomputed every 8 kHz sample from v)
   float gm_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD g_m / m^s (per 8 kHz sample, from smoothed K1)
   int   mtop_ = 1;                 // ADD highest harmonic with g_m > 0
+  float gm_side_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD side (supersaw) voices: g_m / m^s, M_eff capped at ARM_ADD_SIDE_MMAX
+  int   mtop_side_ = 1;             // ADD side voices: highest harmonic with gm_side_ > 0 (<= ARM_ADD_SIDE_MMAX)
   float k2s_ = 0.f, k2_t_ = 0.f;   // K2 supersaw (smoothed / target)
   float ss_gi_ = 0.f, ss_go_ = 0.f;   // inner / outer pair gain (per 8 kHz sample)
   float ss_dr_[4] = {};            // r_v - 1 for voices +in, -in, +out, -out
-  float ss_g2_ = 0.f;              // g_in^2 + g_out^2
+  float ss_g2_ = 0.f;              // g_in^2 + g_out^2 (FB / PD compensation)
+  float ss_g2_add_ = 0.f;          // g_in^2 alone (ADD compensation: its one pair, gain ss_gi_)
   bool  ss_on_[2] = { false, false };   // pair (inner, outer) computed in the previous 8 kHz sample
   float pd_d0_ = 0.f;              // PD depth coefficient (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) before amt_k
   float w_[kBands], w_t_[kBands];  // output weight (always 1; K2 roll-off removed, kept for the smoother call site)

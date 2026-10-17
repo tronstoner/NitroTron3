@@ -28,7 +28,10 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full shaping (never more)
 constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = full shaping on every band)
 
-// --- K2 = supersaw detune (Schism / JP-8000 style): 4 extra voices per band, detuned BEFORE shaping ---
+// --- K2 = supersaw detune (Schism / JP-8000 style): up to 4 extra voices per band, detuned BEFORE shaping ---
+// (ADD, SW1 MID, is the exception: CPU cut 2026-10-17 to a single pair at the
+// +-ARM_SS_SPREAD_OUT spread, fading in over the INNER law's range (0..ARM_SS_IN_END);
+// see armitage.h Process()/Run() and ARM_ADD_SIDE_MMAX above. FB and PD keep all 4 voices.)
 // Voice v at ratio r_v = 2^(s_v D / 1200), s_v = +-ARM_SS_SPREAD_IN, +-ARM_SS_SPREAD_OUT; each
 // band's phase psi_{v,k} += (r_v - 1) dphi_k (dphi_k = the band's actual phase advance per 8 kHz
 // sample); the voice runs the SW1 model on z'_k e^{j psi_{v,k}}. Staging along smoothed K2:
@@ -48,7 +51,10 @@ constexpr float ARM_SS_COMP_EXP   = 0.5f;    // level compensation exponent on (
 // FB: G^2 = FB0 + (FB1 - FB0) * k1^2 (linear in beta); ADD / PD: G^2 = SAW (K1-independent within 0.5 dB).
 constexpr float ARM_SS_VPOW_FB0[3] = { 1.0f, 2.6f, 0.9f };   // FB at K1 = 0
 constexpr float ARM_SS_VPOW_FB1[3] = { 2.1f, 5.0f, 4.9f };   // FB at K1 = 1
-constexpr float ARM_SS_VPOW_SAW[3] = { 1.0f, 2.4f, 0.85f };  // ADD and PD
+constexpr float ARM_SS_VPOW_PD[3]  = { 1.0f, 2.4f, 0.85f };  // PD (K1-independent within 0.5 dB; unchanged, was ARM_SS_VPOW_SAW)
+// ADD (2026-10-17 CPU cut, 1 pair / <=4 side harmonics): re-measured for the new voice set
+// (KS gtr G3 + bass E1, geometric mean, K2 = 0.6; K1-independent within 0.5 dB, same as PD).
+constexpr float ARM_SS_VPOW_ADD[3] = { 1.0f, 1.9f, 0.97f };  // UP / MID / DOWN
 constexpr float ARM_SS_ON         = 1e-4f;   // pair gain below this: that pair's whole computation is skipped (-80 dB)
 constexpr float ARM_SS_SEED[4]    = { 0.13f, 0.61f, 0.37f, 0.89f };   // cycles; initial psi of voices +in, -in, +out, -out
                                                                        // (same for every band; never reset afterwards)
@@ -82,6 +88,10 @@ constexpr int   ARM_ADD_MMAX   = 16;      // highest harmonic at K1 = 1 (extende
 constexpr float ARM_ADD_S_MIN  = 0.6f;    // harmonic-weight exponent s at K1 = 1 (1/m -> 1/m^0.6: brighter top)
 constexpr float ARM_ADD_FMAX   = 3800.f;  // Hz; a harmonic at m f'_k above this is dropped (anti-fold)
 constexpr float ARM_ADD_FEDGE  = 400.f;   // Hz; fade width below ARM_ADD_FMAX (weight 1 at 3400 Hz -> 0 at 3800 Hz)
+// K2 supersaw side (detuned) voices, ADD only (CPU cut, 2026-10-17): the K1 morph
+// M_eff is clamped to this many harmonics for the +-D pair; the centre voice keeps
+// the full 1..ARM_ADD_MMAX law above. See armitage.h Process()/AddSum().
+constexpr int   ARM_ADD_SIDE_MMAX = 4;
 
 // PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) * amt_k
 // (u, v as above). At K1 <= ARM_K1_SPLIT this is exactly the old law scaled onto u.
