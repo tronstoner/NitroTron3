@@ -47,6 +47,9 @@ constexpr int   ARM_MP_BUF        = 4096;    // samples (power of two, 85 ms at 
 static_assert((ARM_MP_BUF & (ARM_MP_BUF - 1)) == 0, "ARM_MP_BUF: power of two");
 static_assert(ARM_MP_WIN_MS[3] * 48.f + 2.f < (float)ARM_MP_BUF, "ARM_MP_BUF: longest window (ARM_MP_WIN_MS[3], at 48 kHz) + interpolation margin");
 
+// --- Wet DC blocker (final 48 kHz wet, before K2 MicroPitch) ---------------
+constexpr float ARM_DC_HZ = 10.f;  // wet DC blocker (FB carries DC); below the lowest bass fundamental
+
 // --- Feedback smoothing (K5, FB model only): per-band one-pole LP on yprev at 8 kHz
 // cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
 constexpr float ARM_SMOOTH_REL_MAX = 8.f;     // c at K5 CCW (cutoff 8 x band freq = little damping)

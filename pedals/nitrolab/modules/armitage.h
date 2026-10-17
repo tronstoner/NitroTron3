@@ -216,6 +216,8 @@ class Armitage : public Module {
       mp_inc_[v] = 0.f;
     }
     mp_gi_ = mp_go_ = 0.f;
+    dc_a_ = expf(-6.283185307f * ARM_DC_HZ / sr);   // wet DC blocker coefficient
+    dc_x1_ = dc_y1_ = 0.f;
     act_ = 0;
     fade_n_ = 0;
     xfade_len_ = (int)(ARM_XFADE_MS * 0.001f * sr8_ + 0.5f);
@@ -394,6 +396,7 @@ class Armitage : public Module {
       // 1 multiply instead of 6.
       int_(acc * ARM_OUT_GAIN, wet + i);
     }
+    DcBlock(wet, size);   // wet-only DC blocker (FB carries DC); dry is untouched by the shell mix
     MicroPitch(wet, size);
   }
 
@@ -616,6 +619,24 @@ class Armitage : public Module {
     return BandOut<kPD, O>(s, k, zr, zi, mag, inv, c);
   }
 
+  // One-pole DC blocker on the final 48 kHz wet, in place: y = x - x1 + a*y1.
+  // Removes the FB model's DC offset before it reaches MicroPitch() (5 shifted
+  // copies would otherwise sum that DC in phase and eat headroom). Wet only —
+  // the shell mixes the dry, which must stay untouched.
+  void DcBlock(float* wet, size_t size) {
+    float x1 = dc_x1_, y1 = dc_y1_;
+    const float a = dc_a_;
+    for (size_t n = 0; n < size; n++) {
+      const float x = wet[n];
+      const float y = x - x1 + a * y1;
+      wet[n] = y;
+      x1 = x;
+      y1 = y;
+    }
+    dc_x1_ = x1;
+    dc_y1_ = y1;
+  }
+
   // K2 micro pitch shift detune on the final 48 kHz wet (in place). The wet is
   // always written to the buffer; a pair is computed only while its gain is on.
   void MicroPitch(float* wet, size_t size) {
@@ -829,6 +850,8 @@ class Armitage : public Module {
   float mp_inc_[4] = {};           // (1 - r_v) / W_v per sample (per block, from D)
   float mp_w_[4] = {}, mp_iw_[4] = {};   // window W_v (samples) and 1 / W_v
   float mp_gi_ = 0.f, mp_go_ = 0.f;   // inner / outer pair gain of the previous block
+  float dc_a_ = 0.f;                  // wet DC blocker coefficient (exp(-2*pi*ARM_DC_HZ/sr))
+  float dc_x1_ = 0.f, dc_y1_ = 0.f;   // wet DC blocker state (previous input / output)
   float pd_d0_ = 0.f;              // PD depth coefficient (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) before amt_k
   float w_[kBands], w_t_[kBands];  // output weight (always 1; K2 roll-off removed, kept for the smoother call site)
   Slot  slot_[2];                  // active + crossfade-in path
