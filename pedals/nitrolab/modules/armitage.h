@@ -36,9 +36,11 @@
 //           res_k = |z'_k| (sin(2 pi R_k phi_m) (1 - phi_m) - dc(R_k)), dc(R) = 1/(2 pi R) - sin(2 pi R)/(2 pi R)^2
 //           out_k = y0_k + G share_k [ (1 - k1) (saw_k - y0_k) + k1 tilt_k cap_k (res_k - y0_k) ]
 //           (k1 = 0: the plain full-knee saw; d_k >= 0.5 and k1 = 0: y0_k)
-//     PULSE: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) k1 (50 % -> 10 %)
-//           S(phi_m) = +1 -> -1 over [0, D], -1 until w, -1 -> +1 over [w, w + D], +1 to 1
-//           (cos half-cycles, D = ARM_PD_KNEE), mean 1 - 2w removed (exact for any w)
+//     PULSE: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) k1 (50 % -> 0 %)
+//           S(phi_m) = 1 - E(phi_m) + E(phi_m - w), two independent edges that may overlap,
+//           E(x) = 0 (x < 0), 1 - cos(pi x / D) (0 <= x < D), 2 (x >= D), D = ARM_PD_KNEE
+//           (w = 0.5: the old square; w = 0: S = +1). Mean over phi in [0, 1):
+//           1 - (2 - D) + (2 - 2w - D) = 1 - 2w, exact for any w in [0, 0.5], removed
 //           out_k = y0_k + G share_k tilt_k cap_k (|z'_k| (S - (1 - 2w)) - y0_k)
 //
 //   ADD (K5 0.4 .. 0.6): additive saw per band, harmonics by repeated complex multiplication:
@@ -107,7 +109,7 @@
 //
 // CONTROL MAP
 //   K1  timbre (per mode)   SAW: resonance (saw -> CZ reso morph, R 1 -> 16)
-//                           PULSE: width 50 % -> 10 %
+//                           PULSE: width 50 % -> 0 % (silence at CW)
 //                           ADD: M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
 //                           FB: beta = ARM_BETA_MAX * k1^2
 //   K2  micro pitch detune  4 pitch shifters on the final wet (all modes / octaves)
@@ -568,11 +570,12 @@ class Armitage : public Module {
     if (fmo != 0.f) ph = Wrap01(ph + fmo * kTwoPiInv);
     constexpr float D = ARM_PD_KNEE, kHalfInvD = 0.5f / ARM_PD_KNEE;
     const float w = pul_w_;
-    float S;
-    if (ph < D)          S = Cos01(ph * kHalfInvD);
-    else if (ph < w)     S = -1.f;
-    else if (ph < w + D) S = Cos01(0.5f + (ph - w) * kHalfInvD);
-    else                 S = 1.f;
+    // S = 1 - E(ph) + E(ph - w): down-edge at 0, up-edge at w, independent (they overlap for w < D).
+    // 1 - E(x) = cos(pi x / D) on the knee, -1 past it; E(ph - w) = 0 before w.
+    float S = (ph < D) ? Cos01(ph * kHalfInvD) : -1.f;          // 1 - E(ph)
+    const float u = ph - w;
+    if (u >= D)        S += 2.f;                                 // + E(ph - w)
+    else if (u >= 0.f) S += 1.f - Cos01(u * kHalfInvD);
     const float g = DeltaGain<M, O>() * share * a;
     return wr + g * (mag * (S - pul_dc_) - wr);
   }

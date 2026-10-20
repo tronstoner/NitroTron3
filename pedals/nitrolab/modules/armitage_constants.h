@@ -122,10 +122,11 @@ constexpr float ARM_RES_R_MIN = 1.f;
 constexpr float ARM_RES_R_MAX = 16.f;
 constexpr float ARM_RES_FMAX  = 3800.f;   // Hz; R_k f'_k capped here (anti-fold)
 
-// PULSE, K1 = width: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) k1 (50 % CCW -> 10 % CW),
-// jumps at phi = 0 (down) and phi = w (up), knee ARM_PD_KNEE each; mean 1 - 2w removed (exact for any w).
+// PULSE, K1 = width: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) k1 (50 % CCW -> 0 % CW),
+// two independent knee steps (down at phi = 0, up at phi = w, ARM_PD_KNEE each) that may overlap;
+// mean 1 - 2w removed (exact for any w in [0, 0.5]). w = 0: the steps cancel, S = +1, silence.
 constexpr float ARM_PUL_W_MAX = 0.5f;
-constexpr float ARM_PUL_W_MIN = 0.1f;
+constexpr float ARM_PUL_W_MIN = 0.f;
 
 // --- K3 = 2-op FM per band, all modes (2026-10-20) ---------------------------
 // phi_mod = phi_k + I sin(phi_down_k), I = ARM_FM_INDEX_MAX * k3 (rad, linear), applied to the
