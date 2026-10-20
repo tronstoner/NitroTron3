@@ -177,10 +177,10 @@ int main() {
         const Armitage::DiagSnap& d = diag_snap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("beta" D2F " rad, tilt p" D2F ", smooth c" D2F
-                          ", xmod" D2F " rad, ss D" D1F " c, in" D2F ", out" D2F
+        hw.seed.PrintLine("beta" D2F " rad, tilt p" D2F ", fm I" D2F
+                          " rad, ss D" D1F " c, in" D2F ", out" D2F
                           ", octave %s, mute %d, cpu %u %%",
-                          D2V(d.beta), D2V(d.p), D2V(d.c), D2V(d.xmod),
+                          D2V(d.beta), D2V(d.p), D2V(d.fm),
                           D1V(d.ss_d), D2V(d.ss_in), D2V(d.ss_out),
                           oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
                           d.mute ? 1 : 0,
@@ -189,14 +189,14 @@ int main() {
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
         // first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
-        static const char* const sw1_name[3] = { "FB", "ADD", "PD" };
+        static const char* const mode_name[4] = { "SAW", "PULSE", "ADD", "FB" };   // K5 zone (sw1 = mode index)
         const Armitage::DiagSnap& d = diag_snap;
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s SW2 %s | ",
+        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " mode %d %s SW2 %s | ",
                       tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
-                      sw1_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
+                      d.sw1, mode_name[(d.sw1 >= 0 && d.sw1 < 4) ? d.sw1 : 3],
                       sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
         diag_stage = 1;
       } else if (now - diag_hb >= 2000) {

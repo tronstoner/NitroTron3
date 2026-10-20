@@ -7,10 +7,15 @@
 
 namespace armitage_k {
 
-// --- Shape amount (K1) -----------------------------------------------------
-// FB: beta = ARM_BETA_MAX * k1^2 (unchanged, full K1 travel). ADD / PD: K1 is
-// split at ARM_K1_SPLIT into u (0..split, scaled to 0..1) and v (split..1,
-// scaled to 0..1) — see armitage.h Process() and the ADD/PD sections below.
+// --- Mode selector (K5, 2026-10-20; SW1 reads nothing) -----------------------
+// K5 zones CCW -> CW: [0, Z0) SAW, [Z0, Z1) PULSE, [Z1, Z2) ADD, [Z2, 1] FEEDBACK
+// (4 equal fifths; the top fifth is reserved and plays FEEDBACK too). A zone change
+// crossfades the band outputs of the two modes linearly over ARM_MODEL_XFADE_MS.
+constexpr float ARM_MODE_ZONE[3] = { 0.2f, 0.4f, 0.6f };
+
+// --- K1 (timbre, per mode) ----------------------------------------------------
+// FB: beta = ARM_BETA_MAX * k1^2 (full travel, as before). ADD: K1 split at
+// ARM_K1_SPLIT into u / v (below, unchanged). SAW: resonance (R, morph). PULSE: width.
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
 constexpr float ARM_K1_SPLIT   = 0.6f;    // K1 split point: below = today's ADD/PD law (scaled), above = extended range
@@ -50,10 +55,10 @@ static_assert(ARM_MP_WIN_MS[3] * 48.f + 2.f < (float)ARM_MP_BUF, "ARM_MP_BUF: lo
 // --- Wet DC blocker (final 48 kHz wet, before K2 MicroPitch) ---------------
 constexpr float ARM_DC_HZ = 10.f;  // wet DC blocker (FB carries DC); below the lowest bass fundamental
 
-// --- Feedback smoothing (K5, FB model only): per-band one-pole LP on yprev at 8 kHz
-// cutoff_k = c * f'_k (relative to the transposed band freq), c exponential K5 CCW -> CW
-constexpr float ARM_SMOOTH_REL_MAX = 8.f;     // c at K5 CCW (cutoff 8 x band freq = little damping)
-constexpr float ARM_SMOOTH_REL_MIN = 0.5f;    // c at K5 CW (cutoff half the band freq = strong damping)
+// --- Feedback smoothing (FB only, fixed since K5 became the mode selector):
+// per-band one-pole LP on yprev at 8 kHz, cutoff_k = c * f'_k (relative to the transposed band freq).
+// c = the K5-noon value of the former K5 law c = 8 * (0.5 / 8)^k5 (8 at CCW -> 0.5 at CW): 8 * 0.25 = 2.0.
+constexpr float ARM_SMOOTH_REL_FIXED = 2.f;   // cutoff 2 x band freq
 constexpr float ARM_SMOOTH_HZ_LO   = 20.f;    // Hz; lower clamp of any band's cutoff
 constexpr float ARM_SMOOTH_HZ_HI   = 3800.f;  // Hz; upper clamp of any band's cutoff (below Nyquist of the 8 kHz rate)
 
@@ -67,13 +72,18 @@ constexpr float ARM_SMOOTH_HZ_HI   = 3800.f;  // Hz; upper clamp of any band's c
 // min 0.0007 / median 0.0209 / max 0.034 (p10 0.014, p90 0.029).
 constexpr float ARM_REF_LEVEL  = 0.021f;  // band |z'| (8 kHz band engine units) that counts as "full"
 
-// --- Shaping model (SW1): UP = FB, MID = ADD, DOWN = PD ----------------------
-constexpr float ARM_MODEL_XFADE_MS = 10.f;  // ms; linear crossfade old -> new model output on an SW1 change
-constexpr float ARM_GAIN_FB    = 1.f;     // FB makeup (on the shaping delta): the reference the other models are matched to
+// --- Modes (K5): SAW / PULSE (PD base), ADD, FB -----------------------------
+constexpr float ARM_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new mode output on a K5 zone change (was 10 ms on SW1)
+// FB "replace" gain on the shaping delta (2026-10-20, as the PD base): out_k = y0_k + ARM_GAIN_FB share_k (y_k - y0_k)
+// in every octave (the *_DELTA octave gains do not apply), feedback signal at full amount
+// (yprev = y_k / |z'_k|, every band above ARM_SILENCE). Set by structure, not by ear (unheard).
+constexpr float ARM_GAIN_FB    = 2.f;     // was 1.0 (with yprev = y_k / ARM_REF_LEVEL)
 constexpr float ARM_GAIN_ADD   = 0.54f;   // ADD makeup on the shaping delta (out_k = y0_k + g_model share_k (shaped_k - y0_k); y0 unscaled, K1 = 0 = unity in every model): matched to FB wet RMS at K1 = 1 on the DI bass excerpts at passive level (peak 0.1), SW2 MID, K2 K3 0, K4 K5 noon (2026-10-20; was 1.02 on the whole output)
-constexpr float ARM_GAIN_PD    = 0.88f;   // PD makeup on the shaping delta, matched to FB the same way (2026-10-20; was 1.01 on the whole output)
+// SAW / PULSE "replace" gain G on the shaping delta, every octave (the *_DELTA octave gains do not apply):
+// out_k = y0_k + G share_k a_k (shaped_k - y0_k). Approved on the host at 2.0048 (DI 2, var8), rounded.
+constexpr float ARM_GAIN_PD    = 2.f;     // was 0.88 (HEAD PD makeup, K1 knee law)
 
-// ADD (SW1 MID): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
+// ADD (K5 3rd zone): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
 // u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
 // M_eff = 1 + u*(ARM_ADD_MID-1) + v*(ARM_ADD_MMAX-ARM_ADD_MID)   (1 -> 8 -> 16)
 // harmonic weight = g_m / m^s, s = 1 - (1-ARM_ADD_S_MIN)*v       (1 -> 1 -> 0.6)
@@ -92,16 +102,39 @@ constexpr float ARM_ADD_FEDGE  = 400.f;   // Hz; fade width below ARM_ADD_FMAX (
 // no picking, no smoothing.
 constexpr float ARM_SHARE_FLOOR = 1e-5f;  // share denominator floor = sqrt(ARM_SILENCE): no 0/0 (a sounding band is >= this already)
 
-// PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) * amt_k
-// (u, v as above). At K1 <= ARM_K1_SPLIT this is exactly the old law scaled onto u.
-// At K1 = 1, amt_k = 1: d = 0.5 - (0.45 + 0.04) = 0.01.
-constexpr float ARM_PD_DEPTH     = 0.45f;  // knee travel vs u: d = 0.5 (sine) .. 0.05 (saw-like) at u = 1, amt_k = 1
-constexpr float ARM_PD_DEPTH_HI  = 0.04f;  // extra knee travel vs v: pushes the floor 0.05 -> 0.01 at v = 1, amt_k = 1
-constexpr float ARM_PD_FOLD_HZ_LO = 500.f;   // Hz; full-depth anti-fold corner at v = 0
-constexpr float ARM_PD_FOLD_HZ_HI = 1000.f;  // Hz; full-depth anti-fold corner at v = 1 (moves 500 -> 1000 with v)
-constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine (linear floor in between)
+// PD base (SAW, PULSE; 2026-10-20): every band above ARM_SILENCE at the full knee (no level
+// amount s_k), the K1 = 1 values of the former K1 knee law, now fixed:
+//   knee time ARM_PD_KNEE = 0.01 (= 0.5 - (0.45 + 0.04), the old depth at K1 = 1)
+//   anti-fold knee floor dfloor_k = ARM_PD_KNEE + (0.5 - ARM_PD_KNEE) clamp((f'_k - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ), 0, 1)
+//   cap_k = (0.5 - dfloor_k) / (0.5 - ARM_PD_KNEE)   (1 up to 1 kHz, 0 at 3.8 kHz)
+// SAW knee: d_k = max(0.5 - (0.5 - ARM_PD_KNEE) tilt_k, dfloor_k)  (tilt and cap inside the knee, a_k = 1)
+// PULSE / resonance: shape at knee ARM_PD_KNEE, amount a_k = tilt_k cap_k
+constexpr float ARM_PD_KNEE       = 0.01f;   // cycles; knee time of the saw / pulse jumps
+constexpr float ARM_PD_FOLD_HZ    = 1000.f;  // Hz; full-depth anti-fold corner (the K1 = 1 value of the old 500 -> 1000 law)
+constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine / no pulse (linear in between)
 
-// --- Cross-modulation (K3): theta_k += beta_x * m --------------------------
+// SAW, K1 = resonance (CZ "reso" on the linear phase, DC removed):
+//   R = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) k1     (linear, 1 -> 16; noon 8.5)
+//   R_k = min(R, ARM_RES_FMAX / f'_k)
+//   res_k = |z'_k| (sin(2 pi R_k phi) (1 - phi) - dc(R_k)),  dc(R) = 1/(2 pi R) - sin(2 pi R)/(2 pi R)^2 (exact mean)
+//   out_k = y0_k + G share_k [ (1 - k1) (saw_k - y0_k) + k1 tilt_k cap_k (res_k - y0_k) ]   (= (1 - k1) out_saw + k1 out_res)
+constexpr float ARM_RES_R_MIN = 1.f;
+constexpr float ARM_RES_R_MAX = 16.f;
+constexpr float ARM_RES_FMAX  = 3800.f;   // Hz; R_k f'_k capped here (anti-fold)
+
+// PULSE, K1 = width: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) k1 (50 % CCW -> 10 % CW),
+// jumps at phi = 0 (down) and phi = w (up), knee ARM_PD_KNEE each; mean 1 - 2w removed (exact for any w).
+constexpr float ARM_PUL_W_MAX = 0.5f;
+constexpr float ARM_PUL_W_MIN = 0.1f;
+
+// --- K3 = 2-op FM per band, all modes (2026-10-20) ---------------------------
+// phi_mod = phi_k + I sin(phi_down_k), I = ARM_FM_INDEX_MAX * k3 (rad, linear), applied to the
+// carrier phase before the shape. Modulator = the carrier's own octave-down from the band:
+// SW2 MID: Down1(z_k) (half phase); UP: z_k (the played band); DOWN: Down1(z_k) = the carrier (1:1).
+constexpr float ARM_FM_INDEX_MAX = 3.f;   // rad at K3 full CW
+
+// --- Cross-modulation (former K3): theta_k += beta_x * m — off since K3 = FM ---
+constexpr bool  ARM_XMOD_ENABLE = false;  // true: K3 drives beta_x = ARM_XMOD_MAX * k3^2 as well (on top of the FM)
 constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k below this form the root modulator m (bands 0..13, 25 .. 148 Hz)
 constexpr float ARM_XMOD_MAX   = 6.f;     // rad; beta_x at K3 full CW (squared taper), Ensemble "Up"-mode depth
 constexpr float ARM_XMOD_DEN_FLOOR = 0.1f; // K3 modulator denominator floor = this * ARM_REF_LEVEL (fixed): root-band leakage near silence no longer jumps m (clicks); 1.0 = stronger, also tames K3 on notes without root content
