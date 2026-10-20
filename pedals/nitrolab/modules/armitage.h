@@ -71,7 +71,12 @@
 //   silence guard: |z|^2 < ARM_SILENCE -> out_k = 0, yprev_k = 0
 //
 //   f'_k = r f_k,  r = 2 / 1 / 0.5 (SW2 UP/MID/DOWN)      (transposed band frequency)
-//   w_k = 1 (K2 roll-off removed 2026-10-17)
+//   w_k = 1 (K2 roll-off removed 2026-10-17); SW2 MID with ARM_ALIGN: w_k = fitted weight
+//         10^(W_dB(log2 f_k) / 20) (0.96 .. 1.20, armitage_constants.h)
+//   ARM_ALIGN (SW2 MID only): z_k -> (-1)^k z_k before everything else (shaping, K3
+//         rotation, root modulator m): adjacent bands are 180 deg apart at every
+//         crossover, so the aligned sum no longer notches between centres.
+//         UP: squaring removes the sign (untouched). DOWN: unrotated.
 //   K5 one-pole cutoff_k = clamp(c * f'_k, ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI)   (FB only)
 //
 //   wet = interpolate( ARM_OUT_GAIN * g_oct * band sum )      (48 kHz)
@@ -204,6 +209,13 @@ class Armitage : public Module {
       f_k_[k] = f;
       if (f < ARM_ROOT_HZ) n_root_ = k + 1;   // centres rise with k
       w_[k] = w_t_[k] = 1.f;                  // K2 roll-off removed: output weight always 1
+      {                                       // ARM_ALIGN: fitted SW2 MID output weight (smooth in log f)
+        float fc = f;
+        if (fc < ARM_ALIGN_W_FLO) fc = ARM_ALIGN_W_FLO;
+        if (fc > ARM_ALIGN_W_FHI) fc = ARM_ALIGN_W_FHI;
+        const float x = log2f(fc);
+        wmid_[k] = ARM_ALIGN ? powf(10.f, (ARM_ALIGN_WA * x * x + ARM_ALIGN_WB * x + ARM_ALIGN_WC) / 20.f) : 1.f;
+      }
       static const float r[3] = { 2.f, 1.f, 0.5f };          // UP / MID / DOWN
       for (int o = 0; o < 3; o++) {
         fb_t_[o][k] = 0.f;
@@ -623,6 +635,10 @@ class Armitage : public Module {
       float zr, zi;
       if (O == kMid) {
         zr = bands_[k].Re(); zi = bands_[k].Im();
+        if (ARM_ALIGN && (k & 1)) {              // phase alignment: odd bands rotated by pi (z -> -z)
+          zr = -zr;                              // before the shaping, the K3 rotation and the root modulator
+          zi = -zi;
+        }
       } else if (O == kUp) {
         bands_[k].ArmUp1(inv, zr, zi);
       } else {
@@ -632,11 +648,13 @@ class Armitage : public Module {
         mnum += zr;
         mden += mag;
       }
+      // Output weight: w_k, times the fitted ARM_ALIGN weight on SW2 MID (UP / DOWN: 1).
+      const float wk = (O == kMid && ARM_ALIGN) ? w[k] * wmid_[k] : w[k];
       if (M != kFade) {
-        acc += w[k] * BandOut<M, O>(s, k, zr, zi, mag, inv, c);
+        acc += wk * BandOut<M, O>(s, k, zr, zi, mag, inv, c);
       } else {                                   // model crossfade: old (acc) and new (acc2)
-        acc  += w[k] * BandOutRT<O>(mf, s, k, zr, zi, mag, inv, c);
-        acc2 += w[k] * BandOutRT<O>(mt, s, k, zr, zi, mag, inv, c);
+        acc  += wk * BandOutRT<O>(mf, s, k, zr, zi, mag, inv, c);
+        acc2 += wk * BandOutRT<O>(mt, s, k, zr, zi, mag, inv, c);
       }
     }
     {                                            // K3 modulator denominator floor (fixed, a share of
@@ -936,6 +954,7 @@ class Armitage : public Module {
   float mag_[kBands + 2];          // |z_k| of the current 8 kHz sample at [k + 1] (0 = silent); [0], [kBands + 1] = 0 guards
   float inv_[kBands];              // 1/|z_k| of the current 8 kHz sample (0 = silent)
   float w_[kBands], w_t_[kBands];  // output weight (always 1; K2 roll-off removed, kept for the smoother call site)
+  float wmid_[kBands];             // ARM_ALIGN fitted output weight, SW2 MID only (1 without ARM_ALIGN)
   Slot  slot_[2];                  // active + crossfade-in path
   int   act_ = 0;                  // index of the active slot
   int   fade_n_ = 0;               // crossfade samples left (0 = no fade)

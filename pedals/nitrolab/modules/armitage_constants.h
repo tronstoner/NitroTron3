@@ -106,18 +106,36 @@ constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k bel
 constexpr float ARM_XMOD_MAX   = 6.f;     // rad; beta_x at K3 full CW (squared taper), Ensemble "Up"-mode depth
 constexpr float ARM_XMOD_DEN_FLOOR = 0.1f; // K3 modulator denominator floor = this * ARM_REF_LEVEL (fixed): root-band leakage near silence no longer jumps m (clicks); 1.0 = stronger, also tames K3 on notes without root content
 
+// --- Phase-aligned band sum (SW2 MID only) ----------------------------------
+// Adjacent bands of the bank are 180 deg apart at every crossover (measured: the
+// rotation that aligns band k is (-1)^k within 1.5 deg), so the plain band sum
+// notched between centres. ARM_ALIGN: every odd band's z_k is negated (z -> -z)
+// BEFORE the shaping / K3 rotation (and before the K3 root modulator), and each band
+// gets the fitted output weight
+//   w_k = 10^(W_dB(x) / 20),  W_dB(x) = ARM_ALIGN_WA x^2 + ARM_ALIGN_WB x + ARM_ALIGN_WC,
+//   x = log2(clamp(f_k, ARM_ALIGN_W_FLO, ARM_ALIGN_W_FHI))   (smooth, 0.96 .. 1.20)
+// SW2 UP: the squaring removes the sign -> untouched. SW2 DOWN: stays unrotated
+// (a rotated DOWN rippled 20.9 dB). false = the unaligned bank (HEAD 2d128a2, bit-identical;
+// ARM_OUT_GAIN / ARM_GAIN_UP / ARM_GAIN_DOWN / *_DELTA revert with it).
+constexpr bool  ARM_ALIGN       = true;
+constexpr float ARM_ALIGN_WA    = -0.1583384f;   // dB per log2(Hz)^2 (fit 2026-10-20, DI + KS chromatic E1..E4)
+constexpr float ARM_ALIGN_WB    =  1.5180589f;   // dB per log2(Hz)
+constexpr float ARM_ALIGN_WC    = -1.9726554f;   // dB
+constexpr float ARM_ALIGN_W_FLO =  41.2f;        // Hz; weight held below (E1)
+constexpr float ARM_ALIGN_W_FHI = 330.f;         // Hz; weight held above (~E4)
+
 // --- Octave (SW2) ------------------------------------------------------------
 constexpr float ARM_XFADE_MS   = 10.f;    // ms; linear crossfade old -> new octave path on an SW2 change
-constexpr float ARM_GAIN_UP    = 0.30f;   // (2026-10-20: checked on the DI bass at K1 = 0: UP -0.1 dB vs MID) (2026-10-17: was 0.36 before the interpolator fix, which raised UP by +1.6 dB vs MID)
+constexpr float ARM_GAIN_UP    = ARM_ALIGN ? 1.139f : 0.30f;   // ALIGN (2026-10-20): unity vs MID at K1 = 0 on the DI bass (passive), 0.0 dB; unaligned 0.30 // (2026-10-20: checked on the DI bass at K1 = 0: UP -0.1 dB vs MID) (2026-10-17: was 0.36 before the interpolator fix, which raised UP by +1.6 dB vs MID)
 //    // octave-up makeup: unity-gain UP measured +8.3..+9.2 dB over MID (KS gtr+bass) -> -8.9 dB
-constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-20: checked on the DI bass at K1 = 0: DOWN +0.4 dB vs MID) (2026-10-17: was 0.38 before the interpolator fix, which lowered DOWN by -0.4 dB vs MID)
+constexpr float ARM_GAIN_DOWN  = ARM_ALIGN ? 1.445f : 0.40f;   // ALIGN (2026-10-20): unity vs MID at K1 = 0 the same way, 0.0 dB; unaligned 0.40 // (2026-10-20: checked on the DI bass at K1 = 0: DOWN +0.4 dB vs MID) (2026-10-17: was 0.38 before the interpolator fix, which lowered DOWN by -0.4 dB vs MID)
 //    // octave-down makeup: unity-gain DOWN measured +8.1..+8.5 dB over MID -> -8.4 dB
 // Octave makeup on the shaping delta only (on top of ARM_GAIN_UP / DOWN, which scale the whole
 // slot): out_k = y0_k + g_model * g_oct_delta * share_k * (shaped_k - y0_k); MID = 1.
 // ARM_GAIN_UP / DOWN are set on the unshaped band sum, which gains +8..+10 dB under the
 // transposition; the shaping delta does not (within -1..+1.4 dB of MID), so without this UP / DOWN sat 2..7 dB under MID at K1 = 1.
-constexpr float ARM_GAIN_UP_DELTA   = 3.59f;   // fit 2026-10-20: UP at K1 = 1 = MID at K1 = 1 (wet RMS, mean of FB / ADD / PD, DI bass at passive level, K2 K3 0, K4 K5 noon); residuals FB +0.0 / ADD -0.2 / PD +0.1 dB
-constexpr float ARM_GAIN_DOWN_DELTA = 2.93f;   // fit the same way for DOWN; residuals FB -0.4 / ADD +0.3 / PD +0.1 dB
+constexpr float ARM_GAIN_UP_DELTA   = ARM_ALIGN ? 1.15f : 3.59f;   // ALIGN refit 2026-10-20 (the aligned MID sum is +11.5 dB louder, ARM_OUT_GAIN / GAIN_UP rescaled): UP - MID at K1 = 1 FB +0.35 / ADD +0.07 / PD +0.50 dB (the floor: below ~1.2 UP gets louder again, not quieter). Unaligned 3.59: fit 2026-10-20: UP at K1 = 1 = MID at K1 = 1 (wet RMS, mean of FB / ADD / PD, DI bass at passive level, K2 K3 0, K4 K5 noon); residuals FB +0.0 / ADD -0.2 / PD +0.1 dB
+constexpr float ARM_GAIN_DOWN_DELTA = ARM_ALIGN ? 1.05f : 2.93f;   // ALIGN refit the same way: DOWN - MID at K1 = 1 FB -0.09 / ADD +0.11 / PD +0.39 dB. Unaligned 2.93: fit the same way for DOWN; residuals FB -0.4 / ADD +0.3 / PD +0.1 dB
 
 // --- Guards -----------------------------------------------------------------
 constexpr float ARM_SILENCE    = 1e-10f;  // |z|^2 below this -> band output 0, yprev reset (FastInvSqrt(0) guard)
@@ -127,7 +145,7 @@ constexpr float ARM_DENORM     = 1e-12f;  // |yprev| below this is flushed to 0
 constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the 8 kHz rate
 
 // --- Output -----------------------------------------------------------------
-constexpr float ARM_OUT_GAIN   = 5.6f;    // wet trim: K1 = 0 (SW2 MID, K2 K3 0, K4 K5 noon) wet RMS = dry RMS on the DI bass
+constexpr float ARM_OUT_GAIN   = ARM_ALIGN ? 1.487f : 5.6f;    // ALIGN (2026-10-20): the aligned MID sum is +11.5 dB louder; 1.487 = unity (+0.0 dB) at K1 = 0 the same way. Unaligned 5.6: wet trim: K1 = 0 (SW2 MID, K2 K3 0, K4 K5 noon) wet RMS = dry RMS on the DI bass
 //     // excerpts at passive level (peak 0.1) (2026-10-20; was 7.4, set on KS plucks: +2.3 dB
 //     // over dry on the DI; K1 = 0 is unaffected by the overlap share)
 
