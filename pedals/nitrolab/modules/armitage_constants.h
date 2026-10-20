@@ -115,6 +115,9 @@ constexpr float ARM_OUT_GAIN   = 7.4f;    // (2026-10-17: was 8 before the inter
 // --- Sin table ----------------------------------------------------------------
 constexpr int   ARM_SIN_SIZE   = 1024;    // entries per period (power of two; mask wrap)
 
+// --- FS1 wet mute (test tool: A/B against dry for unity-gain testing) ------
+constexpr float ARM_MUTE_SLIDE_MS = 1.0f;   // ms; linear slide of mute_g_ to the target (0 or 1)
+
 // --- DIAG "note this setting" log (DIAG builds only; no effect otherwise) ---
 constexpr float    ARM_DIAG_KNOB_EPS  = 0.02f;  // knob move (remapped 0..1) that counts as a change
 constexpr uint32_t ARM_DIAG_SETTLE_MS = 600;    // ms without change before an `auto` line

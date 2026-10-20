@@ -128,7 +128,11 @@
 //   SW1 shaping model       UP = FB (feedback FM), MID = ADD (additive saw),
 //                           DOWN = PD (phase-distortion saw); ARM_MODEL_XFADE_MS crossfade
 //   SW2 octave              UP = octave up, MID = as played, DOWN = octave down
-//   FS1/FS2 unused. LED1 on, LED2 off.
+//   FS1  wet mute (test tool)  rising edge toggles mute_; wet output gain
+//                              mute_g_ slides linearly to 0/1 over
+//                              ARM_MUTE_SLIDE_MS (declick), last step of
+//                              Process(); dry (shell K6 mix) is untouched.
+//                              LED2 on while muted. FS2 unused. LED1 on.
 //   DIAG builds only: FS1 tap = "note this setting" (LED1 off ~ARM_DIAG_BLINK_MS,
 //   numbered line on the serial log); an `auto` line once the controls have
 //   settled after a change. The module only fills a snapshot (Controls(), main
@@ -232,11 +236,15 @@ class Armitage : public Module {
     rel_a_ = 1.f - expf(-1000.f / (ARM_REL_RELEASE_MS * sr8_));
     bx_ = bx_t_ = 0.f;
     oct_t_ = kMid;
+    mute_ = false;
+    mute_g_ = 1.f;
+    mute_step_ = 1.f / (ARM_MUTE_SLIDE_MS * 0.001f * sr);
   }
 
   void Controls(const ControlSurface& cs,
                 daisy::Led& led1, daisy::Led& led2) override {
     using namespace armitage_k;
+    if (cs.Foot(0).rising) mute_ = !mute_;   // FS1: wet mute toggle (test tool)
     const float k1 = RemapKnob(cs.Knob(0));
     const float k2 = RemapKnob(cs.Knob(1));   // micro pitch detune
     const float k3 = RemapKnob(cs.Knob(2));
@@ -279,7 +287,7 @@ class Armitage : public Module {
     oct_t_ = oct;
 
     led1.Set(1.f);
-    led2.Set(0.f);
+    led2.Set(mute_ ? 1.f : 0.f);   // LED2 on while wet is muted
 
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
@@ -295,6 +303,7 @@ class Armitage : public Module {
     float beta, p, c, xmod;  // derived values the engine runs toward
     float ss_d, ss_in, ss_out;   // K2 micro-pitch target: outer detune D (cents), inner / outer pair gain
     int   oct;               // 0 up, 1 played, 2 down
+    bool  mute;              // FS1 wet mute state
   };
   void Activate() override {
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
@@ -398,6 +407,7 @@ class Armitage : public Module {
     }
     DcBlock(wet, size);   // wet-only DC blocker (FB carries DC); dry is untouched by the shell mix
     MicroPitch(wet, size);
+    ApplyMute(wet, size);   // FS1 test-tool mute, last step: declicked wet gain, dry untouched
   }
 
  private:
@@ -637,6 +647,22 @@ class Armitage : public Module {
     dc_y1_ = y1;
   }
 
+  // FS1 test-tool mute (in place, final 48 kHz wet). mute_g_ slides linearly
+  // toward the target (0 muted / 1 unmuted) at ARM_MUTE_SLIDE_MS per sample —
+  // never latched/deferred. mute_g_ == 1.f (unmuted, default) multiplies
+  // every sample by exactly 1.0, so unmuted output stays bit-identical.
+  void ApplyMute(float* wet, size_t size) {
+    const float target = mute_ ? 0.f : 1.f;
+    const float step = mute_step_;
+    float g = mute_g_;
+    for (size_t n = 0; n < size; n++) {
+      if (g < target)      { g += step; if (g > target) g = target; }
+      else if (g > target) { g -= step; if (g < target) g = target; }
+      wet[n] *= g;
+    }
+    mute_g_ = g;
+  }
+
   // K2 micro pitch shift detune on the final 48 kHz wet (in place). The wet is
   // always written to the buffer; a pair is computed only while its gain is on.
   void MicroPitch(float* wet, size_t size) {
@@ -728,6 +754,7 @@ class Armitage : public Module {
     for (int i = 0; i < 5; i++) s.k[i] = kv[i];
     s.sw1 = sw1; s.sw2 = oct; s.oct = oct;
     s.beta = beta; s.p = p; s.c = c; s.xmod = bx_t_;
+    s.mute = mute_;
     SsStage(kv[1], s.ss_d, s.ss_in, s.ss_out);
 
     // FS1 tap: numbered line + LED1 blink-off.
@@ -871,6 +898,9 @@ class Armitage : public Module {
   float rel_a_ = 0.0025f;              // L_ref release coefficient (8 kHz)
   float bx_ = 0.f, bx_t_ = 0.f;        // K3 cross-mod depth beta_x (smoothed / target)
   volatile int oct_t_ = kMid;          // SW2 target octave
+  volatile bool mute_ = false;         // FS1 wet mute target (test tool)
+  float mute_g_ = 1.f;                 // wet mute gain, slides toward mute_ ? 0 : 1
+  float mute_step_ = 0.f;              // mute_g_ step per 48 kHz sample (1 / (ARM_MUTE_SLIDE_MS ms))
 
   // DIAG (main loop only)
   DiagSnap diag_tap_{}, diag_auto_{};

@@ -178,10 +178,12 @@ int main() {
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         hw.seed.PrintLine("beta" D2F " rad, tilt p" D2F ", smooth c" D2F
-                          ", xmod" D2F " rad, ss D" D1F " c, in" D2F ", out" D2F ", octave %s, cpu %u %%",
+                          ", xmod" D2F " rad, ss D" D1F " c, in" D2F ", out" D2F
+                          ", octave %s, mute %d, cpu %u %%",
                           D2V(d.beta), D2V(d.p), D2V(d.c), D2V(d.xmod),
                           D1V(d.ss_d), D2V(d.ss_in), D2V(d.ss_out),
                           oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
+                          d.mute ? 1 : 0,
                           (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
