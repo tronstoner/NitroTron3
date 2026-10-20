@@ -40,6 +40,7 @@
 //     amt_k   = s_k * tilt_k
 //   share_k = |z'_k| / max(|z'_{k-1}| + |z'_k| + |z'_{k+1}|, ARM_SHARE_FLOOR)
 //   y0_k    = Re(z'_k e^{j xm})   (the unshaped band; ALL models: out_k = y0_k + g_model * share_k * (shaped_k - y0_k),
+//             g_model times g_oct_delta in the shifted octaves, see wet below;
 //             so the plain band sum stays flat and each partial's shaping counts about once)
 //             (overlap share, ALL models; edge bands: the one existing neighbour; silent bands count 0;
 //               all magnitudes of the sample are computed first, then the bands are shaped)
@@ -75,6 +76,11 @@
 //
 //   wet = interpolate( ARM_OUT_GAIN * g_oct * band sum )      (48 kHz)
 //         g_model = ARM_GAIN_FB / ARM_GAIN_ADD / ARM_GAIN_PD, applied per band on the shaping delta (above)
+//         g_oct = ARM_GAIN_UP / 1 / ARM_GAIN_DOWN (SW2 UP / MID / DOWN) on the whole slot output;
+//         the shifted slots also scale the shaping delta by g_oct_delta = ARM_GAIN_UP_DELTA /
+//         ARM_GAIN_DOWN_DELTA (MID 1): out_k = y0_k + g_model g_oct_delta share_k (shaped_k - y0_k)
+//   wet  -> DC blocker -> K2 micro pitch -> soft clipper -> FS1 mute   (all 48 kHz, in place)
+//   soft clipper: wet = ARM_SAT_TRIM * ARM_SAT_T * tanh(wet / ARM_SAT_T)  (Pade(3,3) tanh)
 //
 //   K2 MICRO PITCH SHIFT DETUNE ("Eventide micro pitch" style, on the final 48 kHz wet, so
 //   for every SW1 model and SW2 octave alike; model / octave crossfades are upstream of it):
@@ -413,6 +419,7 @@ class Armitage : public Module {
     }
     DcBlock(wet, size);   // wet-only DC blocker (FB carries DC); dry is untouched by the shell mix
     MicroPitch(wet, size);
+    Saturate(wet, size);    // wet soft clipper ARM_SAT_T * tanh(x / ARM_SAT_T) * ARM_SAT_TRIM
     ApplyMute(wet, size);   // FS1 test-tool mute, last step: declicked wet gain, dry untouched
   }
 
@@ -479,9 +486,13 @@ class Armitage : public Module {
     }
   }
 
-  static float ModelGain(int m) {
+  // Gain on the shaping delta of model M in octave O: g_model * g_oct_delta
+  // (MID: 1; UP / DOWN: ARM_GAIN_UP_DELTA / ARM_GAIN_DOWN_DELTA). Constant-folded.
+  template <int M, int O>
+  static constexpr float DeltaGain() {
     using namespace armitage_k;
-    return (m == kFB) ? ARM_GAIN_FB : (m == kADD) ? ARM_GAIN_ADD : ARM_GAIN_PD;
+    return ((M == kFB) ? ARM_GAIN_FB : (M == kADD) ? ARM_GAIN_ADD : ARM_GAIN_PD)
+         * ((O == kUp) ? ARM_GAIN_UP_DELTA : (O == kDown) ? ARM_GAIN_DOWN_DELTA : 1.f);
   }
 
   // Per-sample values shared by all bands of one slot.
@@ -515,7 +526,7 @@ class Armitage : public Module {
       if (y < -1.f) y = -1.f;
       if (fabsf(y) < ARM_DENORM) y = 0.f;
       s.yprev[k] = y;                            // feedback from the UNSCALED band output
-      return wr + ModelGain(M) * share * (out - wr);   // g_model on the delta only
+      return wr + DeltaGain<M, O>() * share * (out - wr);   // g_model * g_oct_delta on the delta only
     }
     float sh = mag * c.invl;                     // s_k = min(1, |z'| / ARM_REF_LEVEL)
     if (sh > 1.f) sh = 1.f;
@@ -524,7 +535,7 @@ class Armitage : public Module {
       const float ur = zr * inv, ui = zi * inv;  // u = z' / |z'|
       const float vr = ur * c.xc - ui * c.xs;    // u e^{j xm}
       const float vi = ur * c.xs + ui * c.xc;
-      return mag * (vr + ModelGain(M) * share * amt * AddSum<O>(k, vr, vi));   // y0 = mag * vr: delta = harmonic term
+      return mag * (vr + DeltaGain<M, O>() * share * amt * AddSum<O>(k, vr, vi));   // y0 = mag * vr: delta = harmonic term
     }
     // kPD
     const float wi = zr * c.xs + zi * c.xc;
@@ -534,7 +545,7 @@ class Armitage : public Module {
     const float ph = FastAtan2Cycles(wi, wr);    // [0, 1)
     const float pw = (ph < dk) ? ph * (0.5f / dk)
                                : 0.5f + (ph - dk) * (0.5f / (1.f - dk));
-    return wr + ModelGain(M) * share * (mag * Cos01(pw) - wr);
+    return wr + DeltaGain<M, O>() * share * (mag * Cos01(pw) - wr);
   }
 
   // ADD harmonic sum sum_{m=2..top} g_m h_mk Re(v^m) / m^s for the unit phasor v.
@@ -665,6 +676,28 @@ class Armitage : public Module {
     }
     dc_x1_ = x1;
     dc_y1_ = y1;
+  }
+
+  // Wet soft clipper (in place, final 48 kHz wet, after MicroPitch, before the
+  // mute): y = ARM_SAT_TRIM * ARM_SAT_T * tanh(x / ARM_SAT_T). Fixed post trim, no
+  // 1/drive compensation; |y| <= ARM_SAT_TRIM * ARM_SAT_T. Dry untouched.
+  void Saturate(float* wet, size_t size) {
+    using namespace armitage_k;
+    constexpr float kIn  = 1.f / ARM_SAT_T;
+    constexpr float kOut = ARM_SAT_T * ARM_SAT_TRIM;
+    for (size_t n = 0; n < size; n++) wet[n] = kOut * PadeTanh(wet[n] * kIn);
+  }
+
+  // tanh(x) by Pade(3,3), x (27 + x^2) / (27 + 9 x^2), clamped to +-1 for |x| > 3
+  // (value 1 and slope 0 at |x| = 3: C1-continuous, monotonic). The same
+  // approximation as MoogLadder::Saturate (src/core/blocks/moog_ladder.h, private
+  // there, so repeated here). Max error 0.024 at |x| ~ 1.57 (2.6 % relative near
+  // |x| ~ 1.45); 0.001 at |x| = 0.3, slope at 0 exactly 1.
+  static inline float PadeTanh(float x) {
+    if (x > 3.f) return 1.f;
+    if (x < -3.f) return -1.f;
+    const float x2 = x * x;
+    return x * (27.f + x2) / (27.f + 9.f * x2);
   }
 
   // FS1 test-tool mute (in place, final 48 kHz wet). mute_g_ slides linearly

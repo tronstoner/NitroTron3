@@ -112,6 +112,12 @@ constexpr float ARM_GAIN_UP    = 0.30f;   // (2026-10-20: checked on the DI bass
 //    // octave-up makeup: unity-gain UP measured +8.3..+9.2 dB over MID (KS gtr+bass) -> -8.9 dB
 constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-20: checked on the DI bass at K1 = 0: DOWN +0.4 dB vs MID) (2026-10-17: was 0.38 before the interpolator fix, which lowered DOWN by -0.4 dB vs MID)
 //    // octave-down makeup: unity-gain DOWN measured +8.1..+8.5 dB over MID -> -8.4 dB
+// Octave makeup on the shaping delta only (on top of ARM_GAIN_UP / DOWN, which scale the whole
+// slot): out_k = y0_k + g_model * g_oct_delta * share_k * (shaped_k - y0_k); MID = 1.
+// ARM_GAIN_UP / DOWN are set on the unshaped band sum, which gains +8..+10 dB under the
+// transposition; the shaping delta does not (within -1..+1.4 dB of MID), so without this UP / DOWN sat 2..7 dB under MID at K1 = 1.
+constexpr float ARM_GAIN_UP_DELTA   = 3.59f;   // fit 2026-10-20: UP at K1 = 1 = MID at K1 = 1 (wet RMS, mean of FB / ADD / PD, DI bass at passive level, K2 K3 0, K4 K5 noon); residuals FB +0.0 / ADD -0.2 / PD +0.1 dB
+constexpr float ARM_GAIN_DOWN_DELTA = 2.93f;   // fit the same way for DOWN; residuals FB -0.4 / ADD +0.3 / PD +0.1 dB
 
 // --- Guards -----------------------------------------------------------------
 constexpr float ARM_SILENCE    = 1e-10f;  // |z|^2 below this -> band output 0, yprev reset (FastInvSqrt(0) guard)
@@ -124,6 +130,12 @@ constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the
 constexpr float ARM_OUT_GAIN   = 5.6f;    // wet trim: K1 = 0 (SW2 MID, K2 K3 0, K4 K5 noon) wet RMS = dry RMS on the DI bass
 //     // excerpts at passive level (peak 0.1) (2026-10-20; was 7.4, set on KS plucks: +2.3 dB
 //     // over dry on the DI; K1 = 0 is unaffected by the overlap share)
+
+// --- Wet soft clipper (final 48 kHz wet, after K2 MicroPitch, before the FS1 mute) ---
+// wet = ARM_SAT_TRIM * ARM_SAT_T * tanh(wet / ARM_SAT_T) (Pade(3,3) tanh, see armitage.h).
+// Fixed post trim, no 1/drive compensation: |wet| <= ARM_SAT_TRIM * ARM_SAT_T.
+constexpr float ARM_SAT_T    = 0.7f;  // knee: ~linear below |x| ~ 0.3 (-0.5 dB at 0.3), ceiling 0.7
+constexpr float ARM_SAT_TRIM = 1.0f;  // fixed post trim
 
 // --- Sin table ----------------------------------------------------------------
 constexpr int   ARM_SIN_SIZE   = 1024;    // entries per period (power of two; mask wrap)
