@@ -22,8 +22,10 @@
 //
 //   SW1 UP = FB (feedback FM):
 //     theta_k = b_k * yprev_k + xm
-//     out_k   = Re(z'_k e^{j theta_k})                     (|z'| kept)
-//     yprev_k = onepole_K5,k(out_k / L), clamped to [-1, 1], flushed below ARM_DENORM
+//     y_k     = Re(z'_k e^{j theta_k})                     (|z'| kept)
+//     out_k   = y0_k + g_model * share_k * (y_k - y0_k)
+//     yprev_k = onepole_K5,k(y_k / L), clamped to [-1, 1], flushed below ARM_DENORM
+//               (feedback from the UNSCALED y_k: the share does not touch the loop)
 //     b_k     = min(ARM_BETA_CLAMP, beta * tilt_k), then min(b_k, max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1))
 //               (anti-fold, Carson; ARM_ANTIFOLD; the K3 term xm is NOT capped)
 //   K1 is split at ARM_K1_SPLIT (0.6) for ADD and PD (FB uses K1 over its full
@@ -33,10 +35,13 @@
 //
 //   SW1 MID = ADD (additive saw, harmonics by repeated complex multiplication, no atan2):
 //     u'      = (z'_k / |z'_k|) e^{j xm}                (cross-mod rotation BEFORE the harmonics)
-//     out_k   = |z'_k| * [ Re(u') + share_k * amt_k * sum_{m=2..top} g_m h_mk Re(u'^m) / m^s ]
+//     out_k   = |z'_k| * [ Re(u') + g_model * share_k * amt_k * sum_{m=2..top} g_m h_mk Re(u'^m) / m^s ]
+//               (= y0_k + g_model * share_k * (shaped - y0_k), y0_k = |z'_k| Re(u'))
 //     amt_k   = s_k * tilt_k
-//     share_k = |z'_k| / max(|z'_{k-1}| + |z'_k| + |z'_{k+1}|, ARM_SHARE_FLOOR)
-//               (overlap share; edge bands: the one existing neighbour; silent bands count 0;
+//   share_k = |z'_k| / max(|z'_{k-1}| + |z'_k| + |z'_{k+1}|, ARM_SHARE_FLOOR)
+//   y0_k    = Re(z'_k e^{j xm})   (the unshaped band; ALL models: out_k = y0_k + g_model * share_k * (shaped_k - y0_k),
+//             so the plain band sum stays flat and each partial's shaping counts about once)
+//             (overlap share, ALL models; edge bands: the one existing neighbour; silent bands count 0;
 //               all magnitudes of the sample are computed first, then the bands are shaped)
 //     g_m     = clamp(M_eff - m + 1, 0, 1)
 //     M_eff   = 1 + u (ARM_ADD_MID - 1) + v (ARM_ADD_MMAX - ARM_ADD_MID)   (1 -> 8 -> 16;
@@ -57,7 +62,7 @@
 //               recomputed every 8 kHz sample from v, since fold_k/floor_min move with K1)
 //     phi_w   = phi / (2 d_k) for phi < d_k, else 0.5 + (phi - d_k) / (2 (1 - d_k))
 //               (d_k >= 0.01 always: finite, no overflow)
-//     out_k   = |z'_k| cos(2 pi phi_w)                  (sin table)
+//     out_k   = y0_k + g_model * share_k * (|z'_k| cos(2 pi phi_w) - y0_k)   (sin table)
 //
 //   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / max(sum_{f_k < ARM_ROOT_HZ} |z'_k|, ARM_XMOD_DEN_FLOOR * L)
 //             (in [-1, 1], silence -> 0; denominator floor stops near-silent root leakage flickering m)
@@ -68,8 +73,8 @@
 //   w_k = 1 (K2 roll-off removed 2026-10-17)
 //   K5 one-pole cutoff_k = clamp(c * f'_k, ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI)   (FB only)
 //
-//   wet = interpolate( ARM_OUT_GAIN * g_oct * g_model * band sum )      (48 kHz)
-//         g_model = ARM_GAIN_FB / ARM_GAIN_ADD / ARM_GAIN_PD
+//   wet = interpolate( ARM_OUT_GAIN * g_oct * band sum )      (48 kHz)
+//         g_model = ARM_GAIN_FB / ARM_GAIN_ADD / ARM_GAIN_PD, applied per band on the shaping delta (above)
 //
 //   K2 MICRO PITCH SHIFT DETUNE ("Eventide micro pitch" style, on the final 48 kHz wet, so
 //   for every SW1 model and SW2 octave alike; model / octave crossfades are upstream of it):
@@ -444,7 +449,7 @@ class Armitage : public Module {
       }
   }
 
-  // One 8 kHz sample of one slot, returns g_oct * g_model * band sum.
+  // One 8 kHz sample of one slot, returns g_oct * band sum (g_model is inside, on the shaping delta).
   // update = true: also clocks the band filters and the w_k smoothers (the
   // first slot of the sample does it; the second, during a fade, reads them).
   // kern = kFB / kADD / kPD, or kFade (old mfrom_ and new mdl_ crossfaded).
@@ -484,7 +489,7 @@ class Armitage : public Module {
     float g;         // FB: 1 / ARM_REF_LEVEL (feedback signal)
     float invl;      // 1 / ARM_REF_LEVEL (s_k)
     float xm;        // cross-mod phase (rad)
-    float xc, xs;    // cos / sin of xm (ADD / PD rotation)
+    float xc, xs;    // cos / sin of xm (rotation, y0 = unshaped band)
   };
 
   // One band of model M (kFB / kADD / kPD). zr, zi = z'_k; mag = |z'_k|;
@@ -493,6 +498,14 @@ class Armitage : public Module {
   inline float BandOut(Slot& s, int k, float zr, float zi, float mag, float inv,
                        const Ctx& c) {
     using namespace armitage_k;
+    // Overlap share on the shaping delta (all models): mag_[k + 1] = |z'_k|, neighbours
+    // at k / k + 2 (zero guards at the ends). out_k = y0 + share_k * (y_shaped - y0),
+    // y0 = Re(z'_k e^{j xm}) = the unshaped band (K1 = 0: out_k = y0, flat band sum).
+    // The model makeup g_model scales the delta only: out_k = y0 + g_model share_k (shaped - y0).
+    float den = mag_[k] + mag_[k + 1] + mag_[k + 2];
+    if (den < ARM_SHARE_FLOOR) den = ARM_SHARE_FLOOR;
+    const float share = mag / den;
+    const float wr = zr * c.xc - zi * c.xs;      // y0 = Re(z' e^{j xm})
     if (M == kFB) {
       float sn, cs;
       SinCos(s.fb[k] * s.yprev[k] + c.xm, sn, cs);
@@ -501,8 +514,8 @@ class Armitage : public Module {
       if (y > 1.f) y = 1.f;
       if (y < -1.f) y = -1.f;
       if (fabsf(y) < ARM_DENORM) y = 0.f;
-      s.yprev[k] = y;
-      return out;
+      s.yprev[k] = y;                            // feedback from the UNSCALED band output
+      return wr + ModelGain(M) * share * (out - wr);   // g_model on the delta only
     }
     float sh = mag * c.invl;                     // s_k = min(1, |z'| / ARM_REF_LEVEL)
     if (sh > 1.f) sh = 1.f;
@@ -511,22 +524,17 @@ class Armitage : public Module {
       const float ur = zr * inv, ui = zi * inv;  // u = z' / |z'|
       const float vr = ur * c.xc - ui * c.xs;    // u e^{j xm}
       const float vi = ur * c.xs + ui * c.xc;
-      // Overlap share: mag_[k + 1] = |z'_k|, neighbours at k / k + 2 (zero guards at the ends).
-      float den = mag_[k] + mag_[k + 1] + mag_[k + 2];
-      if (den < ARM_SHARE_FLOOR) den = ARM_SHARE_FLOOR;
-      const float share = mag / den;
-      return mag * (vr + share * amt * AddSum<O>(k, vr, vi));
+      return mag * (vr + ModelGain(M) * share * amt * AddSum<O>(k, vr, vi));   // y0 = mag * vr: delta = harmonic term
     }
     // kPD
-    const float wr = zr * c.xc - zi * c.xs;      // z' e^{j xm}
     const float wi = zr * c.xs + zi * c.xc;
     float dk = 0.5f - pd_d0_ * amt;
     if (dk < pd_dfl_[O][k]) dk = pd_dfl_[O][k];
-    if (dk >= 0.5f) return wr;                   // no distortion: |z'| e^{j phi} = z' e^{j xm}
+    if (dk >= 0.5f) return wr;                   // no distortion: |z'| e^{j phi} = z' e^{j xm} = y0
     const float ph = FastAtan2Cycles(wi, wr);    // [0, 1)
     const float pw = (ph < dk) ? ph * (0.5f / dk)
                                : 0.5f + (ph - dk) * (0.5f / (1.f - dk));
-    return mag * Cos01(pw);
+    return wr + ModelGain(M) * share * (mag * Cos01(pw) - wr);
   }
 
   // ADD harmonic sum sum_{m=2..top} g_m h_mk Re(v^m) / m^s for the unit phasor v.
@@ -554,7 +562,7 @@ class Armitage : public Module {
     c.invl = 1.f / ARM_REF_LEVEL;                // fixed reference (constant-folded)
     c.g    = c.invl;
     c.xm   = bx_ * s.m;                          // cross-mod phase, previous sample's m
-    if (M != kFB) SinCos(c.xm, c.xs, c.xc);
+    SinCos(c.xm, c.xs, c.xc);                    // all models: y0 = Re(z' e^{j xm}) (FB: share delta)
     const int mf = mfrom_, mt = mdl_;
     const float* __restrict a5t = a5_t_[O];
     float* __restrict sa5 = s.a5;
@@ -628,8 +636,8 @@ class Armitage : public Module {
       const float den = (mden > kDenFloor) ? mden : kDenFloor;
       s.m = mnum / den;
     }
-    if (M != kFade) return ModelGain(M) * acc;
-    return ModelGain(mf) * (1.f - mg_) * acc + ModelGain(mt) * mg_ * acc2;
+    if (M != kFade) return acc;                  // g_model is applied per band, on the shaping delta
+    return (1.f - mg_) * acc + mg_ * acc2;
   }
 
   // Runtime-dispatched BandOut (model crossfade only).

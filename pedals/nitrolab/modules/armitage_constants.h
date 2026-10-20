@@ -69,9 +69,9 @@ constexpr float ARM_REF_LEVEL  = 0.021f;  // band |z'| (8 kHz band engine units)
 
 // --- Shaping model (SW1): UP = FB, MID = ADD, DOWN = PD ----------------------
 constexpr float ARM_MODEL_XFADE_MS = 10.f;  // ms; linear crossfade old -> new model output on an SW1 change
-constexpr float ARM_GAIN_FB    = 1.f;     // FB makeup: the reference the other models are matched to
-constexpr float ARM_GAIN_ADD   = 1.02f;   // ADD makeup: matched to FB at K1 = 1 on the DI bass excerpts at passive level (peak 0.1), SW2 MID, K2 K3 0, K4 K5 noon (was 1.95, matched on KS gtr G3 under the old L_ref; 2026-10-20 re-match after fixed reference + overlap share: -5.7 dB)
-constexpr float ARM_GAIN_PD    = 1.01f;   // PD makeup: matched to FB at K1 = 1, same DI measurement (was 2.8, KS gtr G3 under the old L_ref; re-match -8.9 dB)
+constexpr float ARM_GAIN_FB    = 1.f;     // FB makeup (on the shaping delta): the reference the other models are matched to
+constexpr float ARM_GAIN_ADD   = 0.54f;   // ADD makeup on the shaping delta (out_k = y0_k + g_model share_k (shaped_k - y0_k); y0 unscaled, K1 = 0 = unity in every model): matched to FB wet RMS at K1 = 1 on the DI bass excerpts at passive level (peak 0.1), SW2 MID, K2 K3 0, K4 K5 noon (2026-10-20; was 1.02 on the whole output)
+constexpr float ARM_GAIN_PD    = 0.88f;   // PD makeup on the shaping delta, matched to FB the same way (2026-10-20; was 1.01 on the whole output)
 
 // ADD (SW1 MID): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
 // u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
@@ -82,11 +82,14 @@ constexpr int   ARM_ADD_MMAX   = 16;      // highest harmonic at K1 = 1 (extende
 constexpr float ARM_ADD_S_MIN  = 0.6f;    // harmonic-weight exponent s at K1 = 1 (1/m -> 1/m^0.6: brighter top)
 constexpr float ARM_ADD_FMAX   = 3800.f;  // Hz; a harmonic at m f'_k above this is dropped (anti-fold)
 constexpr float ARM_ADD_FEDGE  = 400.f;   // Hz; fade width below ARM_ADD_FMAX (weight 1 at 3400 Hz -> 0 at 3800 Hz)
-// ADD overlap share: the synthesized harmonics of band k are scaled by
+// Overlap share on the shaping delta (ALL models, 2026-10-20):
+// out_k = y0_k + share_k * (shaped_k - y0_k),  y0_k = Re(z'_k e^{j xm}) (the unshaped band),
 // share_k = |z'_k| / max(|z'_{k-1}| + |z'_k| + |z'_{k+1}|, ARM_SHARE_FLOOR)
-// (edge bands: the one existing neighbour), so a partial that rings in 2-3 adjacent
-// bands generates its harmonic series about once instead of 2-3 times. The band's own
-// partial (Re(u) term) is not scaled. No threshold, no picking, no smoothing.
+// (edge bands: the one existing neighbour). K1 = 0: plain band sum (flat vs pitch); the
+// shaping of a partial that rings in 2-3 adjacent bands counts about once (shaped overlapping
+// bands stopped cancelling: +9 dB at K1 = 1). ADD: the delta is the harmonic term.
+// FB: the feedback signal yprev is taken from the unscaled band output. No threshold,
+// no picking, no smoothing.
 constexpr float ARM_SHARE_FLOOR = 1e-5f;  // share denominator floor = sqrt(ARM_SILENCE): no 0/0 (a sounding band is >= this already)
 
 // PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) * amt_k
@@ -105,9 +108,9 @@ constexpr float ARM_XMOD_DEN_FLOOR = 0.1f; // K3 modulator denominator floor = t
 
 // --- Octave (SW2) ------------------------------------------------------------
 constexpr float ARM_XFADE_MS   = 10.f;    // ms; linear crossfade old -> new octave path on an SW2 change
-constexpr float ARM_GAIN_UP    = 0.30f;   // (2026-10-17: was 0.36 before the interpolator fix, which raised UP by +1.6 dB vs MID)
+constexpr float ARM_GAIN_UP    = 0.30f;   // (2026-10-20: checked on the DI bass at K1 = 0: UP -0.1 dB vs MID) (2026-10-17: was 0.36 before the interpolator fix, which raised UP by +1.6 dB vs MID)
 //    // octave-up makeup: unity-gain UP measured +8.3..+9.2 dB over MID (KS gtr+bass) -> -8.9 dB
-constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-17: was 0.38 before the interpolator fix, which lowered DOWN by -0.4 dB vs MID)
+constexpr float ARM_GAIN_DOWN  = 0.40f;   // (2026-10-20: checked on the DI bass at K1 = 0: DOWN +0.4 dB vs MID) (2026-10-17: was 0.38 before the interpolator fix, which lowered DOWN by -0.4 dB vs MID)
 //    // octave-down makeup: unity-gain DOWN measured +8.1..+8.5 dB over MID -> -8.4 dB
 
 // --- Guards -----------------------------------------------------------------
@@ -118,8 +121,9 @@ constexpr float ARM_DENORM     = 1e-12f;  // |yprev| below this is flushed to 0
 constexpr float ARM_CTRL_SMOOTH_MS = 10.f;  // ms; one-pole time constant at the 8 kHz rate
 
 // --- Output -----------------------------------------------------------------
-constexpr float ARM_OUT_GAIN   = 7.4f;    // (2026-10-17: was 8 before the interpolator fix, which raised MID by +0.7 dB)
-//     // wet trim: K1 = 0 band sum (Re of analytic bands, band-limited) is ~0.125 x input RMS on KS plucks
+constexpr float ARM_OUT_GAIN   = 5.6f;    // wet trim: K1 = 0 (SW2 MID, K2 K3 0, K4 K5 noon) wet RMS = dry RMS on the DI bass
+//     // excerpts at passive level (peak 0.1) (2026-10-20; was 7.4, set on KS plucks: +2.3 dB
+//     // over dry on the DI; K1 = 0 is unaffected by the overlap share)
 
 // --- Sin table ----------------------------------------------------------------
 constexpr int   ARM_SIN_SIZE   = 1024;    // entries per period (power of two; mask wrap)
