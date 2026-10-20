@@ -315,13 +315,18 @@ class ArmBand {
   float down1_sign_ = 1.f;
 };
 
-// Band layout (verbatim from PolyOctave): quasi-log centres, ~60 Hz (n=0) to
-// ~1.69 kHz (n=79); bandwidth = harmonic mean of the neighbour spacings.
-static constexpr int kArmBands  = 80;
+// Band layout ("grid B"): PolyOctave's quasi-log law f(j) = 480 * 2^(0.027 j) - 420
+// for j = -kArmPre .. 79, i.e. POG's 80 bands (~60 Hz .. ~1.69 kHz, verbatim)
+// plus kArmPre bands continued below 60 Hz by the same law (j = -1..-4:
+// 51.1 / 42.4 / 33.8 / 25.4 Hz). Index n = 0 is the lowest band (j = n - kArmPre).
+// Bandwidth = harmonic mean of the neighbour spacings (the law is evaluated one
+// step beyond each end: j = -kArmPre - 1 = 17.1 Hz, j = 80).
+static constexpr int kArmPre    = 4;              // bands below POG's lowest (60 Hz)
+static constexpr int kArmBands  = 80 + kArmPre;   // 84
 static constexpr int kArmFactor = 6;  // 48 kHz / 6 = 8 kHz analysis rate
 
 static inline float ArmCenterFreq(int n) {
-  return 480.f * powf(2.f, 0.027f * (float)n) - 420.f;
+  return 480.f * powf(2.f, 0.027f * (float)(n - kArmPre)) - 420.f;
 }
 
 static inline float ArmBandwidth(int n) {

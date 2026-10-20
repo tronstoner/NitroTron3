@@ -3,9 +3,10 @@
 // armitage — polyphonic feedback-FM voice on a band engine.  SW3 UP on NitroLab.
 //
 // WHAT IT IS: a polyphonic synth voice WITHOUT pitch tracking. The input is
-// split into 80 complex (analytic) bands (a private copy of the POG band
+// split into 84 complex (analytic) bands (a private copy of the POG band
 // engine, armitage_bands.h: decimate 48 -> 8 kHz, centres
-// f_k = 480 * 2^(0.027 k) - 420 = 60 Hz .. 1.69 kHz, interpolate 8 -> 48 kHz).
+// f_k = 480 * 2^(0.027 (k - 4)) - 420 = 25.4 Hz .. 1.69 kHz: POG's 80 bands plus
+// 4 continued below 60 Hz by the same law; interpolate 8 -> 48 kHz).
 // Each band's analytic signal z = (yr, yi) is first transposed by SW2 with
 // POG's own per-band octave shift (z' = z / Up1 / Down1, complex, |z'| = |z|),
 // then reshaped by one of three SHAPING MODELS (SW1) riding on the (transposed)
@@ -14,16 +15,15 @@
 //   z'      = SW2 UP: z^2/|z| (POG Up1)   MID: z   DOWN: |z| e^{j phi/2} with sign
 //             continuation (POG Down1: half-angle identities + per-band sign flip
 //             on every phase crossing of pi)
-//   L_ref   = max_k |z'_k| of the slot, instant attack, one-pole release ARM_REL_RELEASE_MS,
-//             floor ARM_REL_FLOOR; the value of the PREVIOUS 8 kHz sample is used (one-sample lag)
-//   s_k     = min(1, |z'_k| / L_ref)                    (relative share: loudest band 1)
+//   L       = ARM_REF_LEVEL (fixed; no normalisation: shaping depth follows the playing level)
+//   s_k     = min(1, |z'_k| / L)
 //   tilt_k  = min(1, (ARM_SHAPE_REF / f'_k)^p)          (K4, all models)
 //   xm      = beta_x * m_prev                           (K3 cross-mod phase, all models)
 //
-//   SW1 UP = FB (feedback FM; the approved relative mode, unchanged):
+//   SW1 UP = FB (feedback FM):
 //     theta_k = b_k * yprev_k + xm
 //     out_k   = Re(z'_k e^{j theta_k})                     (|z'| kept)
-//     yprev_k = onepole_K5,k(out_k / L_ref), clamped to [-1, 1], flushed below ARM_DENORM
+//     yprev_k = onepole_K5,k(out_k / L), clamped to [-1, 1], flushed below ARM_DENORM
 //     b_k     = min(ARM_BETA_CLAMP, beta * tilt_k), then min(b_k, max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1))
 //               (anti-fold, Carson; ARM_ANTIFOLD; the K3 term xm is NOT capped)
 //   K1 is split at ARM_K1_SPLIT (0.6) for ADD and PD (FB uses K1 over its full
@@ -33,8 +33,11 @@
 //
 //   SW1 MID = ADD (additive saw, harmonics by repeated complex multiplication, no atan2):
 //     u'      = (z'_k / |z'_k|) e^{j xm}                (cross-mod rotation BEFORE the harmonics)
-//     out_k   = |z'_k| * [ Re(u') + amt_k * sum_{m=2..top} g_m h_mk Re(u'^m) / m^s ]
+//     out_k   = |z'_k| * [ Re(u') + share_k * amt_k * sum_{m=2..top} g_m h_mk Re(u'^m) / m^s ]
 //     amt_k   = s_k * tilt_k
+//     share_k = |z'_k| / max(|z'_{k-1}| + |z'_k| + |z'_{k+1}|, ARM_SHARE_FLOOR)
+//               (overlap share; edge bands: the one existing neighbour; silent bands count 0;
+//               all magnitudes of the sample are computed first, then the bands are shaped)
 //     g_m     = clamp(M_eff - m + 1, 0, 1)
 //     M_eff   = 1 + u (ARM_ADD_MID - 1) + v (ARM_ADD_MMAX - ARM_ADD_MID)   (1 -> 8 -> 16;
 //               K1 = 0: sine only; the top harmonic fades in continuously)
@@ -56,7 +59,7 @@
 //               (d_k >= 0.01 always: finite, no overflow)
 //     out_k   = |z'_k| cos(2 pi phi_w)                  (sin table)
 //
-//   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / max(sum_{f_k < ARM_ROOT_HZ} |z'_k|, ARM_XMOD_DEN_FLOOR * L_ref)
+//   m       = Re(sum_{f_k < ARM_ROOT_HZ} z'_k) / max(sum_{f_k < ARM_ROOT_HZ} |z'_k|, ARM_XMOD_DEN_FLOOR * L)
 //             (in [-1, 1], silence -> 0; denominator floor stops near-silent root leakage flickering m)
 //             m_prev = m of the previous 8 kHz sample (one-sample delay, like yprev)
 //   silence guard: |z|^2 < ARM_SILENCE -> out_k = 0, yprev_k = 0
@@ -100,10 +103,9 @@
 // during a fade is picked up when that fade ends. Independent of the SW2 crossfade (both can run).
 //
 // OCTAVE SWITCH: two processing slots (each: octave, yprev[], smoothed b_k[],
-// smoothed K5 coefficients[], smoothed tilt_k[], m_prev, L_ref). Normally only one
+// smoothed K5 coefficients[], smoothed tilt_k[], m_prev). Normally only one
 // runs. On an SW2 change the idle slot starts at the new octave (yprev = 0,
-// m_prev = 0, b_k and K5 coefficients = target, L_ref = the active slot's L_ref,
-// since |z'| = |z| in every octave) and the two are crossfaded linearly over
+// m_prev = 0, b_k and K5 coefficients = target) and the two are crossfaded linearly over
 // ARM_XFADE_MS; then the old one stops. An SW2 change during a fade is picked up
 // when that fade ends.
 //
@@ -183,6 +185,7 @@ class Armitage : public Module {
       armitage_sin_tab[i] = sinf(6.283185307f * (float)i / (float)ARM_SIN_SIZE);
     for (int m = 2; m <= kMM; m++) ln_m_[m] = logf((float)m);   // ADD harmonic weight: 1/m^s = expf(-s*ln_m_[m])
     n_root_ = 0;
+    for (int k = 0; k < kBands + 2; k++) mag_[k] = 0.f;   // incl. the two zero guards
     for (int k = 0; k < kBands; k++) {
       const float f = armbands::ArmCenterFreq(k);
       bands_[k].Init(f, sr8_, armbands::ArmBandwidth(k));
@@ -233,7 +236,6 @@ class Armitage : public Module {
     if (mfade_len_ < 1) mfade_len_ = 1;
     k1s_ = k1_t_ = 0.f;
     k2s_ = k2_t_ = 0.f;
-    rel_a_ = 1.f - expf(-1000.f / (ARM_REL_RELEASE_MS * sr8_));
     bx_ = bx_t_ = 0.f;
     oct_t_ = kMid;
     mute_ = false;
@@ -388,7 +390,6 @@ class Armitage : public Module {
           ns.fb[k] = fb_t_[ot][k];
           ns.tl[k] = tl_t_[ot][k];
         }
-        ns.lref = slot_[act_].lref;              // |z'| = |z|: same reference in every octave
         fade_n_ = xfade_len_;
       }
 
@@ -414,7 +415,6 @@ class Armitage : public Module {
   struct Slot {
     int   oct;
     float m;                 // root modulator of the previous 8 kHz sample
-    float lref;              // SW1 relative reference L_ref (loudest band |z'|, smoothed)
     float yprev[kBands];     // feedback state per band
     float fb[kBands];        // effective feedback beta (smoothed toward fb_t_[oct])
     float a5[kBands];        // K5 one-pole coefficient per band (smoothed toward a5_t_[oct])
@@ -424,7 +424,6 @@ class Armitage : public Module {
   void ResetSlot(Slot& s, int oct) {
     s.oct = oct;
     s.m   = 0.f;
-    s.lref = armitage_k::ARM_REL_FLOOR;
     for (int k = 0; k < kBands; k++) {
       s.yprev[k] = s.fb[k] = 0.f;
       s.a5[k] = a5_t_[oct][k];
@@ -482,8 +481,8 @@ class Armitage : public Module {
 
   // Per-sample values shared by all bands of one slot.
   struct Ctx {
-    float g;         // FB: 1 / L_ref (relative feedback signal)
-    float invl;      // 1 / L_ref (s_k)
+    float g;         // FB: 1 / ARM_REF_LEVEL (feedback signal)
+    float invl;      // 1 / ARM_REF_LEVEL (s_k)
     float xm;        // cross-mod phase (rad)
     float xc, xs;    // cos / sin of xm (ADD / PD rotation)
   };
@@ -505,14 +504,18 @@ class Armitage : public Module {
       s.yprev[k] = y;
       return out;
     }
-    float sh = mag * c.invl;                     // s_k = min(1, |z'| / L_ref)
+    float sh = mag * c.invl;                     // s_k = min(1, |z'| / ARM_REF_LEVEL)
     if (sh > 1.f) sh = 1.f;
     const float amt = sh * s.tl[k];              // amt_k = s_k * tilt_k
     if (M == kADD) {
       const float ur = zr * inv, ui = zi * inv;  // u = z' / |z'|
       const float vr = ur * c.xc - ui * c.xs;    // u e^{j xm}
       const float vi = ur * c.xs + ui * c.xc;
-      return mag * (vr + amt * AddSum<O>(k, vr, vi));
+      // Overlap share: mag_[k + 1] = |z'_k|, neighbours at k / k + 2 (zero guards at the ends).
+      float den = mag_[k] + mag_[k + 1] + mag_[k + 2];
+      if (den < ARM_SHARE_FLOOR) den = ARM_SHARE_FLOOR;
+      const float share = mag / den;
+      return mag * (vr + share * amt * AddSum<O>(k, vr, vi));
     }
     // kPD
     const float wr = zr * c.xc - zi * c.xs;      // z' e^{j xm}
@@ -548,7 +551,7 @@ class Armitage : public Module {
     using namespace armitage_k;
     const float ca  = ctrl_a_;
     Ctx c;
-    c.invl = 1.f / s.lref;                       // previous sample's L_ref
+    c.invl = 1.f / ARM_REF_LEVEL;                // fixed reference (constant-folded)
     c.g    = c.invl;
     c.xm   = bx_ * s.m;                          // cross-mod phase, previous sample's m
     if (M != kFB) SinCos(c.xm, c.xs, c.xc);
@@ -562,31 +565,45 @@ class Armitage : public Module {
     float* __restrict syp = s.yprev;
     float* __restrict w   = w_;
     const float* __restrict wt = w_t_;
+    float* __restrict mg  = mag_ + 1;            // mg[k] = |z_k| (0 = silent); mag_[0], mag_[kBands + 1] = 0
+    float* __restrict ivs = inv_;
     const int nroot = n_root_;
-    float acc = 0.f, acc2 = 0.f, mnum = 0.f, mden = 0.f, nmax = 0.f;
-    for (int k = 0; k < kBands; k++) {
-      if (kUpdate) {
+    // Pass 1 (first slot of the sample only): clock the bands, all magnitudes first
+    // (the ADD overlap share needs both neighbours). A fading second slot reuses them
+    // (|z'| = |z| in every octave).
+    if (kUpdate) {
+      for (int k = 0; k < kBands; k++) {
         bands_[k].Update(d);
         w[k] += (wt[k] - w[k]) * ca;
+        const float yr = bands_[k].Re();
+        const float yi = bands_[k].Im();
+        const float n  = yr * yr + yi * yi;
+        if (n < ARM_SILENCE) {
+          mg[k] = 0.f;
+          ivs[k] = 0.f;
+        } else {
+          const float inv = armbands::ArmFastInvSqrt(n);   // 1/|z| = 1/|z'|
+          ivs[k] = inv;
+          mg[k]  = n * inv;                      // |z'| = |z|
+        }
       }
+    }
+    float acc = 0.f, acc2 = 0.f, mnum = 0.f, mden = 0.f;
+    for (int k = 0; k < kBands; k++) {
       if (M == kFB || M == kFade) {              // FB state: smoothed only while FB runs
         sfb[k] += (fbt[k] - sfb[k]) * ca;
         sa5[k] += (a5t[k] - sa5[k]) * ca;
       }
       if (M != kFB) stl[k] += (tlt[k] - stl[k]) * ca;   // tilt_k: only while ADD / PD run
-      const float yr = bands_[k].Re();
-      const float yi = bands_[k].Im();
-      const float n  = yr * yr + yi * yi;
-      if (n < ARM_SILENCE) {
+      const float mag = mg[k];
+      if (mag == 0.f) {                          // silent band (|z|^2 < ARM_SILENCE)
         syp[k] = 0.f;
         continue;
       }
-      if (n > nmax) nmax = n;                    // loudest band |z|^2 (= |z'|^2)
-      const float inv = armbands::ArmFastInvSqrt(n);   // 1/|z| = 1/|z'|
-      const float mag = n * inv;                 // |z'| = |z|
+      const float inv = ivs[k];
       float zr, zi;
       if (O == kMid) {
-        zr = yr; zi = yi;
+        zr = bands_[k].Re(); zi = bands_[k].Im();
       } else if (O == kUp) {
         bands_[k].ArmUp1(inv, zr, zi);
       } else {
@@ -603,17 +620,12 @@ class Armitage : public Module {
         acc2 += w[k] * BandOutRT<O>(mt, s, k, zr, zi, mag, inv, c);
       }
     }
-    {                                            // L_ref: instant attack, one-pole release, floor
-      const float lm = sqrtf(nmax);
-      float l = s.lref;
-      l = (lm > l) ? lm : l + (lm - l) * rel_a_;
-      s.lref = (l < ARM_REL_FLOOR) ? ARM_REL_FLOOR : l;
-    }
-    {                                            // K3 modulator denominator floor as a share of the
-                                                  // loudest band: root-band leakage near silence no
+    {                                            // K3 modulator denominator floor (fixed, a share of
+                                                  // ARM_REF_LEVEL): root-band leakage near silence no
                                                   // longer jumps m (clicks); 1.0 = stronger, also
                                                   // tames K3 on notes without root content
-      const float den = (mden > ARM_XMOD_DEN_FLOOR * s.lref) ? mden : ARM_XMOD_DEN_FLOOR * s.lref;
+      constexpr float kDenFloor = ARM_XMOD_DEN_FLOOR * ARM_REF_LEVEL;
+      const float den = (mden > kDenFloor) ? mden : kDenFloor;
       s.m = mnum / den;
     }
     if (M != kFade) return ModelGain(M) * acc;
@@ -880,6 +892,8 @@ class Armitage : public Module {
   float dc_a_ = 0.f;                  // wet DC blocker coefficient (exp(-2*pi*ARM_DC_HZ/sr))
   float dc_x1_ = 0.f, dc_y1_ = 0.f;   // wet DC blocker state (previous input / output)
   float pd_d0_ = 0.f;              // PD depth coefficient (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) before amt_k
+  float mag_[kBands + 2];          // |z_k| of the current 8 kHz sample at [k + 1] (0 = silent); [0], [kBands + 1] = 0 guards
+  float inv_[kBands];              // 1/|z_k| of the current 8 kHz sample (0 = silent)
   float w_[kBands], w_t_[kBands];  // output weight (always 1; K2 roll-off removed, kept for the smoother call site)
   Slot  slot_[2];                  // active + crossfade-in path
   int   act_ = 0;                  // index of the active slot
@@ -895,7 +909,6 @@ class Armitage : public Module {
   int   mfade_n_ = 0;                  // model crossfade samples left (0 = no fade)
   int   mfade_len_ = 80;               // model crossfade length (8 kHz samples)
   float mg_ = 1.f;                     // new-model gain during a model fade
-  float rel_a_ = 0.0025f;              // L_ref release coefficient (8 kHz)
   float bx_ = 0.f, bx_t_ = 0.f;        // K3 cross-mod depth beta_x (smoothed / target)
   volatile int oct_t_ = kMid;          // SW2 target octave
   volatile bool mute_ = false;         // FS1 wet mute target (test tool)

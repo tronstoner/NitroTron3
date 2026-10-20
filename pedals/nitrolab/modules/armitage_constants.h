@@ -57,18 +57,21 @@ constexpr float ARM_SMOOTH_REL_MIN = 0.5f;    // c at K5 CW (cutoff half the ban
 constexpr float ARM_SMOOTH_HZ_LO   = 20.f;    // Hz; lower clamp of any band's cutoff
 constexpr float ARM_SMOOTH_HZ_HI   = 3800.f;  // Hz; upper clamp of any band's cutoff (below Nyquist of the 8 kHz rate)
 
-// --- Relative reference (feedback signal + ADD/PD saw amount) ---------------
-// L_ref = loudest band |z'| of the slot (instant attack, ARM_REL_RELEASE_MS release,
-// floored at ARM_REL_FLOOR). FB: yprev = out / L_ref (loudest band full, a band at
-// -20 dB 1/10). ADD/PD: per-band share s_k = min(1, |z'_k| / L_ref).
-constexpr float ARM_REL_RELEASE_MS = 50.f;    // ms; one-pole release of L_ref (attack is instant)
-constexpr float ARM_REL_FLOOR  = 1e-5f;   // L_ref floor = sqrt(ARM_SILENCE): silence never divides by ~0
+// --- Fixed reference level (feedback signal + ADD/PD saw amount) ----------
+// No normalisation of any kind: shaping depth follows the absolute playing level.
+// FB: yprev = out / ARM_REF_LEVEL (then clamped to [-1, 1]). ADD/PD: per-band amount
+// s_k = min(1, |z'_k| / ARM_REF_LEVEL). A band at this |z'| gets the full shaping;
+// play harder -> more bands reach it (FB: more feedback), softer -> less.
+// Value = median of the old relative reference L_ref (loudest band |z'|) over the
+// sounding notes of the DI bass excerpts at passive level (peak 0.1):
+// min 0.0007 / median 0.0209 / max 0.034 (p10 0.014, p90 0.029).
+constexpr float ARM_REF_LEVEL  = 0.021f;  // band |z'| (8 kHz band engine units) that counts as "full"
 
 // --- Shaping model (SW1): UP = FB, MID = ADD, DOWN = PD ----------------------
 constexpr float ARM_MODEL_XFADE_MS = 10.f;  // ms; linear crossfade old -> new model output on an SW1 change
-constexpr float ARM_GAIN_FB    = 1.f;     // FB makeup: the approved relative-feedback level, unchanged (KS gtr G3, K1 = 1, K4/K5 noon: +7.2 dB over K1 = 0)
-constexpr float ARM_GAIN_ADD   = 1.95f;   // ADD makeup +5.8 dB: unity ADD at K1 = 1 measured 5.8 dB under FB (KS gtr G3) -> matched at K1 = 1
-constexpr float ARM_GAIN_PD    = 2.8f;    // PD makeup +8.9 dB: unity PD at K1 = 1 measured 8.9 dB under FB (KS gtr G3) -> matched at K1 = 1
+constexpr float ARM_GAIN_FB    = 1.f;     // FB makeup: the reference the other models are matched to
+constexpr float ARM_GAIN_ADD   = 1.02f;   // ADD makeup: matched to FB at K1 = 1 on the DI bass excerpts at passive level (peak 0.1), SW2 MID, K2 K3 0, K4 K5 noon (was 1.95, matched on KS gtr G3 under the old L_ref; 2026-10-20 re-match after fixed reference + overlap share: -5.7 dB)
+constexpr float ARM_GAIN_PD    = 1.01f;   // PD makeup: matched to FB at K1 = 1, same DI measurement (was 2.8, KS gtr G3 under the old L_ref; re-match -8.9 dB)
 
 // ADD (SW1 MID): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
 // u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
@@ -79,6 +82,12 @@ constexpr int   ARM_ADD_MMAX   = 16;      // highest harmonic at K1 = 1 (extende
 constexpr float ARM_ADD_S_MIN  = 0.6f;    // harmonic-weight exponent s at K1 = 1 (1/m -> 1/m^0.6: brighter top)
 constexpr float ARM_ADD_FMAX   = 3800.f;  // Hz; a harmonic at m f'_k above this is dropped (anti-fold)
 constexpr float ARM_ADD_FEDGE  = 400.f;   // Hz; fade width below ARM_ADD_FMAX (weight 1 at 3400 Hz -> 0 at 3800 Hz)
+// ADD overlap share: the synthesized harmonics of band k are scaled by
+// share_k = |z'_k| / max(|z'_{k-1}| + |z'_k| + |z'_{k+1}|, ARM_SHARE_FLOOR)
+// (edge bands: the one existing neighbour), so a partial that rings in 2-3 adjacent
+// bands generates its harmonic series about once instead of 2-3 times. The band's own
+// partial (Re(u) term) is not scaled. No threshold, no picking, no smoothing.
+constexpr float ARM_SHARE_FLOOR = 1e-5f;  // share denominator floor = sqrt(ARM_SILENCE): no 0/0 (a sounding band is >= this already)
 
 // PD (SW1 DOWN): Casio-CZ phase-distortion saw per band, knee d = 0.5 - (ARM_PD_DEPTH*u + ARM_PD_DEPTH_HI*v) * amt_k
 // (u, v as above). At K1 <= ARM_K1_SPLIT this is exactly the old law scaled onto u.
@@ -90,9 +99,9 @@ constexpr float ARM_PD_FOLD_HZ_HI = 1000.f;  // Hz; full-depth anti-fold corner 
 constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine (linear floor in between)
 
 // --- Cross-modulation (K3): theta_k += beta_x * m --------------------------
-constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k below this form the root modulator m (bands 0..9)
+constexpr float ARM_ROOT_HZ    = 150.f;   // Hz; bands with input centre f_k below this form the root modulator m (bands 0..13, 25 .. 148 Hz)
 constexpr float ARM_XMOD_MAX   = 6.f;     // rad; beta_x at K3 full CW (squared taper), Ensemble "Up"-mode depth
-constexpr float ARM_XMOD_DEN_FLOOR = 0.1f; // K3 modulator denominator floor as a share of the loudest band: root-band leakage near silence no longer jumps m (clicks); 1.0 = stronger, also tames K3 on notes without root content
+constexpr float ARM_XMOD_DEN_FLOOR = 0.1f; // K3 modulator denominator floor = this * ARM_REF_LEVEL (fixed): root-band leakage near silence no longer jumps m (clicks); 1.0 = stronger, also tames K3 on notes without root content
 
 // --- Octave (SW2) ------------------------------------------------------------
 constexpr float ARM_XFADE_MS   = 10.f;    // ms; linear crossfade old -> new octave path on an SW2 change
