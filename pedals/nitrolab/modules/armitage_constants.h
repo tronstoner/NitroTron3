@@ -79,9 +79,12 @@ constexpr float ARM_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new m
 // (yprev = y_k / |z'_k|, every band above ARM_SILENCE). Set by structure, not by ear (unheard).
 constexpr float ARM_GAIN_FB    = 2.f;     // was 1.0 (with yprev = y_k / ARM_REF_LEVEL)
 constexpr float ARM_GAIN_ADD   = 0.54f;   // ADD makeup on the shaping delta (out_k = y0_k + g_model share_k (shaped_k - y0_k); y0 unscaled, K1 = 0 = unity in every model): matched to FB wet RMS at K1 = 1 on the DI bass excerpts at passive level (peak 0.1), SW2 MID, K2 K3 0, K4 K5 noon (2026-10-20; was 1.02 on the whole output)
-// SAW / PULSE "replace" gain G on the shaping delta, every octave (the *_DELTA octave gains do not apply):
-// out_k = y0_k + G share_k a_k (shaped_k - y0_k). Approved on the host at 2.0048 (DI 2, var8), rounded.
+// SAW / PULSE gain G on the shape, every octave (the *_DELTA octave gains do not apply), shape only
+// (no clean term): out_k = G share_k a_k shaped_k + c y0_k. Approved on the host at 2.0048 (DI 2, var8), rounded.
 constexpr float ARM_GAIN_PD    = 2.f;     // was 0.88 (HEAD PD makeup, K1 knee law)
+// SAW / PULSE K4 clean mix-back, in parallel with the K4 tilt: c = ARM_PD_CLEAN_MIX_MAX (1 - k4),
+// linear (K4 CCW: this much of the clean band y0_k added; CW: none). No level compensation.
+constexpr float ARM_PD_CLEAN_MIX_MAX = 1.f;
 
 // ADD (K5 3rd zone): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
 // u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
@@ -117,7 +120,7 @@ constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee flo
 //   R = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) k1     (linear, 1 -> 16; noon 8.5)
 //   R_k = min(R, ARM_RES_FMAX / f'_k)
 //   res_k = |z'_k| (sin(2 pi R_k phi) (1 - phi) - dc(R_k)),  dc(R) = 1/(2 pi R) - sin(2 pi R)/(2 pi R)^2 (exact mean)
-//   out_k = y0_k + G share_k [ (1 - k1) (saw_k - y0_k) + k1 tilt_k cap_k (res_k - y0_k) ]   (= (1 - k1) out_saw + k1 out_res)
+//   out_k = G share_k [ (1 - k1) saw_k + k1 tilt_k cap_k res_k ] + c y0_k   (morph on the shape only)
 constexpr float ARM_RES_R_MIN = 1.f;
 constexpr float ARM_RES_R_MAX = 16.f;
 constexpr float ARM_RES_FMAX  = 3800.f;   // Hz; R_k f'_k capped here (anti-fold)

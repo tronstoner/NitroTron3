@@ -25,7 +25,8 @@
 //   phi_m   = frac(phi + fmo_k / 2 pi)                  (the shapes run on the modulated phase)
 //
 //   SAW (K5 0 .. 0.2) and PULSE (0.2 .. 0.4) = PD base: every band above ARM_SILENCE at
-//   full amount ("replace"), G = ARM_GAIN_PD in every octave:
+//   full amount, shape only (no clean term; true replace), G = ARM_GAIN_PD in every octave,
+//   plus the K4 clean mix-back c = ARM_PD_CLEAN_MIX_MAX (1 - k4) (smoothed) of y0_k:
 //     dfloor_k = ARM_PD_KNEE + (0.5 - ARM_PD_KNEE) clamp((f'_k - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ), 0, 1)
 //     cap_k    = (0.5 - dfloor_k) / (0.5 - ARM_PD_KNEE)                (anti-fold; fixed, Init)
 //     SAW:  d_k   = max(0.5 - (0.5 - ARM_PD_KNEE) tilt_k, dfloor_k)    (d_k >= 0.01: finite)
@@ -34,14 +35,14 @@
 //           K1 = resonance: R = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) k1 (1 -> 16),
 //           R_k = min(R, ARM_RES_FMAX / f'_k),
 //           res_k = |z'_k| (sin(2 pi R_k phi_m) (1 - phi_m) - dc(R_k)), dc(R) = 1/(2 pi R) - sin(2 pi R)/(2 pi R)^2
-//           out_k = y0_k + G share_k [ (1 - k1) (saw_k - y0_k) + k1 tilt_k cap_k (res_k - y0_k) ]
-//           (k1 = 0: the plain full-knee saw; d_k >= 0.5 and k1 = 0: y0_k)
+//           out_k = G share_k [ (1 - k1) saw_k + k1 tilt_k cap_k res_k ] + c y0_k
+//           (d_k >= 0.5 and k1 = 0: saw_k = y0_k)
 //     PULSE: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) k1 (50 % -> 0 %)
 //           S(phi_m) = 1 - E(phi_m) + E(phi_m - w), two independent edges that may overlap,
 //           E(x) = 0 (x < 0), 1 - cos(pi x / D) (0 <= x < D), 2 (x >= D), D = ARM_PD_KNEE
 //           (w = 0.5: the old square; w = 0: S = +1). Mean over phi in [0, 1):
 //           1 - (2 - D) + (2 - 2w - D) = 1 - 2w, exact for any w in [0, 0.5], removed
-//           out_k = y0_k + G share_k tilt_k cap_k (|z'_k| (S - (1 - 2w)) - y0_k)
+//           out_k = G share_k tilt_k cap_k |z'_k| (S - (1 - 2w)) + c y0_k   (w = 0, K4 CW: silence)
 //
 //   ADD (K5 0.4 .. 0.6): additive saw per band, harmonics by repeated complex multiplication:
 //     v       = (z'_k / |z'_k|) e^{j xm},  q = v e^{j fmo_k}  (q = v without FM)
@@ -115,6 +116,7 @@
 //   K2  micro pitch detune  4 pitch shifters on the final wet (all modes / octaves)
 //   K3  FM index            I = ARM_FM_INDEX_MAX * k3 (0 -> 3 rad), all modes; K3 = 0: no FM
 //   K4  shaping tilt        p = ARM_SHAPE_P_MAX * (1 - k4) (CCW warm, CW every band full), all modes
+//                           SAW / PULSE also: clean mix-back c = ARM_PD_CLEAN_MIX_MAX (1 - k4), linear
 //   K5  mode                SAW | PULSE | ADD | FEEDBACK (| reserved = FEEDBACK), fifths of the travel
 //   K6  dry/wet             (shell)
 //   SW1 unused (reads nothing)
@@ -238,6 +240,7 @@ class Armitage : public Module {
     mfade_len_ = (int)(ARM_MODEL_XFADE_MS * 0.001f * sr8_ + 0.5f);
     if (mfade_len_ < 1) mfade_len_ = 1;
     k1s_ = k1_t_ = 0.f;
+    cm_ = cm_t_ = 0.f;
     k2s_ = k2_t_ = 0.f;
     bx_ = bx_t_ = 0.f;
     fm_ = fm_t_ = 0.f;
@@ -265,6 +268,7 @@ class Armitage : public Module {
     mdl_t_ = mode;
     k1_t_ = k1;
     k2_t_ = k2;
+    cm_t_ = ARM_PD_CLEAN_MIX_MAX * (1.f - k4);   // SAW / PULSE clean mix-back (K4 CCW full, CW none)
 
     const float beta  = ARM_BETA_MAX * k1 * k1;
     const float p     = ARM_SHAPE_P_MAX * (1.f - k4);
@@ -330,6 +334,7 @@ class Armitage : public Module {
       bx_  += (bx_t_ - bx_) * ca;
       fm_  += (fm_t_ - fm_) * ca;                // K3 FM index (0 stays exactly 0)
       k1s_ += (k1_t_ - k1s_) * ca;
+      cm_  += (cm_t_ - cm_) * ca;               // K4 clean mix-back (SAW / PULSE)
       k2s_ += (k2_t_ - k2s_) * ca;              // K2 micro pitch: staged per block below
 
       // Start a mode crossfade when the K5 zone changed and no mode fade is running.
@@ -477,8 +482,9 @@ class Armitage : public Module {
   }
 
   // Gain on the shaping delta of mode M in octave O. ADD: g_model * g_oct_delta
-  // (MID: 1; UP / DOWN: ARM_GAIN_UP_DELTA / ARM_GAIN_DOWN_DELTA). SAW / PULSE / FB
-  // ("replace"): G alone in every octave (ARM_GAIN_PD / ARM_GAIN_FB). Constant-folded.
+  // (MID: 1; UP / DOWN: ARM_GAIN_UP_DELTA / ARM_GAIN_DOWN_DELTA). FB ("replace"): G alone
+  // in every octave (ARM_GAIN_FB). SAW / PULSE: G on the shape itself (no clean term,
+  // ARM_GAIN_PD), every octave. Constant-folded.
   template <int M, int O>
   static constexpr float DeltaGain() {
     using namespace armitage_k;
@@ -503,7 +509,8 @@ class Armitage : public Module {
                        float fmo, const Ctx& c) {
     using namespace armitage_k;
     // Overlap share on the shaping delta (all modes): mag_[k + 1] = |z'_k|, neighbours
-    // at k / k + 2 (zero guards at the ends). out_k = y0 + G share_k (y_shaped - y0),
+    // at k / k + 2 (zero guards at the ends). ADD / FB: out_k = y0 + G share_k (y_shaped - y0);
+    // SAW / PULSE: out_k = G share_k y_shaped + c y0 (K4 clean mix-back).
     // y0 = Re(z'_k e^{j xm}) = the unshaped band. FM (K3) acts on the shaped term only.
     float den = mag_[k] + mag_[k + 1] + mag_[k + 2];
     if (den < ARM_SHARE_FLOOR) den = ARM_SHARE_FLOOR;
@@ -538,7 +545,9 @@ class Armitage : public Module {
       // shaped = mag (Re(q) + amt sum(q)); delta against the clean y0 = mag vr
       return mag * (vr + DeltaGain<M, O>() * share * ((qr - vr) + amt * AddSum<O>(k, qr, qi)));
     }
-    // PD base (SAW / PULSE): full amount, tilt_k from K4, anti-fold cap per band.
+    // PD base (SAW / PULSE): shape only (no clean term), tilt_k from K4, anti-fold cap per
+    // band, plus the K4 clean mix-back cm_ * y0.
+    const float cy = cm_ * wr;                   // clean mix-back c y0_k
     const float wi = zr * c.xs + zi * c.xc;
     const float tl = s.tl[k];
     constexpr float kTwoPiInv = 0.159154943f;
@@ -546,23 +555,23 @@ class Armitage : public Module {
       float dk = 0.5f - (0.5f - ARM_PD_KNEE) * tl;   // knee: tilt (and the cap) inside, a_k = 1
       if (dk < pd_dfl_[O][k]) dk = pd_dfl_[O][k];
       const float m = k1s_;                      // K1: saw -> resonance morph
-      if (dk >= 0.5f && m <= 0.f) return wr;     // no distortion, no resonance: y0
+      const float g = DeltaGain<M, O>() * share;
+      if (dk >= 0.5f && m <= 0.f) return g * wr + cy;   // no distortion, no resonance: saw_k = y0
       float ph = FastAtan2Cycles(wi, wr);        // [0, 1)
       if (fmo != 0.f) ph = Wrap01(ph + fmo * kTwoPiInv);
-      float dsaw = 0.f;
+      float saw = wr;                            // d_k >= 0.5: the sine, = y0
       if (dk < 0.5f) {
         const float pw = (ph < dk) ? ph * (0.5f / dk)
                                    : 0.5f + (ph - dk) * (0.5f / (1.f - dk));
-        dsaw = mag * Cos01(pw) - wr;
+        saw = mag * Cos01(pw);
       }
-      const float g = DeltaGain<M, O>() * share;
-      if (m <= 0.f) return wr + g * dsaw;        // K1 = 0: the plain full-knee saw
+      if (m <= 0.f) return g * saw + cy;         // K1 = 0: the plain full-knee saw
       const float rc = res_rcap_[O][k];
       const float rk = (res_r_ < rc) ? res_r_ : rc;           // R_k = min(R, 3800 / f'_k)
       const float dc = (res_r_ < rc) ? res_dc_ : res_dccap_[O][k];
       const float res = mag * (Sin01(rk * ph) * (1.f - ph) - dc);
       const float ares = tl * pd_ck_[O][k];      // a_k = tilt_k cap_k
-      return wr + g * ((1.f - m) * dsaw + m * ares * (res - wr));
+      return g * ((1.f - m) * saw + m * ares * res) + cy;   // morph on the shape only
     }
     // kPUL: width w (K1), jumps at 0 (down) and w (up), knee ARM_PD_KNEE, mean removed.
     const float a = tl * pd_ck_[O][k];           // a_k = tilt_k cap_k
@@ -577,7 +586,7 @@ class Armitage : public Module {
     if (u >= D)        S += 2.f;                                 // + E(ph - w)
     else if (u >= 0.f) S += 1.f - Cos01(u * kHalfInvD);
     const float g = DeltaGain<M, O>() * share * a;
-    return wr + g * (mag * (S - pul_dc_) - wr);
+    return g * mag * (S - pul_dc_) + cy;       // shape only (w = 0: S - dc = 0)
   }
 
   // ADD harmonic sum sum_{m=2..top} g_m h_mk Re(v^m) / m^s for the unit phasor v.
@@ -1035,6 +1044,7 @@ class Armitage : public Module {
 
   float sr8_    = 8000.f;
   float ctrl_a_ = 0.f;                 // control-smoothing coefficient (8 kHz)
+  float cm_ = 0.f, cm_t_ = 0.f;       // SAW / PULSE clean mix-back c (smoothed / target), from K4
   float k1s_ = 0.f, k1_t_ = 0.f;       // K1 (smoothed / target) for ADD / SAW / PULSE
   int   mdl_ = kFB, mfrom_ = kFB;      // current mode / mode faded out
   volatile int mdl_t_ = kFB;           // K5 target mode
