@@ -34,10 +34,8 @@
 #define D2F FLT_FMT(2)
 static inline int DiagHundredths(float x) { return (x > 0.f) ? (int)(x * 100.f + 0.5f) : 0; }
 #define D2V(x) ' ', DiagHundredths(x) / 100, DiagHundredths(x) % 100
-// Same with 1 decimal (armitage K2 micro-pitch detune D in cents).
-#define D1F FLT_FMT(1)
-static inline int DiagTenths(float x) { return (x > 0.f) ? (int)(x * 10.f + 0.5f) : 0; }
-#define D1V(x) ' ', DiagTenths(x) / 10, DiagTenths(x) % 10
+// Signed variant (armitage K4 post filter t in [-1, 1]): the sign slot carries '-'.
+#define D2SV(x) ((x) < 0.f ? '-' : ' '), DiagHundredths(fabsf(x)) / 100, DiagHundredths(fabsf(x)) % 100
 
 using namespace daisy;
 using clevelandmusicco::Hothouse;
@@ -177,11 +175,9 @@ int main() {
         const Armitage::DiagSnap& d = diag_snap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("beta" D2F " rad, tilt p" D2F ", fm I" D2F
-                          " rad, ss D" D1F " c, in" D2F ", out" D2F
-                          ", octave %s, mute %d, cpu %u %%",
-                          D2V(d.beta), D2V(d.p), D2V(d.fm),
-                          D1V(d.ss_d), D2V(d.ss_in), D2V(d.ss_out),
+        hw.seed.PrintLine("beta" D2F " rad, filt t" D2F ", fm I" D2F
+                          " rad, pwm u" D2F ", octave %s, mute %d, cpu %u %%",
+                          D2V(d.beta), D2SV(d.filt_t), D2V(d.fm), D2V(d.pwm_u),
                           oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
                           d.mute ? 1 : 0,
                           (unsigned)(cpu_pk * 100.f + 0.5f));
