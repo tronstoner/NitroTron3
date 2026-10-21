@@ -20,9 +20,10 @@ constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), th
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
 constexpr float ARM_K1_SPLIT   = 0.6f;    // ADD K1 split point: below = today's ADD law (scaled), above = extended range
 // SAW / PULSE K1 split: x = min(K1 / split, 1) is the knee depth, shape only at every K1:
-// d = 0.5 - (0.5 - ARM_PD_KNEE) x, linear in K1 (0.5 = the sine at K1 = 0 -> ARM_PD_KNEE, full saw /
-// square w = 0.5, at the split); SAW: times tilt_k inside, max(d, dfloor_k); PULSE: both edges, amount
-// 1 - x (1 - tilt_k cap_k). p = max((K1 - split) / (1 - split), 0) pushes it (SAW resonance R 1 -> 16, PULSE w 50 -> 0 %).
+// d(x) = 0.5 (ARM_PD_KNEE / 0.5)^x, exponential in K1 (0.5 = the sine at K1 = 0 -> 0.19 -> 0.07 ->
+// 0.027 -> ARM_PD_KNEE, full saw / square w = 0.5, at the split; x = 1 sets d = ARM_PD_KNEE exactly);
+// SAW: depth (0.5 - d(x)) times tilt_k inside, d_k = max(0.5 - (0.5 - d(x)) tilt_k, dfloor_k);
+// PULSE: D = d(x) on both edges, amount 1 - x (1 - tilt_k cap_k) (linear x, unchanged). p = max((K1 - split) / (1 - split), 0) pushes it (SAW resonance R 1 -> 16, PULSE w 50 -> 0 %).
 constexpr float ARM_K1_SPLIT_PD = 0.5f;
 
 // --- FB anti-fold limit (always on): beta_k <= max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1) ---
@@ -33,10 +34,15 @@ constexpr float ARM_K1_SPLIT_PD = 0.5f;
 constexpr bool  ARM_ANTIFOLD      = true;     // false = no cap (for A/B comparison)
 constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band engine
 
-// --- Shaping tilt (K4): tilt_k = min(1, (ARM_SHAPE_REF / f'_k)^p), all models ---
-// FB: beta_k = beta * tilt_k. ADD / PD: amt_k = s_k * tilt_k.
-constexpr float ARM_SHAPE_REF   = 150.f;  // Hz; transposed band freq f'_k at/below which a band gets the full shaping (never more)
-constexpr float ARM_SHAPE_P_MAX = 2.f;    // tilt exponent p at K4 CCW (p = this * (1 - k4); CW p = 0 = full shaping on every band)
+// --- Shaping tilt (K4), full range, all models; FB: beta_k = beta * tilt_k, ADD / PD: amt_k = s_k * tilt_k ---
+// k4 < 0.5 (low side, warm):  e = 1 - 2 k4, p = ARM_TILT_P_MAX e,
+//   F_lo = ARM_TILT_LO_HZ + (ARM_TILT_LO_HZ_MIN - ARM_TILT_LO_HZ) e,  tilt_k = min(1, (F_lo / f'_k)^p)
+// k4 = 0.5 (noon): tilt_k = 1 on every band (exactly: exponent 0)
+// k4 > 0.5 (high side, bright): q = ARM_TILT_P_MAX (2 k4 - 1),  tilt_k = min(1, (f'_k / ARM_TILT_HI_HZ)^q)
+constexpr float ARM_TILT_LO_HZ     = 150.f;   // Hz; low-side corner just below noon (bands at/below get full shaping)
+constexpr float ARM_TILT_LO_HZ_MIN = 50.f;    // Hz; low-side corner at K4 full CCW (slides 150 -> 50 Hz)
+constexpr float ARM_TILT_HI_HZ     = 1000.f;  // Hz; high-side corner (bands at/above get full shaping)
+constexpr float ARM_TILT_P_MAX     = 4.f;     // tilt exponent at either K4 end (0 at noon)
 
 // --- K2 = micro pitch shift detune ("Eventide micro pitch" style) on the final 48 kHz wet ---
 // 4 delay-based pitch shifters (voices -out, -in, +in, +out) read one circular buffer of
@@ -87,9 +93,9 @@ constexpr float ARM_GAIN_ADD   = 0.54f;   // ADD makeup on the shaping delta (ou
 // SAW / PULSE gain G on the shape, every octave (the *_DELTA octave gains do not apply), shape only
 // (no clean term): out_k = G share_k a_k shaped_k + c y0_k. Approved on the host at 2.0048 (DI 2, var8), rounded.
 constexpr float ARM_GAIN_PD    = 2.f;     // was 0.88 (HEAD PD makeup, K1 knee law)
-// SAW / PULSE K4 clean mix-back, in parallel with the K4 tilt: c = ARM_PD_CLEAN_MIX_MAX (1 - k4),
-// linear (K4 CCW: this much of the clean band y0_k added; CW: none). No level compensation.
-constexpr float ARM_PD_CLEAN_MIX_MAX = 0.5f;   // was 1.0 (K4 CCW = the old noon amount)
+// SAW / PULSE clean fundamental: fixed mix-back c y0_k of the clean band (no knob; K4 no longer
+// controls it). No level compensation.
+constexpr float ARM_PD_CLEAN_MIX = 0.5f;   // was ARM_PD_CLEAN_MIX_MAX (1 - k4) (0.5 = the old K4 CCW amount)
 
 // ADD (K5 3rd zone): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
 // u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
@@ -115,8 +121,8 @@ constexpr float ARM_SHARE_FLOOR = 1e-5f;  // share denominator floor = sqrt(ARM_
 //   knee time ARM_PD_KNEE = 0.01 (= 0.5 - (0.45 + 0.04), the old depth at K1 = 1)
 //   anti-fold knee floor dfloor_k = ARM_PD_KNEE + (0.5 - ARM_PD_KNEE) clamp((f'_k - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ), 0, 1)
 //   cap_k = (0.5 - dfloor_k) / (0.5 - ARM_PD_KNEE)   (1 up to 1 kHz, 0 at 3.8 kHz)
-// SAW knee: d_k = max(0.5 - (0.5 - ARM_PD_KNEE) tilt_k x, dfloor_k)  (x = K1 knee depth; tilt and cap inside the knee, a_k = 1)
-// PULSE: knee D = 0.5 - (0.5 - ARM_PD_KNEE) x, amount a_k = 1 - x (1 - tilt_k cap_k); resonance: a_k = tilt_k cap_k
+// SAW knee: d_k = max(0.5 - (0.5 - d(x)) tilt_k, dfloor_k), d(x) = 0.5 (ARM_PD_KNEE / 0.5)^x  (x = K1 knee depth; tilt and cap inside the knee, a_k = 1)
+// PULSE: knee D = d(x), amount a_k = 1 - x (1 - tilt_k cap_k); resonance: a_k = tilt_k cap_k
 constexpr float ARM_PD_KNEE       = 0.01f;   // cycles; knee time of the saw / pulse jumps
 constexpr float ARM_PD_FOLD_HZ    = 1000.f;  // Hz; full-depth anti-fold corner (the K1 = 1 value of the old 500 -> 1000 law)
 constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine / no pulse (linear in between)
