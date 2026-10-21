@@ -19,8 +19,10 @@ constexpr float ARM_MODE_ZONE[3] = { 0.2f, 0.4f, 0.6f };
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
 constexpr float ARM_K1_SPLIT   = 0.6f;    // ADD K1 split point: below = today's ADD law (scaled), above = extended range
-// SAW / PULSE K1 split: a = min(K1 / split, 1) crossfades clean y0_k -> full shape (saw full knee /
-// square w = 0.5); p = max((K1 - split) / (1 - split), 0) pushes it (SAW resonance R 1 -> 16, PULSE w 50 -> 0 %).
+// SAW / PULSE K1 split: x = min(K1 / split, 1) is the knee depth, shape only at every K1:
+// d = 0.5 - (0.5 - ARM_PD_KNEE) x, linear in K1 (0.5 = the sine at K1 = 0 -> ARM_PD_KNEE, full saw /
+// square w = 0.5, at the split); SAW: times tilt_k inside, max(d, dfloor_k); PULSE: both edges, amount
+// 1 - x (1 - tilt_k cap_k). p = max((K1 - split) / (1 - split), 0) pushes it (SAW resonance R 1 -> 16, PULSE w 50 -> 0 %).
 constexpr float ARM_K1_SPLIT_PD = 0.5f;
 
 // --- FB anti-fold limit (always on): beta_k <= max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1) ---
@@ -113,8 +115,8 @@ constexpr float ARM_SHARE_FLOOR = 1e-5f;  // share denominator floor = sqrt(ARM_
 //   knee time ARM_PD_KNEE = 0.01 (= 0.5 - (0.45 + 0.04), the old depth at K1 = 1)
 //   anti-fold knee floor dfloor_k = ARM_PD_KNEE + (0.5 - ARM_PD_KNEE) clamp((f'_k - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ), 0, 1)
 //   cap_k = (0.5 - dfloor_k) / (0.5 - ARM_PD_KNEE)   (1 up to 1 kHz, 0 at 3.8 kHz)
-// SAW knee: d_k = max(0.5 - (0.5 - ARM_PD_KNEE) tilt_k, dfloor_k)  (tilt and cap inside the knee, a_k = 1)
-// PULSE / resonance: shape at knee ARM_PD_KNEE, amount a_k = tilt_k cap_k
+// SAW knee: d_k = max(0.5 - (0.5 - ARM_PD_KNEE) tilt_k x, dfloor_k)  (x = K1 knee depth; tilt and cap inside the knee, a_k = 1)
+// PULSE: knee D = 0.5 - (0.5 - ARM_PD_KNEE) x, amount a_k = 1 - x (1 - tilt_k cap_k); resonance: a_k = tilt_k cap_k
 constexpr float ARM_PD_KNEE       = 0.01f;   // cycles; knee time of the saw / pulse jumps
 constexpr float ARM_PD_FOLD_HZ    = 1000.f;  // Hz; full-depth anti-fold corner (the K1 = 1 value of the old 500 -> 1000 law)
 constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine / no pulse (linear in between)
