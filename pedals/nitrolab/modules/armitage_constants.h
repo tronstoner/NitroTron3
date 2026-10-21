@@ -34,15 +34,16 @@ constexpr float ARM_K1_SPLIT_PD = 0.5f;
 constexpr bool  ARM_ANTIFOLD      = true;     // false = no cap (for A/B comparison)
 constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band engine
 
-// --- Shaping tilt (K4), full range, all models; FB: beta_k = beta * tilt_k, ADD / PD: amt_k = s_k * tilt_k ---
-// k4 < 0.5 (low side, warm):  e = 1 - 2 k4, p = ARM_TILT_P_MAX e,
-//   F_lo = ARM_TILT_LO_HZ + (ARM_TILT_LO_HZ_MIN - ARM_TILT_LO_HZ) e,  tilt_k = min(1, (F_lo / f'_k)^p)
-// k4 = 0.5 (noon): tilt_k = 1 on every band (exactly: exponent 0)
-// k4 > 0.5 (high side, bright): q = ARM_TILT_P_MAX (2 k4 - 1),  tilt_k = min(1, (f'_k / ARM_TILT_HI_HZ)^q)
-constexpr float ARM_TILT_LO_HZ     = 150.f;   // Hz; low-side corner just below noon (bands at/below get full shaping)
-constexpr float ARM_TILT_LO_HZ_MIN = 50.f;    // Hz; low-side corner at K4 full CCW (slides 150 -> 50 Hz)
-constexpr float ARM_TILT_HI_HZ     = 1000.f;  // Hz; high-side corner (bands at/above get full shaping)
-constexpr float ARM_TILT_P_MAX     = 4.f;     // tilt exponent at either K4 end (0 at noon)
+// --- Shaping tilt (K4), fader line, all models; FB: beta_k = beta * tilt_k, ADD / PD: amt_k = s_k * tilt_k ---
+// One fader per band on a straight line over log frequency, K4 rotates the line about the pivot:
+//   t = 2 k4 - 1 in [-1, 1],  tilt_k = clamp01( 1 + t * ARM_TILT_SLOPE * (log2 f'_k - log2 ARM_TILT_PIVOT_HZ) )
+//   noon (t = 0): every fader 1.  CW (t > 0): bands below the pivot drop (lowest first), above clamp at 1.
+//   CCW (t < 0): bands above the pivot drop (highest first), below clamp at 1.
+// At |t| = 1 a band n octaves on the "down" side sits at 1 - n s: 1 oct 0.67 (-3.5 dB), 2 oct 0.34 (-9.4 dB),
+// 3 oct 0.01 (-40 dB), beyond 0.
+// The fader is tilt_k wherever the modes use it (amounts in dB above are of tilt_k itself, not of the band level).
+constexpr float ARM_TILT_PIVOT_HZ = 200.f;   // Hz; the line's pivot (this band's fader stays 1 at every K4)
+constexpr float ARM_TILT_SLOPE    = 0.33f;   // fader drop per octave at K4 full turn (amplitude, linear)
 
 // --- K2 = micro pitch shift detune ("Eventide micro pitch" style) on the final 48 kHz wet ---
 // 4 delay-based pitch shifters (voices -out, -in, +in, +out) read one circular buffer of

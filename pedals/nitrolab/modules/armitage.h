@@ -18,9 +18,8 @@
 //   y0_k    = Re(z'_k e^{j xm})   the unshaped band (xm = 0 unless ARM_XMOD_ENABLE)
 //   share_k = |z'_k| / max(|z'_{k-1}| + |z'_k| + |z'_{k+1}|, ARM_SHARE_FLOOR)   (overlap share,
 //             all modes; edge bands: the one existing neighbour; silent bands count 0)
-//   tilt_k  = K4, all modes: k4 < 0.5: min(1, (F_lo / f'_k)^p), p = ARM_TILT_P_MAX (1 - 2 k4),
-//             F_lo = ARM_TILT_LO_HZ + (ARM_TILT_LO_HZ_MIN - ARM_TILT_LO_HZ)(1 - 2 k4) (150 -> 50 Hz);
-//             noon: 1; k4 > 0.5: min(1, (f'_k / ARM_TILT_HI_HZ)^q), q = ARM_TILT_P_MAX (2 k4 - 1)
+//   tilt_k  = K4 fader line, all modes: t = 2 k4 - 1,
+//             clamp01(1 + t ARM_TILT_SLOPE (log2 f'_k - log2 ARM_TILT_PIVOT_HZ)); noon: 1
 //   phi     = arg(z'_k e^{j xm}) / 2 pi in [0, 1)       (polynomial atan2, max error ~0.005 rad)
 //   fmo_k   = I sin(phi_down,k)  (K3 FM, rad, I = ARM_FM_INDEX_MAX * k3^2; modulator = the
 //             carrier's own octave-down: MID Down1(z_k), UP z_k, DOWN Down1(z_k) = carrier 1:1)
@@ -126,8 +125,8 @@
 //                           FB: beta = ARM_BETA_MAX * k1^2
 //   K2  micro pitch detune  4 pitch shifters on the final wet (all modes / octaves)
 //   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), all modes; K3 = 0: no FM
-//   K4  shaping tilt        full range, all modes: CCW warm (low bands only, p 4, F_lo 50 Hz) -> noon every
-//                           band full -> CW bright (bands >= ARM_TILT_HI_HZ only, q 4)
+//   K4  shaping tilt        fader line over log f, pivot ARM_TILT_PIVOT_HZ, all modes: CCW highs drop
+//                           (ARM_TILT_SLOPE / octave at the end) -> noon every fader 1 -> CW lows drop
 //   K5  mode                SAW | PULSE | ADD | FEEDBACK (| reserved = FEEDBACK), fifths of the travel
 //   K6  dry/wet             (shell)
 //   SW1 unused (reads nothing)
@@ -281,30 +280,23 @@ class Armitage : public Module {
     k2_t_ = k2;
 
     const float beta  = ARM_BETA_MAX * k1 * k1;
-    // K4 tilt: tilt_k = min(1, (f'_k / F)^s) = min(1, exp(s (ln f_k - ln F)) r^s), signed exponent s:
-    //   low side  (k4 < 0.5): s = -p, p = ARM_TILT_P_MAX e, F = F_lo = ARM_TILT_LO_HZ + (ARM_TILT_LO_HZ_MIN - ARM_TILT_LO_HZ) e, e = 1 - 2 k4
-    //   high side (k4 > 0.5): s = +q, q = ARM_TILT_P_MAX (2 k4 - 1), F = ARM_TILT_HI_HZ
-    //   noon: s = 0 -> every tilt_k exactly 1
-    // Cost: 84 expf (one per band, MID) + 2 for the octave factors per Controls() call (main loop).
-    float p, lnF;
-    if (k4 < 0.5f) {
-      const float e = 1.f - 2.f * k4;
-      p   = -ARM_TILT_P_MAX * e;
-      lnF = logf(ARM_TILT_LO_HZ + (ARM_TILT_LO_HZ_MIN - ARM_TILT_LO_HZ) * e);
-    } else {
-      p   = ARM_TILT_P_MAX * (2.f * k4 - 1.f);
-      lnF = logf(ARM_TILT_HI_HZ);
-    }
-    const float ln2   = 0.693147181f;
-    const float rp[3] = { expf(p * ln2), 1.f, expf(-p * ln2) };   // r^s: UP r=2, MID, DOWN r=1/2
-    static const float r[3] = { 2.f, 1.f, 0.5f };          // UP / MID / DOWN
+    // K4 tilt, fader line: t = 2 k4 - 1, tilt_k = clamp01(1 + t ARM_TILT_SLOPE (log2 f'_k - log2 ARM_TILT_PIVOT_HZ)),
+    //   log2 f'_k = log2 f_k + (1 UP, 0 MID, -1 DOWN). Noon: t = 0 -> every tilt_k exactly 1.
+    // Cost: 1 logf per Controls() call, then a multiply-add and two compares per band and octave (main loop).
+    const float t     = 2.f * k4 - 1.f;
+    const float ts    = t * ARM_TILT_SLOPE;
+    const float il2   = 1.442695041f;                       // 1 / ln 2
+    const float l2piv = logf(ARM_TILT_PIVOT_HZ) * il2;
+    static const float r[3]  = { 2.f, 1.f, 0.5f };          // UP / MID / DOWN
+    static const float lr[3] = { 1.f, 0.f, -1.f };          // log2 r
     for (int k = 0; k < kBands; k++) {
-      const float t1 = expf(p * (ln_f_[k] - lnF));         // (f_k / F)^s
+      const float dl = ln_f_[k] * il2 - l2piv;              // log2 f_k - log2 pivot
       for (int o = 0; o < 3; o++) {
-        float t = t1 * rp[o];                              // (f'_k / F)^s
-        if (t > 1.f) t = 1.f;                              // never more than full shaping
-        tl_t_[o][k] = t;                                   // tilt_k (ADD / PD)
-        float bk = beta * t;
+        float g = 1.f + ts * (dl + lr[o]);                 // fader on the line
+        if (g > 1.f) g = 1.f;                              // "up" side clamps at 1
+        if (g < 0.f) g = 0.f;                              // "down" side bottoms out at 0
+        tl_t_[o][k] = g;                                   // tilt_k (ADD / PD)
+        float bk = beta * g;
         if (bk > ARM_BETA_CLAMP) bk = ARM_BETA_CLAMP;
         if (ARM_ANTIFOLD) {                                // Carson: (b_k + 1) f'_k <= limit
           float cap = ARM_FOLD_LIMIT_HZ / (r[o] * f_k_[k]) - 1.f;
@@ -324,7 +316,7 @@ class Armitage : public Module {
 
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
-      DiagControls(cs, led1, kv, mode, oct, beta, p, fm_t_);
+      DiagControls(cs, led1, kv, mode, oct, beta, t, fm_t_);
     }
   }
 
@@ -333,7 +325,7 @@ class Armitage : public Module {
     int   n;                 // tap number (#n), 0 = automatic line
     float k[5];              // K1..K5, the module's remapped 0..1 values
     int   sw1, sw2;          // sw1 = mode (0 SAW, 1 PULSE, 2 ADD, 3 FB); sw2: 0 UP, 1 MID, 2 DOWN
-    float beta, p, fm;       // derived values the engine runs toward (FB beta, K4 signed tilt exponent s: < 0 low side, > 0 high side, K3 FM index I)
+    float beta, p, fm;       // derived values the engine runs toward (FB beta, field p = K4 fader-line rotation t = 2 k4 - 1, K3 FM index I)
     float ss_d, ss_in, ss_out;   // K2 micro-pitch target: outer detune D (cents), inner / outer pair gain
     int   oct;               // 0 up, 1 played, 2 down
     bool  mute;              // FS1 wet mute state
