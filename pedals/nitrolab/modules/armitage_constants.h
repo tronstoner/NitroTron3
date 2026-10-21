@@ -18,7 +18,10 @@ constexpr float ARM_MODE_ZONE[3] = { 0.2f, 0.4f, 0.6f };
 // ARM_K1_SPLIT into u / v (below, unchanged). SAW: resonance (R, morph). PULSE: width.
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (K4 law gives at most beta, so never reached)
-constexpr float ARM_K1_SPLIT   = 0.6f;    // K1 split point: below = today's ADD/PD law (scaled), above = extended range
+constexpr float ARM_K1_SPLIT   = 0.6f;    // ADD K1 split point: below = today's ADD law (scaled), above = extended range
+// SAW / PULSE K1 split: a = min(K1 / split, 1) crossfades clean y0_k -> full shape (saw full knee /
+// square w = 0.5); p = max((K1 - split) / (1 - split), 0) pushes it (SAW resonance R 1 -> 16, PULSE w 50 -> 0 %).
+constexpr float ARM_K1_SPLIT_PD = 0.5f;
 
 // --- FB anti-fold limit (always on): beta_k <= max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1) ---
 // Carson's rule: a feedback-FM band at f'_k with index beta_k spreads to about
@@ -84,7 +87,7 @@ constexpr float ARM_GAIN_ADD   = 0.54f;   // ADD makeup on the shaping delta (ou
 constexpr float ARM_GAIN_PD    = 2.f;     // was 0.88 (HEAD PD makeup, K1 knee law)
 // SAW / PULSE K4 clean mix-back, in parallel with the K4 tilt: c = ARM_PD_CLEAN_MIX_MAX (1 - k4),
 // linear (K4 CCW: this much of the clean band y0_k added; CW: none). No level compensation.
-constexpr float ARM_PD_CLEAN_MIX_MAX = 1.f;
+constexpr float ARM_PD_CLEAN_MIX_MAX = 0.5f;   // was 1.0 (K4 CCW = the old noon amount)
 
 // ADD (K5 3rd zone): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
 // u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
@@ -117,25 +120,25 @@ constexpr float ARM_PD_FOLD_HZ    = 1000.f;  // Hz; full-depth anti-fold corner 
 constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine / no pulse (linear in between)
 
 // SAW, K1 = resonance (CZ "reso" on the linear phase, DC removed):
-//   R = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) k1     (linear, 1 -> 16; noon 8.5)
+//   R = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) p      (p = K1 push above ARM_K1_SPLIT_PD, linear, 1 -> 16)
 //   R_k = min(R, ARM_RES_FMAX / f'_k)
 //   res_k = |z'_k| (sin(2 pi R_k phi) (1 - phi) - dc(R_k)),  dc(R) = 1/(2 pi R) - sin(2 pi R)/(2 pi R)^2 (exact mean)
-//   out_k = G share_k [ (1 - k1) saw_k + k1 tilt_k cap_k res_k ] + c y0_k   (morph on the shape only)
+//   shape_k = G share_k [ (1 - p) saw_k + p tilt_k cap_k res_k ]   (morph on the shape only)
 constexpr float ARM_RES_R_MIN = 1.f;
 constexpr float ARM_RES_R_MAX = 16.f;
 constexpr float ARM_RES_FMAX  = 3800.f;   // Hz; R_k f'_k capped here (anti-fold)
 
-// PULSE, K1 = width: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) k1 (50 % CCW -> 0 % CW),
+// PULSE, K1 push = width: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) p (50 % at K1 split -> 0 % CW),
 // two independent knee steps (down at phi = 0, up at phi = w, ARM_PD_KNEE each) that may overlap;
 // mean 1 - 2w removed (exact for any w in [0, 0.5]). w = 0: the steps cancel, S = +1, silence.
 constexpr float ARM_PUL_W_MAX = 0.5f;
 constexpr float ARM_PUL_W_MIN = 0.f;
 
 // --- K3 = 2-op FM per band, all modes (2026-10-20) ---------------------------
-// phi_mod = phi_k + I sin(phi_down_k), I = ARM_FM_INDEX_MAX * k3 (rad, linear), applied to the
+// phi_mod = phi_k + I sin(phi_down_k), I = ARM_FM_INDEX_MAX * k3^2 (rad, squared taper), applied to the
 // carrier phase before the shape. Modulator = the carrier's own octave-down from the band:
 // SW2 MID: Down1(z_k) (half phase); UP: z_k (the played band); DOWN: Down1(z_k) = the carrier (1:1).
-constexpr float ARM_FM_INDEX_MAX = 3.f;   // rad at K3 full CW
+constexpr float ARM_FM_INDEX_MAX = 12.f;  // rad at K3 full CW (was 3, linear; old max now at K3 = 0.5)
 
 // --- Cross-modulation (former K3): theta_k += beta_x * m — off since K3 = FM ---
 constexpr bool  ARM_XMOD_ENABLE = false;  // true: K3 drives beta_x = ARM_XMOD_MAX * k3^2 as well (on top of the FM)
