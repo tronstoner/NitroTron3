@@ -48,8 +48,8 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 //   t = 0 (noon): true bypass (filter not run, wet bit-identical).
 //   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
-//   Q (both stages) = ARM_FILT_Q (fixed). The K2 envelope turns the K4 knob itself:
-//   t_eff = t + k5 ARM_ENV_T_MAX e, unclamped (fc limited only by ARM_FILT_FC_MIN/MAX for
+//   Q (both stages) = ARM_FILT_Q (fixed). The K5 envelope turns the K4 knob itself:
+//   t_eff = t + ARM_ENV_DEPTH e, unclamped (fc limited only by ARM_FILT_FC_MIN/MAX for
 //   stability) - rising e = clockwise (LP opens, through noon,
 //   HP thins), falling e = counter-clockwise; from noon it pushes off noon (noon is alive).
 // No makeup gain. t_eff is smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block). Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
@@ -68,7 +68,8 @@ constexpr float ARM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t
 constexpr float ARM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with target 0: bypass
 
-// --- K2 = triggered envelope on the K4 post-filter cutoff (2026-10-22), bipolar t2 = 2 k2 - 1 ---
+// --- K5 = triggered envelope on the K4 post-filter cutoff (2026-10-22; was K2 until the same evening,
+// moved next to K4; K2 is free), bipolar t2 = 2 k5 - 1 ---
 // Onset detector (vestige's IsrCapture idiom, vestige.h / VESTIGE_ONSET_*), per 48 kHz sample on
 // the raw INPUT |in|, before the decimator (2026-10-22: moved off the decimated 8 kHz |d| because
 // the decimator's low-pass was softening the attack and missing fast plucks):
@@ -87,7 +88,7 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 //   CW (t2 > 0, rise + fall, 2026-10-22): on each onset e = 0, then e rises toward +1 with the
 //     knob's tau (same law as the CCW fall). Once e >= 0.98 (the peak) it falls back toward 0 as a
 //     plain one-pole decay (fast off the peak, long tail) with tau x ARM_ENV_FALL_RATIO. A new onset restarts the rise from e's current value.
-// K5 = depth: t_eff = t_K4 + k5 ARM_ENV_T_MAX e (see K4).
+// Depth fixed: t_eff = t_K4 + ARM_ENV_DEPTH e (see K4); 0.7 = the old K5 depth knob at 2 o'clock.
 constexpr float    ARM_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz), now run at 48 kHz directly
 constexpr float    ARM_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS), 48 kHz
 constexpr float    ARM_ONSET_SLOW_COEF     = 0.0006f;  // baseline one-pole at 48 kHz (vestige's own coefficient, ~35 ms; was 0.0036 at the old 8 kHz rate)
@@ -95,12 +96,12 @@ constexpr float    ARM_ONSET_RISE          = 1.5f;     // gate > baseline x this
 constexpr float    ARM_ONSET_FLOOR         = 0.0021f;  // input gate-meter units = 0.1 x ARM_REF_LEVEL (0.021); unchanged — the decimator has unity passband gain, so 48 kHz |in| and the old decimated |d| share the same level scale
                                                        // (its K4 open threshold) sits at ~0.1 of a typical passive-bass env
 constexpr uint32_t ARM_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (vestige), now counted in 48 kHz samples
-constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time constant just off K2 noon
-constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K2 full CW / CCW
+constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time constant just off K5 noon
+constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K5 full CW / CCW
 constexpr float    ARM_ENV_FALL_RATIO      = 3.0f;     // CW fall tau / rise tau (plain one-pole decay after the peak)
-constexpr float    ARM_ENV_T_MAX           = 1.0f;     // K4 knob travel (t units, 1.0 = CCW end to noon or noon to CW end) at K5 full and |e| = 1
-// K2 LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false;
-// K2 then drives only the envelope.
+constexpr float    ARM_ENV_DEPTH           = 0.7f;     // K4 knob travel (t units, 1.0 = noon to an end) at |e| = 1; the old K5 depth knob at 2:00 (builder 2026-10-22)
+// LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false
+// (it reads the envelope knob, now K5, if ever re-enabled).
 constexpr bool     ARM_LFO_ENABLE          = false;
 
 // --- (parked, ARM_LFO_ENABLE) K2 = PWM (SAW / PULSE only; ADD / FB: K2 unused), bipolar t2 = 2 k2 - 1 ---
