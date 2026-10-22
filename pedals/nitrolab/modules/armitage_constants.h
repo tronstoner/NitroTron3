@@ -62,22 +62,27 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 // shared by all bands (phase at 8 kHz). Travel = mnemonic's K3 pre-effect law (MNEM_PRE_*):
 //   depth = min(u / ARM_PWM_DEPTH_FRAC, 1)                          (fade-in over the first 10 %)
 //   rate  = ARM_PWM_HZ_MIN (ARM_PWM_HZ_MAX / ARM_PWM_HZ_MIN)^ub, ub = min(u, ARM_PWM_TOP_KNEE)
-//           (exponential from u = 0, 0.1 -> ~9.0 Hz at the knee), then for u > ARM_PWM_TOP_KNEE:
+//           (exponential from u = 0, 0.1 -> ~1.8 Hz at the knee), then for u > ARM_PWM_TOP_KNEE:
 //           rate *= (ARM_PWM_TOP_HZ / rate)^((u - knee) / (1 - knee))  (exponential leg to 200 Hz)
-//   u:    0     .1     .2     .5     .85    .9     1
-//   Hz:   0.10  0.17   0.29   1.41   9.03   25.4   200
-//   PULSE: w = w_K1 + ARM_PWM_W_SWING depth lfo (Schism's width law around K1's width; the centre
-//          never moves). NO clamp, no floor: w <= 0 = the shape is silent (the clean mix-back
-//          stays), w > 1 - D = the wrap term; DC term 1 - 2w follows w per sample.
+//   u:    0     .2     .4     .6     .85    .9     1
+//   Hz:   0.10  0.20   0.39   0.77   1.80   8.65   200
+//   PULSE: w = w_K1 + s lfo, s = depth min(ARM_PWM_W_SWING, w_K1 + x),
+//          x = ARM_PWM_SIL_X clamp((ARM_PWM_SIL_W - w_K1) / ARM_PWM_SIL_W, 0, 1)
+//          (symmetric around K1's width, the centre never moves; for w_K1 >= ARM_PWM_SIL_W the sweep
+//          only touches 0, never silent; below it the undershoot grows linearly: w_K1 0.05 -> w
+//          -0.05..0.15, w_K1 0 -> -0.10..0.10). NO clamp, no floor: w <= 0 = the shape is silent
+//          (the clean mix-back stays), continuous at 0; DC term 1 - 2w follows w per sample.
 //   SAW:   Ultrasaw: shape = saw(phi) + depth saw(phi + o), o = 0.5 + ARM_PWM_O_SWING depth lfo
 //          (0.1 <-> 0.9 at full depth, no clamp); same knee / resonance push on both copies;
 //          no level compensation (the sum is up to +6 dB).
 constexpr float ARM_PWM_DEPTH_FRAC = 0.10f;   // share of the CCW half over which the depth fades in
 constexpr float ARM_PWM_HZ_MIN     = 0.1f;    // Hz; LFO rate at u = 0 (10 s cycle)
-constexpr float ARM_PWM_HZ_MAX     = 20.f;    // Hz; the exponential law's end point (u = 1, reached only below the knee)
-constexpr float ARM_PWM_TOP_KNEE   = 0.85f;   // u where the top leg starts (~9.0 Hz)
+constexpr float ARM_PWM_HZ_MAX     = 3.0f;    // Hz; the exponential law's end point (u = 1, reached only below the knee)
+constexpr float ARM_PWM_TOP_KNEE   = 0.85f;   // u where the top leg starts (~1.8 Hz)
 constexpr float ARM_PWM_TOP_HZ     = 200.f;   // Hz; LFO rate at K2 full CCW (audio-rate)
-constexpr float ARM_PWM_W_SWING    = 0.40f;   // PULSE: duty swing at full depth (+-, Schism MODE_C_SYNTH_PWM depth max)
+constexpr float ARM_PWM_W_SWING    = 0.40f;   // PULSE: max duty swing at full depth (+-, Schism MODE_C_SYNTH_PWM depth max); else limited to w_K1 + x
+constexpr float ARM_PWM_SIL_W      = 0.10f;   // PULSE: K1 base width below which the sweep crosses into silence
+constexpr float ARM_PWM_SIL_X      = 0.10f;   // PULSE: undershoot below 0 at base width 0 (linear from 0 at ARM_PWM_SIL_W)
 constexpr float ARM_PWM_O_SWING    = 0.40f;   // SAW: copy phase-offset swing at full depth (+-, cycles) around 0.5
 
 // --- Wet DC blocker (final 48 kHz wet, before the K4 post filter) ----------
