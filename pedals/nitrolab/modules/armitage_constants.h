@@ -22,7 +22,7 @@ constexpr float ARM_K1_SPLIT   = 0.6f;    // ADD K1 split point: below = today's
 // SAW / PULSE K1 split: x = min(K1 / split, 1) is the knee depth, shape only at every K1:
 // d(x) = 0.5 (ARM_PD_KNEE / 0.5)^x, exponential in K1 (0.5 = the sine at K1 = 0 -> 0.19 -> 0.07 ->
 // 0.027 -> ARM_PD_KNEE, full saw / square w = 0.5, at the split; x = 1 sets d = ARM_PD_KNEE exactly);
-// SAW: d_k = max(d(x), dfloor_k) (K2 CCW: d(x) swept by the PWM LFO, see below);
+// SAW: d_k = max(d(x), dfloor_k) (K2 CCW: Ultrasaw copy, see below);
 // PULSE: D = d(x) on both edges, amount 1 - x (1 - cap_k) (linear x, unchanged). p = max((K1 - split) / (1 - split), 0) pushes it (SAW resonance R 1 -> 16, PULSE w 50 -> 0 %).
 constexpr float ARM_K1_SPLIT_PD = 0.5f;
 
@@ -61,17 +61,19 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 // t2 >= 0 (noon -> CW): nothing (reserved). t2 < 0: u = -t2 in (0, 1], one triangle LFO in [-1, 1]
 // shared by all bands (phase at 8 kHz), Schism's PWM law (MODE_C_SYNTH_PWM_*): depth first, then rate:
 //   depth = min(u / ARM_PWM_DEPTH_FRAC, 1),  rate = ARM_PWM_HZ_MIN + (ARM_PWM_HZ_MAX - ARM_PWM_HZ_MIN) max(0, (u - ARM_PWM_DEPTH_FRAC) / (1 - ARM_PWM_DEPTH_FRAC))
-//   PULSE: w = clamp(w_base + ARM_PWM_W_SWING depth lfo, w_floor, 0.5), w_base from K1 (push);
-//          w_floor = ARM_PWM_W_FLOOR for K1 <= ARM_PWM_FLOOR_K1, linear to 0 at K1 = 1
-//          (the LFO can modulate into silence only there); DC term 1 - 2w follows w per sample.
-//   SAW:   knee d = d(x) 2^(ARM_PWM_KNEE_OCT depth lfo), clamped to [ARM_PD_KNEE, 0.5] (saw mean stays 0).
+//   PULSE: w = w_K1 + depth (ARM_PWM_CENTRE - w_K1) + ARM_PWM_W_SWING depth lfo, w_K1 from K1 (push);
+//          the centre moves from K1's width to 0.5 with depth, the swing grows with depth; at full
+//          depth exactly Schism's duty 0.5 + 0.40 tri (0.1 <-> 0.9). NO clamp, no floor;
+//          DC term 1 - 2w follows w per sample (exact for any w in [0, 1)).
+//   SAW:   Ultrasaw: shape = saw(phi) + depth saw(phi + o), o = ARM_PWM_CENTRE + ARM_PWM_O_SWING depth lfo
+//          (0.1 <-> 0.9 at full depth, no clamp); same knee / resonance push on both copies;
+//          no level compensation (the sum is up to +6 dB).
 constexpr float ARM_PWM_DEPTH_FRAC = 0.4f;    // share of the CCW half that ramps the depth (then the rate)
-constexpr float ARM_PWM_HZ_MIN     = 0.2f;    // Hz; LFO rate while the depth ramps
-constexpr float ARM_PWM_HZ_MAX     = 2.0f;    // Hz; LFO rate at K2 full CCW
+constexpr float ARM_PWM_HZ_MIN     = 0.3f;    // Hz; LFO rate while the depth ramps
+constexpr float ARM_PWM_HZ_MAX     = 15.0f;   // Hz; LFO rate at K2 full CCW
+constexpr float ARM_PWM_CENTRE     = 0.5f;    // PULSE duty / SAW copy offset centre at full depth
 constexpr float ARM_PWM_W_SWING    = 0.40f;   // PULSE: duty swing at full depth (+-, Schism MODE_C_SYNTH_PWM depth max)
-constexpr float ARM_PWM_W_FLOOR    = 0.05f;   // PULSE: lowest modulated width (never silence) for K1 <= ARM_PWM_FLOOR_K1
-constexpr float ARM_PWM_FLOOR_K1   = 0.9f;    // PULSE: K1 from which w_floor fades linearly to 0 at K1 = 1
-constexpr float ARM_PWM_KNEE_OCT   = 2.0f;    // SAW: knee sweep +- octaves at full depth
+constexpr float ARM_PWM_O_SWING    = 0.40f;   // SAW: copy phase-offset swing at full depth (+-, cycles)
 
 // --- Wet DC blocker (final 48 kHz wet, before the K4 post filter) ----------
 constexpr float ARM_DC_HZ = 10.f;  // wet DC blocker (FB carries DC); below the lowest bass fundamental
@@ -148,7 +150,8 @@ constexpr float ARM_RES_FMAX  = 3800.f;   // Hz; R_k f'_k capped here (anti-fold
 
 // PULSE, K1 push = width: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) p (50 % at K1 split -> 0 % CW),
 // two independent knee steps (down at phi = 0, up at phi = w, ARM_PD_KNEE each) that may overlap;
-// mean 1 - 2w removed (exact for any w in [0, 0.5]). w = 0: the steps cancel, S = +1, silence.
+// mean 1 - 2w removed (exact for any w in [0, 1); an up-step not finished by phi = 1 wraps into
+// the next cycle). w = 0: the steps cancel, S = +1, silence.
 constexpr float ARM_PUL_W_MAX = 0.5f;
 constexpr float ARM_PUL_W_MIN = 0.f;
 
