@@ -155,9 +155,11 @@
 //                           ADD (UP, CCW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
 //                           FB (UP, CW): beta = ARM_BETA_MAX * K1old^2
 //                           DOWN: unshaped on both halves (K1 does nothing)
-//   K2  envelope            bipolar, noon = off (e = 0); triggered on each onset, e -> sign(t2), tau 4 s (off noon)
-//                           -> 0.05 s (ends): CW opens / CCW closes the K4 cutoff (all modes)
-//                           (PWM LFO parked behind ARM_LFO_ENABLE)
+//   K2  envelope            bipolar, noon = off (e = 0); triggered on each onset: CCW (t2 < 0) e falls
+//                           to -1 and holds, tau 4 s (off noon) -> 0.05 s (ends), as before; CW (t2 > 0)
+//                           AR envelope: e attacks to +1 in ARM_ENV_ATTACK_MS (fixed 5 ms), then releases
+//                           to 0 at the same knob tau (4 s -> 0.05 s); CW opens / CCW closes the K4 cutoff
+//                           (all modes) (PWM LFO parked behind ARM_LFO_ENABLE)
 //   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct,
 //                           two stages, Q fixed ARM_FILT_Q 1.1), on the final wet, all modes
@@ -292,6 +294,8 @@ class Armitage : public Module {
     on_refr_len_ = (int)((float)ARM_ONSET_REFRACTORY_MS * 0.001f * sr8_ + 0.5f);
     on_seen_ = false;
     env_e_ = 0.f;
+    env_attacking_ = false;
+    env_attack_a_ = 1.f - expf(-1.f / (ARM_ENV_ATTACK_MS * 0.001f * sr8_));
     ln_tau_ratio_ = logf(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S);
     fm_g_ = 0.f;
     f_on_ = false;
@@ -851,7 +855,10 @@ class Armitage : public Module {
   // K2: onset detector (vestige IsrCapture idiom) on the decimated input |d| + the triggered
   // envelope e, once per 8 kHz sample. Fast meter -> gate meter (up at once, slow fall) ->
   // slow baseline; onset = gate > ARM_ONSET_RISE base and > ARM_ONSET_FLOOR, refractory.
-  // e: t2 = 0 -> 0 held; onset -> e = 0; then one-pole toward sign(t2), tau from |t2| (exponential).
+  // e: t2 = 0 -> 0 held. CCW (t2 < 0, unchanged): onset -> e = 0, then one-pole toward -1, tau
+  // from |t2|. CW (t2 > 0, AR): onset -> e = 0 and (re)start the attack phase; attack = fixed
+  // one-pole toward +1 (ARM_ENV_ATTACK_MS); once e >= 0.98 the attack ends and e releases toward
+  // 0 with the same knob-tau one-pole used on the CCW side.
   inline void OnsetEnv(float d) {
     using namespace armitage_k;
     const float a = fabsf(d);
@@ -863,7 +870,10 @@ class Armitage : public Module {
     const bool onset = (on_refr_ == 0 && on_gate_ > ARM_ONSET_FLOOR &&
                         on_gate_ > on_base_ * ARM_ONSET_RISE);
     const float t2 = 2.f * k2s_ - 1.f;
-    if (onset) { on_refr_ = on_refr_len_; on_seen_ = true; env_e_ = 0.f; }
+    if (onset) {
+      on_refr_ = on_refr_len_; on_seen_ = true; env_e_ = 0.f;
+      env_attacking_ = (t2 > 0.f);
+    }
     if (t2 == 0.f || !on_seen_) { env_e_ = 0.f; return; }
     const float at = fabsf(t2);
     if (at != env_at_) {                         // tau = SLOW (FAST / SLOW)^|t2| -> one-pole coefficient
@@ -871,8 +881,13 @@ class Armitage : public Module {
       const float tau = ARM_ENV_TAU_SLOW_S * expf(at * ln_tau_ratio_);
       env_a_ = 1.f - expf(-1.f / (tau * sr8_));
     }
-    const float T = (t2 > 0.f) ? 1.f : -1.f;
-    env_e_ += env_a_ * (T - env_e_);
+    if (t2 > 0.f && env_attacking_) {             // CW attack phase: fixed tau toward +1
+      env_e_ += env_attack_a_ * (1.f - env_e_);
+      if (env_e_ >= 0.98f) env_attacking_ = false;
+    } else {
+      const float T = (t2 > 0.f) ? 0.f : -1.f;    // CW release -> 0; CCW -> -1 (unchanged)
+      env_e_ += env_a_ * (T - env_e_);
+    }
   }
 
   // K1 bipolar remap: h = |2 k1 - 1| -> the model's old unipolar K1. The first ARM_K1_FADE_FRAC of
@@ -1202,6 +1217,8 @@ class Armitage : public Module {
   volatile float env_e_ = 0.f;     // envelope e (-1..1)
   float env_at_ = -1.f, env_a_ = 0.f;                    // |t2| the coefficient was computed for, coefficient
   float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)
+  bool  env_attacking_ = false;    // CW (t2 > 0) only: true while e is in its fixed-tau attack phase
+  float env_attack_a_ = 0.f;       // CW attack one-pole coefficient (ARM_ENV_ATTACK_MS, fixed)
   float fm_g_ = 0.f;               // dry -> filtered crossfade m (per sample slide)
   float f_step_ = 0.f;             // max m step per sample
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;   // ln(HP_MAX / FMIN), ln(LP_MIN / FMAX) (Init)
