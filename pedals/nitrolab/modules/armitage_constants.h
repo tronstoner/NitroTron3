@@ -48,11 +48,10 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 //   t = 0 (noon): true bypass (filter not run, wet bit-identical).
 //   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
-//   Q (both stages) = ARM_FILT_Q (fixed). K2 envelope modulates the cutoff of the ACTIVE side:
-//   fc_mod = fc_K4 2^(k5 ARM_ENV_OCT_MAX e), clamped to the side's own range ends
-//   (LP [ARM_FILT_LP_MIN, ARM_FILT_FMAX], HP [ARM_FILT_FMIN, ARM_FILT_HP_MAX]); K4 noon = bypass, nothing modulated.
-// No makeup gain. t and the modulation (octaves) are smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio
-// block; both linear in log fc, so this = the 5 ms smoothing on the modulated cutoff). Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
+//   Q (both stages) = ARM_FILT_Q (fixed). The K2 envelope turns the K4 knob itself:
+//   t_eff = clamp(t + k5 ARM_ENV_T_MAX e, -1, 1) - rising e = clockwise (LP opens, through noon,
+//   HP thins), falling e = counter-clockwise; from noon it pushes off noon (noon is alive).
+// No makeup gain. t_eff is smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block). Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
 // (linear crossfade over the first ARM_FILT_FADE of travel each side of noon; there the filter
 // sits at its range end: LP ~20 kHz / HP ~20 Hz). |t| snaps to 0 below ARM_FILT_SNAP when the
 // target is noon (filter off again, no CPU).
@@ -85,7 +84,7 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 //   CW (t2 > 0, rise + fall, 2026-10-22): on each onset e = 0, then e rises toward +1 with the
 //     knob's tau (same law as the CCW fall). Once e >= 0.98 (the peak) it falls back toward 0 with
 //     the same tau. A new onset restarts the rise from e's current value.
-// K5 = depth: fc_mod = fc_K4 2^(k5 ARM_ENV_OCT_MAX e) (see K4).
+// K5 = depth: t_eff = t_K4 + k5 ARM_ENV_T_MAX e (see K4).
 constexpr float    ARM_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz), now run at 48 kHz directly
 constexpr float    ARM_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS), 48 kHz
 constexpr float    ARM_ONSET_SLOW_COEF     = 0.0006f;  // baseline one-pole at 48 kHz (vestige's own coefficient, ~35 ms; was 0.0036 at the old 8 kHz rate)
@@ -95,7 +94,7 @@ constexpr float    ARM_ONSET_FLOOR         = 0.0021f;  // input gate-meter units
 constexpr uint32_t ARM_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (vestige), now counted in 48 kHz samples
 constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time constant just off K2 noon
 constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K2 full CW / CCW
-constexpr float    ARM_ENV_OCT_MAX         = 4.0f;     // octaves of cutoff travel at K5 full and |e| = 1
+constexpr float    ARM_ENV_T_MAX           = 1.0f;     // K4 knob travel (t units, 1.0 = CCW end to noon or noon to CW end) at K5 full and |e| = 1
 // K2 LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false;
 // K2 then drives only the envelope.
 constexpr bool     ARM_LFO_ENABLE          = false;

@@ -94,8 +94,8 @@
 //   K4 POST FILTER (final 48 kHz wet, every mode / octave; law copied from mnemonic's tone filter):
 //     two cascaded TPT SVF stages (24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
 //     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q (both stages, fixed)
-//     cutoff of the active side modulated by the K2 envelope: fc_mod = fc 2^(k5 ARM_ENV_OCT_MAX e),
-//     clamped to that side's range ends; modulation octaves smoothed like t (ARM_FILT_SMOOTH_MS, per block)
+//     the K2 envelope turns the knob: t_eff = clamp(t + k5 ARM_ENV_T_MAX e, -1, 1), smoothed like t
+//     (rising e = clockwise, falling e = counter-clockwise, from any K4 position incl. noon)
 //     t < 0: LP, fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //     t > 0: HP, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
 //     t = 0: true bypass (not run). wet = dry + m (filtered - dry), m -> min(|t| / ARM_FILT_FADE, 1),
@@ -166,7 +166,7 @@
 //   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct,
 //                           two stages, Q fixed ARM_FILT_Q 1.1), on the final wet, all modes
-//   K5  env depth           0 -> ARM_ENV_OCT_MAX (4) octaves of K2-envelope cutoff travel; nothing at K4 noon
+//   K5  env depth           0 -> ARM_ENV_T_MAX (1.0 = full K4 travel) of K2-envelope knob travel
 //   K6  dry/wet             (shell)
 //   SW1 mode pair           UP = ADD (K1 CCW) / FEEDBACK (K1 CW), MID = SAW (CCW) / PULSE (CW),
 //                           DOWN = unshaped band sum (both halves, placeholder)
@@ -288,7 +288,6 @@ class Armitage : public Module {
     sr_ = sr;
     ft_ = ft_t_ = 0.f;
     k5_t_ = 0.f;                               // K5 env depth
-    f_mod_ = 0.f;                              // smoothed cutoff modulation (octaves)
     // K2 onset detector (48 kHz, pre-decimator) + envelope (8 kHz).
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (ARM_ONSET_ENV_MS * sr));
@@ -994,8 +993,11 @@ class Armitage : public Module {
     // K2 envelope x K5 depth, in octaves, smoothed the same way (also while bypassed). t and the
     // modulation are both linear in log fc (ARM_FILT_CURVE 1): this is the 5 ms smoothing on the
     // modulated cutoff.
-    f_mod_ += (k5_t_ * ARM_ENV_OCT_MAX * env_e_ - f_mod_) * f_a_;
-    const float tt = ft_t_;
+    // K2 envelope x K5 depth turns the K4 knob itself: t_eff = t + k5 ARM_ENV_T_MAX e, clamped to the
+    // knob's travel. Rising e = clockwise (LP opens, through noon, HP thins), falling e = counter-
+    // clockwise; from noon the envelope simply pushes off noon. Smoothed with t (ARM_FILT_SMOOTH_MS).
+    float tt = ft_t_ + k5_t_ * ARM_ENV_T_MAX * env_e_;
+    tt = (tt < -1.f) ? -1.f : (tt > 1.f) ? 1.f : tt;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < ARM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -1020,12 +1022,6 @@ class Armitage : public Module {
       const float tmag = expf(ARM_FILT_CURVE * logf((at > 1e-6f) ? at : 1e-6f));   // |t|^curve
       float fc = f_hp_ ? ARM_FILT_FMIN * expf(tmag * f_lnhp_)
                        : ARM_FILT_FMAX * expf(tmag * f_lnlp_);
-      // K2 envelope, depth K5: fc 2^(+-k5 ARM_ENV_OCT_MAX e). Sign flipped on the HP side so a
-      // rising e OPENS the filter on both sides (LP: corner up, HP: corner down).
-      fc *= exp2f(f_hp_ ? -f_mod_ : f_mod_);
-      const float lo = f_hp_ ? ARM_FILT_FMIN : ARM_FILT_LP_MIN;    // the active side's own range ends
-      const float hi = f_hp_ ? ARM_FILT_HP_MAX : ARM_FILT_FMAX;
-      fc = (fc < lo) ? lo : (fc > hi) ? hi : fc;
       svf_[0].Set(fc, ARM_FILT_Q, sr_);
       svf_[1].CopyCoefFrom(svf_[0]);
     }
@@ -1225,7 +1221,6 @@ class Armitage : public Module {
   float ft_ = 0.f;                 // smoothed t (per block)
   volatile float ft_t_ = 0.f;      // target t = 2 k4 - 1
   volatile float k5_t_ = 0.f;      // K5 env depth (0..1)
-  float f_mod_ = 0.f;              // smoothed cutoff modulation, octaves (per block)
   // K2 onset detector (48 kHz, pre-decimator) + envelope (8 kHz)
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
