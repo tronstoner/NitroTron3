@@ -160,7 +160,7 @@
 //                           FB (UP, CW): beta = ARM_BETA_MAX * K1old^2
 //                           DOWN: unshaped on both halves (K1 does nothing)
 //   K2  FM envelope         SW1 UP (ADD / FB) only, bipolar, noon off; a gain g on the K3 knob
-//                           (k3_eff = k3 g), K2 = travel time T 4 s (off noon) -> 50 ms (ends):
+//                           (k3_eff = k3 g), K2 = travel time T 12 s (off noon) -> 150 ms (ends):
 //                           CCW: each pluck starts at K3 and decays to 0 in 3 T (ARM_ENV_FM_DECAY_RATIO), holds 0;
 //                           CW: each pluck starts at 0, rises to K3 in T, decays to 0 in 3 T.
 //                           I = ARM_FM_INDEX_MAX k3_eff^2. MID / DOWN: nothing (parked PWM LFO shares the knob)
@@ -926,7 +926,7 @@ class Armitage : public Module {
     }
   };
   // K2 -> K3 FM envelope: a GAIN g (0..1) on the K3 knob, k3_eff = k3 g, so start and end are exactly
-  // 0 and K3. K2 sets the travel time T = ARM_ENV_TAU_SLOW_S (FAST / SLOW)^|t2| (4 s -> 50 ms):
+  // 0 and K3. K2 sets the travel time T = ARM_ENV_FM_TIME_RATIO ARM_ENV_TAU_SLOW_S (FAST / SLOW)^|t2| (12 s -> 150 ms):
   //   CCW (decay): onset -> g = 1 (index = K3), one-pole decay reaching 0 in ARM_ENV_FM_DECAY_RATIO T, then holds 0.
   //   CW (rise):   onset -> g = 0, one-pole rise reaching 1 in exactly T, then decays to 0 in
   //                ARM_ENV_FALL_RATIO T.
@@ -946,7 +946,7 @@ class Armitage : public Module {
       const float am = fabsf(t2);
       if (am != at) {
         at = am;
-        const float T = ARM_ENV_TAU_SLOW_S * expf(am * ln_tau_ratio);
+        const float T = ARM_ENV_FM_TIME_RATIO * ARM_ENV_TAU_SLOW_S * expf(am * ln_tau_ratio);   // FM: whole time law x ARM_ENV_FM_TIME_RATIO
         a = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * sr8));
         fall_a = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * ARM_ENV_FALL_RATIO * sr8));
         dec_a  = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * ARM_ENV_FM_DECAY_RATIO * sr8));   // CCW decay, x ARM_ENV_FM_DECAY_RATIO
