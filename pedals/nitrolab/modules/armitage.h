@@ -883,7 +883,7 @@ class Armitage : public Module {
   // from |t2|. CW (t2 > 0, rise + fall): onset -> e = 0 and (re)start the rise; the rise uses the
   // same knob-tau one-pole toward +1; once e >= 0.98 (peak) e falls back to 0 as the MIRRORED rise:
   // e = 1 - w, w growing from 0.02 by exp(1/(tau sr8)) per sample (slow start, accelerating, same
-  // duration as the rise); at w >= 1 e = 0 and holds.
+  // shape as the rise, ARM_ENV_FALL_RATIO x its duration); at w >= 1 e = 0 and holds.
   inline void EnvUpdate() {
     using namespace armitage_k;
     const bool onset = on_pending_;
@@ -900,6 +900,7 @@ class Armitage : public Module {
       env_at_ = at;
       const float tau = ARM_ENV_TAU_SLOW_S * expf(at * ln_tau_ratio_);
       env_a_ = 1.f - expf(-1.f / (tau * sr8_));
+      env_fall_g_ = expf(1.f / (tau * ARM_ENV_FALL_RATIO * sr8_));   // mirrored fall, ARM_ENV_FALL_RATIO x slower
     }
     if (t2 > 0.f) {
       if (env_attacking_) {                        // CW rise: the knob's tau toward +1 (original spec)
@@ -910,7 +911,7 @@ class Armitage : public Module {
           env_fall_w_ = 1.f - env_e_;
         }
       } else if (env_falling_) {                   // CW fall: the rise played backwards
-        env_fall_w_ *= 1.f / (1.f - env_a_);       // = exp(1 / (tau sr8))
+        env_fall_w_ *= env_fall_g_;                // exp(1 / (ARM_ENV_FALL_RATIO tau sr8))
         if (env_fall_w_ >= 1.f) { env_fall_w_ = 1.f; env_falling_ = false; }
         env_e_ = 1.f - env_fall_w_;
       } else {
@@ -1252,6 +1253,7 @@ class Armitage : public Module {
   bool  env_attacking_ = false;    // CW (t2 > 0) only: true while e is in its knob-tau rise
   bool  env_falling_ = false;      // CW only: true during the mirrored fall after the peak
   float env_fall_w_ = 1.f;         // mirrored fall: e = 1 - w, w grows 0.02 -> 1
+  float env_fall_g_ = 1.f;         // its per-sample growth factor
   float fm_g_ = 0.f;               // dry -> filtered crossfade m (per sample slide)
   float f_step_ = 0.f;             // max m step per sample
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;   // ln(HP_MAX / FMIN), ln(LP_MIN / FMAX) (Init)
