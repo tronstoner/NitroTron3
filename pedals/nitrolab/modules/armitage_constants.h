@@ -97,7 +97,7 @@ constexpr float    ARM_ONSET_FLOOR         = 0.0021f;  // input gate-meter units
 constexpr uint32_t ARM_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (vestige), now counted in 48 kHz samples
 constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time constant just off K2 noon
 constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K2 full CW / CCW
-constexpr float    ARM_ENV_FALL_RATIO      = 4.0f;     // CW fall duration / rise duration (fall curve = mirrored rise, stretched)
+constexpr float    ARM_ENV_FALL_RATIO      = 2.0f;     // CW fall duration / rise duration (fall curve = mirrored rise, stretched)
 constexpr float    ARM_ENV_T_MAX           = 1.0f;     // K4 knob travel (t units, 1.0 = CCW end to noon or noon to CW end) at K5 full and |e| = 1
 // K2 LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false;
 // K2 then drives only the envelope.
