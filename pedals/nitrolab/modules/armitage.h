@@ -93,15 +93,22 @@
 //
 //   K4 POST FILTER (final 48 kHz wet, every mode / octave; law copied from mnemonic's tone filter):
 //     two cascaded TPT SVF stages (24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
-//     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q_MIN (ARM_FILT_Q_MAX / ARM_FILT_Q_MIN)^k5 (both stages;
-//     K5 = resonance, k5 smoothed like t, ARM_FILT_SMOOTH_MS per block)
+//     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q (both stages, fixed)
+//     cutoff of the active side modulated by the K2 envelope: fc_mod = fc 2^(k5 ARM_ENV_OCT_MAX e),
+//     clamped to that side's range ends; modulation octaves smoothed like t (ARM_FILT_SMOOTH_MS, per block)
 //     t < 0: LP, fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //     t > 0: HP, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
 //     t = 0: true bypass (not run). wet = dry + m (filtered - dry), m -> min(|t| / ARM_FILT_FADE, 1),
 //     m slides at most 1 per ARM_MUTE_SLIDE_MS (1 ms) per sample. LP <-> HP (t crosses noon): m slides
 //     to 0 first, then the other type starts from a cleared state and m slides in. No makeup gain.
 //
-//   K2 PWM (SAW / PULSE only; ADD / FB: K2 unused), t2 = 2 k2 - 1 (smoothed K2):
+//   K2 ENVELOPE (all modes), t2 = 2 k2 - 1 (smoothed K2): onset detector on the decimated input |d|
+//     (8 kHz; fast meter ARM_ONSET_ENV_MS, gate fall ARM_ONSET_FALL_MS, baseline ARM_ONSET_SLOW_COEF,
+//     onset = gate > ARM_ONSET_RISE base && gate > ARM_ONSET_FLOOR, refractory ARM_ONSET_REFRACTORY_MS).
+//     Each onset: e = 0, then e += a (sign(t2) - e), tau = ARM_ENV_TAU_SLOW_S (FAST / SLOW)^|t2|.
+//     t2 = 0: e = 0 held. Before the first onset e = 0. e drives the K4 cutoff (depth K5).
+//
+//   K2 PWM (PARKED: ARM_LFO_ENABLE = false, compiled out; SAW / PULSE only), t2 = 2 k2 - 1 (smoothed K2):
 //     t2 >= 0: nothing (reserved). t2 < 0: u = -t2, one triangle LFO in [-1, 1], phase at 8 kHz,
 //     depth = min(u / ARM_PWM_DEPTH_FRAC, 1) (first 10 %), rate = ARM_PWM_HZ_MIN (ARM_PWM_HZ_MAX /
 //     ARM_PWM_HZ_MIN)^u, one exponential over the whole travel, no knee (2026-10-22: was a two-leg
@@ -148,13 +155,13 @@
 //                           ADD (UP, CCW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
 //                           FB (UP, CW): beta = ARM_BETA_MAX * K1old^2
 //                           DOWN: unshaped on both halves (K1 does nothing)
-//   K2  PWM (SAW / PULSE)   noon -> CCW: depth (first 10 %), rate 0.2 -> 32 Hz, one exponential; noon -> CW: nothing
-//                           (the active side only: PULSE swings its own base width, SAW its formant R +-1 oct); ADD / FB / unshaped: unused
+//   K2  envelope            bipolar, noon = off (e = 0); triggered on each onset, e -> sign(t2), tau 4 s (off noon)
+//                           -> 0.05 s (ends): CW opens / CCW closes the K4 cutoff (all modes)
+//                           (PWM LFO parked behind ARM_LFO_ENABLE)
 //   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE / unshaped: nothing
-//   K4  post filter         CCW LP 180 Hz <- 20 kHz | noon bypass | CW HP 20 Hz -> 4 kHz (24 dB/oct,
-//                           two stages, Q from K5), on the final wet, all modes
-//   K5  post-filter resonance  Q (both stages) = 0.707 (CCW, flat) -> 6.0 (CW), exponential; acts only while
-//                           the K4 filter runs (K4 off noon, either side); at K4 noon (bypass) K5 does nothing
+//   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct,
+//                           two stages, Q fixed ARM_FILT_Q 1.1), on the final wet, all modes
+//   K5  env depth           0 -> ARM_ENV_OCT_MAX (4) octaves of K2-envelope cutoff travel; nothing at K4 noon
 //   K6  dry/wet             (shell)
 //   SW1 mode pair           UP = ADD (K1 CCW) / FEEDBACK (K1 CW), MID = SAW (CCW) / PULSE (CW),
 //                           DOWN = unshaped band sum (both halves, placeholder)
@@ -275,8 +282,17 @@ class Armitage : public Module {
     // K4 post filter: bypass, cleared state.
     sr_ = sr;
     ft_ = ft_t_ = 0.f;
-    fq_ = fq_t_ = 0.f;                         // K5 start: CCW (Q_MIN)
-    f_lnq_ = logf(ARM_FILT_Q_MAX / ARM_FILT_Q_MIN);
+    k5_t_ = 0.f;                               // K5 env depth
+    f_mod_ = 0.f;                              // smoothed cutoff modulation (octaves)
+    // K2 envelope + onset detector (8 kHz).
+    on_env_ = on_gate_ = on_base_ = 0.f;
+    on_env_a_  = 1.f - expf(-1000.f / (ARM_ONSET_ENV_MS * sr8_));
+    on_fall_a_ = 1.f - expf(-1000.f / (ARM_ONSET_FALL_MS * sr8_));
+    on_refr_ = 0;
+    on_refr_len_ = (int)((float)ARM_ONSET_REFRACTORY_MS * 0.001f * sr8_ + 0.5f);
+    on_seen_ = false;
+    env_e_ = 0.f;
+    ln_tau_ratio_ = logf(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S);
     fm_g_ = 0.f;
     f_on_ = false;
     f_hp_ = false;
@@ -312,10 +328,10 @@ class Armitage : public Module {
     using namespace armitage_k;
     if (cs.Foot(0).rising) mute_ = !mute_;   // FS1: wet mute toggle (test tool)
     const float k1 = RemapKnob(cs.Knob(0));
-    const float k2 = RemapKnob(cs.Knob(1));   // PWM (SAW / PULSE), bipolar
+    const float k2 = RemapKnob(cs.Knob(1));   // K2 envelope, bipolar
     const float k3 = RemapKnob(cs.Knob(2));
     const float k4 = RemapKnob(cs.Knob(3));
-    const float k5 = RemapKnob(cs.Knob(4));   // K4 post-filter resonance (Q)
+    const float k5 = RemapKnob(cs.Knob(4));   // K2 envelope depth on the K4 cutoff
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
     int pair = cs.Switch(0);                   // SW1 = mode pair
@@ -348,7 +364,7 @@ class Armitage : public Module {
     }
     const float t = 2.f * k4 - 1.f;                        // K4 post filter: t < 0 LP, 0 bypass, t > 0 HP
     ft_t_ = t;
-    fq_t_ = k5;                                            // K5: post-filter Q, smoothed in PostFilter
+    k5_t_ = k5;                                            // K5: env depth (modulation smoothed in PostFilter)
     bx_t_ = ARM_XMOD_ENABLE ? ARM_XMOD_MAX * k3 * k3 : 0.f;   // former K3 cross-mod (off)
     fm_t_ = ARM_FM_INDEX_MAX * k3 * k3;                    // K3: FM index I (rad), squared taper
     oct_t_ = oct;
@@ -359,8 +375,7 @@ class Armitage : public Module {
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
       const float t2 = 2.f * k2 - 1.f;
-      const float q = ARM_FILT_Q_MIN * expf(k5 * f_lnq_);
-      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, q, (t2 < 0.f) ? -t2 : 0.f, fm_t_);
+      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, t2, env_e_, fm_t_);
     }
   }
 
@@ -372,8 +387,8 @@ class Armitage : public Module {
     int   mode;              // model: 0 SAW, 1 PULSE, 2 ADD, 3 FB, 4 unshaped (SW1 + sign of K1)
     float h;                 // K1 amount h = |2 k1 - 1| (0 = noon)
     float beta, filt_t, fm;  // derived values the engine runs toward (FB beta, K4 post filter t = 2 k4 - 1, K3 FM index I)
-    float filt_q;            // K5: post-filter Q (both stages; inactive at K4 noon)
-    float pwm_u;             // K2 PWM amount u = max(0, 1 - 2 k2) (0 = off; SAW / PULSE only)
+    float env_t2;            // K2: t2 = 2 k2 - 1 (0 = env off; sign = direction, |t2| = speed)
+    float env_e;             // K2 envelope value e at the snapshot (-1..1); K5 depth = k[4]
     int   oct;               // 0 up, 1 played, 2 down
     bool  mute;              // FS1 wet mute state
   };
@@ -392,6 +407,7 @@ class Armitage : public Module {
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       const float d = dec_(in + i);
+      OnsetEnv(d);                              // K2: onset detector on |d| + triggered envelope e
       bx_  += (bx_t_ - bx_) * ca;
       fm_  += (fm_t_ - fm_) * ca;                // K3 FM index (0 stays exactly 0)
       k1s_ += (k1_t_ - k1s_) * ca;
@@ -438,9 +454,10 @@ class Armitage : public Module {
           if (g > 0.f) mtop_ = m;
         }
       }
-      // K2 PWM LFO (shared by all bands): u = max(0, -(2 k2 - 1)); depth fades in over the first
-      // ARM_PWM_DEPTH_FRAC, rate one exponential over the whole travel: ARM_PWM_HZ_MIN -> ARM_PWM_HZ_MAX.
-      {
+      // K2 PWM LFO (shared by all bands; PARKED behind ARM_LFO_ENABLE): u = max(0, -(2 k2 - 1)); depth
+      // fades in over the first ARM_PWM_DEPTH_FRAC, rate one exponential: ARM_PWM_HZ_MIN -> ARM_PWM_HZ_MAX.
+      // Disabled: depth stays 0 (SAW R / PULSE w exactly as without PWM).
+      if (ARM_LFO_ENABLE) {                     // constexpr false: compiled out
         const float t2 = 2.f * k2s_ - 1.f;
         const float u = (t2 < 0.f) ? -t2 : 0.f;
         float dep = u * (1.f / ARM_PWM_DEPTH_FRAC);
@@ -831,6 +848,33 @@ class Armitage : public Module {
     return BandOut<kFB, O>(s, k, zr, zi, mag, inv, fmo, c);
   }
 
+  // K2: onset detector (vestige IsrCapture idiom) on the decimated input |d| + the triggered
+  // envelope e, once per 8 kHz sample. Fast meter -> gate meter (up at once, slow fall) ->
+  // slow baseline; onset = gate > ARM_ONSET_RISE base and > ARM_ONSET_FLOOR, refractory.
+  // e: t2 = 0 -> 0 held; onset -> e = 0; then one-pole toward sign(t2), tau from |t2| (exponential).
+  inline void OnsetEnv(float d) {
+    using namespace armitage_k;
+    const float a = fabsf(d);
+    on_env_ += on_env_a_ * (a - on_env_);
+    if (on_env_ > on_gate_) on_gate_ = on_env_;
+    else                    on_gate_ += on_fall_a_ * (on_env_ - on_gate_);
+    on_base_ += ARM_ONSET_SLOW_COEF * (on_gate_ - on_base_);
+    if (on_refr_ > 0) on_refr_--;
+    const bool onset = (on_refr_ == 0 && on_gate_ > ARM_ONSET_FLOOR &&
+                        on_gate_ > on_base_ * ARM_ONSET_RISE);
+    const float t2 = 2.f * k2s_ - 1.f;
+    if (onset) { on_refr_ = on_refr_len_; on_seen_ = true; env_e_ = 0.f; }
+    if (t2 == 0.f || !on_seen_) { env_e_ = 0.f; return; }
+    const float at = fabsf(t2);
+    if (at != env_at_) {                         // tau = SLOW (FAST / SLOW)^|t2| -> one-pole coefficient
+      env_at_ = at;
+      const float tau = ARM_ENV_TAU_SLOW_S * expf(at * ln_tau_ratio_);
+      env_a_ = 1.f - expf(-1.f / (tau * sr8_));
+    }
+    const float T = (t2 > 0.f) ? 1.f : -1.f;
+    env_e_ += env_a_ * (T - env_e_);
+  }
+
   // K1 bipolar remap: h = |2 k1 - 1| -> the model's old unipolar K1. The first ARM_K1_FADE_FRAC of
   // h covers the old [0, split] (fade-in), the rest the old [split, 1] (push); continuous, no dead zone.
   static inline float K1Old(float h, float split) {
@@ -917,7 +961,10 @@ class Armitage : public Module {
       f_sz_ = (int)size;
       f_a_ = 1.f - expf(-(float)size / (ARM_FILT_SMOOTH_MS * 0.001f * sr_));
     }
-    fq_ += (fq_t_ - fq_) * f_a_;                 // K5 (Q) smoothed the same way, also while bypassed
+    // K2 envelope x K5 depth, in octaves, smoothed the same way (also while bypassed). t and the
+    // modulation are both linear in log fc (ARM_FILT_CURVE 1): this is the 5 ms smoothing on the
+    // modulated cutoff.
+    f_mod_ += (k5_t_ * ARM_ENV_OCT_MAX * env_e_ - f_mod_) * f_a_;
     const float tt = ft_t_;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < ARM_FILT_SNAP) ts = 0.f;
@@ -941,10 +988,13 @@ class Armitage : public Module {
     // Cutoff and Q of the running type (from |t|; at the type's own side of noon).
     {
       const float tmag = expf(ARM_FILT_CURVE * logf((at > 1e-6f) ? at : 1e-6f));   // |t|^curve
-      const float fc = f_hp_ ? ARM_FILT_FMIN * expf(tmag * f_lnhp_)
-                             : ARM_FILT_FMAX * expf(tmag * f_lnlp_);
-      const float q = ARM_FILT_Q_MIN * expf(fq_ * f_lnq_);   // K5: Q_MIN (Q_MAX / Q_MIN)^k5
-      svf_[0].Set(fc, q, sr_);
+      float fc = f_hp_ ? ARM_FILT_FMIN * expf(tmag * f_lnhp_)
+                       : ARM_FILT_FMAX * expf(tmag * f_lnlp_);
+      fc *= exp2f(f_mod_);                       // K2 envelope, depth K5: fc 2^(k5 ARM_ENV_OCT_MAX e)
+      const float lo = f_hp_ ? ARM_FILT_FMIN : ARM_FILT_LP_MIN;    // the active side's own range ends
+      const float hi = f_hp_ ? ARM_FILT_HP_MAX : ARM_FILT_FMAX;
+      fc = (fc < lo) ? lo : (fc > hi) ? hi : fc;
+      svf_[0].Set(fc, ARM_FILT_Q, sr_);
       svf_[1].CopyCoefFrom(svf_[0]);
     }
     float m = fm_g_;
@@ -982,7 +1032,7 @@ class Armitage : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int mode, float h, int oct, float beta, float ft, float fq, float pu, float fm) {
+                    int sw1, int mode, float h, int oct, float beta, float ft, float t2, float e, float fm) {
     using namespace armitage_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -990,8 +1040,8 @@ class Armitage : public Module {
     for (int i = 0; i < 5; i++) s.k[i] = kv[i];
     s.sw1 = sw1; s.sw2 = oct; s.oct = oct;
     s.mode = mode; s.h = h;
-    s.beta = beta; s.filt_t = ft; s.filt_q = fq; s.fm = fm;
-    s.pwm_u = pu;
+    s.beta = beta; s.filt_t = ft; s.fm = fm;
+    s.env_t2 = t2; s.env_e = e;
     s.mute = mute_;
 
     // FS1 tap: numbered line + LED1 blink-off.
@@ -1142,9 +1192,16 @@ class Armitage : public Module {
   float sr_ = 48000.f;
   float ft_ = 0.f;                 // smoothed t (per block)
   volatile float ft_t_ = 0.f;      // target t = 2 k4 - 1
-  float fq_ = 0.f;                 // smoothed k5 (per block)
-  volatile float fq_t_ = 0.f;      // target k5 (Q law input; 0 = Q_MIN)
-  float f_lnq_ = 0.f;              // ln(Q_MAX / Q_MIN) (Init)
+  volatile float k5_t_ = 0.f;      // K5 env depth (0..1)
+  float f_mod_ = 0.f;              // smoothed cutoff modulation, octaves (per block)
+  // K2 envelope + onset detector (8 kHz)
+  float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline
+  float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients
+  int   on_refr_ = 0, on_refr_len_ = 800;                // refractory samples left / length
+  bool  on_seen_ = false;                                // an onset has happened (before: e = 0)
+  volatile float env_e_ = 0.f;     // envelope e (-1..1)
+  float env_at_ = -1.f, env_a_ = 0.f;                    // |t2| the coefficient was computed for, coefficient
+  float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)
   float fm_g_ = 0.f;               // dry -> filtered crossfade m (per sample slide)
   float f_step_ = 0.f;             // max m step per sample
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;   // ln(HP_MAX / FMIN), ln(LP_MIN / FMAX) (Init)

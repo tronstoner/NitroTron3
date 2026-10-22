@@ -48,10 +48,11 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 //   t = 0 (noon): true bypass (filter not run, wet bit-identical).
 //   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
-//   Q (both stages) = ARM_FILT_Q_MIN (ARM_FILT_Q_MAX / ARM_FILT_Q_MIN)^k5   (K5 = resonance, exponential;
-//   k5 smoothed like t; K4 noon = bypass: K5 does nothing there)
-// No makeup gain. t and k5 are smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block); cutoff
-// follows the smoothed t, Q the smoothed k5. Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
+//   Q (both stages) = ARM_FILT_Q (fixed). K2 envelope modulates the cutoff of the ACTIVE side:
+//   fc_mod = fc_K4 2^(k5 ARM_ENV_OCT_MAX e), clamped to the side's own range ends
+//   (LP [ARM_FILT_LP_MIN, ARM_FILT_FMAX], HP [ARM_FILT_FMIN, ARM_FILT_HP_MAX]); K4 noon = bypass, nothing modulated.
+// No makeup gain. t and the modulation (octaves) are smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio
+// block; both linear in log fc, so this = the 5 ms smoothing on the modulated cutoff). Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
 // (linear crossfade over the first ARM_FILT_FADE of travel each side of noon; there the filter
 // sits at its range end: LP ~20 kHz / HP ~20 Hz). |t| snaps to 0 below ARM_FILT_SNAP when the
 // target is noon (filter off again, no CPU).
@@ -60,13 +61,38 @@ constexpr float ARM_FILT_FMAX      = 4000.f;   // Hz; LP cutoff just left of noo
 constexpr float ARM_FILT_HP_MAX    = 4000.f;   // Hz; HP cutoff at K4 full CW (thin)
 constexpr float ARM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW (dark)
 constexpr float ARM_FILT_CURVE     = 1.0f;     // |t| exponent: 1 = cutoff moves linearly in octaves with the knob
-constexpr float ARM_FILT_Q_MIN     = 0.707f;   // per-stage Q at K5 full CCW (flat, the start value)
-constexpr float ARM_FILT_Q_MAX     = 6.0f;     // per-stage Q at K5 full CW (resonant peak; replaces the old K4-driven ARM_FILT_Q_PEAK ramp)
+constexpr float ARM_FILT_Q         = 1.1f;     // per-stage Q, both stages, fixed (2026-10-22: K5 resonance removed, K5 = env depth)
 constexpr float ARM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t
 constexpr float ARM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with target 0: bypass
 
-// --- K2 = PWM (SAW / PULSE only; ADD / FB: K2 unused), bipolar t2 = 2 k2 - 1 ---------------
+// --- K2 = triggered envelope on the K4 post-filter cutoff (2026-10-22), bipolar t2 = 2 k2 - 1 ---
+// Onset detector (vestige's IsrCapture idiom, vestige.h / VESTIGE_ONSET_*), per 8 kHz sample on the
+// decimated INPUT |d| (the engine's input, before the bands: no band group delay on the attack):
+//   env:  one-pole rise ARM_ONSET_ENV_MS, then gate meter = follows env up at once, falls with
+//         ARM_ONSET_FALL_MS (= VESTIGE_ENV_COEF 0.008 @ 48 k ~ 2.6 ms, VESTIGE_GATE_RELEASE_MS 40)
+//   base += ARM_ONSET_SLOW_COEF (gate - base)
+//   onset = refractory over && gate > ARM_ONSET_RISE base && gate > ARM_ONSET_FLOOR
+//   refractory ARM_ONSET_REFRACTORY_MS
+// Envelope e: noon (t2 = 0) -> e = 0 held. On each onset e = 0, then per 8 kHz sample
+//   e += a (T - e), T = sign(t2), a = 1 - exp(-1 / (tau 8000)),
+//   tau = ARM_ENV_TAU_SLOW_S (ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)^|t2|   (4 s just off noon -> 0.05 s at the end)
+// Before the first onset e = 0. K5 = depth: fc_mod = fc_K4 2^(k5 ARM_ENV_OCT_MAX e) (see K4).
+constexpr float    ARM_ONSET_ENV_MS        = 2.6f;     // ms; input |d| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz)
+constexpr float    ARM_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS)
+constexpr float    ARM_ONSET_SLOW_COEF     = 0.0036f;  // baseline one-pole at 8 kHz (= vestige 0.0006 at 48 kHz x 6, ~35 ms)
+constexpr float    ARM_ONSET_RISE          = 1.8f;     // gate > baseline x this = an attack (vestige / sprawl)
+constexpr float    ARM_ONSET_FLOOR         = 0.0021f;  // input |d| gate-meter units = 0.1 x ARM_REF_LEVEL (0.021); vestige's floor
+                                                       // (its K4 open threshold) sits at ~0.1 of a typical passive-bass env
+constexpr uint32_t ARM_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (vestige)
+constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time constant just off K2 noon
+constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K2 full CW / CCW
+constexpr float    ARM_ENV_OCT_MAX         = 4.0f;     // octaves of cutoff travel at K5 full and |e| = 1
+// K2 LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false;
+// K2 then drives only the envelope.
+constexpr bool     ARM_LFO_ENABLE          = false;
+
+// --- (parked, ARM_LFO_ENABLE) K2 = PWM (SAW / PULSE only; ADD / FB: K2 unused), bipolar t2 = 2 k2 - 1 ---
 // t2 >= 0 (noon -> CW): nothing (reserved). t2 < 0: u = -t2 in (0, 1], one triangle LFO in [-1, 1]
 // shared by all bands (phase at 8 kHz). Travel = mnemonic's K3 pre-effect law (MNEM_PRE_*):
 //   depth = min(u / ARM_PWM_DEPTH_FRAC, 1)                          (fade-in over the first 10 %)
