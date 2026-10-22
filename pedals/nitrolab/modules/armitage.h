@@ -53,7 +53,7 @@
 //           a_k = 1 - x (1 - cap_k)   (1 at K1 = 0: the sine is not capped)
 //           shape_k = G share_k a_k |z'_k| (S - (1 - 2w))   (w = 0: silence)
 //
-//   ADD (SW1 UP, K1 CW; K1 = K1Old(h, ARM_K1_SPLIT)): additive saw per band, harmonics by repeated complex multiplication:
+//   ADD (SW1 UP, K1 CCW; K1 = K1Old(h, ARM_K1_SPLIT)): additive saw per band, harmonics by repeated complex multiplication:
 //     v       = (z'_k / |z'_k|) e^{j xm},  q = v e^{j fmo_k}  (q = v without FM)
 //     out_k   = |z'_k| [ Re(v) + g_add share_k ( (Re(q) - Re(v)) + amt_k sum_{m=2..top} g_m h_mk Re(q^m) / m^s ) ]
 //               (y0_k = |z'_k| Re(v); g_add = ARM_GAIN_ADD times ARM_GAIN_UP_DELTA / ARM_GAIN_DOWN_DELTA
@@ -64,7 +64,7 @@
 //     s       = 1 - (1 - ARM_ADD_S_MIN) v                                 (1 -> 1 -> 0.6)
 //     h_mk    = clamp((ARM_ADD_FMAX - m f'_k) / ARM_ADD_FEDGE, 0, 1)   (anti-fold)
 //
-//   FEEDBACK (SW1 UP, K1 CCW; beta = ARM_BETA_MAX K1Old(h, ARM_K1_FB_SPLIT)^2):
+//   FEEDBACK (SW1 UP, K1 CW; beta = ARM_BETA_MAX K1Old(h, ARM_K1_FB_SPLIT)^2):
 //     theta_k = b_k * yprev_k + xm + fmo_k
 //     y_k     = Re(z'_k e^{j theta_k})                     (|z'| kept)
 //     out_k   = y0_k + ARM_GAIN_FB share_k (y_k - y0_k)    (replace, G in every octave)
@@ -121,7 +121,7 @@
 //   SAW / PULSE split ARM_K1_SPLIT_PD 0.5 (knee fade-in, then push), ADD ARM_K1_SPLIT 0.6,
 //   FB ARM_K1_FB_SPLIT 0.5. No dead zone at noon.
 //
-// MODE SWITCH: model = SW1 pair (UP: FB | ADD, MID: SAW | PULSE, DOWN: unshaped | unshaped),
+// MODE SWITCH: model = SW1 pair (UP: ADD | FB, MID: SAW | PULSE, DOWN: unshaped | unshaped),
 // CCW model for t1 < 0 (K1 target), CW model for t1 >= 0. On any model change (SW1, or K1
 // crossing noon) the old and the new model's band outputs are both computed
 // for ARM_MODEL_XFADE_MS (1 ms) and crossfaded linearly; then only the new one runs
@@ -142,8 +142,8 @@
 //                             SAW: resonance (saw -> CZ reso morph, R 1 -> 16)
 //                             PULSE: width 50 % -> 0 % (silence at the knob end)
 //                             (K2 CCW: SAW Ultrasaw copy / PULSE width swept by the PWM LFO)
-//                           ADD (UP, CW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
-//                           FB (UP, CCW): beta = ARM_BETA_MAX * K1old^2
+//                           ADD (UP, CCW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
+//                           FB (UP, CW): beta = ARM_BETA_MAX * K1old^2
 //                           DOWN: unshaped on both halves (K1 does nothing)
 //   K2  PWM (SAW / PULSE)   noon -> CCW: depth (first 10 %), rate 0.1 -> ~1.8 Hz (85 %) -> 200 Hz; noon -> CW: nothing
 //                           (the active side only: PULSE swings its own base width, SAW = Ultrasaw); ADD / FB / unshaped: unused
@@ -153,7 +153,7 @@
 //   K5  post-filter resonance  Q (both stages) = 0.707 (CCW, flat) -> 6.0 (CW), exponential; acts only while
 //                           the K4 filter runs (K4 off noon, either side); at K4 noon (bypass) K5 does nothing
 //   K6  dry/wet             (shell)
-//   SW1 mode pair           UP = FEEDBACK (K1 CCW) / ADD (K1 CW), MID = SAW (CCW) / PULSE (CW),
+//   SW1 mode pair           UP = ADD (K1 CCW) / FEEDBACK (K1 CW), MID = SAW (CCW) / PULSE (CW),
 //                           DOWN = unshaped band sum (both halves, placeholder)
 //   SW2 octave              UP = octave up, MID = as played, DOWN = octave down
 //   FS1  wet mute (test tool)  rising edge toggles mute_; mute_g_ slides over
@@ -322,7 +322,7 @@ class Armitage : public Module {
     const float t1 = 2.f * k1 - 1.f;
     const bool  cw = (t1 >= 0.f);
     const float h  = cw ? t1 : -t1;
-    const int mode = (pair == kUp)  ? (cw ? kADD : kFB)
+    const int mode = (pair == kUp)  ? (cw ? kFB : kADD)
                    : (pair == kMid) ? (cw ? kPUL : kSAW) : kUNS;
     mdl_t_ = mode;
     k1_t_ = k1;                                // smoothed as the raw knob; h and the remaps follow it
