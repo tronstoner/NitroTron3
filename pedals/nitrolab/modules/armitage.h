@@ -1020,7 +1020,9 @@ class Armitage : public Module {
       const float tmag = expf(ARM_FILT_CURVE * logf((at > 1e-6f) ? at : 1e-6f));   // |t|^curve
       float fc = f_hp_ ? ARM_FILT_FMIN * expf(tmag * f_lnhp_)
                        : ARM_FILT_FMAX * expf(tmag * f_lnlp_);
-      fc *= exp2f(f_mod_);                       // K2 envelope, depth K5: fc 2^(k5 ARM_ENV_OCT_MAX e)
+      // K2 envelope, depth K5: fc 2^(+-k5 ARM_ENV_OCT_MAX e). Sign flipped on the HP side so a
+      // rising e OPENS the filter on both sides (LP: corner up, HP: corner down).
+      fc *= exp2f(f_hp_ ? -f_mod_ : f_mod_);
       const float lo = f_hp_ ? ARM_FILT_FMIN : ARM_FILT_LP_MIN;    // the active side's own range ends
       const float hi = f_hp_ ? ARM_FILT_HP_MAX : ARM_FILT_FMAX;
       fc = (fc < lo) ? lo : (fc > hi) ? hi : fc;
