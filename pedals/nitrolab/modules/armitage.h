@@ -93,7 +93,8 @@
 //
 //   K4 POST FILTER (final 48 kHz wet, every mode / octave; law copied from mnemonic's tone filter):
 //     two cascaded TPT SVF stages (24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
-//     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q_FLAT + (ARM_FILT_Q_PEAK - ARM_FILT_Q_FLAT) tmag (both stages)
+//     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q_MIN (ARM_FILT_Q_MAX / ARM_FILT_Q_MIN)^k5 (both stages;
+//     K5 = resonance, k5 smoothed like t, ARM_FILT_SMOOTH_MS per block)
 //     t < 0: LP, fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (20 kHz -> 180 Hz)
 //     t > 0: HP, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (20 Hz -> 4 kHz)
 //     t = 0: true bypass (not run). wet = dry + m (filtered - dry), m -> min(|t| / ARM_FILT_FADE, 1),
@@ -148,8 +149,9 @@
 //                           (the active side only: PULSE swings its own base width, SAW = Ultrasaw); ADD / FB / unshaped: unused
 //   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 20 kHz | noon bypass | CW HP 20 Hz -> 4 kHz (24 dB/oct,
-//                           Q 0.707 flat, peak off: ARM_FILT_Q_PEAK = Q_FLAT), on the final wet, all modes
-//   K5  no function (reads nothing)
+//                           two stages, Q from K5), on the final wet, all modes
+//   K5  post-filter resonance  Q (both stages) = 0.707 (CCW, flat) -> 6.0 (CW), exponential; acts only while
+//                           the K4 filter runs (K4 off noon, either side); at K4 noon (bypass) K5 does nothing
 //   K6  dry/wet             (shell)
 //   SW1 mode pair           UP = FEEDBACK (K1 CCW) / ADD (K1 CW), MID = SAW (CCW) / PULSE (CW),
 //                           DOWN = unshaped band sum (both halves, placeholder)
@@ -271,6 +273,8 @@ class Armitage : public Module {
     // K4 post filter: bypass, cleared state.
     sr_ = sr;
     ft_ = ft_t_ = 0.f;
+    fq_ = fq_t_ = 0.f;                         // K5 start: CCW (Q_MIN)
+    f_lnq_ = logf(ARM_FILT_Q_MAX / ARM_FILT_Q_MIN);
     fm_g_ = 0.f;
     f_on_ = false;
     f_hp_ = false;
@@ -309,7 +313,7 @@ class Armitage : public Module {
     const float k2 = RemapKnob(cs.Knob(1));   // PWM (SAW / PULSE), bipolar
     const float k3 = RemapKnob(cs.Knob(2));
     const float k4 = RemapKnob(cs.Knob(3));
-    // K5: no function (reads nothing).
+    const float k5 = RemapKnob(cs.Knob(4));   // K4 post-filter resonance (Q)
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
     int pair = cs.Switch(0);                   // SW1 = mode pair
@@ -342,6 +346,7 @@ class Armitage : public Module {
     }
     const float t = 2.f * k4 - 1.f;                        // K4 post filter: t < 0 LP, 0 bypass, t > 0 HP
     ft_t_ = t;
+    fq_t_ = k5;                                            // K5: post-filter Q, smoothed in PostFilter
     bx_t_ = ARM_XMOD_ENABLE ? ARM_XMOD_MAX * k3 * k3 : 0.f;   // former K3 cross-mod (off)
     fm_t_ = ARM_FM_INDEX_MAX * k3 * k3;                    // K3: FM index I (rad), squared taper
     oct_t_ = oct;
@@ -350,20 +355,22 @@ class Armitage : public Module {
     led2.Set(mute_ ? 1.f : 0.f);   // LED2 on while wet is muted
 
     if (NL_DIAG) {
-      const float kv[4] = { k1, k2, k3, k4 };
+      const float kv[5] = { k1, k2, k3, k4, k5 };
       const float t2 = 2.f * k2 - 1.f;
-      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, (t2 < 0.f) ? -t2 : 0.f, fm_t_);
+      const float q = ARM_FILT_Q_MIN * expf(k5 * f_lnq_);
+      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, q, (t2 < 0.f) ? -t2 : 0.f, fm_t_);
     }
   }
 
   // --- DIAG snapshot (written in Controls(), main loop; read by main.cpp) ---
   struct DiagSnap {
     int   n;                 // tap number (#n), 0 = automatic line
-    float k[4];              // K1..K4, the module's remapped 0..1 values (K5: no function)
+    float k[5];              // K1..K5, the module's remapped 0..1 values
     int   sw1, sw2;          // sw1 = SW1 mode pair, sw2 = SW2: 0 UP, 1 MID, 2 DOWN
     int   mode;              // model: 0 SAW, 1 PULSE, 2 ADD, 3 FB, 4 unshaped (SW1 + sign of K1)
     float h;                 // K1 amount h = |2 k1 - 1| (0 = noon)
     float beta, filt_t, fm;  // derived values the engine runs toward (FB beta, K4 post filter t = 2 k4 - 1, K3 FM index I)
+    float filt_q;            // K5: post-filter Q (both stages; inactive at K4 noon)
     float pwm_u;             // K2 PWM amount u = max(0, 1 - 2 k2) (0 = off; SAW / PULSE only)
     int   oct;               // 0 up, 1 played, 2 down
     bool  mute;              // FS1 wet mute state
@@ -913,6 +920,7 @@ class Armitage : public Module {
       f_sz_ = (int)size;
       f_a_ = 1.f - expf(-(float)size / (ARM_FILT_SMOOTH_MS * 0.001f * sr_));
     }
+    fq_ += (fq_t_ - fq_) * f_a_;                 // K5 (Q) smoothed the same way, also while bypassed
     const float tt = ft_t_;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < ARM_FILT_SNAP) ts = 0.f;
@@ -938,7 +946,7 @@ class Armitage : public Module {
       const float tmag = expf(ARM_FILT_CURVE * logf((at > 1e-6f) ? at : 1e-6f));   // |t|^curve
       const float fc = f_hp_ ? ARM_FILT_FMIN * expf(tmag * f_lnhp_)
                              : ARM_FILT_FMAX * expf(tmag * f_lnlp_);
-      const float q = ARM_FILT_Q_FLAT + (ARM_FILT_Q_PEAK - ARM_FILT_Q_FLAT) * tmag;
+      const float q = ARM_FILT_Q_MIN * expf(fq_ * f_lnq_);   // K5: Q_MIN (Q_MAX / Q_MIN)^k5
       svf_[0].Set(fc, q, sr_);
       svf_[1].CopyCoefFrom(svf_[0]);
     }
@@ -977,15 +985,15 @@ class Armitage : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int mode, float h, int oct, float beta, float ft, float pu, float fm) {
+                    int sw1, int mode, float h, int oct, float beta, float ft, float fq, float pu, float fm) {
     using namespace armitage_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
     s.n = 0;
-    for (int i = 0; i < 4; i++) s.k[i] = kv[i];
+    for (int i = 0; i < 5; i++) s.k[i] = kv[i];
     s.sw1 = sw1; s.sw2 = oct; s.oct = oct;
     s.mode = mode; s.h = h;
-    s.beta = beta; s.filt_t = ft; s.fm = fm;
+    s.beta = beta; s.filt_t = ft; s.filt_q = fq; s.fm = fm;
     s.pwm_u = pu;
     s.mute = mute_;
 
@@ -1006,9 +1014,9 @@ class Armitage : public Module {
     // change, restarts the timer; one `auto` line once nothing changed for
     // ARM_DIAG_SETTLE_MS.
     bool moved = (sw1 != diag_ref_sw1_) || (oct != diag_ref_sw2_);
-    for (int i = 0; i < 4; i++) if (fabsf(kv[i] - diag_ref_k_[i]) > ARM_DIAG_KNOB_EPS) moved = true;
+    for (int i = 0; i < 5; i++) if (fabsf(kv[i] - diag_ref_k_[i]) > ARM_DIAG_KNOB_EPS) moved = true;
     if (moved) {
-      for (int i = 0; i < 4; i++) diag_ref_k_[i] = kv[i];
+      for (int i = 0; i < 5; i++) diag_ref_k_[i] = kv[i];
       diag_ref_sw1_ = sw1; diag_ref_sw2_ = oct;
       diag_changed_ = true;
       diag_t_ = now;
@@ -1137,6 +1145,9 @@ class Armitage : public Module {
   float sr_ = 48000.f;
   float ft_ = 0.f;                 // smoothed t (per block)
   volatile float ft_t_ = 0.f;      // target t = 2 k4 - 1
+  float fq_ = 0.f;                 // smoothed k5 (per block)
+  volatile float fq_t_ = 0.f;      // target k5 (Q law input; 0 = Q_MIN)
+  float f_lnq_ = 0.f;              // ln(Q_MAX / Q_MIN) (Init)
   float fm_g_ = 0.f;               // dry -> filtered crossfade m (per sample slide)
   float f_step_ = 0.f;             // max m step per sample
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;   // ln(HP_MAX / FMIN), ln(LP_MIN / FMAX) (Init)
@@ -1179,6 +1190,6 @@ class Armitage : public Module {
   uint32_t diag_blink_t_ = 0;
   bool     diag_changed_ = true;             // first settle -> one `auto` line with the start state
   uint32_t diag_t_ = 0;
-  float    diag_ref_k_[4] = { -1.f, -1.f, -1.f, -1.f };
+  float    diag_ref_k_[5] = { -1.f, -1.f, -1.f, -1.f, -1.f };
   int      diag_ref_sw1_ = -1, diag_ref_sw2_ = -1;
 };

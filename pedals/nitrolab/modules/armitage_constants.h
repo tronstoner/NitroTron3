@@ -7,7 +7,7 @@
 
 namespace armitage_k {
 
-// --- Mode selector (SW1 = mode pair, sign of K1 = model; 2026-10-22; K5 reads nothing) ---
+// --- Mode selector (SW1 = mode pair, sign of K1 = model; 2026-10-22; K5 = K4 post-filter resonance) ---
 // SW1 UP = FEEDBACK (K1 CCW half) / ADD (K1 CW half); MID = SAW (CCW) / PULSE (CW);
 // DOWN = unshaped band sum on both halves (placeholder). t1 = 2 k1 - 1: t1 < 0 -> the CCW
 // model, t1 >= 0 -> the CW model. Any model change (SW1 or the sign of K1) crossfades the
@@ -48,9 +48,10 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 //   t = 0 (noon): true bypass (filter not run, wet bit-identical).
 //   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (20 kHz -> 180 Hz)
 //   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (20 Hz -> 4 kHz)
-//   Q (both stages) = ARM_FILT_Q_FLAT + (ARM_FILT_Q_PEAK - ARM_FILT_Q_FLAT) tmag   (peak grows toward the ends)
-// No makeup gain. t is smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block); cutoff and Q
-// follow the smoothed t. Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
+//   Q (both stages) = ARM_FILT_Q_MIN (ARM_FILT_Q_MAX / ARM_FILT_Q_MIN)^k5   (K5 = resonance, exponential;
+//   k5 smoothed like t; K4 noon = bypass: K5 does nothing there)
+// No makeup gain. t and k5 are smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block); cutoff
+// follows the smoothed t, Q the smoothed k5. Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
 // (linear crossfade over the first ARM_FILT_FADE of travel each side of noon; there the filter
 // sits at its range end: LP ~20 kHz / HP ~20 Hz). |t| snaps to 0 below ARM_FILT_SNAP when the
 // target is noon (filter off again, no CPU).
@@ -59,8 +60,8 @@ constexpr float ARM_FILT_FMAX      = 20000.f;  // Hz; LP cutoff just left of noo
 constexpr float ARM_FILT_HP_MAX    = 4000.f;   // Hz; HP cutoff at K4 full CW (thin)
 constexpr float ARM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW (dark)
 constexpr float ARM_FILT_CURVE     = 1.6f;     // |t| exponent: finer resolution around noon
-constexpr float ARM_FILT_Q_FLAT    = 0.707f;   // per-stage Q next to noon (flat)
-constexpr float ARM_FILT_Q_PEAK    = 0.707f;   // per-stage Q at either knob end; = Q_FLAT: peak off, Q 0.707 over the whole travel (was 1.6 = resonant bump)
+constexpr float ARM_FILT_Q_MIN     = 0.707f;   // per-stage Q at K5 full CCW (flat, the start value)
+constexpr float ARM_FILT_Q_MAX     = 6.0f;     // per-stage Q at K5 full CW (resonant peak; replaces the old K4-driven ARM_FILT_Q_PEAK ramp)
 constexpr float ARM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t
 constexpr float ARM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with target 0: bypass
@@ -150,11 +151,11 @@ constexpr float ARM_SHARE_FLOOR = 1e-5f;  // share denominator floor = sqrt(ARM_
 // amount s_k), the K1 = 1 values of the former K1 knee law, now fixed:
 //   knee time ARM_PD_KNEE = 0.01 (= 0.5 - (0.45 + 0.04), the old depth at K1 = 1)
 //   anti-fold knee floor dfloor_k = ARM_PD_KNEE + (0.5 - ARM_PD_KNEE) clamp((f'_k - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ), 0, 1)
-//   cap_k = (0.5 - dfloor_k) / (0.5 - ARM_PD_KNEE)   (1 up to 1 kHz, 0 at 3.8 kHz)
+//   cap_k = (0.5 - dfloor_k) / (0.5 - ARM_PD_KNEE)   (1 up to 500 Hz, 0 at 3.8 kHz)
 // SAW knee: d_k = max(d(x), dfloor_k), d(x) = 0.5 (ARM_PD_KNEE / 0.5)^x  (x = K1 knee depth; cap inside the knee, a_k = 1)
 // PULSE: knee D = d(x), amount a_k = 1 - x (1 - cap_k); resonance: a_k = cap_k
 constexpr float ARM_PD_KNEE       = 0.01f;   // cycles; knee time of the saw / pulse jumps
-constexpr float ARM_PD_FOLD_HZ    = 1000.f;  // Hz; full-depth anti-fold corner (the K1 = 1 value of the old 500 -> 1000 law)
+constexpr float ARM_PD_FOLD_HZ    = 500.f;   // Hz; full-depth anti-fold corner; bands above it get the softer knee floor (2026-10-22: 1000 -> 500, less fizz from the upper partials' saws)
 constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee floor 0.5 = sine / no pulse (linear in between)
 
 // SAW, K1 = resonance (CZ "reso" on the linear phase, DC removed):
