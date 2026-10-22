@@ -39,12 +39,18 @@
 #undef constexpr
 
 // Runtime form of the static_asserts in armitage.h that read tunables.
-// Returns an error message, or empty when every constraint holds.
-inline std::string ValidateTunables() {
+// Returns an error message, or nullptr when every constraint holds. Does not
+// allocate (armlive calls it from the audio thread after a live --set).
+inline const char* ValidateTunablesC() {
   using namespace armitage_k;
   if (!(ARM_BETA_CLAMP + ARM_XMOD_MAX < 90.f))
     return "ARM_BETA_CLAMP + ARM_XMOD_MAX must be < 90 (SinCos offset covers |theta| < ~100 rad)";
   if (ARM_ADD_MID < 1 || ARM_ADD_MID > ARM_ADD_MMAX)
     return "ARM_ADD_MID must be in [1, ARM_ADD_MMAX] (ARM_ADD_MMAX is fixed: array size)";
-  return "";
+  return nullptr;
+}
+// Same, as a std::string (empty = ok).
+inline std::string ValidateTunables() {
+  const char* e = ValidateTunablesC();
+  return e ? std::string(e) : std::string();
 }
