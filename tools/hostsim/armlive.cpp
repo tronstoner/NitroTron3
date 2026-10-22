@@ -20,6 +20,7 @@
 // Usage: see tools/hostsim/README.md, or `armlive --help`.
 
 #include "armitage_host.h"
+#include "const_docs.h"
 #include "json_mini.h"
 #include "wav.h"
 #include "ws_server.h"
@@ -276,9 +277,14 @@ static std::string FmtTunable(const hostsim::Tunable& t, double v) {
   return buf;
 }
 
-// {"tunables":[...]} — only call when no op is pending (values are stable).
+// Comments of armitage_constants.h (section / doc block / inline note per name),
+// read once at startup (const_docs.h). Empty when the file was not found.
+static constdocs::Docs g_docs;
+
+// {"tunables":[...], "constants_file": path} — only call when no op is pending
+// (values are stable).
 static std::string TunablesJson() {
-  std::string s = "{\"tunables\":[";
+  std::string s = "{\"constants_file\":" + json::Esc(g_docs.path) + ",\"tunables\":[";
   bool first = true;
   for (auto& t : hostsim::Registry()) {
     const double v = hostsim::Get(t);
@@ -288,7 +294,12 @@ static std::string TunablesJson() {
     s += "{\"name\":" + json::Esc(t.name) + ",\"type\":" + json::Esc(hostsim::TyName(t.ty)) +
          ",\"value\":" + FmtTunable(t, v) +
          ",\"default\":" + FmtTunable(t, d) + ",\"expr\":" + json::Esc(t.def_text) +
-         ",\"fixed\":" + (t.fixed ? "true" : "false") + ",\"set\":" + (t.set ? "true" : "false") + "}";
+         ",\"fixed\":" + (t.fixed ? "true" : "false") + ",\"set\":" + (t.set ? "true" : "false");
+    auto it = g_docs.by_name.find(t.name);
+    const constdocs::Entry none;
+    const constdocs::Entry& e = it == g_docs.by_name.end() ? none : it->second;
+    s += ",\"section\":" + json::Esc(e.section) + ",\"doc\":" + json::Esc(e.doc) + ",\"doc_of\":" + json::Esc(e.doc_of) +
+         ",\"note\":" + json::Esc(e.note) + "}";
   }
   return s + "]}";
 }
@@ -318,6 +329,9 @@ static void Usage(FILE* f) {
     "  --ws-port N       WebSocket port (default 8765)\n"
     "  --http-port N     HTTP port serving ui.html (default 8766)\n"
     "  --ui FILE         the page to serve (default: ui.html next to the executable)\n"
+    "  --constants FILE  armitage_constants.h to read the comments from (default:\n"
+    "                    pedals/nitrolab/modules/armitage_constants.h of the repo the\n"
+    "                    executable sits in, i.e. <exe dir>/../.., else of the cwd)\n"
     "  --null-audio      miniaudio's null backend: real-time callback, no sound\n"
     "                    (server / protocol tests without the speakers)\n"
     "  --selftest        no device, no server: render --seconds (default 2) offline\n"
@@ -337,7 +351,7 @@ int main(int argc, char** argv) {
   float knob[6] = {0.5f, 0.5f, 0.f, 0.5f, 0.5f, 1.f};
   int sw[2] = {1, 1};
   int fs1 = 0, ws_port = 8765, http_port = 8766;
-  std::string ui_path;
+  std::string ui_path, constants_path;
   std::vector<const char*> sets;
 
   for (int i = 1; i < argc; i++) {
@@ -363,6 +377,7 @@ int main(int argc, char** argv) {
     else if (a == "--ws-port") ws_port = atoi(need("--ws-port"));
     else if (a == "--http-port") http_port = atoi(need("--http-port"));
     else if (a == "--ui") ui_path = need("--ui");
+    else if (a == "--constants") constants_path = need("--constants");
     else if (a == "--selftest") selftest = true;
     else if (a == "--null-audio") null_audio = true;
     else if (a == "--seconds") seconds = strtof(need("--seconds"), nullptr);
@@ -456,6 +471,42 @@ int main(int argc, char** argv) {
     ui_path = (sl == std::string::npos ? std::string(".") : exe.substr(0, sl)) + "/ui.html";
   }
   if (ReadFile(ui_path).empty()) fprintf(stderr, "armlive: warning: cannot read %s (HTTP will 404)\n", ui_path.c_str());
+
+  // --- constant comments (section / doc / note), read from the source file ---
+  {
+    std::vector<std::string> cands;
+    if (!constants_path.empty()) cands.push_back(constants_path);
+    else {
+      const std::string rel = "pedals/nitrolab/modules/armitage_constants.h";
+      std::string exe = argv[0];
+      const size_t sl = exe.rfind('/');
+      const std::string dir = sl == std::string::npos ? std::string(".") : exe.substr(0, sl);
+      cands.push_back(dir + "/../../" + rel);   // the executable lives in tools/hostsim/
+      cands.push_back(rel);                     // run from the repo root
+    }
+    bool ok = false;
+    for (auto& c : cands) if (constdocs::Load(c, g_docs)) { ok = true; break; }
+    if (!ok) {
+      fprintf(stderr, "armlive: warning: cannot read %s - the page shows the constants without comments\n",
+              cands[0].c_str());
+    } else {
+      int missing = 0, extra = 0, nodoc = 0, nonote = 0;
+      for (auto& t : hostsim::Registry()) {
+        auto it = g_docs.by_name.find(t.name);
+        if (it == g_docs.by_name.end()) {
+          if (missing++ < 5) fprintf(stderr, "armlive: warning: %s is not declared in %s (no comments)\n", t.name, g_docs.path.c_str());
+          continue;
+        }
+        if (it->second.doc.empty()) nodoc++;
+        if (it->second.note.empty()) nonote++;
+      }
+      for (auto& n : g_docs.order) if (!hostsim::Find(n.c_str())) extra++;
+      fprintf(stderr, "armlive: comments from %s: %zu tunables, %d without a doc block, %d without an inline note%s\n",
+              g_docs.path.c_str(), hostsim::Registry().size() - missing, nodoc, nonote,
+              missing || extra ? " (file and build differ: rebuild?)" : "");
+      if (extra) fprintf(stderr, "armlive: warning: %d constant(s) in the file are not in this build (stale binary?)\n", extra);
+    }
+  }
 
   g_eng.Start(fs1 != 0);
 

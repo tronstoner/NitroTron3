@@ -18,9 +18,17 @@
   .knobs { display: flex; flex-wrap: wrap; gap: 10px; }
   .knob { width: 128px; display: flex; flex-direction: column; align-items: center; text-align: center; }
   .knob .name { font-weight: 700; }
-  .knob .role { color: var(--dim); font-size: 11px; }
-  .knob input[type=range] { writing-mode: vertical-lr; direction: rtl; -webkit-appearance: slider-vertical; appearance: slider-vertical; width: 28px; height: 150px; margin: 6px 0; }
+  .knob .role { color: var(--dim); font-size: 11px; min-height: 2.8em; }
+  .knob svg { width: 84px; height: 84px; margin: 4px 0 0; cursor: ns-resize; touch-action: none; user-select: none; }
+  .knob svg:focus { outline: 1px solid var(--acc); outline-offset: 2px; border-radius: 50%; }
+  .knob .track { fill: none; stroke: #0d0f12; stroke-width: 7; stroke-linecap: round; }
+  .knob .fill { fill: none; stroke: var(--acc); stroke-width: 7; stroke-linecap: round; }
+  .knob .cap { fill: #2a2f38; stroke: #3a404b; stroke-width: 1; }
+  .knob .ptr { stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
+  .knob .noonmark { stroke: var(--dim); stroke-width: 2; }
+  .knob .endmark { stroke: #3a404b; stroke-width: 2; }
   .knob .val { font-family: ui-monospace, Menlo, monospace; }
+  .knob .noon { font-size: 11px; padding: 1px 8px; margin: 2px 0 4px; }
   .knob .mean { font-size: 11px; color: var(--acc); min-height: 3.2em; }
   fieldset { border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px 8px; margin: 0; }
   legend { color: var(--dim); }
@@ -43,6 +51,16 @@
   td input[type=range] { width: 220px; }
   td input[type=number] { width: 110px; background: #0d0f12; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; font-family: ui-monospace, Menlo, monospace; }
   td.def { color: var(--dim); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  tr.main td { border-bottom: none; }
+  td.name[title] { text-decoration: underline dotted var(--dim); text-underline-offset: 3px; cursor: help; }
+  tr.note td { padding: 0 6px 4px 18px; }
+  tr.note .inl { color: var(--dim); font-size: 11px; white-space: pre-wrap; }
+  tr.note .doc { display: none; margin: 4px 0 2px; padding: 4px 8px; border-left: 2px solid var(--line); color: #b6bcc6;
+                 font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap; }
+  tr.note.showdoc .doc { display: block; }
+  tbody.sec tr.sechead td { background: #23272e; color: var(--fg); font-weight: 600; cursor: pointer; border-bottom: 1px solid var(--line); padding: 5px 6px; }
+  tbody.sec tr.sechead .tw { display: inline-block; width: 1em; color: var(--dim); }
+  tbody.sec tr.sechead .cnt { color: var(--dim); font-weight: 400; margin-left: 6px; }
   .tablewrap { overflow-x: auto; }
   textarea { width: 100%; height: 160px; background: #0d0f12; color: var(--fg); border: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
   .hint { color: var(--dim); font-size: 11px; }
@@ -97,19 +115,21 @@
 </div>
 
 <div class="panel">
-  <h2>Constants (armitage_constants.h)</h2>
+  <h2>Constants (<span id="cfile">armitage_constants.h</span>)</h2>
   <div class="row" style="align-items: center; margin-bottom: 6px">
     <label><input type="checkbox" id="onlyset"> show changed only</label>
+    <label title="show every comment block from armitage_constants.h in the table (otherwise: hover a name)"><input type="checkbox" id="docs"> docs</label>
+    <button id="expandall">expand all</button> <button id="collapseall">collapse all</button>
     <label>filter <input type="text" id="filter" placeholder="name contains"></label>
     <button id="export">Export</button>
-    <span class="hint">A slider applies on release, a number box on Enter / leaving it. Every change re-runs Init() (engine state restarts briefly).
+    <span class="hint">Grouped by the file's <span class="mono">// --- section ---</span> headers (click to fold); under each row its inline comment, the comment block above it on hover (or all with "docs").
+      A slider applies on release, a number box on Enter / leaving it. Every change re-runs Init() (engine state restarts briefly).
       Slider range: positive float default/10 .. default&times;10 (log); negative float &plusmn;10&times;|default|; zero default &plusmn;1. Type any value into the box.</span>
   </div>
   <textarea id="exportout" style="display: none" readonly></textarea>
   <div class="tablewrap">
-    <table>
+    <table id="consts">
       <thead><tr><th>name</th><th>type</th><th>slider</th><th>value</th><th>default</th><th></th></tr></thead>
-      <tbody id="consts"></tbody>
     </table>
   </div>
 </div>
@@ -173,7 +193,7 @@ function connect() {
       let m;
       try { m = JSON.parse(line); } catch (e) { continue; }
       if (m.state) applyState(m.state);
-      else if (m.tunables) applyTunables(m.tunables);
+      else if (m.tunables) applyTunables(m.tunables, m.constants_file);
       else if (m.error) showErr("server: " + m.error);
       else if ("cpu" in m) applyStatus(m);
     }
@@ -186,6 +206,23 @@ function setConn(on) {
 }
 
 // ---- controls ---------------------------------------------------------------
+// Rotary knob: 270 deg travel, 0 = 7 o'clock, 0.5 = noon (marked), 1 = 5 o'clock.
+// Drag vertically (KNOB_UI.dragPx pixels = full travel; shift = KNOB_UI.fine x finer),
+// mouse wheel (KNOB_UI.wheelStep per notch, shift = fine), arrow keys when focused,
+// double-click or the "noon" button = exactly 0.5.
+const KNOB_UI = { dragPx: 200, fine: 10, wheelStep: 0.01, wheelNotchPx: 40, keyStep: 0.01 };
+const KN = { cx: 50, cy: 50, r: 38, travel: 270 };
+const SVGNS = "http://www.w3.org/2000/svg";
+function knobAngle(v) { return -KN.travel / 2 + KN.travel * v; }          // deg, 0 = up (noon)
+function polar(deg, r) { const a = (deg - 90) * Math.PI / 180; return [KN.cx + r * Math.cos(a), KN.cy + r * Math.sin(a)]; }
+function arcPath(d0, d1, r) {
+  const [x0, y0] = polar(d0, r), [x1, y1] = polar(d1, r);
+  const large = Math.abs(d1 - d0) > 180 ? 1 : 0;
+  return `M ${x0} ${y0} A ${r} ${r} 0 ${large} ${d1 > d0 ? 1 : 0} ${x1} ${y1}`;
+}
+function svgEl(tag, attrs) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
 const knobEls = [];
 let knobSendPending = false;
 function buildKnobs() {
@@ -193,25 +230,91 @@ function buildKnobs() {
   KNOBS.forEach((k, i) => {
     const d = document.createElement("div");
     d.className = "knob";
-    d.innerHTML = `<div class="name">${k.name}</div><div class="role">${k.role}</div>
-      <input type="range" min="0" max="1" step="0.001" value="0.5">
-      <div class="val"></div><div class="mean">—</div>`;
+    d.innerHTML = `<div class="name">${k.name}</div><div class="role">${k.role}</div>`;
+    const svg = svgEl("svg", { viewBox: "0 0 100 100", tabindex: "0", role: "slider",
+      "aria-label": k.name, "aria-valuemin": "0", "aria-valuemax": "1" });
+    svg.appendChild(svgEl("path", { class: "track", d: arcPath(knobAngle(0), knobAngle(1), KN.r) }));
+    const fill = svgEl("path", { class: "fill" });
+    svg.appendChild(fill);
+    for (const [v, cls] of [[0, "endmark"], [1, "endmark"], [0.5, "noonmark"]]) {
+      const [x0, y0] = polar(knobAngle(v), KN.r + 5), [x1, y1] = polar(knobAngle(v), KN.r + 11);
+      svg.appendChild(svgEl("line", { class: cls, x1: x0, y1: y0, x2: x1, y2: y1 }));
+    }
+    svg.appendChild(svgEl("circle", { class: "cap", cx: KN.cx, cy: KN.cy, r: KN.r - 9 }));
+    const ptr = svgEl("line", { class: "ptr", x1: KN.cx, y1: KN.cy, x2: KN.cx, y2: KN.cy - (KN.r - 12) });
+    svg.appendChild(ptr);
+    d.appendChild(svg);
+    const val = document.createElement("div"); val.className = "val";
+    const noon = document.createElement("button"); noon.className = "noon"; noon.textContent = "noon";
+    const mean = document.createElement("div"); mean.className = "mean"; mean.textContent = "—";
+    d.append(val, noon, mean);
     box.appendChild(d);
-    const r = d.querySelector("input"), v = d.querySelector(".val"), mean = d.querySelector(".mean");
-    r.addEventListener("input", () => { v.textContent = fmt(+r.value, 3); queueKnobs(); });
-    knobEls.push({ r, v, mean });
+    const ke = { v: 0.5, svg, fill, ptr, val, mean };
+    knobEls.push(ke);
+    const user = (v) => { setKnob(i, v); queueKnobs(); };
+    // drag
+    let drag = null;
+    svg.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      svg.setPointerCapture(ev.pointerId); svg.focus();
+      drag = { y: ev.clientY, v: ke.v };
+      ev.preventDefault();
+    });
+    svg.addEventListener("pointermove", (ev) => {
+      if (!drag) return;
+      const dy = drag.y - ev.clientY;
+      // rebase on every move so pressing / releasing shift mid-drag does not jump
+      drag.v = clamp01(drag.v + dy / KNOB_UI.dragPx / (ev.shiftKey ? KNOB_UI.fine : 1));
+      drag.y = ev.clientY;
+      user(drag.v);
+    });
+    const end = () => { drag = null; };
+    svg.addEventListener("pointerup", end);
+    svg.addEventListener("pointercancel", end);
+    svg.addEventListener("lostpointercapture", end);
+    // wheel: a mouse notch (>= KNOB_UI.wheelNotchPx) = one step; smaller trackpad
+    // deltas move proportionally (down to a tenth of a step per event)
+    svg.addEventListener("wheel", (ev) => {
+      ev.preventDefault();
+      const d = (ev.deltaY || ev.deltaX) * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1);
+      if (!d) return;
+      const frac = Math.max(0.1, Math.min(1, Math.abs(d) / KNOB_UI.wheelNotchPx));
+      const step = KNOB_UI.wheelStep * frac / (ev.shiftKey ? KNOB_UI.fine : 1);
+      user(clamp01(ke.v + (d < 0 ? step : -step)));
+    }, { passive: false });
+    svg.addEventListener("keydown", (ev) => {
+      const step = KNOB_UI.keyStep / (ev.shiftKey ? KNOB_UI.fine : 1);
+      if (ev.key === "ArrowUp" || ev.key === "ArrowRight") user(clamp01(ke.v + step));
+      else if (ev.key === "ArrowDown" || ev.key === "ArrowLeft") user(clamp01(ke.v - step));
+      else return;
+      ev.preventDefault();
+    });
+    svg.addEventListener("dblclick", (ev) => { ev.preventDefault(); user(0.5); });
+    noon.addEventListener("click", () => user(0.5));
+    setKnob(i, 0.5);
   });
+}
+// Draws knob i at v (no send).
+function setKnob(i, v) {
+  const e = knobEls[i];
+  e.v = clamp01(+v);
+  const a = knobAngle(e.v);
+  e.ptr.setAttribute("transform", `rotate(${a} ${KN.cx} ${KN.cy})`);
+  e.fill.setAttribute("d", e.v > 0 ? arcPath(knobAngle(0), a, KN.r) : "");
+  e.val.textContent = fmt(e.v, 3);
+  e.svg.setAttribute("aria-valuenow", String(e.v));
+  e.svg.setAttribute("aria-valuetext", fmt(e.v, 3));
 }
 function queueKnobs() {
   if (knobSendPending) return;
   knobSendPending = true;
-  requestAnimationFrame(() => { knobSendPending = false; send({ k: knobEls.map(e => +e.r.value) }); });
+  requestAnimationFrame(() => { knobSendPending = false; send({ k: knobEls.map(e => e.v) }); });
 }
 function setRadio(name, val) {
   for (const el of document.querySelectorAll(`input[name=${name}]`)) el.checked = (el.value === val);
 }
 function applyState(s) {
-  s.k.forEach((v, i) => { knobEls[i].r.value = v; knobEls[i].v.textContent = fmt(v, 3); });
+  s.k.forEach((v, i) => setKnob(i, v));
   setRadio("sw1", s.sw1); setRadio("sw2", s.sw2); setRadio("src", s.src);
   document.querySelector("input[name=src][value=input]").disabled = !s.input_ok;
   document.querySelector("input[name=src][value=wav]").disabled = !s.wav;
@@ -255,7 +358,8 @@ function applyStatus(m) {
 }
 
 // ---- constants panel ----------------------------------------------------------
-const rows = new Map();   // name -> {t, tr, slider, num, chk, def}
+const rows = new Map();   // name -> {t, tr, noteTr, slider, num, chk, tdD, sec}
+const sections = new Map(); // section title -> {tbody, head, cnt, tw, rows: [], collapsed}
 function sliderMap(t) {
   // returns {toPos(v), fromPos(p)} on a 0..1000 slider, or null (no slider)
   if (t.fixed || t.type !== "float") return null;
@@ -274,7 +378,7 @@ function buildRow(t) {
   const tdT = document.createElement("td"); tdT.textContent = t.type + (t.fixed ? " (fixed)" : "");
   const tdS = document.createElement("td"), tdV = document.createElement("td"), tdD = document.createElement("td"), tdR = document.createElement("td");
   tdD.className = "def";
-  const row = { t, tr, slider: null, num: null, chk: null, map: sliderMap(t), tdD };
+  const row = { t, tr, tdN, slider: null, num: null, chk: null, map: sliderMap(t), tdD };
   if (t.type === "bool") {
     const c = document.createElement("input"); c.type = "checkbox"; c.disabled = t.fixed;
     c.addEventListener("change", () => sendSet(t.name, c.checked));
@@ -297,8 +401,32 @@ function buildRow(t) {
     tdR.appendChild(b);
   }
   tr.append(tdN, tdT, tdS, tdV, tdD, tdR);
+  tr.className = "main";
   row.tr = tr;
+  // second row: the inline comment, and the comment block (shown with "docs")
+  const nt = document.createElement("tr"); nt.className = "note";
+  const nd = document.createElement("td"); nd.colSpan = 6;
+  const inl = document.createElement("div"); inl.className = "inl";
+  const doc = document.createElement("div"); doc.className = "doc";
+  nd.append(inl, doc); nt.appendChild(nd);
+  row.noteTr = nt; row.inl = inl; row.doc = doc;
   return row;
+}
+function getSection(title) {
+  let sec = sections.get(title);
+  if (sec) return sec;
+  const tbody = document.createElement("tbody"); tbody.className = "sec";
+  const head = document.createElement("tr"); head.className = "sechead";
+  const td = document.createElement("td"); td.colSpan = 6;
+  const tw = document.createElement("span"); tw.className = "tw";
+  const ttl = document.createElement("span"); ttl.textContent = title || "(before the first section header)";
+  const cnt = document.createElement("span"); cnt.className = "cnt";
+  td.append(tw, ttl, cnt); head.appendChild(td); tbody.appendChild(head);
+  document.getElementById("consts").appendChild(tbody);
+  sec = { tbody, head, cnt, tw, rows: [], collapsed: false };
+  head.addEventListener("click", () => { sec.collapsed = !sec.collapsed; applyFilter(); });
+  sections.set(title, sec);
+  return sec;
 }
 function updateRow(row, t) {
   row.t = t;
@@ -307,27 +435,57 @@ function updateRow(row, t) {
   if (row.slider) row.slider.value = row.map.toPos(t.value);
   row.tdD.textContent = fmtConst(t.default, t.type) + (String(t.expr) !== fmtConst(t.default, t.type) ? "  = " + t.expr : "");
   row.tdD.title = t.expr;
-  row.tr.className = (t.fixed ? "fixed" : "") + (t.set ? " set" : "");
+  row.tr.className = "main" + (t.fixed ? " fixed" : "") + (t.set ? " set" : "");
+  const note = t.note || "", doc = t.doc || "";
+  // a block shared by a run of constants is labelled with the constant it sits above
+  const docLabel = doc && t.doc_of && t.doc_of !== t.name ? "(comment block above " + t.doc_of + ")\n" : "";
+  row.inl.textContent = note;
+  row.doc.textContent = docLabel + doc;
+  if (doc) row.tdN.title = docLabel + doc; else row.tdN.removeAttribute("title");
 }
-function applyTunables(list) {
-  const body = document.getElementById("consts");
+function applyTunables(list, file) {
+  if (file !== undefined) document.getElementById("cfile").textContent = file ? file : "armitage_constants.h - file not found, no comments";
   for (const t of list) {
     let row = rows.get(t.name);
-    if (!row) { row = buildRow(t); rows.set(t.name, row); body.appendChild(row.tr); }
+    if (!row) {
+      row = buildRow(t); rows.set(t.name, row);
+      const sec = getSection(t.section || "");
+      sec.rows.push(row); row.sec = sec;
+      sec.tbody.append(row.tr, row.noteTr);
+    }
     updateRow(row, t);
   }
   applyFilter();
   if (document.getElementById("exportout").style.display !== "none") doExport();
 }
+// Visibility: filter + changed-only + folded sections. With "docs" on, a comment
+// block shared by a run of constants is shown once, on the first visible row of the run.
 function applyFilter() {
   const only = document.getElementById("onlyset").checked;
+  const docs = document.getElementById("docs").checked;
   const f = document.getElementById("filter").value.trim().toUpperCase();
-  for (const row of rows.values()) {
-    const show = (!only || row.t.set) && (!f || row.t.name.includes(f));
-    row.tr.style.display = show ? "" : "none";
+  for (const sec of sections.values()) {
+    let n = 0, lastDoc = null;
+    for (const row of sec.rows) {
+      const match = (!only || row.t.set) && (!f || row.t.name.includes(f));
+      if (match) n++;
+      const show = match && !sec.collapsed;
+      row.tr.style.display = show ? "" : "none";
+      const doc = row.t.doc || "";
+      const showDoc = show && docs && doc !== "" && doc !== lastDoc;
+      if (show) lastDoc = doc;
+      row.noteTr.classList.toggle("showdoc", showDoc);
+      row.noteTr.style.display = show && (row.t.note || showDoc) ? "" : "none";
+    }
+    sec.tbody.style.display = n ? "" : "none";
+    sec.tw.textContent = sec.collapsed ? "▸" : "▾";
+    sec.cnt.textContent = (n === sec.rows.length ? n : n + " of " + sec.rows.length) + (n === 1 ? " constant" : " constants");
   }
 }
 document.getElementById("onlyset").addEventListener("change", applyFilter);
+document.getElementById("docs").addEventListener("change", applyFilter);
+document.getElementById("expandall").addEventListener("click", () => { for (const s of sections.values()) s.collapsed = false; applyFilter(); });
+document.getElementById("collapseall").addEventListener("click", () => { for (const s of sections.values()) s.collapsed = true; applyFilter(); });
 document.getElementById("filter").addEventListener("input", applyFilter);
 
 function doExport() {

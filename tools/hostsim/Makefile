@@ -31,7 +31,7 @@ armsim: armsim.cpp $(MODDEPS)
 miniaudio_impl.o: miniaudio_impl.c third_party/miniaudio.h
 	$(CC) $(CFLAGS) -c -o $@ miniaudio_impl.c
 
-armlive: armlive.cpp ws_server.h json_mini.h miniaudio_impl.o $(MODDEPS)
+armlive: armlive.cpp ws_server.h json_mini.h const_docs.h miniaudio_impl.o $(MODDEPS)
 	$(CXX) $(CXXFLAGS) $(LIVEDEFS) $(INCLUDES) -o $@ armlive.cpp miniaudio_impl.o $(LDLIVE)
 
 .PHONY: all clean
