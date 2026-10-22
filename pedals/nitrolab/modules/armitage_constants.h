@@ -81,10 +81,10 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 //          -0.05..0.15, w_K1 0 -> -0.10..0.10). NO clamp, no floor: w <= 0 = the shape is silent
 //          (the clean mix-back stays), continuous at 0; DC term 1 - 2w follows w per sample.
 //   SAW:   formant (resonance R) modulation around K1's setting (one saw, no copy):
-//          R_mod = max(R_K1 2^(ARM_RMOD_OCT depth lfo), 1)     (+-2 octaves at full depth, 2026-10-22: was +-1)
+//          R_mod = max(R_K1 2^(ARM_RMOD_OCT depth lfo), 1)     (+-ARM_RMOD_OCT octaves at full depth)
 //          R_k   = min(R_mod, ARM_RES_FMAX / f'_k)             (the per-band anti-fold cap)
 //          Below R = 1 there is no formant (it would sit under the fundamental): R = 1 is the floor,
-//          so at p = 0 (R_K1 = 1) only the rising half of the LFO moves R (1 -> 4 with ARM_RMOD_OCT = 2).
+//          so at p = 0 (R_K1 = 1) only the rising half of the LFO moves R (1 -> 2^ARM_RMOD_OCT).
 //          mix = max(ARM_RES_MIX_MAX p, ARM_RMOD_MIX depth)    (2026-10-22: K2 also opens the morph,
 //          so with K2 engaged (depth > 0) the formant is audible even at p = 0, near K1 noon;
 //          depth = 0 restores mix = ARM_RES_MIX_MAX p exactly, unmodulated)
@@ -96,8 +96,8 @@ constexpr float ARM_PWM_HZ_MAX     = 32.f;    // Hz; LFO rate at u = 1, K2 full 
 constexpr float ARM_PWM_W_SWING    = 0.40f;   // PULSE: max duty swing at full depth (+-, Schism MODE_C_SYNTH_PWM depth max); else limited to w_K1 + x
 constexpr float ARM_PWM_SIL_W      = 0.10f;   // PULSE: K1 base width below which the sweep crosses into silence
 constexpr float ARM_PWM_SIL_X      = 0.10f;   // PULSE: undershoot below 0 at base width 0 (linear from 0 at ARM_PWM_SIL_W)
-constexpr float ARM_RMOD_OCT       = 2.0f;    // SAW: formant (R) swing at full depth, octaves (+-) around K1's R (2026-10-22: 1.0 -> 2.0, wider sweep)
-constexpr float ARM_RMOD_MIX       = 0.5f;    // SAW: morph mix floor when K2 is engaged (depth > 0), independent of K1 push p (2026-10-22: so the formant is audible even at p = 0, near K1 noon)
+constexpr float ARM_RMOD_OCT       = 0.5f;    // SAW: formant (R) swing at full depth, octaves (+-) around K1's R (2026-10-22: 2.0 -> 0.5, builder: "reduce significantly")
+constexpr float ARM_RMOD_MIX       = 0.25f;   // SAW: morph mix floor when K2 is engaged (depth > 0), independent of K1 push p (2026-10-22: 0.5 -> 0.25 with the smaller sweep)
 
 // --- Wet DC blocker (final 48 kHz wet, before the K4 post filter) ----------
 constexpr float ARM_DC_HZ = 10.f;  // wet DC blocker (FB carries DC); below the lowest bass fundamental
@@ -168,7 +168,7 @@ constexpr float ARM_PD_FOLD_TOP   = 3800.f;  // Hz; f'_k at/above this: knee flo
 //   (K2 CCW: R -> R_mod, see K2 above), R_k = min(R, ARM_RES_FMAX / f'_k)
 //   res_k = |z'_k| (sin(2 pi R_k phi) (1 - phi) - dc(R_k)),  dc(R) = 1/(2 pi R) - sin(2 pi R)/(2 pi R)^2 (exact mean)
 //   mix = max(ARM_RES_MIX_MAX p, ARM_RMOD_MIX depth)   (K1 full, K2 off: 90 % res / 10 % saw; K2 engaged
-//   opens the morph to >= ARM_RMOD_MIX (50 %) even where p = 0, so the formant is heard near K1 noon)
+//   opens the morph to >= ARM_RMOD_MIX even where p = 0, so the formant is heard near K1 noon)
 //   shape_k = G share_k [ (1 - mix) saw_k + mix cap_k res_k ]   (morph on the shape only)
 constexpr float ARM_RES_R_MIN   = 1.f;
 constexpr float ARM_RES_R_MAX   = 8.f;     // R at K1 full (was 16, then 4 subtler push; 2026-10-22: 4 -> 8, builder go)
