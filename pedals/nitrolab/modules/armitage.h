@@ -94,7 +94,8 @@
 //   K4 POST FILTER (final 48 kHz wet, every mode / octave; law copied from mnemonic's tone filter):
 //     two cascaded TPT SVF stages (24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
 //     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q (both stages, fixed)
-//     the K2 envelope turns the knob: t_eff = clamp(t + k5 ARM_ENV_T_MAX e, -1, 1), smoothed like t
+//     the K2 envelope turns the knob: t_eff = t + k5 ARM_ENV_T_MAX e (NOT clamped to the knob's ends;
+//     fc only limited by ARM_FILT_FC_MIN/MAX for stability), smoothed like t
 //     (rising e = clockwise, falling e = counter-clockwise, from any K4 position incl. noon)
 //     t < 0: LP, fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //     t > 0: HP, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
@@ -298,6 +299,8 @@ class Armitage : public Module {
     on_seen_ = false;
     env_e_ = 0.f;
     env_attacking_ = false;
+    env_falling_ = false;
+    env_fall_w_ = 1.f;
     ln_tau_ratio_ = logf(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S);
     fm_g_ = 0.f;
     f_on_ = false;
@@ -878,7 +881,9 @@ class Armitage : public Module {
   // K2: the triggered envelope e, once per 8 kHz sample, driven by the 48 kHz onset flag.
   // e: t2 = 0 -> 0 held. CCW (t2 < 0, unchanged): onset -> e = 0, then one-pole toward -1, tau
   // from |t2|. CW (t2 > 0, rise + fall): onset -> e = 0 and (re)start the rise; the rise uses the
-  // same knob-tau one-pole toward +1; once e >= 0.98 (peak) e falls back toward 0 with that tau.
+  // same knob-tau one-pole toward +1; once e >= 0.98 (peak) e falls back to 0 as the MIRRORED rise:
+  // e = 1 - w, w growing from 0.02 by exp(1/(tau sr8)) per sample (slow start, accelerating, same
+  // duration as the rise); at w >= 1 e = 0 and holds.
   inline void EnvUpdate() {
     using namespace armitage_k;
     const bool onset = on_pending_;
@@ -887,6 +892,7 @@ class Armitage : public Module {
     if (onset) {
       on_seen_ = true; env_e_ = 0.f;
       env_attacking_ = (t2 > 0.f);
+      env_falling_ = false;
     }
     if (t2 == 0.f || !on_seen_) { env_e_ = 0.f; return; }
     const float at = fabsf(t2);
@@ -895,12 +901,23 @@ class Armitage : public Module {
       const float tau = ARM_ENV_TAU_SLOW_S * expf(at * ln_tau_ratio_);
       env_a_ = 1.f - expf(-1.f / (tau * sr8_));
     }
-    if (t2 > 0.f && env_attacking_) {             // CW rise: the knob's tau toward +1 (original spec)
-      env_e_ += env_a_ * (1.f - env_e_);
-      if (env_e_ >= 0.98f) env_attacking_ = false; // peak reached -> fall back
+    if (t2 > 0.f) {
+      if (env_attacking_) {                        // CW rise: the knob's tau toward +1 (original spec)
+        env_e_ += env_a_ * (1.f - env_e_);
+        if (env_e_ >= 0.98f) {                     // peak reached -> mirrored fall
+          env_attacking_ = false;
+          env_falling_ = true;
+          env_fall_w_ = 1.f - env_e_;
+        }
+      } else if (env_falling_) {                   // CW fall: the rise played backwards
+        env_fall_w_ *= 1.f / (1.f - env_a_);       // = exp(1 / (tau sr8))
+        if (env_fall_w_ >= 1.f) { env_fall_w_ = 1.f; env_falling_ = false; }
+        env_e_ = 1.f - env_fall_w_;
+      } else {
+        env_e_ = 0.f;                              // fall finished: hold 0 until the next onset
+      }
     } else {
-      const float T = (t2 > 0.f) ? 0.f : -1.f;    // CW fall -> 0 (same tau); CCW -> -1 and hold
-      env_e_ += env_a_ * (T - env_e_);
+      env_e_ += env_a_ * (-1.f - env_e_);          // CCW: toward -1 and hold (unchanged)
     }
   }
 
@@ -996,8 +1013,9 @@ class Armitage : public Module {
     // K2 envelope x K5 depth turns the K4 knob itself: t_eff = t + k5 ARM_ENV_T_MAX e, clamped to the
     // knob's travel. Rising e = clockwise (LP opens, through noon, HP thins), falling e = counter-
     // clockwise; from noon the envelope simply pushes off noon. Smoothed with t (ARM_FILT_SMOOTH_MS).
-    float tt = ft_t_ + k5_t_ * ARM_ENV_T_MAX * env_e_;
-    tt = (tt < -1.f) ? -1.f : (tt > 1.f) ? 1.f : tt;
+    // No clamp to the knob's ends: the envelope may push the LP corner below ARM_FILT_LP_MIN and the
+    // HP corner above ARM_FILT_HP_MAX; only the stability limits ARM_FILT_FC_MIN/MAX apply to fc.
+    const float tt = ft_t_ + k5_t_ * ARM_ENV_T_MAX * env_e_;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < ARM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -1022,6 +1040,7 @@ class Armitage : public Module {
       const float tmag = expf(ARM_FILT_CURVE * logf((at > 1e-6f) ? at : 1e-6f));   // |t|^curve
       float fc = f_hp_ ? ARM_FILT_FMIN * expf(tmag * f_lnhp_)
                        : ARM_FILT_FMAX * expf(tmag * f_lnlp_);
+      fc = (fc < ARM_FILT_FC_MIN) ? ARM_FILT_FC_MIN : (fc > ARM_FILT_FC_MAX) ? ARM_FILT_FC_MAX : fc;  // stability only
       svf_[0].Set(fc, ARM_FILT_Q, sr_);
       svf_[1].CopyCoefFrom(svf_[0]);
     }
@@ -1230,7 +1249,9 @@ class Armitage : public Module {
   volatile float env_e_ = 0.f;     // envelope e (-1..1)
   float env_at_ = -1.f, env_a_ = 0.f;                    // |t2| the coefficient was computed for, coefficient
   float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)
-  bool  env_attacking_ = false;    // CW (t2 > 0) only: true while e is in its fixed-tau attack phase
+  bool  env_attacking_ = false;    // CW (t2 > 0) only: true while e is in its knob-tau rise
+  bool  env_falling_ = false;      // CW only: true during the mirrored fall after the peak
+  float env_fall_w_ = 1.f;         // mirrored fall: e = 1 - w, w grows 0.02 -> 1
   float fm_g_ = 0.f;               // dry -> filtered crossfade m (per sample slide)
   float f_step_ = 0.f;             // max m step per sample
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;   // ln(HP_MAX / FMIN), ln(LP_MIN / FMAX) (Init)

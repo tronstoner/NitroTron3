@@ -49,7 +49,8 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 //   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
 //   Q (both stages) = ARM_FILT_Q (fixed). The K2 envelope turns the K4 knob itself:
-//   t_eff = clamp(t + k5 ARM_ENV_T_MAX e, -1, 1) - rising e = clockwise (LP opens, through noon,
+//   t_eff = t + k5 ARM_ENV_T_MAX e, unclamped (fc limited only by ARM_FILT_FC_MIN/MAX for
+//   stability) - rising e = clockwise (LP opens, through noon,
 //   HP thins), falling e = counter-clockwise; from noon it pushes off noon (noon is alive).
 // No makeup gain. t_eff is smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block). Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
 // (linear crossfade over the first ARM_FILT_FADE of travel each side of noon; there the filter
@@ -59,6 +60,8 @@ constexpr float ARM_FILT_FMIN      = 40.f;     // Hz; HP cutoff just right of no
 constexpr float ARM_FILT_FMAX      = 4000.f;   // Hz; LP cutoff just left of noon (engine ceiling, ARM_FOLD_LIMIT_HZ)
 constexpr float ARM_FILT_HP_MAX    = 4000.f;   // Hz; HP cutoff at K4 full CW (thin)
 constexpr float ARM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW (dark)
+constexpr float ARM_FILT_FC_MIN    = 10.f;     // Hz; stability floor for the envelope-pushed cutoff (not a range end)
+constexpr float ARM_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling (below Nyquist) for the envelope-pushed cutoff
 constexpr float ARM_FILT_CURVE     = 1.0f;     // |t| exponent: 1 = cutoff moves linearly in octaves with the knob
 constexpr float ARM_FILT_Q         = 1.1f;     // per-stage Q, both stages, fixed (2026-10-22: K5 resonance removed, K5 = env depth)
 constexpr float ARM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t
@@ -82,8 +85,8 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 //     a = 1 - exp(-1 / (tau 8000)), tau = ARM_ENV_TAU_SLOW_S (ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)^|t2|
 //     (4 s just off noon -> 0.05 s at the end): e falls to -1 and holds.
 //   CW (t2 > 0, rise + fall, 2026-10-22): on each onset e = 0, then e rises toward +1 with the
-//     knob's tau (same law as the CCW fall). Once e >= 0.98 (the peak) it falls back toward 0 with
-//     the same tau. A new onset restarts the rise from e's current value.
+//     knob's tau (same law as the CCW fall). Once e >= 0.98 (the peak) it falls back to 0 as the
+//     rise mirrored in time (slow start, accelerating; same duration as the rise), then holds 0. A new onset restarts the rise from e's current value.
 // K5 = depth: t_eff = t_K4 + k5 ARM_ENV_T_MAX e (see K4).
 constexpr float    ARM_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz), now run at 48 kHz directly
 constexpr float    ARM_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS), 48 kHz
