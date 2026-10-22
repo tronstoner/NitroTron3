@@ -102,9 +102,12 @@
 //     m slides at most 1 per ARM_MUTE_SLIDE_MS (1 ms) per sample. LP <-> HP (t crosses noon): m slides
 //     to 0 first, then the other type starts from a cleared state and m slides in. No makeup gain.
 //
-//   K2 ENVELOPE (all modes), t2 = 2 k2 - 1 (smoothed K2): onset detector on the decimated input |d|
-//     (8 kHz; fast meter ARM_ONSET_ENV_MS, gate fall ARM_ONSET_FALL_MS, baseline ARM_ONSET_SLOW_COEF,
-//     onset = gate > ARM_ONSET_RISE base && gate > ARM_ONSET_FLOOR, refractory ARM_ONSET_REFRACTORY_MS).
+//   K2 ENVELOPE (all modes), t2 = 2 k2 - 1 (smoothed K2): onset detector on the raw 48 kHz input
+//     |in|, before the decimator (its low-pass would soften the attack); fast meter
+//     ARM_ONSET_ENV_MS, gate fall ARM_ONSET_FALL_MS, baseline ARM_ONSET_SLOW_COEF, onset = gate
+//     > ARM_ONSET_RISE base && gate > ARM_ONSET_FLOOR, refractory ARM_ONSET_REFRACTORY_MS (all at
+//     48 kHz). The onset flag crosses to the 8 kHz envelope step (e), which cannot miss or
+//     double-count it since the refractory is far longer than one 8 kHz step.
 //     Each onset: e = 0, then e += a (sign(t2) - e), tau = ARM_ENV_TAU_SLOW_S (FAST / SLOW)^|t2|.
 //     t2 = 0: e = 0 held. Before the first onset e = 0. e drives the K4 cutoff (depth K5).
 //
@@ -286,12 +289,13 @@ class Armitage : public Module {
     ft_ = ft_t_ = 0.f;
     k5_t_ = 0.f;                               // K5 env depth
     f_mod_ = 0.f;                              // smoothed cutoff modulation (octaves)
-    // K2 envelope + onset detector (8 kHz).
+    // K2 onset detector (48 kHz, pre-decimator) + envelope (8 kHz).
     on_env_ = on_gate_ = on_base_ = 0.f;
-    on_env_a_  = 1.f - expf(-1000.f / (ARM_ONSET_ENV_MS * sr8_));
-    on_fall_a_ = 1.f - expf(-1000.f / (ARM_ONSET_FALL_MS * sr8_));
+    on_env_a_  = 1.f - expf(-1000.f / (ARM_ONSET_ENV_MS * sr));
+    on_fall_a_ = 1.f - expf(-1000.f / (ARM_ONSET_FALL_MS * sr));
     on_refr_ = 0;
-    on_refr_len_ = (int)((float)ARM_ONSET_REFRACTORY_MS * 0.001f * sr8_ + 0.5f);
+    on_refr_len_ = (int)((float)ARM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
+    on_pending_ = false;
     on_seen_ = false;
     env_e_ = 0.f;
     env_attacking_ = false;
@@ -410,8 +414,9 @@ class Armitage : public Module {
     using namespace armitage_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
+      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // K2: onset detector, 48 kHz |in|, pre-decimator
       const float d = dec_(in + i);
-      OnsetEnv(d);                              // K2: onset detector on |d| + triggered envelope e
+      EnvUpdate();                               // K2: triggered envelope e (consumes the 48 kHz onset flag)
       bx_  += (bx_t_ - bx_) * ca;
       fm_  += (fm_t_ - fm_) * ca;                // K3 FM index (0 stays exactly 0)
       k1s_ += (k1_t_ - k1s_) * ca;
@@ -852,16 +857,16 @@ class Armitage : public Module {
     return BandOut<kFB, O>(s, k, zr, zi, mag, inv, fmo, c);
   }
 
-  // K2: onset detector (vestige IsrCapture idiom) on the decimated input |d| + the triggered
-  // envelope e, once per 8 kHz sample. Fast meter -> gate meter (up at once, slow fall) ->
-  // slow baseline; onset = gate > ARM_ONSET_RISE base and > ARM_ONSET_FLOOR, refractory.
-  // e: t2 = 0 -> 0 held. CCW (t2 < 0, unchanged): onset -> e = 0, then one-pole toward -1, tau
-  // from |t2|. CW (t2 > 0, AR): onset -> e = 0 and (re)start the attack phase; attack = fixed
-  // one-pole toward +1 (ARM_ENV_ATTACK_MS); once e >= 0.98 the attack ends and e releases toward
-  // 0 with the same knob-tau one-pole used on the CCW side.
-  inline void OnsetEnv(float d) {
+  // K2: onset detector (vestige IsrCapture idiom), run once per 48 kHz sample on |in|,
+  // before the decimator (the decimator's low-pass softens the attack otherwise). Fast
+  // meter -> gate meter (up at once, slow fall) -> slow baseline; onset = gate >
+  // ARM_ONSET_RISE base and > ARM_ONSET_FLOOR, refractory (all in 48 kHz samples/coefficients).
+  // Latches on_pending_ for EnvUpdate() (8 kHz) to consume; refractory (100 ms) is far longer
+  // than one 8 kHz step, so at most one onset can land per step and the latch cannot be lost
+  // or double-counted.
+  inline void OnsetDetect(float in_sample) {
     using namespace armitage_k;
-    const float a = fabsf(d);
+    const float a = fabsf(in_sample);
     on_env_ += on_env_a_ * (a - on_env_);
     if (on_env_ > on_gate_) on_gate_ = on_env_;
     else                    on_gate_ += on_fall_a_ * (on_env_ - on_gate_);
@@ -869,9 +874,21 @@ class Armitage : public Module {
     if (on_refr_ > 0) on_refr_--;
     const bool onset = (on_refr_ == 0 && on_gate_ > ARM_ONSET_FLOOR &&
                         on_gate_ > on_base_ * ARM_ONSET_RISE);
+    if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
+  }
+
+  // K2: the triggered envelope e, once per 8 kHz sample, driven by the 48 kHz onset flag.
+  // e: t2 = 0 -> 0 held. CCW (t2 < 0, unchanged): onset -> e = 0, then one-pole toward -1, tau
+  // from |t2|. CW (t2 > 0, AR): onset -> e = 0 and (re)start the attack phase; attack = fixed
+  // one-pole toward +1 (ARM_ENV_ATTACK_MS); once e >= 0.98 the attack ends and e releases toward
+  // 0 with the same knob-tau one-pole used on the CCW side.
+  inline void EnvUpdate() {
+    using namespace armitage_k;
+    const bool onset = on_pending_;
+    on_pending_ = false;
     const float t2 = 2.f * k2s_ - 1.f;
     if (onset) {
-      on_refr_ = on_refr_len_; on_seen_ = true; env_e_ = 0.f;
+      on_seen_ = true; env_e_ = 0.f;
       env_attacking_ = (t2 > 0.f);
     }
     if (t2 == 0.f || !on_seen_) { env_e_ = 0.f; return; }
@@ -1209,10 +1226,11 @@ class Armitage : public Module {
   volatile float ft_t_ = 0.f;      // target t = 2 k4 - 1
   volatile float k5_t_ = 0.f;      // K5 env depth (0..1)
   float f_mod_ = 0.f;              // smoothed cutoff modulation, octaves (per block)
-  // K2 envelope + onset detector (8 kHz)
-  float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline
-  float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients
-  int   on_refr_ = 0, on_refr_len_ = 800;                // refractory samples left / length
+  // K2 onset detector (48 kHz, pre-decimator) + envelope (8 kHz)
+  float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
+  float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
+  int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
+  bool  on_pending_ = false;                             // an onset fired this 8 kHz step, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened (before: e = 0)
   volatile float env_e_ = 0.f;     // envelope e (-1..1)
   float env_at_ = -1.f, env_a_ = 0.f;                    // |t2| the coefficient was computed for, coefficient

@@ -67,13 +67,17 @@ constexpr float ARM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfad
 constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with target 0: bypass
 
 // --- K2 = triggered envelope on the K4 post-filter cutoff (2026-10-22), bipolar t2 = 2 k2 - 1 ---
-// Onset detector (vestige's IsrCapture idiom, vestige.h / VESTIGE_ONSET_*), per 8 kHz sample on the
-// decimated INPUT |d| (the engine's input, before the bands: no band group delay on the attack):
+// Onset detector (vestige's IsrCapture idiom, vestige.h / VESTIGE_ONSET_*), per 48 kHz sample on
+// the raw INPUT |in|, before the decimator (2026-10-22: moved off the decimated 8 kHz |d| because
+// the decimator's low-pass was softening the attack and missing fast plucks):
 //   env:  one-pole rise ARM_ONSET_ENV_MS, then gate meter = follows env up at once, falls with
 //         ARM_ONSET_FALL_MS (= VESTIGE_ENV_COEF 0.008 @ 48 k ~ 2.6 ms, VESTIGE_GATE_RELEASE_MS 40)
 //   base += ARM_ONSET_SLOW_COEF (gate - base)
 //   onset = refractory over && gate > ARM_ONSET_RISE base && gate > ARM_ONSET_FLOOR
 //   refractory ARM_ONSET_REFRACTORY_MS
+// The onset flag latches (on_pending_) and crosses once into the 8 kHz envelope step below; the
+// refractory (100 ms) is far longer than one 8 kHz step (0.125 ms) so an onset within a block is
+// never lost or double-counted.
 // Envelope e: noon (t2 = 0) -> e = 0 held. Before the first onset e = 0.
 //   CCW (t2 < 0, unchanged): on each onset e = 0, then per 8 kHz sample e += a (T - e), T = -1,
 //     a = 1 - exp(-1 / (tau 8000)), tau = ARM_ENV_TAU_SLOW_S (ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)^|t2|
@@ -83,13 +87,13 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 //     e >= 0.98 the attack phase ends and e releases toward 0 with the same knob-tau one-pole as above
 //     (T = 0 instead of T = -1). A new onset mid-release restarts the attack phase from e's current value.
 // K5 = depth: fc_mod = fc_K4 2^(k5 ARM_ENV_OCT_MAX e) (see K4).
-constexpr float    ARM_ONSET_ENV_MS        = 2.6f;     // ms; input |d| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz)
-constexpr float    ARM_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS)
-constexpr float    ARM_ONSET_SLOW_COEF     = 0.0036f;  // baseline one-pole at 8 kHz (= vestige 0.0006 at 48 kHz x 6, ~35 ms)
-constexpr float    ARM_ONSET_RISE          = 1.8f;     // gate > baseline x this = an attack (vestige / sprawl)
-constexpr float    ARM_ONSET_FLOOR         = 0.0021f;  // input |d| gate-meter units = 0.1 x ARM_REF_LEVEL (0.021); vestige's floor
+constexpr float    ARM_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz), now run at 48 kHz directly
+constexpr float    ARM_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS), 48 kHz
+constexpr float    ARM_ONSET_SLOW_COEF     = 0.0006f;  // baseline one-pole at 48 kHz (vestige's own coefficient, ~35 ms; was 0.0036 at the old 8 kHz rate)
+constexpr float    ARM_ONSET_RISE          = 1.5f;     // gate > baseline x this = an attack (2026-10-22: lowered from 1.8 for the sharper 48 kHz gate meter)
+constexpr float    ARM_ONSET_FLOOR         = 0.0021f;  // input gate-meter units = 0.1 x ARM_REF_LEVEL (0.021); unchanged — the decimator has unity passband gain, so 48 kHz |in| and the old decimated |d| share the same level scale
                                                        // (its K4 open threshold) sits at ~0.1 of a typical passive-bass env
-constexpr uint32_t ARM_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (vestige)
+constexpr uint32_t ARM_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (vestige), now counted in 48 kHz samples
 constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time constant just off K2 noon
 constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K2 full CW / CCW
 constexpr float    ARM_ENV_OCT_MAX         = 4.0f;     // octaves of cutoff travel at K5 full and |e| = 1
