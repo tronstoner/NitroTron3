@@ -159,8 +159,11 @@
 //                           ADD (UP, CCW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
 //                           FB (UP, CW): beta = ARM_BETA_MAX * K1old^2
 //                           DOWN: unshaped on both halves (K1 does nothing)
-//   K2  free                (nothing; the parked PWM LFO code reads the envelope knob if ever re-enabled)
-//   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE / unshaped: nothing
+//   K2  FM envelope         SW1 UP (ADD / FB) only: same law as K5 (bipolar, noon off, CCW sink-and-hold,
+//                           CW rise + decay, same tau range, same onset detector); it turns the K3 knob:
+//                           k3_eff = k3 + ARM_ENV_FM_DEPTH e, floored at 0 (no FM), open above 1;
+//                           I = ARM_FM_INDEX_MAX k3_eff^2. MID / DOWN: nothing (parked PWM LFO shares the knob)
+//   K3  FM index            I = ARM_FM_INDEX_MAX * k3_eff^2 (0 -> 12 rad at K2 noon, squared), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct,
 //                           two stages, Q fixed ARM_FILT_Q 1.1), on the final wet, all modes
 //   K5  envelope            bipolar, noon = off (e = 0); triggered on each onset: CCW (t2 < 0) e falls
@@ -296,9 +299,8 @@ class Armitage : public Module {
     on_refr_len_ = (int)((float)ARM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
-    env_e_ = 0.f;
-    env_attacking_ = false;
-    env_fall_a_ = 0.f;
+    env_.Reset();
+    env_fm_.Reset();
     ln_tau_ratio_ = logf(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S);
     fm_g_ = 0.f;
     f_on_ = false;
@@ -321,7 +323,9 @@ class Armitage : public Module {
     mfade_len_ = (int)(ARM_MODEL_XFADE_MS * 0.001f * sr8_ + 0.5f);
     if (mfade_len_ < 1) mfade_len_ = 1;
     k1s_ = k1_t_ = 0.5f;                       // K1 noon = h 0 (unshaped)
-    k2s_ = k2_t_ = 0.5f;                       // K2 noon = PWM off
+    k2s_ = k2_t_ = 0.5f;                       // K2 noon = FM envelope off (and PWM off)
+    k5s_ = k5_t_ = 0.5f;                       // K5 noon = filter envelope off
+    k3s_ = k3_t_ = 0.f;
     bx_ = bx_t_ = 0.f;
     fm_ = fm_t_ = 0.f;
     oct_t_ = kMid;
@@ -335,7 +339,7 @@ class Armitage : public Module {
     using namespace armitage_k;
     if (cs.Foot(0).rising) mute_ = !mute_;   // FS1: wet mute toggle (test tool)
     const float k1 = RemapKnob(cs.Knob(0));
-    const float k2 = RemapKnob(cs.Knob(1));   // K2: free (does nothing; shown in DIAG)
+    const float k2 = RemapKnob(cs.Knob(1));   // K2: triggered envelope on the K3 FM index (SW1 UP), bipolar
     const float k3 = RemapKnob(cs.Knob(2));
     const float k4 = RemapKnob(cs.Knob(3));
     const float k5 = RemapKnob(cs.Knob(4));   // K5: the triggered envelope on the K4 post filter, bipolar (was K2)
@@ -351,7 +355,9 @@ class Armitage : public Module {
                    : (pair == kMid) ? (cw ? kPUL : kSAW) : kUNS;
     mdl_t_ = mode;
     k1_t_ = k1;                                // smoothed as the raw knob; h and the remaps follow it
-    k2_t_ = k5;                                // envelope knob target (k2s_: smoothed; the name predates the move K2 -> K5)
+    k2_t_ = k2;                                // K2: FM envelope knob (also the parked PWM LFO's knob)
+    k5_t_ = k5;                                // K5: filter envelope knob
+    k3_t_ = k3;                                // K3: FM index base (index derived at 8 kHz with the K2 envelope)
 
     const float k1fb  = K1Old(h, ARM_K1_FB_SPLIT);   // FB: the old K1 law on the remapped h
     const float beta  = ARM_BETA_MAX * k1fb * k1fb;
@@ -372,7 +378,7 @@ class Armitage : public Module {
     const float t = 2.f * k4 - 1.f;                        // K4 post filter: t < 0 LP, 0 bypass, t > 0 HP
     ft_t_ = t;
     bx_t_ = ARM_XMOD_ENABLE ? ARM_XMOD_MAX * k3 * k3 : 0.f;   // former K3 cross-mod (off)
-    fm_t_ = ARM_FM_INDEX_MAX * k3 * k3;                    // K3: FM index I (rad), squared taper
+    fm_t_ = ARM_FM_INDEX_MAX * k3 * k3;                    // K3: FM index I (rad) without the envelope (DIAG only)
     oct_t_ = oct;
 
     led1.Set(1.f);
@@ -381,7 +387,8 @@ class Armitage : public Module {
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
       const float t2 = 2.f * k5 - 1.f;
-      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, t2, env_e_, fm_t_);
+      const float t2f = 2.f * k2 - 1.f;
+      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, t2, env_.e, t2f, env_fm_.e, fm_t_);
     }
   }
 
@@ -395,6 +402,7 @@ class Armitage : public Module {
     float beta, filt_t, fm;  // derived values the engine runs toward (FB beta, K4 post filter t = 2 k4 - 1, K3 FM index I)
     float env_t2;            // K5: t2 = 2 k5 - 1 (0 = env off; sign = direction, |t2| = speed)
     float env_e;             // K5 envelope value e at the snapshot (-1..1); depth fixed ARM_ENV_DEPTH
+    float envf_t2, envf_e;   // K2 envelope (-> K3 FM index, SW1 UP): t2 = 2 k2 - 1, e
     int   oct;               // 0 up, 1 played, 2 down
     bool  mute;              // FS1 wet mute state
   };
@@ -412,14 +420,21 @@ class Armitage : public Module {
     using namespace armitage_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // K2: onset detector, 48 kHz |in|, pre-decimator
+      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
       const float d = dec_(in + i);
-      EnvUpdate();                               // K2: triggered envelope e (consumes the 48 kHz onset flag)
+      EnvUpdate();                               // K5 / K2 triggered envelopes (consume the 48 kHz onset flag)
       bx_  += (bx_t_ - bx_) * ca;
-      fm_  += (fm_t_ - fm_) * ca;                // K3 FM index (0 stays exactly 0)
       k1s_ += (k1_t_ - k1s_) * ca;
-      k2s_ += (k2_t_ - k2s_) * ca;              // K2 PWM (SAW / PULSE)
-      if (fabsf(k2_t_ - k2s_) < 1e-6f) k2s_ = k2_t_;   // land exactly (noon: u = 0, PWM fully off)
+      k2s_ += (k2_t_ - k2s_) * ca;              // K2 FM envelope knob (and the parked PWM)
+      if (fabsf(k2_t_ - k2s_) < 1e-6f) k2s_ = k2_t_;   // land exactly (noon: envelope fully off)
+      k5s_ += (k5_t_ - k5s_) * ca;              // K5 filter envelope knob
+      if (fabsf(k5_t_ - k5s_) < 1e-6f) k5s_ = k5_t_;
+      k3s_ += (k3_t_ - k3s_) * ca;
+      {                                          // K3 FM index: the K2 envelope turns the K3 knob,
+        float k3e = k3s_ + ARM_ENV_FM_DEPTH * env_fm_.e;   // k3_eff = k3 + depth e, floored at 0 (no FM),
+        if (k3e < 0.f) k3e = 0.f;                // open above 1 (index beyond ARM_FM_INDEX_MAX)
+        fm_ = ARM_FM_INDEX_MAX * k3e * k3e;
+      }
 
       // K1 bipolar (smoothed): h = |2 k1 - 1|, remapped per model onto its old K1 law.
       const float hs = fabsf(2.f * k1s_ - 1.f);
@@ -880,33 +895,42 @@ class Armitage : public Module {
   // from |t2|. CW (t2 > 0, rise + fall): onset -> e = 0 and (re)start the rise; the rise uses the
   // same knob-tau one-pole toward +1; once e >= 0.98 (peak) e falls back toward 0 as a plain one-pole
   // decay (fast off the peak, long tail) with tau x ARM_ENV_FALL_RATIO.
+  // Two instances: env_ (K5 -> K4 post-filter position) and env_fm_ (K2 -> K3 FM index, SW1 UP).
+  struct Env {
+    volatile float e = 0.f;        // envelope value (-1..1)
+    float at = -1.f, a = 0.f;      // |t2| the coefficients were computed for; rise / CCW one-pole coefficient
+    float fall_a = 0.f;            // CW fall one-pole coefficient (tau x ARM_ENV_FALL_RATIO)
+    bool  attacking = false;       // CW only: true while e is in its knob-tau rise
+    void Reset() { e = 0.f; at = -1.f; a = 0.f; fall_a = 0.f; attacking = false; }
+    inline void Step(bool onset, bool seen, float t2, float sr8, float ln_tau_ratio) {
+      using namespace armitage_k;
+      if (onset) { e = 0.f; attacking = (t2 > 0.f); }
+      if (t2 == 0.f || !seen) { e = 0.f; return; }
+      const float am = fabsf(t2);
+      if (am != at) {                            // tau = SLOW (FAST / SLOW)^|t2| -> one-pole coefficients
+        at = am;
+        const float tau = ARM_ENV_TAU_SLOW_S * expf(am * ln_tau_ratio);
+        a = 1.f - expf(-1.f / (tau * sr8));
+        fall_a = 1.f - expf(-1.f / (tau * ARM_ENV_FALL_RATIO * sr8));
+      }
+      if (t2 > 0.f) {
+        if (attacking) {                         // CW rise: the knob's tau toward +1
+          e += a * (1.f - e);
+          if (e >= 0.98f) attacking = false;     // peak reached -> fall
+        } else {
+          e += fall_a * (0.f - e);               // CW fall: one-pole decay toward 0, tau x ARM_ENV_FALL_RATIO
+        }
+      } else {
+        e += a * (-1.f - e);                     // CCW: toward -1 and hold
+      }
+    }
+  };
   inline void EnvUpdate() {
-    using namespace armitage_k;
     const bool onset = on_pending_;
     on_pending_ = false;
-    const float t2 = 2.f * k2s_ - 1.f;
-    if (onset) {
-      on_seen_ = true; env_e_ = 0.f;
-      env_attacking_ = (t2 > 0.f);
-    }
-    if (t2 == 0.f || !on_seen_) { env_e_ = 0.f; return; }
-    const float at = fabsf(t2);
-    if (at != env_at_) {                         // tau = SLOW (FAST / SLOW)^|t2| -> one-pole coefficient
-      env_at_ = at;
-      const float tau = ARM_ENV_TAU_SLOW_S * expf(at * ln_tau_ratio_);
-      env_a_ = 1.f - expf(-1.f / (tau * sr8_));
-      env_fall_a_ = 1.f - expf(-1.f / (tau * ARM_ENV_FALL_RATIO * sr8_));   // fall one-pole, ARM_ENV_FALL_RATIO x slower
-    }
-    if (t2 > 0.f) {
-      if (env_attacking_) {                        // CW rise: the knob's tau toward +1 (original spec)
-        env_e_ += env_a_ * (1.f - env_e_);
-        if (env_e_ >= 0.98f) env_attacking_ = false;   // peak reached -> fall
-      } else {
-        env_e_ += env_fall_a_ * (0.f - env_e_);    // CW fall: one-pole decay toward 0, tau x ARM_ENV_FALL_RATIO
-      }
-    } else {
-      env_e_ += env_a_ * (-1.f - env_e_);          // CCW: toward -1 and hold (unchanged)
-    }
+    if (onset) on_seen_ = true;
+    env_.Step(onset, on_seen_, 2.f * k5s_ - 1.f, sr8_, ln_tau_ratio_);      // K5 -> K4 post filter
+    env_fm_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);   // K2 -> K3 FM index (SW1 UP)
   }
 
   // K1 bipolar remap: h = |2 k1 - 1| -> the model's old unipolar K1. The first ARM_K1_FADE_FRAC of
@@ -1000,7 +1024,7 @@ class Armitage : public Module {
     // envelope simply pushes off noon. Smoothed with t (ARM_FILT_SMOOTH_MS).
     // No clamp to the knob's ends: the envelope may push the LP corner below ARM_FILT_LP_MIN and the
     // HP corner above ARM_FILT_HP_MAX; only the stability limits ARM_FILT_FC_MIN/MAX apply to fc.
-    const float tt = ft_t_ + ARM_ENV_DEPTH * env_e_;
+    const float tt = ft_t_ + ARM_ENV_DEPTH * env_.e;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < ARM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -1064,7 +1088,8 @@ class Armitage : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int mode, float h, int oct, float beta, float ft, float t2, float e, float fm) {
+                    int sw1, int mode, float h, int oct, float beta, float ft, float t2, float e,
+                    float t2f, float ef, float fm) {
     using namespace armitage_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -1074,6 +1099,7 @@ class Armitage : public Module {
     s.mode = mode; s.h = h;
     s.beta = beta; s.filt_t = ft; s.fm = fm;
     s.env_t2 = t2; s.env_e = e;
+    s.envf_t2 = t2f; s.envf_e = ef;
     s.mute = mute_;
 
     // FS1 tap: numbered line + LED1 blink-off.
@@ -1215,7 +1241,9 @@ class Armitage : public Module {
   float pul_d_ = 0.5f, pul_hid_ = 1.f; // PULSE knee D (K1 lower part) and 0.5 / D
   float gm_[armitage_k::ARM_ADD_MMAX + 1] = {};   // ADD g_m / m^s (per 8 kHz sample, from smoothed K1)
   int   mtop_ = 1;                 // ADD highest harmonic with g_m > 0
-  float k2s_ = 0.5f, k2_t_ = 0.5f; // K2 PWM (smoothed / target; noon = off)
+  float k2s_ = 0.5f, k2_t_ = 0.5f; // K2 FM envelope knob (smoothed / target; noon = off; also the parked PWM)
+  float k5s_ = 0.5f, k5_t_ = 0.5f; // K5 filter envelope knob (smoothed / target; noon = off)
+  float k3s_ = 0.f,  k3_t_ = 0.f;  // K3 FM index base (smoothed / target)
   float pwm_ph_ = 0.25f;           // PWM LFO phase in [0, 1) (8 kHz)
   float ln_pwm_min_ = 0.f, ln_pwm_span_ = 0.f;   // ln ARM_PWM_HZ_MIN, ln(ARM_PWM_HZ_MAX / ARM_PWM_HZ_MIN)
   float pwm_dep_ = 0.f, pwm_lfo_ = 0.f;   // PWM depth (0..1) and triangle value (-1..1), per 8 kHz sample
@@ -1230,11 +1258,9 @@ class Armitage : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired this 8 kHz step, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened (before: e = 0)
-  volatile float env_e_ = 0.f;     // envelope e (-1..1)
-  float env_at_ = -1.f, env_a_ = 0.f;                    // |t2| the coefficient was computed for, coefficient
+  Env   env_;                      // K5 envelope -> K4 post-filter position
+  Env   env_fm_;                   // K2 envelope -> K3 FM index (SW1 UP: ADD / FB)
   float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)
-  bool  env_attacking_ = false;    // CW (t2 > 0) only: true while e is in its knob-tau rise
-  float env_fall_a_ = 0.f;         // CW fall one-pole coefficient (tau x ARM_ENV_FALL_RATIO)
   float fm_g_ = 0.f;               // dry -> filtered crossfade m (per sample slide)
   float f_step_ = 0.f;             // max m step per sample
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;   // ln(HP_MAX / FMIN), ln(LP_MIN / FMAX) (Init)
@@ -1263,7 +1289,7 @@ class Armitage : public Module {
   int   mfade_len_ = 80;               // model crossfade length (8 kHz samples)
   float mg_ = 1.f;                     // new-model gain during a model fade
   float bx_ = 0.f, bx_t_ = 0.f;        // former K3 cross-mod depth beta_x (smoothed / target; 0 unless ARM_XMOD_ENABLE)
-  float fm_ = 0.f, fm_t_ = 0.f;        // K3 FM index I (rad; smoothed / target)
+  float fm_ = 0.f, fm_t_ = 0.f;        // K3 FM index I (rad): fm_ = live (k3 smoothed + K2 envelope), fm_t_ = knob only (DIAG)
   volatile int oct_t_ = kMid;          // SW2 target octave
   volatile bool mute_ = false;         // FS1 wet mute target (test tool)
   float mute_g_ = 1.f;                 // wet mute gain, slides toward mute_ ? 0 : 1

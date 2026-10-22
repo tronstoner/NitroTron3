@@ -10,7 +10,7 @@
 //                          the 80-band POG engine — see modules/armitage.h;
 //                          unrelated to ChronoTron3's archived armitage;
 //                          SW1 = mode pair, K1 bipolar: CCW / CW model,
-//                          K5 onset-triggered envelope on the K4 cutoff (depth fixed), K2 free)
+//                          K5 onset-triggered envelope on the K4 cutoff, K2 the same on the K3 FM index (UP))
 // SW3 MIDDLE = empty      (pass-through placeholder)
 // SW3 DOWN   = empty      (pass-through placeholder)
 
@@ -177,9 +177,10 @@ int main() {
         const Armitage::DiagSnap& d = diag_snap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("beta" D2F " fm" D2F " filt t" D2F " env t2" D2F " e" D2F
+        hw.seed.PrintLine("beta" D2F " fm" D2F " filt t" D2F " env t2" D2F " e" D2F " fmenv t2" D2F " e" D2F
                           " oct %s mute %d cpu %u%%",
                           D2V(d.beta), D2V(d.fm), D2SV(d.filt_t), D2SV(d.env_t2), D2SV(d.env_e),
+                          D2SV(d.envf_t2), D2SV(d.envf_e),
                           oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
                           d.mute ? 1 : 0,
                           (unsigned)(cpu_pk * 100.f + 0.5f));
@@ -187,7 +188,7 @@ int main() {
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
         // first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
-        // model from (SW1 pair, sign of K1); h = |2 k1 - 1|. K5 env (t2, e) in the second half.
+        // model from (SW1 pair, sign of K1); h = |2 k1 - 1|. K5 env + K2 FM env (t2, e) in the second half.
         static const char* const mode_name[5] = { "SAW", "PULSE", "ADD", "FB", "UNSHAPED" };
         const Armitage::DiagSnap& d = diag_snap;
         char tag[12];

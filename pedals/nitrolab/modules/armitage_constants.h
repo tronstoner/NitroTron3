@@ -100,6 +100,9 @@ constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time const
 constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K5 full CW / CCW
 constexpr float    ARM_ENV_FALL_RATIO      = 3.0f;     // CW fall tau / rise tau (plain one-pole decay after the peak)
 constexpr float    ARM_ENV_DEPTH           = 0.7f;     // K4 knob travel (t units, 1.0 = noon to an end) at |e| = 1; the old K5 depth knob at 2:00 (builder 2026-10-22)
+// K2 = second envelope (2026-10-22), SW1 UP only, same law / times / onset detector as K5's: it turns the K3
+// FM knob, k3_eff = k3 + ARM_ENV_FM_DEPTH e (floored at 0 = no FM, open above 1), I = ARM_FM_INDEX_MAX k3_eff^2.
+constexpr float    ARM_ENV_FM_DEPTH        = 0.7f;     // K3 knob travel at |e| = 1 (same depth as the filter envelope)
 // LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false
 // (it reads the envelope knob, now K5, if ever re-enabled).
 constexpr bool     ARM_LFO_ENABLE          = false;
