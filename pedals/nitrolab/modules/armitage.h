@@ -161,7 +161,7 @@
 //                           DOWN: unshaped on both halves (K1 does nothing)
 //   K2  FM envelope         SW1 UP (ADD / FB) only, bipolar, noon off; a gain g on the K3 knob
 //                           (k3_eff = k3 g), K2 = travel time T 4 s (off noon) -> 50 ms (ends):
-//                           CCW: each pluck starts at K3 and decays to 0 in T, holds 0;
+//                           CCW: each pluck starts at K3 and decays to 0 in 3 T (ARM_ENV_FM_DECAY_RATIO), holds 0;
 //                           CW: each pluck starts at 0, rises to K3 in T, decays to 0 in 3 T.
 //                           I = ARM_FM_INDEX_MAX k3_eff^2. MID / DOWN: nothing (parked PWM LFO shares the knob)
 //   K3  FM index            I = ARM_FM_INDEX_MAX * (k3 g)^2 (0 -> 12 rad; g = 1 at K2 noon), ADD / FB; SAW / PULSE / unshaped: nothing
@@ -927,16 +927,16 @@ class Armitage : public Module {
   };
   // K2 -> K3 FM envelope: a GAIN g (0..1) on the K3 knob, k3_eff = k3 g, so start and end are exactly
   // 0 and K3. K2 sets the travel time T = ARM_ENV_TAU_SLOW_S (FAST / SLOW)^|t2| (4 s -> 50 ms):
-  //   CCW (decay): onset -> g = 1 (index = K3), one-pole decay reaching 0 in exactly T, then holds 0.
+  //   CCW (decay): onset -> g = 1 (index = K3), one-pole decay reaching 0 in ARM_ENV_FM_DECAY_RATIO T, then holds 0.
   //   CW (rise):   onset -> g = 0, one-pole rise reaching 1 in exactly T, then decays to 0 in
   //                ARM_ENV_FALL_RATIO T.
   // "Reaching" = the one-pole's 98 % point (tau = T / ARM_ENV_TRAVEL_TAUS), where g snaps to the end
   // value. Noon: off, g = 1. Before the first onset: CCW g = 1, CW g = 0.
   struct EnvGain {
     volatile float g = 1.f;
-    float at = -1.f, a = 0.f, fall_a = 0.f;
+    float at = -1.f, a = 0.f, fall_a = 0.f, dec_a = 0.f;   // rise (CW) / fall after the peak (CW) / decay (CCW) coefficients
     int   phase = 0;               // 0 idle (holding), 1 decaying (CCW), 2 rising (CW), 3 falling after the peak (CW)
-    void Reset() { g = 1.f; at = -1.f; a = 0.f; fall_a = 0.f; phase = 0; }
+    void Reset() { g = 1.f; at = -1.f; a = 0.f; fall_a = 0.f; dec_a = 0.f; phase = 0; }
     inline void Step(bool onset, bool seen, float t2, float sr8, float ln_tau_ratio) {
       using namespace armitage_k;
       if (t2 == 0.f) { g = 1.f; phase = 0; return; }
@@ -949,9 +949,10 @@ class Armitage : public Module {
         const float T = ARM_ENV_TAU_SLOW_S * expf(am * ln_tau_ratio);
         a = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * sr8));
         fall_a = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * ARM_ENV_FALL_RATIO * sr8));
+        dec_a  = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * ARM_ENV_FM_DECAY_RATIO * sr8));   // CCW decay, x ARM_ENV_FM_DECAY_RATIO
       }
       switch (phase) {
-        case 1: g += a * (0.f - g);      if (g <= 0.02f) { g = 0.f; phase = 0; } break;
+        case 1: g += dec_a * (0.f - g);  if (g <= 0.02f) { g = 0.f; phase = 0; } break;
         case 2: g += a * (1.f - g);      if (g >= 0.98f) { g = 1.f; phase = 3; } break;
         case 3: g += fall_a * (0.f - g); if (g <= 0.02f) { g = 0.f; phase = 0; } break;
         default: break;

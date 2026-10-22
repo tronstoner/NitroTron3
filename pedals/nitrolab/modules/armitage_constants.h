@@ -102,9 +102,10 @@ constexpr float    ARM_ENV_FALL_RATIO      = 3.0f;     // CW fall tau / rise tau
 constexpr float    ARM_ENV_DEPTH           = 0.7f;     // K4 knob travel (t units, 1.0 = noon to an end) at |e| = 1; the old K5 depth knob at 2:00 (builder 2026-10-22)
 // K2 = second envelope (2026-10-22), SW1 UP only, same onset detector and time law as K5's, but a GAIN g
 // (0..1) on the K3 FM knob (k3_eff = k3 g) so start / end are exactly 0 and K3: K2 CCW = each pluck
-// starts at K3 and decays to 0 in the K2 time T, holds 0; K2 CW = starts at 0, rises to K3 in T, decays
+// starts at K3 and decays to 0 in ARM_ENV_FM_DECAY_RATIO x the K2 time T, holds 0; K2 CW = starts at 0, rises to K3 in T, decays
 // to 0 in ARM_ENV_FALL_RATIO T. The one-pole's tau = T / ARM_ENV_TRAVEL_TAUS, g snaps at the 98 % point.
 constexpr float    ARM_ENV_TRAVEL_TAUS     = 3.9f;     // one-pole time constants per full travel (1 - e^-3.9 = 0.98)
+constexpr float    ARM_ENV_FM_DECAY_RATIO  = 3.0f;     // K2 CCW FM decay time / T (2026-10-22: T alone too fast; range 12 s -> 150 ms)
 // LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false
 // (it reads the envelope knob, now K5, if ever re-enabled).
 constexpr bool     ARM_LFO_ENABLE          = false;
