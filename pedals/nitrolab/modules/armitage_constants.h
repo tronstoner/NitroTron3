@@ -82,10 +82,9 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 //   CCW (t2 < 0, unchanged): on each onset e = 0, then per 8 kHz sample e += a (T - e), T = -1,
 //     a = 1 - exp(-1 / (tau 8000)), tau = ARM_ENV_TAU_SLOW_S (ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)^|t2|
 //     (4 s just off noon -> 0.05 s at the end): e falls to -1 and holds.
-//   CW (t2 > 0, AR envelope, 2026-10-22): on each onset e = 0 and the attack phase starts: e rises
-//     toward +1 with a fixed one-pole, a_attack = 1 - exp(-1 / (ARM_ENV_ATTACK_MS/1000 8000)). Once
-//     e >= 0.98 the attack phase ends and e releases toward 0 with the same knob-tau one-pole as above
-//     (T = 0 instead of T = -1). A new onset mid-release restarts the attack phase from e's current value.
+//   CW (t2 > 0, rise + fall, 2026-10-22): on each onset e = 0, then e rises toward +1 with the
+//     knob's tau (same law as the CCW fall). Once e >= 0.98 (the peak) it falls back toward 0 with
+//     the same tau. A new onset restarts the rise from e's current value.
 // K5 = depth: fc_mod = fc_K4 2^(k5 ARM_ENV_OCT_MAX e) (see K4).
 constexpr float    ARM_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz), now run at 48 kHz directly
 constexpr float    ARM_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS), 48 kHz
@@ -97,7 +96,6 @@ constexpr uint32_t ARM_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset 
 constexpr float    ARM_ENV_TAU_SLOW_S      = 4.0f;     // s; envelope time constant just off K2 noon
 constexpr float    ARM_ENV_TAU_FAST_S      = 0.05f;    // s; at K2 full CW / CCW
 constexpr float    ARM_ENV_OCT_MAX         = 4.0f;     // octaves of cutoff travel at K5 full and |e| = 1
-constexpr float    ARM_ENV_ATTACK_MS       = 5.0f;     // ms; CW side (t2 > 0) only: fixed attack one-pole, e -> +1 on each onset, then releases to 0 at the knob's tau (2026-10-22)
 // K2 LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false;
 // K2 then drives only the envelope.
 constexpr bool     ARM_LFO_ENABLE          = false;
