@@ -71,7 +71,7 @@ constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with t
 //   depth = min(u / ARM_PWM_DEPTH_FRAC, 1)                          (fade-in over the first 10 %)
 //   rate  = ARM_PWM_HZ_MIN (ARM_PWM_HZ_MAX / ARM_PWM_HZ_MIN)^ub, ub = min(u, ARM_PWM_TOP_KNEE)
 //           (exponential from u = 0, 0.1 -> ~1.8 Hz at the knee), then for u > ARM_PWM_TOP_KNEE:
-//           rate *= (ARM_PWM_TOP_HZ / rate)^((u - knee) / (1 - knee))  (exponential leg to 200 Hz)
+//           rate *= (ARM_PWM_TOP_HZ / rate)^((u - knee) / (1 - knee))  (exponential leg to ARM_PWM_TOP_HZ)
 //   u:    0     .2     .4     .6     .85    .9     1
 //   Hz:   0.10  0.20   0.39   0.77   1.80   8.65   200
 //   PULSE: w = w_K1 + s lfo, s = depth min(ARM_PWM_W_SWING, w_K1 + x),
@@ -87,7 +87,7 @@ constexpr float ARM_PWM_DEPTH_FRAC = 0.10f;   // share of the CCW half over whic
 constexpr float ARM_PWM_HZ_MIN     = 0.1f;    // Hz; LFO rate at u = 0 (10 s cycle)
 constexpr float ARM_PWM_HZ_MAX     = 3.0f;    // Hz; the exponential law's end point (u = 1, reached only below the knee)
 constexpr float ARM_PWM_TOP_KNEE   = 0.85f;   // u where the top leg starts (~1.8 Hz)
-constexpr float ARM_PWM_TOP_HZ     = 200.f;   // Hz; LFO rate at K2 full CCW (audio-rate)
+constexpr float ARM_PWM_TOP_HZ     = 32.f;    // Hz; LFO rate at K2 full CCW (builder-tuned on the host sim 2026-10-22, was 200)
 constexpr float ARM_PWM_W_SWING    = 0.40f;   // PULSE: max duty swing at full depth (+-, Schism MODE_C_SYNTH_PWM depth max); else limited to w_K1 + x
 constexpr float ARM_PWM_SIL_W      = 0.10f;   // PULSE: K1 base width below which the sweep crosses into silence
 constexpr float ARM_PWM_SIL_X      = 0.10f;   // PULSE: undershoot below 0 at base width 0 (linear from 0 at ARM_PWM_SIL_W)
