@@ -8,7 +8,8 @@
 //
 // SW3 UP     = armitage   (polyphonic feedback-FM voice on a private copy of
 //                          the 80-band POG engine — see modules/armitage.h;
-//                          unrelated to ChronoTron3's archived armitage)
+//                          unrelated to ChronoTron3's archived armitage;
+//                          SW1 = mode pair, K1 bipolar: CCW / CW model, K5 unused)
 // SW3 MIDDLE = empty      (pass-through placeholder)
 // SW3 DOWN   = empty      (pass-through placeholder)
 
@@ -185,14 +186,16 @@ int main() {
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
         // first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
-        static const char* const mode_name[4] = { "SAW", "PULSE", "ADD", "FB" };   // K5 zone (sw1 = mode index)
+        // model from (SW1 pair, sign of K1); h = |2 k1 - 1|. K5 has no function.
+        static const char* const mode_name[5] = { "SAW", "PULSE", "ADD", "FB", "UNSHAPED" };
         const Armitage::DiagSnap& d = diag_snap;
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " mode %d %s SW2 %s | ",
-                      tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
-                      d.sw1, mode_name[(d.sw1 >= 0 && d.sw1 < 4) ? d.sw1 : 3],
+        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " SW1 %s %s h" D2F " SW2 %s | ",
+                      tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]),
+                      sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
+                      mode_name[(d.mode >= 0 && d.mode < 5) ? d.mode : 4], D2V(d.h),
                       sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
         diag_stage = 1;
       } else if (now - diag_hb >= 2000) {

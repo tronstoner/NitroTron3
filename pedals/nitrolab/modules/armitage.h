@@ -9,7 +9,7 @@
 // 4 continued below 60 Hz by the same law; interpolate 8 -> 48 kHz).
 // Each band's analytic signal z = (yr, yi) is first transposed by SW2 with
 // POG's own per-band octave shift (z' = z / Up1 / Down1, complex, |z'| = |z|),
-// then reshaped by one of four MODES (K5 zones) riding on the (transposed)
+// then reshaped by one of four MODES (SW1 pair + sign of K1) riding on the (transposed)
 // played note (FB = DX7-style feedback FM, docs/FM_FEEDBACK_VOICE_SPEC.md):
 //
 //   z'      = SW2 UP: z^2/|z| (POG Up1)   MID: z   DOWN: |z| e^{j phi/2} with sign
@@ -22,7 +22,7 @@
 //   fmo_k   = I sin(phi_down,k)  (K3 FM, ADD / FB only, rad, I = ARM_FM_INDEX_MAX * k3^2; modulator =
 //             the carrier's own octave-down: MID Down1(z_k), UP z_k, DOWN Down1(z_k) = carrier 1:1)
 //
-//   SAW (K5 0 .. 0.2) and PULSE (0.2 .. 0.4) = PD base: every band above ARM_SILENCE at
+//   SAW (SW1 MID, K1 CCW) and PULSE (SW1 MID, K1 CW) = PD base: every band above ARM_SILENCE at
 //   full amount, shape only (no clean term; true replace), G = ARM_GAIN_PD in every octave,
 //   plus the fixed clean mix-back c = ARM_PD_CLEAN_MIX of y0_k (no knob):
 //     dfloor_k = ARM_PD_KNEE + (0.5 - ARM_PD_KNEE) clamp((f'_k - ARM_PD_FOLD_HZ) / (ARM_PD_FOLD_TOP - ARM_PD_FOLD_HZ), 0, 1)
@@ -30,7 +30,7 @@
 //     SAW:  d_k   = max(d, dfloor_k)  (d_k >= 0.01: finite; d = d(x))
 //           saw_k = |z'_k| cos(2 pi phi_w), phi_w = phi / (2 d_k) below d_k, else 0.5 + (phi - d_k) / (2 (1 - d_k))
 //           (saw mean is exactly 0 for any knee: no DC term)
-//     K1 split at ARM_K1_SPLIT_PD (SAW / PULSE):
+//     K1 below = the old unipolar K1 = K1Old(h, ARM_K1_SPLIT_PD) (see K1 BIPOLAR); split at ARM_K1_SPLIT_PD:
 //           x = min(K1 / ARM_K1_SPLIT_PD, 1)  (knee depth; knee d(x) = 0.5 (ARM_PD_KNEE / 0.5)^x, exponential:
 //           0.5 = the sine at K1 = 0 -> 0.19 -> 0.07 -> 0.027 -> the CZ knee ARM_PD_KNEE at the split),
 //           p = max((K1 - ARM_K1_SPLIT_PD) / (1 - ARM_K1_SPLIT_PD), 0)  (push)
@@ -53,7 +53,7 @@
 //           a_k = 1 - x (1 - cap_k)   (1 at K1 = 0: the sine is not capped)
 //           shape_k = G share_k a_k |z'_k| (S - (1 - 2w))   (w = 0: silence)
 //
-//   ADD (K5 0.4 .. 0.6): additive saw per band, harmonics by repeated complex multiplication:
+//   ADD (SW1 UP, K1 CW; K1 = K1Old(h, ARM_K1_SPLIT)): additive saw per band, harmonics by repeated complex multiplication:
 //     v       = (z'_k / |z'_k|) e^{j xm},  q = v e^{j fmo_k}  (q = v without FM)
 //     out_k   = |z'_k| [ Re(v) + g_add share_k ( (Re(q) - Re(v)) + amt_k sum_{m=2..top} g_m h_mk Re(q^m) / m^s ) ]
 //               (y0_k = |z'_k| Re(v); g_add = ARM_GAIN_ADD times ARM_GAIN_UP_DELTA / ARM_GAIN_DOWN_DELTA
@@ -64,7 +64,7 @@
 //     s       = 1 - (1 - ARM_ADD_S_MIN) v                                 (1 -> 1 -> 0.6)
 //     h_mk    = clamp((ARM_ADD_FMAX - m f'_k) / ARM_ADD_FEDGE, 0, 1)   (anti-fold)
 //
-//   FEEDBACK (K5 0.6 .. 1; the top fifth is reserved and plays FB too):
+//   FEEDBACK (SW1 UP, K1 CCW; beta = ARM_BETA_MAX K1Old(h, ARM_K1_FB_SPLIT)^2):
 //     theta_k = b_k * yprev_k + xm + fmo_k
 //     y_k     = Re(z'_k e^{j theta_k})                     (|z'| kept)
 //     out_k   = y0_k + ARM_GAIN_FB share_k (y_k - y0_k)    (replace, G in every octave)
@@ -72,6 +72,8 @@
 //               [-1, 1], flushed below ARM_DENORM; one-pole cutoff = ARM_SMOOTH_REL_FIXED f'_k
 //               clamped to [ARM_SMOOTH_HZ_LO, ARM_SMOOTH_HZ_HI]
 //     b_k     = min(ARM_BETA_CLAMP, beta), then min(b_k, max(0, ARM_FOLD_LIMIT_HZ / f'_k - 1))
+//
+//   UNSHAPED (SW1 DOWN, both K1 halves; placeholder): out_k = y0_k (no shaping, no K3 FM, no K2)
 //
 //   m (former K3 cross-mod, only with ARM_XMOD_ENABLE) = Re(sum_{f_k < ARM_ROOT_HZ} z'_k)
 //             / max(sum_{f_k < ARM_ROOT_HZ} |z'_k|, ARM_XMOD_DEN_FLOOR * L), xm = beta_x m_prev
@@ -112,10 +114,19 @@
 //            compensation (up to +6 dB).
 //     depth = 0: w / saw exactly as without PWM.
 //
-// MODE SWITCH (K5 zone): the old and the new mode's band outputs are both computed
-// for ARM_MODEL_XFADE_MS (1 ms) and crossfaded linearly; then only the new one runs.
+// K1 BIPOLAR: t1 = 2 k1 - 1 (raw knob smoothed), h = |t1| in [0, 1] (noon = 0). Each model maps h
+// onto its old unipolar K1 law, the first ARM_K1_FADE_FRAC (0.2) of h = the old fade-in part:
+//   K1Old(h, split) = split h / 0.2 (h <= 0.2),  split + (1 - split) (h - 0.2) / 0.8 (h > 0.2)
+//   SAW / PULSE split ARM_K1_SPLIT_PD 0.5 (knee fade-in, then push), ADD ARM_K1_SPLIT 0.6,
+//   FB ARM_K1_FB_SPLIT 0.5. No dead zone at noon.
+//
+// MODE SWITCH: model = SW1 pair (UP: FB | ADD, MID: SAW | PULSE, DOWN: unshaped | unshaped),
+// CCW model for t1 < 0 (K1 target), CW model for t1 >= 0. On any model change (SW1, or K1
+// crossing noon) the old and the new model's band outputs are both computed
+// for ARM_MODEL_XFADE_MS (1 ms) and crossfaded linearly; then only the new one runs
+// (at h = 0 the two sides of a pair are close, not bit-identical: the fade covers the step).
 // The entering mode starts from its targets: FB from yprev = 0 with b_k and the
-// one-pole coefficients at target (FB state is not computed while the others run). A zone change during a fade is picked up
+// one-pole coefficients at target (FB state is not computed while the others run). A model change during a fade is picked up
 // when that fade ends. Independent of the SW2 crossfade (both can run).
 //
 // OCTAVE SWITCH: two processing slots (each: octave, yprev[], smoothed b_k[],
@@ -124,20 +135,24 @@
 // crossfaded linearly over ARM_XFADE_MS; then the old one stops.
 //
 // CONTROL MAP
-//   K1  timbre (per mode)   SAW / PULSE: CCW -> ARM_K1_SPLIT_PD knee 0.5 (sine) -> ARM_PD_KNEE, shape only, then
-//                           SAW: resonance (saw -> CZ reso morph, R 1 -> 16)
-//                           PULSE: width 50 % -> 0 % (silence at CW)
-//                           (K2 CCW: SAW Ultrasaw copy / PULSE width swept by the PWM LFO)
-//                           ADD: M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
-//                           FB: beta = ARM_BETA_MAX * k1^2
+//   K1  model + timbre      bipolar: noon = unshaped; CCW half = the pair's CCW model, CW half = its CW
+//                           model, amount h = |2 k1 - 1| (first 20 % of each half = fade-in, rest = push):
+//                           SAW (MID, CCW) / PULSE (MID, CW): knee 0.5 (sine) -> ARM_PD_KNEE, shape only, then
+//                             SAW: resonance (saw -> CZ reso morph, R 1 -> 16)
+//                             PULSE: width 50 % -> 0 % (silence at the knob end)
+//                             (K2 CCW: SAW Ultrasaw copy / PULSE width swept by the PWM LFO)
+//                           ADD (UP, CW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
+//                           FB (UP, CCW): beta = ARM_BETA_MAX * K1old^2
+//                           DOWN: unshaped on both halves (K1 does nothing)
 //   K2  PWM (SAW / PULSE)   noon -> CCW: depth (first 10 %), rate 0.1 -> ~1.8 Hz (85 %) -> 200 Hz; noon -> CW: nothing
-//                           ADD / FB: unused
-//   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE: nothing
+//                           (the active side only: PULSE swings its own base width, SAW = Ultrasaw); ADD / FB / unshaped: unused
+//   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 20 kHz | noon bypass | CW HP 20 Hz -> 4 kHz (24 dB/oct,
 //                           Q 0.707 flat, peak off: ARM_FILT_Q_PEAK = Q_FLAT), on the final wet, all modes
-//   K5  mode                SAW | PULSE | ADD | FEEDBACK (| reserved = FEEDBACK), fifths of the travel
+//   K5  no function (reads nothing)
 //   K6  dry/wet             (shell)
-//   SW1 unused (reads nothing)
+//   SW1 mode pair           UP = FEEDBACK (K1 CCW) / ADD (K1 CW), MID = SAW (CCW) / PULSE (CW),
+//                           DOWN = unshaped band sum (both halves, placeholder)
 //   SW2 octave              UP = octave up, MID = as played, DOWN = octave down
 //   FS1  wet mute (test tool)  rising edge toggles mute_; mute_g_ slides over
 //                              ARM_MUTE_SLIDE_MS; dry untouched. LED2 on while muted.
@@ -194,7 +209,8 @@ class Armitage : public Module {
   static constexpr int kBands  = armbands::kArmBands;
   static constexpr int kFactor = armbands::kArmFactor;
   enum { kUp = 0, kMid = 1, kDown = 2 };   // = cs.Switch(1) values
-  enum { kSAW = 0, kPUL = 1, kADD = 2, kFB = 3, kFade = 4 };   // mode = K5 zone; kFade = both (crossfade)
+  enum { kSAW = 0, kPUL = 1, kADD = 2, kFB = 3, kUNS = 4, kFade = 5 };   // model (SW1 pair + sign of K1); kUNS = unshaped
+                                                                          // band sum (SW1 DOWN); kFade = both (crossfade)
   static constexpr int kMM = armitage_k::ARM_ADD_MMAX;
 
   void Init(float sr) override {
@@ -245,7 +261,7 @@ class Armitage : public Module {
         }
       }
     }
-    SetSmoothTargets(ARM_SMOOTH_REL_FIXED);   // FB smoothing: fixed (K5 = mode selector)
+    SetSmoothTargets(ARM_SMOOTH_REL_FIXED);   // FB smoothing: fixed (former K5 noon value)
     for (int s = 0; s < 2; s++) ResetSlot(slot_[s], kMid);
     // K2 PWM LFO: phase 0.25 = triangle at 0 (rising toward +1).
     pwm_ph_ = 0.25f;
@@ -275,7 +291,7 @@ class Armitage : public Module {
     mfade_n_ = 0;
     mfade_len_ = (int)(ARM_MODEL_XFADE_MS * 0.001f * sr8_ + 0.5f);
     if (mfade_len_ < 1) mfade_len_ = 1;
-    k1s_ = k1_t_ = 0.f;
+    k1s_ = k1_t_ = 0.5f;                       // K1 noon = h 0 (unshaped)
     k2s_ = k2_t_ = 0.5f;                       // K2 noon = PWM off
     bx_ = bx_t_ = 0.f;
     fm_ = fm_t_ = 0.f;
@@ -293,18 +309,23 @@ class Armitage : public Module {
     const float k2 = RemapKnob(cs.Knob(1));   // PWM (SAW / PULSE), bipolar
     const float k3 = RemapKnob(cs.Knob(2));
     const float k4 = RemapKnob(cs.Knob(3));
-    const float k5 = RemapKnob(cs.Knob(4));   // mode selector
+    // K5: no function (reads nothing).
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
-    // SW1 reads nothing (the mode moved to K5).
-    const int mode = (k5 < ARM_MODE_ZONE[0]) ? kSAW
-                   : (k5 < ARM_MODE_ZONE[1]) ? kPUL
-                   : (k5 < ARM_MODE_ZONE[2]) ? kADD : kFB;   // top two fifths: FB (5th reserved)
+    int pair = cs.Switch(0);                   // SW1 = mode pair
+    if (pair < kUp || pair > kDown) pair = kMid;
+    // K1 bipolar: t1 = 2 k1 - 1, the sign picks the model of the pair, h = |t1| its amount.
+    const float t1 = 2.f * k1 - 1.f;
+    const bool  cw = (t1 >= 0.f);
+    const float h  = cw ? t1 : -t1;
+    const int mode = (pair == kUp)  ? (cw ? kADD : kFB)
+                   : (pair == kMid) ? (cw ? kPUL : kSAW) : kUNS;
     mdl_t_ = mode;
-    k1_t_ = k1;
+    k1_t_ = k1;                                // smoothed as the raw knob; h and the remaps follow it
     k2_t_ = k2;
 
-    const float beta  = ARM_BETA_MAX * k1 * k1;
+    const float k1fb  = K1Old(h, ARM_K1_FB_SPLIT);   // FB: the old K1 law on the remapped h
+    const float beta  = ARM_BETA_MAX * k1fb * k1fb;
     // FB beta_k per band and octave (no tilt): min(beta, ARM_BETA_CLAMP), then the Carson cap.
     static const float r[3]  = { 2.f, 1.f, 0.5f };          // UP / MID / DOWN
     for (int k = 0; k < kBands; k++) {
@@ -329,17 +350,19 @@ class Armitage : public Module {
     led2.Set(mute_ ? 1.f : 0.f);   // LED2 on while wet is muted
 
     if (NL_DIAG) {
-      const float kv[5] = { k1, k2, k3, k4, k5 };
+      const float kv[4] = { k1, k2, k3, k4 };
       const float t2 = 2.f * k2 - 1.f;
-      DiagControls(cs, led1, kv, mode, oct, beta, t, (t2 < 0.f) ? -t2 : 0.f, fm_t_);
+      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, (t2 < 0.f) ? -t2 : 0.f, fm_t_);
     }
   }
 
   // --- DIAG snapshot (written in Controls(), main loop; read by main.cpp) ---
   struct DiagSnap {
     int   n;                 // tap number (#n), 0 = automatic line
-    float k[5];              // K1..K5, the module's remapped 0..1 values
-    int   sw1, sw2;          // sw1 = mode (0 SAW, 1 PULSE, 2 ADD, 3 FB); sw2: 0 UP, 1 MID, 2 DOWN
+    float k[4];              // K1..K4, the module's remapped 0..1 values (K5: no function)
+    int   sw1, sw2;          // sw1 = SW1 mode pair, sw2 = SW2: 0 UP, 1 MID, 2 DOWN
+    int   mode;              // model: 0 SAW, 1 PULSE, 2 ADD, 3 FB, 4 unshaped (SW1 + sign of K1)
+    float h;                 // K1 amount h = |2 k1 - 1| (0 = noon)
     float beta, filt_t, fm;  // derived values the engine runs toward (FB beta, K4 post filter t = 2 k4 - 1, K3 FM index I)
     float pwm_u;             // K2 PWM amount u = max(0, 1 - 2 k2) (0 = off; SAW / PULSE only)
     int   oct;               // 0 up, 1 played, 2 down
@@ -366,12 +389,15 @@ class Armitage : public Module {
       k2s_ += (k2_t_ - k2s_) * ca;              // K2 PWM (SAW / PULSE)
       if (fabsf(k2_t_ - k2s_) < 1e-6f) k2s_ = k2_t_;   // land exactly (noon: u = 0, PWM fully off)
 
-      // Start a mode crossfade when the K5 zone changed and no mode fade is running.
+      // K1 bipolar (smoothed): h = |2 k1 - 1|, remapped per model onto its old K1 law.
+      const float hs = fabsf(2.f * k1s_ - 1.f);
+
+      // Start a mode crossfade when the model (SW1 pair, sign of K1) changed and no mode fade is running.
       if (mfade_n_ == 0 && mdl_t_ != mdl_) {
         mfrom_ = mdl_;
         mdl_ = mdl_t_;
         // The entering mode starts from its targets: FB from yprev = 0 with b_k and
-        // K5 coefficients at target.
+        // the one-pole coefficients at target.
         if (mdl_ == kFB) {
           for (int s = 0; s < 2; s++) {
             Slot& sl = slot_[s];
@@ -389,8 +415,9 @@ class Armitage : public Module {
       if (uses(kADD)) {                          // ADD harmonic weights g_m / m^s (shared by all bands)
         // K1 split at ARM_K1_SPLIT into u (lower 60% of travel, scaled 0..1) and
         // v (upper 40%, scaled 0..1).
-        const float u = (k1s_ < ARM_K1_SPLIT) ? (k1s_ / ARM_K1_SPLIT) : 1.f;
-        const float v = (k1s_ > ARM_K1_SPLIT) ? (k1s_ - ARM_K1_SPLIT) / (1.f - ARM_K1_SPLIT) : 0.f;
+        const float ka = K1Old(hs, ARM_K1_SPLIT);   // old ADD K1
+        const float u = (ka < ARM_K1_SPLIT) ? (ka / ARM_K1_SPLIT) : 1.f;
+        const float v = (ka > ARM_K1_SPLIT) ? (ka - ARM_K1_SPLIT) / (1.f - ARM_K1_SPLIT) : 0.f;
         const float me = 1.f + u * (float)(ARM_ADD_MID - 1) + v * (float)(kMM - ARM_ADD_MID);
         const float s_exp = 1.f - (1.f - ARM_ADD_S_MIN) * v;   // 1 (u-range) -> ARM_ADD_S_MIN at v = 1
         mtop_ = 1;
@@ -423,8 +450,9 @@ class Armitage : public Module {
       }
       if (uses(kSAW) || uses(kPUL)) {            // SAW / PULSE K1 split at ARM_K1_SPLIT_PD
         // lower part: knee depth x (d 0.5 -> ARM_PD_KNEE, shape only); upper part: push p (full knee)
-        pd_a_ = (k1s_ < ARM_K1_SPLIT_PD) ? k1s_ / ARM_K1_SPLIT_PD : 1.f;
-        pd_p_ = (k1s_ > ARM_K1_SPLIT_PD) ? (k1s_ - ARM_K1_SPLIT_PD) / (1.f - ARM_K1_SPLIT_PD) : 0.f;
+        const float kp = K1Old(hs, ARM_K1_SPLIT_PD);   // old SAW / PULSE K1
+        pd_a_ = (kp < ARM_K1_SPLIT_PD) ? kp / ARM_K1_SPLIT_PD : 1.f;
+        pd_p_ = (kp > ARM_K1_SPLIT_PD) ? (kp - ARM_K1_SPLIT_PD) / (1.f - ARM_K1_SPLIT_PD) : 0.f;
         // knee d(x) = 0.5 (ARM_PD_KNEE / 0.5)^x, exponential in x; x = 1: exactly ARM_PD_KNEE
         pd_d_ = (pd_a_ >= 1.f) ? ARM_PD_KNEE : 0.5f * expf(pd_a_ * ln_knee_);
         pd_dd_ = 0.5f - pd_d_;                   // SAW knee depth 0.5 - d
@@ -542,6 +570,7 @@ class Armitage : public Module {
       case kPUL: return Run<O, kUpdate, kPUL>(s, d);
       case kADD: return Run<O, kUpdate, kADD>(s, d);
       case kFB:  return Run<O, kUpdate, kFB>(s, d);
+      case kUNS: return Run<O, kUpdate, kUNS>(s, d);
       default:   return Run<O, kUpdate, kFade>(s, d);
     }
   }
@@ -581,6 +610,7 @@ class Armitage : public Module {
     if (den < ARM_SHARE_FLOOR) den = ARM_SHARE_FLOOR;
     const float share = mag / den;
     const float wr = zr * c.xc - zi * c.xs;      // y0 = Re(z' e^{j xm})
+    if (M == kUNS) return wr;                    // SW1 DOWN: the unshaped band (no shaping, no FM)
     if (M == kSAW || M == kPUL) fmo = 0.f;       // K3 FM: ADD / FB only (matters in a mode crossfade)
     if (M == kFB) {
       float sn, cs;
@@ -588,7 +618,7 @@ class Armitage : public Module {
       if (fmo != 0.f) th += fmo;                 // K3 FM on the carrier phase
       SinCos(th, sn, cs);
       const float out = zr * cs - zi * sn;
-      // Feedback at full amount: yprev = y / |z'| (every band above the gate), K5-fixed one-pole.
+      // Feedback at full amount: yprev = y / |z'| (every band above the gate), fixed one-pole.
       float y = s.yprev[k] + (out * inv - s.yprev[k]) * s.a5[k];
       if (y > 1.f) y = 1.f;
       if (y < -1.f) y = -1.f;
@@ -699,7 +729,7 @@ class Armitage : public Module {
     float* __restrict mg  = mag_ + 1;            // mg[k] = |z_k| (0 = silent); mag_[0], mag_[kBands + 1] = 0
     float* __restrict ivs = inv_;
     const int nroot = n_root_;
-    const float fmI = (M == kSAW || M == kPUL) ? 0.f : fm_;   // K3 FM index (rad), ADD / FB only; 0 = no FM
+    const float fmI = (M == kSAW || M == kPUL || M == kUNS) ? 0.f : fm_;   // K3 FM index (rad), ADD / FB only; 0 = no FM
     // Pass 1 (first slot of the sample only): clock the bands, all magnitudes first
     // (the ADD overlap share needs both neighbours). A fading second slot reuses them
     // (|z'| = |z| in every octave).
@@ -793,7 +823,17 @@ class Armitage : public Module {
     if (m == kSAW) return BandOut<kSAW, O>(s, k, zr, zi, mag, inv, fmo, c);
     if (m == kPUL) return BandOut<kPUL, O>(s, k, zr, zi, mag, inv, fmo, c);
     if (m == kADD) return BandOut<kADD, O>(s, k, zr, zi, mag, inv, fmo, c);
+    if (m == kUNS) return BandOut<kUNS, O>(s, k, zr, zi, mag, inv, fmo, c);
     return BandOut<kFB, O>(s, k, zr, zi, mag, inv, fmo, c);
+  }
+
+  // K1 bipolar remap: h = |2 k1 - 1| -> the model's old unipolar K1. The first ARM_K1_FADE_FRAC of
+  // h covers the old [0, split] (fade-in), the rest the old [split, 1] (push); continuous, no dead zone.
+  static inline float K1Old(float h, float split) {
+    using namespace armitage_k;
+    return (h <= ARM_K1_FADE_FRAC)
+         ? split * (h * (1.f / ARM_K1_FADE_FRAC))
+         : split + (1.f - split) * ((h - ARM_K1_FADE_FRAC) * (1.f / (1.f - ARM_K1_FADE_FRAC)));
   }
 
   // Mean of sin(2 pi R phi) (1 - phi) over phi in [0, 1): 1/a - sin(a)/a^2, a = 2 pi R.
@@ -937,13 +977,14 @@ class Armitage : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int oct, float beta, float ft, float pu, float fm) {
+                    int sw1, int mode, float h, int oct, float beta, float ft, float pu, float fm) {
     using namespace armitage_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
     s.n = 0;
-    for (int i = 0; i < 5; i++) s.k[i] = kv[i];
+    for (int i = 0; i < 4; i++) s.k[i] = kv[i];
     s.sw1 = sw1; s.sw2 = oct; s.oct = oct;
+    s.mode = mode; s.h = h;
     s.beta = beta; s.filt_t = ft; s.fm = fm;
     s.pwm_u = pu;
     s.mute = mute_;
@@ -965,9 +1006,9 @@ class Armitage : public Module {
     // change, restarts the timer; one `auto` line once nothing changed for
     // ARM_DIAG_SETTLE_MS.
     bool moved = (sw1 != diag_ref_sw1_) || (oct != diag_ref_sw2_);
-    for (int i = 0; i < 5; i++) if (fabsf(kv[i] - diag_ref_k_[i]) > ARM_DIAG_KNOB_EPS) moved = true;
+    for (int i = 0; i < 4; i++) if (fabsf(kv[i] - diag_ref_k_[i]) > ARM_DIAG_KNOB_EPS) moved = true;
     if (moved) {
-      for (int i = 0; i < 5; i++) diag_ref_k_[i] = kv[i];
+      for (int i = 0; i < 4; i++) diag_ref_k_[i] = kv[i];
       diag_ref_sw1_ = sw1; diag_ref_sw2_ = oct;
       diag_changed_ = true;
       diag_t_ = now;
@@ -1117,9 +1158,9 @@ class Armitage : public Module {
 
   float sr8_    = 8000.f;
   float ctrl_a_ = 0.f;                 // control-smoothing coefficient (8 kHz)
-  float k1s_ = 0.f, k1_t_ = 0.f;       // K1 (smoothed / target) for ADD / SAW / PULSE
+  float k1s_ = 0.5f, k1_t_ = 0.5f;     // K1 raw knob (smoothed / target); h = |2 k1s_ - 1| for ADD / SAW / PULSE
   int   mdl_ = kFB, mfrom_ = kFB;      // current mode / mode faded out
-  volatile int mdl_t_ = kFB;           // K5 target mode
+  volatile int mdl_t_ = kFB;           // target model (SW1 pair + sign of K1)
   int   mfade_n_ = 0;                  // model crossfade samples left (0 = no fade)
   int   mfade_len_ = 80;               // model crossfade length (8 kHz samples)
   float mg_ = 1.f;                     // new-model gain during a model fade
@@ -1138,6 +1179,6 @@ class Armitage : public Module {
   uint32_t diag_blink_t_ = 0;
   bool     diag_changed_ = true;             // first settle -> one `auto` line with the start state
   uint32_t diag_t_ = 0;
-  float    diag_ref_k_[5] = { -1.f, -1.f, -1.f, -1.f, -1.f };
+  float    diag_ref_k_[4] = { -1.f, -1.f, -1.f, -1.f };
   int      diag_ref_sw1_ = -1, diag_ref_sw2_ = -1;
 };

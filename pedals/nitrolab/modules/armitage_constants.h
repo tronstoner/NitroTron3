@@ -7,14 +7,22 @@
 
 namespace armitage_k {
 
-// --- Mode selector (K5, 2026-10-20; SW1 reads nothing) -----------------------
-// K5 zones CCW -> CW: [0, Z0) SAW, [Z0, Z1) PULSE, [Z1, Z2) ADD, [Z2, 1] FEEDBACK
-// (4 equal fifths; the top fifth is reserved and plays FEEDBACK too). A zone change
-// crossfades the band outputs of the two modes linearly over ARM_MODEL_XFADE_MS.
-constexpr float ARM_MODE_ZONE[3] = { 0.2f, 0.4f, 0.6f };
+// --- Mode selector (SW1 = mode pair, sign of K1 = model; 2026-10-22; K5 reads nothing) ---
+// SW1 UP = FEEDBACK (K1 CCW half) / ADD (K1 CW half); MID = SAW (CCW) / PULSE (CW);
+// DOWN = unshaped band sum on both halves (placeholder). t1 = 2 k1 - 1: t1 < 0 -> the CCW
+// model, t1 >= 0 -> the CW model. Any model change (SW1 or the sign of K1) crossfades the
+// band outputs of the two models linearly over ARM_MODEL_XFADE_MS.
+//
+// --- K1 bipolar: h = |t1| in [0, 1] (noon = unshaped), remapped to each model's old K1 law ---
+//   K1old(h, split) = split * h / ARM_K1_FADE_FRAC                                    (h <= fade frac)
+//                   = split + (1 - split) (h - ARM_K1_FADE_FRAC) / (1 - ARM_K1_FADE_FRAC)  (above)
+//   split = ARM_K1_SPLIT_PD (SAW / PULSE: knee fade-in, then push), ARM_K1_SPLIT (ADD),
+//           ARM_K1_FB_SPLIT (FB, beta = ARM_BETA_MAX K1old^2). No dead zone at noon.
+constexpr float ARM_K1_FADE_FRAC = 0.2f;   // share of each K1 half that carries the fade-in (lower part of the old law)
+constexpr float ARM_K1_FB_SPLIT  = 0.5f;   // FB: old K1 reached at the end of the fade-in part
 
-// --- K1 (timbre, per mode) ----------------------------------------------------
-// FB: beta = ARM_BETA_MAX * k1^2 (full travel, as before). ADD: K1 split at
+// --- K1 (timbre, per mode; values = the old unipolar K1, see the remap above) ---
+// FB: beta = ARM_BETA_MAX * k1^2. ADD: K1 split at
 // ARM_K1_SPLIT into u / v (below, unchanged). SAW: resonance (R, morph). PULSE: width.
 constexpr float ARM_BETA_MAX   = 4.4f;    // rad; K1 full CW (squared taper), the Ensemble Oscillator's max
 constexpr float ARM_BETA_CLAMP = 8.8f;    // rad; safety ceiling on any band's beta_k (beta_k = beta <= ARM_BETA_MAX, so never reached)
@@ -105,8 +113,8 @@ constexpr float ARM_SMOOTH_HZ_HI   = 3800.f;  // Hz; upper clamp of any band's c
 // min 0.0007 / median 0.0209 / max 0.034 (p10 0.014, p90 0.029).
 constexpr float ARM_REF_LEVEL  = 0.021f;  // band |z'| (8 kHz band engine units) that counts as "full"
 
-// --- Modes (K5): SAW / PULSE (PD base), ADD, FB -----------------------------
-constexpr float ARM_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new mode output on a K5 zone change (was 10 ms on SW1)
+// --- Models (SW1 pair + sign of K1): SAW / PULSE (PD base), ADD, FB, unshaped ---
+constexpr float ARM_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new mode output on a model change (SW1 or the sign of K1; was a K5 zone change)
 // FB "replace" gain on the shaping delta (2026-10-20, as the PD base): out_k = y0_k + ARM_GAIN_FB share_k (y_k - y0_k)
 // in every octave (the *_DELTA octave gains do not apply), feedback signal at full amount
 // (yprev = y_k / |z'_k|, every band above ARM_SILENCE). Set by structure, not by ear (unheard).
@@ -119,7 +127,7 @@ constexpr float ARM_GAIN_PD    = 2.f;     // was 0.88 (HEAD PD makeup, K1 knee l
 // controls it). No level compensation.
 constexpr float ARM_PD_CLEAN_MIX = 0.5f;   // was ARM_PD_CLEAN_MIX_MAX (1 - k4) (0.5 = the old K4 CCW amount)
 
-// ADD (K5 3rd zone): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
+// ADD (SW1 UP, K1 CW half): additive saw per band, harmonics m = 2..ARM_ADD_MMAX of u = z'/|z'|.
 // u = min(K1/ARM_K1_SPLIT, 1), v = max((K1-ARM_K1_SPLIT)/(1-ARM_K1_SPLIT), 0).
 // M_eff = 1 + u*(ARM_ADD_MID-1) + v*(ARM_ADD_MMAX-ARM_ADD_MID)   (1 -> 8 -> 16)
 // harmonic weight = g_m / m^s, s = 1 - (1-ARM_ADD_S_MIN)*v       (1 -> 1 -> 0.6)
