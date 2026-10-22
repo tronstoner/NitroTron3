@@ -46,8 +46,8 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 // Copied law from mnemonic's tone filter (MNEM_FILT_*): two cascaded TPT SVF stages (24 dB/oct),
 // t = 2 k4 - 1, tmag = |t|^ARM_FILT_CURVE.
 //   t = 0 (noon): true bypass (filter not run, wet bit-identical).
-//   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (20 kHz -> 180 Hz)
-//   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (20 Hz -> 4 kHz)
+//   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
+//   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
 //   Q (both stages) = ARM_FILT_Q_MIN (ARM_FILT_Q_MAX / ARM_FILT_Q_MIN)^k5   (K5 = resonance, exponential;
 //   k5 smoothed like t; K4 noon = bypass: K5 does nothing there)
 // No makeup gain. t and k5 are smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block); cutoff
@@ -55,11 +55,11 @@ constexpr float ARM_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band e
 // (linear crossfade over the first ARM_FILT_FADE of travel each side of noon; there the filter
 // sits at its range end: LP ~20 kHz / HP ~20 Hz). |t| snaps to 0 below ARM_FILT_SNAP when the
 // target is noon (filter off again, no CPU).
-constexpr float ARM_FILT_FMIN      = 20.f;     // Hz; HP cutoff just right of noon
-constexpr float ARM_FILT_FMAX      = 20000.f;  // Hz; LP cutoff just left of noon
+constexpr float ARM_FILT_FMIN      = 40.f;     // Hz; HP cutoff just right of noon
+constexpr float ARM_FILT_FMAX      = 4000.f;   // Hz; LP cutoff just left of noon (engine ceiling, ARM_FOLD_LIMIT_HZ)
 constexpr float ARM_FILT_HP_MAX    = 4000.f;   // Hz; HP cutoff at K4 full CW (thin)
 constexpr float ARM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW (dark)
-constexpr float ARM_FILT_CURVE     = 1.6f;     // |t| exponent: finer resolution around noon
+constexpr float ARM_FILT_CURVE     = 1.0f;     // |t| exponent: 1 = cutoff moves linearly in octaves with the knob
 constexpr float ARM_FILT_Q_MIN     = 0.707f;   // per-stage Q at K5 full CCW (flat, the start value)
 constexpr float ARM_FILT_Q_MAX     = 6.0f;     // per-stage Q at K5 full CW (resonant peak; replaces the old K4-driven ARM_FILT_Q_PEAK ramp)
 constexpr float ARM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t

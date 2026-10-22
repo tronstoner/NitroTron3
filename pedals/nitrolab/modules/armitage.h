@@ -95,8 +95,8 @@
 //     two cascaded TPT SVF stages (24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
 //     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q_MIN (ARM_FILT_Q_MAX / ARM_FILT_Q_MIN)^k5 (both stages;
 //     K5 = resonance, k5 smoothed like t, ARM_FILT_SMOOTH_MS per block)
-//     t < 0: LP, fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (20 kHz -> 180 Hz)
-//     t > 0: HP, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (20 Hz -> 4 kHz)
+//     t < 0: LP, fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
+//     t > 0: HP, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
 //     t = 0: true bypass (not run). wet = dry + m (filtered - dry), m -> min(|t| / ARM_FILT_FADE, 1),
 //     m slides at most 1 per ARM_MUTE_SLIDE_MS (1 ms) per sample. LP <-> HP (t crosses noon): m slides
 //     to 0 first, then the other type starts from a cleared state and m slides in. No makeup gain.
