@@ -35,11 +35,10 @@
 //           0.5 = the sine at K1 = 0 -> 0.19 -> 0.07 -> 0.027 -> the CZ knee ARM_PD_KNEE at the split),
 //           p = max((K1 - ARM_K1_SPLIT_PD) / (1 - ARM_K1_SPLIT_PD), 0)  (push)
 //           out_k = shape_k + c y0_k   (shape only at every K1; K1 = 0: G share_k y0_k + c y0_k)
-//           SAW push = resonance: R = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) p (1 -> 16),
-//           R_k = min(R, ARM_RES_FMAX / f'_k),
+//           SAW push = resonance: R = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) p (1 -> 4),
+//           (K2 CCW: R -> R_mod, see K2 PWM), R_k = min(R, ARM_RES_FMAX / f'_k),
 //           res_k = |z'_k| (sin(2 pi R_k phi) (1 - phi) - dc(R_k)), dc(R) = 1/(2 pi R) - sin(2 pi R)/(2 pi R)^2
-//           shape_k = G share_k [ (1 - p) saw_k + p cap_k res_k ]
-//           (K2 CCW Ultrasaw: saw_k -> saw_k(phi) + depth saw_k(phi + o), res_k likewise, see K2 PWM)
+//           mix = ARM_RES_MIX_MAX p (0 -> 0.6), shape_k = G share_k [ (1 - mix) saw_k + mix cap_k res_k ]
 //           (d_k >= 0.5 and p = 0: saw_k = y0_k)
 //     PULSE: push = width: w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) p (50 % -> 0 %)
 //           (K2 CCW: w swept by the PWM LFO, see below)
@@ -105,15 +104,15 @@
 //     t2 >= 0: nothing (reserved). t2 < 0: u = -t2, one triangle LFO in [-1, 1], phase at 8 kHz,
 //     depth = min(u / ARM_PWM_DEPTH_FRAC, 1) (first 10 %), rate = ARM_PWM_HZ_MIN (ARM_PWM_HZ_MAX /
 //     ARM_PWM_HZ_MIN)^min(u, ARM_PWM_TOP_KNEE), above the knee rate *= (ARM_PWM_TOP_HZ / rate)^((u - knee)
-//     / (1 - knee)) (mnemonic's K3 travel: 0.1 Hz -> ~1.8 Hz at u = 0.85 -> 200 Hz at full CCW).
+//     / (1 - knee)) (mnemonic's K3 travel: 0.1 Hz -> ~1.8 Hz at u = 0.85 -> 32 Hz at full CCW).
 //     PULSE: w = w_K1 + s lfo, s = depth min(ARM_PWM_W_SWING, w_K1 + x), x = ARM_PWM_SIL_X clamp((ARM_PWM_SIL_W
 //            - w_K1) / ARM_PWM_SIL_W, 0, 1) (centre = K1's width, never moves; w_K1 >= 0.10: touches 0, never
 //            silent; below: crosses into silence; no clamp, no floor), DC 1 - 2w per 8 kHz sample;
 //            w <= 0: shape silent (clean mix-back stays), w > 1 - D: wrap term.
-//     SAW:   Ultrasaw: saw_k(phi) + depth saw_k(phi + o), o = 0.5 + ARM_PWM_O_SWING depth lfo
-//            (0.1 <-> 0.9 cycles, no clamp), same knee d_k, resonance push on both copies; no level
-//            compensation (up to +6 dB).
-//     depth = 0: w / saw exactly as without PWM.
+//     SAW:   formant modulation: R_mod = max(R_K1 2^(ARM_RMOD_OCT depth lfo), 1) (+-1 oct; R = 1 floor:
+//            no formant below the fundamental), R_k = min(R_mod, ARM_RES_FMAX / f'_k) (anti-fold cap);
+//            dc(R) per 8 kHz sample (shared by the uncapped bands); the mix stays K1's (p = 0: not heard).
+//     depth = 0: w / R exactly as without PWM.
 //
 // K1 BIPOLAR: t1 = 2 k1 - 1 (raw knob smoothed), h = |t1| in [0, 1] (noon = 0). Each model maps h
 // onto its old unipolar K1 law, the first ARM_K1_FADE_FRAC (0.2) of h = the old fade-in part:
@@ -139,14 +138,14 @@
 //   K1  model + timbre      bipolar: noon = unshaped; CCW half = the pair's CCW model, CW half = its CW
 //                           model, amount h = |2 k1 - 1| (first 20 % of each half = fade-in, rest = push):
 //                           SAW (MID, CCW) / PULSE (MID, CW): knee 0.5 (sine) -> ARM_PD_KNEE, shape only, then
-//                             SAW: resonance (saw -> CZ reso morph, R 1 -> 16)
+//                             SAW: resonance (saw -> CZ reso morph 0 -> 60 %, R 1 -> 4)
 //                             PULSE: width 50 % -> 0 % (silence at the knob end)
-//                             (K2 CCW: SAW Ultrasaw copy / PULSE width swept by the PWM LFO)
+//                             (K2 CCW: SAW formant R / PULSE width swept by the PWM LFO)
 //                           ADD (UP, CCW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
 //                           FB (UP, CW): beta = ARM_BETA_MAX * K1old^2
 //                           DOWN: unshaped on both halves (K1 does nothing)
-//   K2  PWM (SAW / PULSE)   noon -> CCW: depth (first 10 %), rate 0.1 -> ~1.8 Hz (85 %) -> 200 Hz; noon -> CW: nothing
-//                           (the active side only: PULSE swings its own base width, SAW = Ultrasaw); ADD / FB / unshaped: unused
+//   K2  PWM (SAW / PULSE)   noon -> CCW: depth (first 10 %), rate 0.1 -> ~1.8 Hz (85 %) -> 32 Hz; noon -> CW: nothing
+//                           (the active side only: PULSE swings its own base width, SAW its formant R +-1 oct); ADD / FB / unshaped: unused
 //   K3  FM index            I = ARM_FM_INDEX_MAX * k3^2 (0 -> 12 rad, squared), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 20 kHz | noon bypass | CW HP 20 Hz -> 4 kHz (24 dB/oct,
 //                           two stages, Q from K5), on the final wet, all modes
@@ -437,7 +436,7 @@ class Armitage : public Module {
         }
       }
       // K2 PWM LFO (shared by all bands): u = max(0, -(2 k2 - 1)); depth fades in over the first
-      // ARM_PWM_DEPTH_FRAC, rate exponential 0.1 -> 3 Hz law (~1.8 Hz at the knee), then a leg to 200 Hz.
+      // ARM_PWM_DEPTH_FRAC, rate exponential 0.1 -> 3 Hz law (~1.8 Hz at the knee), then a leg to ARM_PWM_TOP_HZ.
       {
         const float t2 = 2.f * k2s_ - 1.f;
         const float u = (t2 < 0.f) ? -t2 : 0.f;
@@ -464,15 +463,15 @@ class Armitage : public Module {
         pd_d_ = (pd_a_ >= 1.f) ? ARM_PD_KNEE : 0.5f * expf(pd_a_ * ln_knee_);
         pd_dd_ = 0.5f - pd_d_;                   // SAW knee depth 0.5 - d
       }
-      if (uses(kSAW)) {                          // SAW Ultrasaw copy offset o (K2 PWM), in [0, 1)
-        float o = 0.5f + ARM_PWM_O_SWING * pwm_dep_ * pwm_lfo_;
-        if (o < 0.f) o += 1.f;                   // phase wrap only (|swing| <= 0.5: never needed at 0.40)
-        if (o >= 1.f) o -= 1.f;
-        saw_o_ = o;
-      }
       if (uses(kSAW)) {                          // SAW resonance (push p): R and dc(R) shared by all uncapped bands
-        res_r_  = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) * pd_p_;
-        res_dc_ = (pd_p_ > 0.f) ? ResDcF(res_r_) : 0.f;
+        float r = ARM_RES_R_MIN + (ARM_RES_R_MAX - ARM_RES_R_MIN) * pd_p_;   // R_K1
+        if (pwm_dep_ > 0.f) {                    // K2 CCW: formant modulation R_K1 2^(oct depth lfo)
+          r *= exp2f(ARM_RMOD_OCT * pwm_dep_ * pwm_lfo_);
+          if (r < ARM_RES_R_MIN) r = ARM_RES_R_MIN;   // no formant below the fundamental
+        }
+        res_r_  = r;
+        res_mix_ = ARM_RES_MIX_MAX * pd_p_;      // saw -> res morph (K1 only, not modulated)
+        res_dc_ = (pd_p_ > 0.f) ? ResDcF(res_r_) : 0.f;   // per 8 kHz sample, follows R_mod
       }
       if (uses(kPUL)) {                          // PULSE width (push p, K2 PWM) and its mean 1 - 2w
         float w = ARM_PUL_W_MAX - (ARM_PUL_W_MAX - ARM_PUL_W_MIN) * pd_p_;
@@ -656,27 +655,19 @@ class Armitage : public Module {
     if (M == kSAW) {
       float dk = 0.5f - pd_dd_;                  // knee d (K1), the cap inside, a_k = 1
       if (dk < pd_dfl_[O][k]) dk = pd_dfl_[O][k];
-      const float m = pd_p_;                     // K1 upper part: saw -> resonance morph
+      const float m = res_mix_;                  // K1 upper part: saw -> resonance morph, ARM_RES_MIX_MAX p
       const float g = DeltaGain<M, O>() * share;
-      const float dep = pwm_dep_;                // K2 PWM: Ultrasaw copy level (0 = copy off)
-      if (dk >= 0.5f && m <= 0.f && dep <= 0.f) return g * wr + cy;   // no distortion, no resonance: saw_k = y0
+      if (dk >= 0.5f && m <= 0.f) return g * wr + cy;   // no distortion, no resonance: saw_k = y0
       const float ph = FastAtan2Cycles(wi, wr);  // [0, 1)
       float saw = wr;                            // d_k >= 0.5: the sine, = y0
       if (dk < 0.5f) saw = mag * Cos01(SawWarp(ph, dk));
-      float ph2 = 0.f, saw2 = 0.f;               // Ultrasaw copy at phi + o (same knee)
-      if (dep > 0.f) {
-        ph2 = ph + saw_o_;
-        if (ph2 >= 1.f) ph2 -= 1.f;
-        saw2 = mag * Cos01((dk < 0.5f) ? SawWarp(ph2, dk) : ph2);
-      }
-      if (m <= 0.f) return g * (saw + dep * saw2) + cy;   // K1 <= split: progressive knee (shape only)
+      if (m <= 0.f) return g * saw + cy;         // K1 <= split: progressive knee (shape only)
       const float rc = res_rcap_[O][k];
-      const float rk = (res_r_ < rc) ? res_r_ : rc;           // R_k = min(R, 3800 / f'_k)
+      const float rk = (res_r_ < rc) ? res_r_ : rc;           // R_k = min(R_mod, 3800 / f'_k)
       const float dc = (res_r_ < rc) ? res_dc_ : res_dccap_[O][k];
-      float res = mag * (Sin01(rk * ph) * (1.f - ph) - dc);
-      if (dep > 0.f) res += dep * mag * (Sin01(rk * ph2) * (1.f - ph2) - dc);   // copy: resonance push too
+      const float res = mag * (Sin01(rk * ph) * (1.f - ph) - dc);
       const float ares = pd_ck_[O][k];           // a_k = cap_k
-      return g * ((1.f - m) * (saw + dep * saw2) + m * ares * res) + cy;   // morph on the shape only (x = 1 here)
+      return g * ((1.f - m) * saw + m * ares * res) + cy;   // morph on the shape only (x = 1 here)
     }
     // kPUL: width w (K1 push, K2 PWM), jumps at 0 (down) and w (up), knee D = pul_d_ (K1 lower
     // part: 0.5 -> ARM_PD_KNEE), mean removed. Amount a_k = 1 - x (1 - cap_k): 1 at x = 0
@@ -1130,7 +1121,7 @@ class Armitage : public Module {
   float res_r_ = 1.f, res_dc_ = 0.f;   // SAW resonance R (from K1) and dc(R), per 8 kHz sample
   float pul_w_ = 0.5f, pul_dc_ = 0.f;  // PULSE width w (from K1) and its mean 1 - 2w, per 8 kHz sample
   float pd_a_ = 0.f, pd_p_ = 0.f;      // SAW / PULSE K1: knee depth x, push p (per 8 kHz sample)
-  float saw_o_ = 0.5f;                 // SAW Ultrasaw copy phase offset o (K2 PWM), per 8 kHz sample
+  float res_mix_ = 0.f;                // SAW saw -> res morph mix ARM_RES_MIX_MAX p, per 8 kHz sample
   float pd_d_ = 0.5f, pd_dd_ = 0.f;    // SAW / PULSE knee d(x) and depth 0.5 - d(x)
   float ln_knee_ = 0.f;                // ln(ARM_PD_KNEE / 0.5) (Init)
   float pul_d_ = 0.5f, pul_hid_ = 1.f; // PULSE knee D (K1 lower part) and 0.5 / D
