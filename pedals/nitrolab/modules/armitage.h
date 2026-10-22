@@ -159,11 +159,12 @@
 //                           ADD (UP, CCW): M_eff = 1 + u*7 + v*8, weight 1/m^s (s 1 -> 0.6 over v)
 //                           FB (UP, CW): beta = ARM_BETA_MAX * K1old^2
 //                           DOWN: unshaped on both halves (K1 does nothing)
-//   K2  FM envelope         SW1 UP (ADD / FB) only: same law as K5 (bipolar, noon off, CCW sink-and-hold,
-//                           CW rise + decay, same tau range, same onset detector); it turns the K3 knob:
-//                           k3_eff = k3 + ARM_ENV_FM_DEPTH e, floored at 0 (no FM), open above 1;
+//   K2  FM envelope         SW1 UP (ADD / FB) only, bipolar, noon off; a gain g on the K3 knob
+//                           (k3_eff = k3 g), K2 = travel time T 4 s (off noon) -> 50 ms (ends):
+//                           CCW: each pluck starts at K3 and decays to 0 in T, holds 0;
+//                           CW: each pluck starts at 0, rises to K3 in T, decays to 0 in 3 T.
 //                           I = ARM_FM_INDEX_MAX k3_eff^2. MID / DOWN: nothing (parked PWM LFO shares the knob)
-//   K3  FM index            I = ARM_FM_INDEX_MAX * k3_eff^2 (0 -> 12 rad at K2 noon, squared), ADD / FB; SAW / PULSE / unshaped: nothing
+//   K3  FM index            I = ARM_FM_INDEX_MAX * (k3 g)^2 (0 -> 12 rad; g = 1 at K2 noon), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct,
 //                           two stages, Q fixed ARM_FILT_Q 1.1), on the final wet, all modes
 //   K5  envelope            bipolar, noon = off (e = 0); triggered on each onset: CCW (t2 < 0) e falls
@@ -388,7 +389,7 @@ class Armitage : public Module {
       const float kv[5] = { k1, k2, k3, k4, k5 };
       const float t2 = 2.f * k5 - 1.f;
       const float t2f = 2.f * k2 - 1.f;
-      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, t2, env_.e, t2f, env_fm_.e, fm_t_);
+      DiagControls(cs, led1, kv, pair, mode, h, oct, beta, t, t2, env_.e, t2f, env_fm_.g, fm_t_);
     }
   }
 
@@ -402,7 +403,7 @@ class Armitage : public Module {
     float beta, filt_t, fm;  // derived values the engine runs toward (FB beta, K4 post filter t = 2 k4 - 1, K3 FM index I)
     float env_t2;            // K5: t2 = 2 k5 - 1 (0 = env off; sign = direction, |t2| = speed)
     float env_e;             // K5 envelope value e at the snapshot (-1..1); depth fixed ARM_ENV_DEPTH
-    float envf_t2, envf_e;   // K2 envelope (-> K3 FM index, SW1 UP): t2 = 2 k2 - 1, e
+    float envf_t2, envf_e;   // K2 envelope (-> K3 FM index gain, SW1 UP): t2 = 2 k2 - 1, g (0..1)
     int   oct;               // 0 up, 1 played, 2 down
     bool  mute;              // FS1 wet mute state
   };
@@ -430,9 +431,8 @@ class Armitage : public Module {
       k5s_ += (k5_t_ - k5s_) * ca;              // K5 filter envelope knob
       if (fabsf(k5_t_ - k5s_) < 1e-6f) k5s_ = k5_t_;
       k3s_ += (k3_t_ - k3s_) * ca;
-      {                                          // K3 FM index: the K2 envelope turns the K3 knob,
-        float k3e = k3s_ + ARM_ENV_FM_DEPTH * env_fm_.e;   // k3_eff = k3 + depth e, floored at 0 (no FM),
-        if (k3e < 0.f) k3e = 0.f;                // open above 1 (index beyond ARM_FM_INDEX_MAX)
+      {                                          // K3 FM index: the K2 envelope gain scales the K3 knob,
+        const float k3e = k3s_ * env_fm_.g;      // k3_eff = k3 g (g 0..1: exactly 0 .. exactly K3)
         fm_ = ARM_FM_INDEX_MAX * k3e * k3e;
       }
 
@@ -925,12 +925,45 @@ class Armitage : public Module {
       }
     }
   };
+  // K2 -> K3 FM envelope: a GAIN g (0..1) on the K3 knob, k3_eff = k3 g, so start and end are exactly
+  // 0 and K3. K2 sets the travel time T = ARM_ENV_TAU_SLOW_S (FAST / SLOW)^|t2| (4 s -> 50 ms):
+  //   CCW (decay): onset -> g = 1 (index = K3), one-pole decay reaching 0 in exactly T, then holds 0.
+  //   CW (rise):   onset -> g = 0, one-pole rise reaching 1 in exactly T, then decays to 0 in
+  //                ARM_ENV_FALL_RATIO T.
+  // "Reaching" = the one-pole's 98 % point (tau = T / ARM_ENV_TRAVEL_TAUS), where g snaps to the end
+  // value. Noon: off, g = 1. Before the first onset: CCW g = 1, CW g = 0.
+  struct EnvGain {
+    volatile float g = 1.f;
+    float at = -1.f, a = 0.f, fall_a = 0.f;
+    int   phase = 0;               // 0 idle (holding), 1 decaying (CCW), 2 rising (CW), 3 falling after the peak (CW)
+    void Reset() { g = 1.f; at = -1.f; a = 0.f; fall_a = 0.f; phase = 0; }
+    inline void Step(bool onset, bool seen, float t2, float sr8, float ln_tau_ratio) {
+      using namespace armitage_k;
+      if (t2 == 0.f) { g = 1.f; phase = 0; return; }
+      const bool cw = (t2 > 0.f);
+      if (onset) { if (cw) { g = 0.f; phase = 2; } else { g = 1.f; phase = 1; } }
+      if (!seen) { g = cw ? 0.f : 1.f; phase = 0; return; }
+      const float am = fabsf(t2);
+      if (am != at) {
+        at = am;
+        const float T = ARM_ENV_TAU_SLOW_S * expf(am * ln_tau_ratio);
+        a = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * sr8));
+        fall_a = 1.f - expf(-ARM_ENV_TRAVEL_TAUS / (T * ARM_ENV_FALL_RATIO * sr8));
+      }
+      switch (phase) {
+        case 1: g += a * (0.f - g);      if (g <= 0.02f) { g = 0.f; phase = 0; } break;
+        case 2: g += a * (1.f - g);      if (g >= 0.98f) { g = 1.f; phase = 3; } break;
+        case 3: g += fall_a * (0.f - g); if (g <= 0.02f) { g = 0.f; phase = 0; } break;
+        default: break;
+      }
+    }
+  };
   inline void EnvUpdate() {
     const bool onset = on_pending_;
     on_pending_ = false;
     if (onset) on_seen_ = true;
     env_.Step(onset, on_seen_, 2.f * k5s_ - 1.f, sr8_, ln_tau_ratio_);      // K5 -> K4 post filter
-    env_fm_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);   // K2 -> K3 FM index (SW1 UP)
+    env_fm_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);   // K2 -> K3 FM index gain (SW1 UP)
   }
 
   // K1 bipolar remap: h = |2 k1 - 1| -> the model's old unipolar K1. The first ARM_K1_FADE_FRAC of
@@ -1259,7 +1292,7 @@ class Armitage : public Module {
   bool  on_pending_ = false;                             // an onset fired this 8 kHz step, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened (before: e = 0)
   Env   env_;                      // K5 envelope -> K4 post-filter position
-  Env   env_fm_;                   // K2 envelope -> K3 FM index (SW1 UP: ADD / FB)
+  EnvGain env_fm_;                 // K2 envelope -> K3 FM index gain (SW1 UP: ADD / FB)
   float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)
   float fm_g_ = 0.f;               // dry -> filtered crossfade m (per sample slide)
   float f_step_ = 0.f;             // max m step per sample
