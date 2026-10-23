@@ -48,7 +48,8 @@
 //   3 XBAND FM   W = cos(2 pi phi_k + I_k sin(2 pi phi_{k+n})), n = 1..24 integer (24 equal K2 zones,
 //                1 ms crossfade); partner beyond the top band: 0. cap I_k <= (L - f'_k) / f'_{k+n} - 1.
 //   4 FB FM      m = sin(2 pi phi + b (m1 + m2) / 2)  (DX7 two-sample average), W = cos(2 pi phi + I_k m);
-//                b = 1.5 K2, cap b_k <= L / f' - 1 (armitage FB); I = 12 K3^2, cap I_k <= L / f' - 2; ratio 1.
+//                EXP_FBFM_PUSHED true: b = 3 K2, no caps; false: b = 1.5 K2, cap b_k <= L / f' - 1
+//                (armitage FB), cap I_k <= L / f' - 2; I = 12 K3^2; ratio 1.
 //   5 SHIFT RING modulator = the band itself at r x its frequency: pm += r wrap(phi - phi_prev),
 //                r = 0.25 * 16^K2 (continuous); ring = cos(2 pi phi) cos(2 pi pm)
 //                = 0.5 [cos(2 pi (phi + pm)) + cos(2 pi (phi - pm))]; W = K3 cos(2 pi phi) + ring
@@ -633,7 +634,7 @@ class Explorer : public Module {
         W = W0;
       } else if (M == kFBFM) {
         float b = p.p0, I = p.p1;
-        if (EXP_ANTIFOLD) {
+        if (EXP_ANTIFOLD && !EXP_FBFM_PUSHED) {  // pushed variant: no caps
           float bc = EXP_FOLD_LIMIT_HZ * ifp[k] - 1.f;
           if (bc < 0.f) bc = 0.f;
           if (b > bc) b = bc;

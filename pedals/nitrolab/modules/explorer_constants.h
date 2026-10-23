@@ -33,7 +33,13 @@ constexpr int   EXP_FM_N_RATIOS   = 14;
 constexpr float EXP_FM_RATIOS[EXP_FM_N_RATIOS] = { 0.5f, 1.f, 1.41421356f, 1.5f, 1.61803399f, 2.f, 2.41421356f,
                                                    2.71828183f, 3.f, 3.14159265f, 3.5f, 4.f, 5.f, 7.f };
 constexpr int   EXP_XB_N_MAX      = 24;      // cross-band FM: partner offset n = 1 .. this bands, integer, snapped (equal K2 zones)
-constexpr float EXP_FBFM_FB_MAX   = 1.5f;    // 2-op feedback FM: modulator self-feedback at K2 CW (linear from 0)
+// 2-op feedback FM variant switch (builder 2026-10-23: swap back and forth by ear):
+//   true  = PUSHED (round 2, 9c48dc6): feedback 0 -> EXP_FBFM_FB_PUSHED, no anti-fold caps on feedback or index
+//   false = GENTLE (4f8b820):          feedback 0 -> EXP_FBFM_FB_GENTLE, caps b <= L/f' - 1, I <= L/f' - 2
+constexpr bool  EXP_FBFM_PUSHED    = true;
+constexpr float EXP_FBFM_FB_GENTLE = 1.5f;    // modulator self-feedback at K2 CW (linear from 0), gentle variant
+constexpr float EXP_FBFM_FB_PUSHED = 3.f;     // modulator self-feedback at K2 CW (linear from 0), pushed variant
+constexpr float EXP_FBFM_FB_MAX    = EXP_FBFM_PUSHED ? EXP_FBFM_FB_PUSHED : EXP_FBFM_FB_GENTLE;
 constexpr float EXP_SR_RATIO_MIN  = 0.25f;   // shifted ring: modulator = r x band freq, r at K2 CCW (exponential, continuous)
 constexpr float EXP_SR_RATIO_MAX  = 4.f;     // shifted ring: r at K2 CW
 constexpr float EXP_FS_MAX_HZ     = 800.f;   // frequency shift: |shift| at K2 full CW / CCW
