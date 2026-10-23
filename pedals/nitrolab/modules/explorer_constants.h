@@ -36,7 +36,7 @@ constexpr int   EXP_XB_N_MAX      = 24;      // cross-band FM: partner offset n 
 // 2-op feedback FM variant switch (builder 2026-10-23: swap back and forth by ear):
 //   true  = PUSHED (round 2, 9c48dc6): feedback 0 -> EXP_FBFM_FB_PUSHED, no anti-fold caps on feedback or index
 //   false = GENTLE (4f8b820):          feedback 0 -> EXP_FBFM_FB_GENTLE, caps b <= L/f' - 1, I <= L/f' - 2
-constexpr bool  EXP_FBFM_PUSHED    = true;
+constexpr bool  EXP_FBFM_PUSHED    = false;
 constexpr float EXP_FBFM_FB_GENTLE = 1.5f;    // modulator self-feedback at K2 CW (linear from 0), gentle variant
 constexpr float EXP_FBFM_FB_PUSHED = 3.f;     // modulator self-feedback at K2 CW (linear from 0), pushed variant
 constexpr float EXP_FBFM_FB_MAX    = EXP_FBFM_PUSHED ? EXP_FBFM_FB_PUSHED : EXP_FBFM_FB_GENTLE;
