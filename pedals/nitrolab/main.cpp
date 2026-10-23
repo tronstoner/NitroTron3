@@ -13,7 +13,8 @@
 //                          K5 onset-triggered envelope on the K4 cutoff, K2 the same on the K3 FM index (UP))
 // SW3 MIDDLE = explorer   (sound-exploration models on a copy of armitage's band
 //                          engine — see modules/explorer.h; SW1 = family, K1 = model,
-//                          K2 / K3 = sweeps, K4 = post filter, K5 = octave mix, SW2 = octave +1 / -1 / -2)
+//                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index envelope),
+//                          K5 = octave mix, SW2 = octave +1 / -1 / -2)
 // SW3 DOWN   = empty      (pass-through placeholder)
 
 #include "daisy.h"
@@ -195,10 +196,17 @@ int main() {
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const char* zn = Explorer::ZoneName(d.model, d.zone);
-        hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " mute %d cpu %u%%",
-                          Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
-                          D2SV(d.a), D2SV(d.b), d.mute ? 1 : 0,
-                          (unsigned)(cpu_pk * 100.f + 0.5f));
+        // K4: SW1 UP = FM index envelope (t, gain g), MID / DOWN = post filter t
+        if (d.sw1 == 0)
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F " mute %d cpu %u%%",
+                            Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
+                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), d.mute ? 1 : 0,
+                            (unsigned)(cpu_pk * 100.f + 0.5f));
+        else
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " filt t" D2F " mute %d cpu %u%%",
+                            Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
+                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), d.mute ? 1 : 0,
+                            (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_EXPLORER && explorer.DiagTake(diag_xsnap)) {
         // explorer, first half: number / auto, knobs, switches

@@ -107,8 +107,30 @@ constexpr float EXP_FILT_FADE      = 0.03f;    // |t| over which bypass crossfad
 constexpr float EXP_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass (= ARM_FILT_SNAP)
 constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide (= ARM_MUTE_SLIDE_MS as armitage uses it)
 
+// --- K4 on SW1 UP = triggered envelope on the K3 FM index (copied 1:1 from armitage's K2 FM envelope) ---
+// Onset detector per 48 kHz input sample, before the decimator (armitage OnsetDetect / ARM_ONSET_*):
+//   fast meter (ENV_MS) -> gate meter (up at once, falls with FALL_MS) -> slow baseline (SLOW_COEF);
+//   onset = gate > RISE x baseline && gate > FLOOR, then REFRACTORY_MS without onsets.
+// Envelope (armitage EnvGain, 8 kHz): a gain g (0..1) on the K3 knob, k3_eff = k3 g, I = EXP_FM_INDEX_MAX k3_eff^2.
+//   t = 2 k4 - 1 (smoothed, lands exactly on its target): t = 0 -> off, g = 1.
+//   T = EXP_ENV_FM_TIME_RATIO EXP_ENV_TAU_SLOW_S (EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)^|t|, travel time
+//   = EXP_ENV_FM_DECAY_RATIO T (36 s just off noon -> 450 ms at the ends); one-pole tau = travel / EXP_ENV_TRAVEL_TAUS,
+//   g snaps at the 98 % point. CCW: each onset g = 1, decays to 0, holds 0. CW: each onset g = 0, rises to 1,
+//   holds 1. Before the first onset: CCW g = 1, CW g = 0.
+constexpr float    EXP_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (= ARM_ONSET_ENV_MS)
+constexpr float    EXP_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (= ARM_ONSET_FALL_MS)
+constexpr float    EXP_ONSET_SLOW_COEF     = 0.0006f;  // baseline one-pole at 48 kHz (= ARM_ONSET_SLOW_COEF)
+constexpr float    EXP_ONSET_RISE          = 1.5f;     // gate > baseline x this = an attack (= ARM_ONSET_RISE)
+constexpr float    EXP_ONSET_FLOOR         = 0.0021f;  // gate-meter floor, input units (= ARM_ONSET_FLOOR)
+constexpr uint32_t EXP_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (= ARM_ONSET_REFRACTORY_MS)
+constexpr float    EXP_ENV_TAU_SLOW_S      = 4.0f;     // s; time law just off noon (= ARM_ENV_TAU_SLOW_S)
+constexpr float    EXP_ENV_TAU_FAST_S      = 0.05f;    // s; at the knob ends (= ARM_ENV_TAU_FAST_S)
+constexpr float    EXP_ENV_TRAVEL_TAUS     = 3.9f;     // one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
+constexpr float    EXP_ENV_FM_TIME_RATIO   = 3.0f;     // T = this x the time law (= ARM_ENV_FM_TIME_RATIO)
+constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // decay (CCW) / rise (CW) time / T (= ARM_ENV_FM_DECAY_RATIO)
+
 // --- Control smoothing / snapping ----------------------------------------------------
-constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K5 at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
+constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t), K5 at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
 constexpr float EXP_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this (K5 = 0 skips octave work)
 
 // --- Band sum: phase alignment + gain staging (copied values from armitage_constants.h, ARM_ALIGN = true) ---
