@@ -16,8 +16,8 @@ constexpr float EXP_DISC_SLIDE_MS  = 1.f;   // ms; linear slide of a snapped num
 
 // --- Anti-fold (armitage's practice: keep generated partials under the 8 kHz engine's Nyquist) ---
 // Applied only where the model has a natural per-band limit (FM index Carson caps on ratio / curated /
-// cross-band FM, fold / formant / CZ resonance ratio caps, CZ knee floor, harmonic drop, shifted-ring
-// sum-term drop, bit-table step count). Not on the pushed 2-op feedback FM. false = off (A/B).
+// cross-band FM, feedback + index caps on the 2-op feedback FM, fold / formant / CZ resonance ratio caps,
+// CZ knee floor, harmonic drop, shifted-ring sum-term drop, bit-table step count). false = off (A/B).
 constexpr bool  EXP_ANTIFOLD      = true;
 constexpr float EXP_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band engine (FM Carson caps, ring sum term)
 constexpr float EXP_PD_FMAX       = 3800.f;   // Hz; ratio caps R_k f'_k <= this (CZ resonance, fold, formant; = ARM_RES_FMAX)
@@ -33,7 +33,7 @@ constexpr int   EXP_FM_N_RATIOS   = 14;
 constexpr float EXP_FM_RATIOS[EXP_FM_N_RATIOS] = { 0.5f, 1.f, 1.41421356f, 1.5f, 1.61803399f, 2.f, 2.41421356f,
                                                    2.71828183f, 3.f, 3.14159265f, 3.5f, 4.f, 5.f, 7.f };
 constexpr int   EXP_XB_N_MAX      = 24;      // cross-band FM: partner offset n = 1 .. this bands, integer, snapped (equal K2 zones)
-constexpr float EXP_FB2_MAX       = 3.f;     // 2-op feedback FM ("pushed"): modulator self-feedback at K2 CW (linear from 0); no anti-fold caps
+constexpr float EXP_FBFM_FB_MAX   = 1.5f;    // 2-op feedback FM: modulator self-feedback at K2 CW (linear from 0)
 constexpr float EXP_SR_RATIO_MIN  = 0.25f;   // shifted ring: modulator = r x band freq, r at K2 CCW (exponential, continuous)
 constexpr float EXP_SR_RATIO_MAX  = 4.f;     // shifted ring: r at K2 CW
 constexpr float EXP_FS_MAX_HZ     = 800.f;   // frequency shift: |shift| at K2 full CW / CCW

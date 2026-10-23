@@ -13,9 +13,11 @@
 //   played  z'_k = (-1)^k z_k (phase alignment, ARM_ALIGN), output weight w_k (fitted, armitage's wmid_)
 //   up      z'_k = z_k^2 / |z_k|                 (POG Up1, f'_k = 2 f_k), slot gain EXP_GAIN_UP
 //   down    z'_k = Down1(z_k) (half phase, sign continuation; f'_k = f_k / 2), slot gain EXP_GAIN_DOWN
-//   down2   z'_k = Down1(Down1(z_k)): the same half-angle step applied to the -1 signal, with its own
-//           sign continuation (flips when the -1 signal's phase crosses pi; tracked only while the
-//           -2 slot runs); f'_k = f_k / 4, slot gain EXP_GAIN_DOWN2
+//   down2   z'_k = |z_k| e^{j theta_k / 4}: theta_k = the band's UNWRAPPED phase, accumulated per 8 kHz
+//           sample from dphi = wrap(arg z_k(n) - arg z_k(n-1)) in (-pi, pi], kept mod 8 pi (theta / 4
+//           stays continuous mod 2 pi). Raw band z (no alignment negation, as Down1 / -1); run only
+//           while the -2 slot runs, (re)started from the current phase (also after a silent band);
+//           f'_k = f_k / 4, slot gain EXP_GAIN_DOWN2
 //   u_k = z'_k / |z'_k| = (cos 2 pi phi_k, sin 2 pi phi_k), phi_k = atan2 / 2 pi in [0, 1) (polynomial)
 //   slot = sum_k w_k a_k W_k                     (W per model, below; w_k = 1 in the octave slots)
 //
@@ -45,8 +47,8 @@
 //   2 RATIO FM C the same with r stepped through EXP_FM_RATIOS (14 equal K2 zones, slid 1 ms), same cap.
 //   3 XBAND FM   W = cos(2 pi phi_k + I_k sin(2 pi phi_{k+n})), n = 1..24 integer (24 equal K2 zones,
 //                1 ms crossfade); partner beyond the top band: 0. cap I_k <= (L - f'_k) / f'_{k+n} - 1.
-//   4 FB FM      m = sin(2 pi phi + b (m1 + m2) / 2)  (DX7 two-sample average), W = cos(2 pi phi + I m);
-//                b = 3 K2 (EXP_FB2_MAX), I = 12 K3^2; ratio 1; NO anti-fold caps on b or I.
+//   4 FB FM      m = sin(2 pi phi + b (m1 + m2) / 2)  (DX7 two-sample average), W = cos(2 pi phi + I_k m);
+//                b = 1.5 K2, cap b_k <= L / f' - 1 (armitage FB); I = 12 K3^2, cap I_k <= L / f' - 2; ratio 1.
 //   5 SHIFT RING modulator = the band itself at r x its frequency: pm += r wrap(phi - phi_prev),
 //                r = 0.25 * 16^K2 (continuous); ring = cos(2 pi phi) cos(2 pi pm)
 //                = 0.5 [cos(2 pi (phi + pm)) + cos(2 pi (phi - pm))]; W = K3 cos(2 pi phi) + ring
@@ -186,8 +188,8 @@ class Explorer : public Module {
         const float x = log2f(fc);
         wmid_[k] = powf(10.f, (EXP_ALIGN_WA * x * x + EXP_ALIGN_WB * x + EXP_ALIGN_WC) / 20.f);
       }
-      d2s_[k] = 1.f;
-      d2pi_[k] = 0.f;
+      d2th_[k] = 0.f;
+      d2pp_[k] = -1.f;
       for (int o = 0; o < kSlots; o++) {
         const float fp = r[o] * f;                         // f'_k
         fp_[o][k] = fp;
@@ -433,7 +435,7 @@ class Explorer : public Module {
         p.p1 = EXP_FM_INDEX_MAX * k3 * k3;
         p.a = (float)p.n0; p.b = p.p1; break;
       case kFBFM:                          // p0 = self-feedback b, p1 = I
-        p.p0 = EXP_FB2_MAX * k2; p.p1 = EXP_FM_INDEX_MAX * k3 * k3;
+        p.p0 = EXP_FBFM_FB_MAX * k2; p.p1 = EXP_FM_INDEX_MAX * k3 * k3;
         p.a = p.p0; p.b = p.p1; break;
       case kSRING: {                       // p0 = r, p1 = carrier share
         p.p0 = EXP_SR_RATIO_MIN * expf(k2 * logf(EXP_SR_RATIO_MAX / EXP_SR_RATIO_MIN));
@@ -506,7 +508,11 @@ class Explorer : public Module {
   void Prep(int o) {
     const float* __restrict mg = mag_ + 1;
     for (int k = 0; k < kBands; k++) {
-      if (mg[k] == 0.f) { ur_[k] = ui_[k] = 0.f; continue; }
+      if (mg[k] == 0.f) {
+        ur_[k] = ui_[k] = 0.f;
+        if (o == kSD2) d2pp_[k] = -1.f;          // -2 accumulator restarts from the phase on return
+        continue;
+      }
       const float iv = inv_[k];
       float zr, zi;
       if (o == kSP) {
@@ -516,19 +522,24 @@ class Explorer : public Module {
         bands_[k].ArmUp1(iv, zr, zi);
       } else if (o == kSD) {
         bands_[k].ArmDown1(iv, zr, zi);
-      } else {                                    // -2: Down1 again, on the -1 signal
-        float r1, i1;
-        bands_[k].ArmDown1(iv, r1, i1);
-        // sign continuation (as ArmBand::Update does for Down1): flip when the -1 signal's phase
-        // crosses pi (Re < 0 and the Im sign changes)
-        if (r1 < 0.f && ((i1 < 0.f) != (d2pi_[k] < 0.f))) d2s_[k] = -d2s_[k];
-        d2pi_[k] = i1;
-        float xh = 0.5f * r1 * iv;                 // |w| = |z|: same 1/|z|
-        xh = (xh > 0.5f) ? 0.5f : (xh < -0.5f) ? -0.5f : xh;   // numeric domain of the sqrt (fast-sqrt error)
-        const float c  = armbands::ArmFastSqrt(0.5f + xh);
-        const float dd = ((i1 < 0.f) ? -1.f : 1.f) * armbands::ArmFastSqrt(0.5f - xh);
-        zr = d2s_[k] * (r1 * c + i1 * dd);
-        zi = d2s_[k] * (i1 * c - r1 * dd);
+      } else {                                    // -2: unwrapped band phase / 4 (cycles: theta in [0, 4))
+        const float ph = FastAtan2Cycles(bands_[k].Im(), bands_[k].Re());   // raw z, as Down1
+        float th = d2th_[k];
+        const float pp = d2pp_[k];
+        if (pp < 0.f) {
+          th = ph;                                // (re)start from the current phase
+        } else {
+          float dph = ph - pp;                    // wrap into (-0.5, 0.5] cycles = (-pi, pi]
+          if (dph > 0.5f) dph -= 1.f;
+          else if (dph <= -0.5f) dph += 1.f;
+          th += dph;
+          if (th >= 4.f) th -= 4.f;               // mod 4 cycles = 8 pi: theta / 4 continuous
+          else if (th < 0.f) th += 4.f;
+        }
+        d2th_[k] = th;
+        d2pp_[k] = ph;
+        CosSin01(0.25f * th, ur_[k], ui_[k]);     // u = e^{j theta / 4}; |z'| = |z| (mag_)
+        continue;
       }
       ur_[k] = zr * iv;
       ui_[k] = zi * iv;
@@ -621,13 +632,22 @@ class Explorer : public Module {
         }
         W = W0;
       } else if (M == kFBFM) {
+        float b = p.p0, I = p.p1;
+        if (EXP_ANTIFOLD) {
+          float bc = EXP_FOLD_LIMIT_HZ * ifp[k] - 1.f;
+          if (bc < 0.f) bc = 0.f;
+          if (b > bc) b = bc;
+          float ic = EXP_FOLD_LIMIT_HZ * ifp[k] - 2.f;
+          if (ic < 0.f) ic = 0.f;
+          if (I > ic) I = ic;
+        }
         float s, c;
-        SinCos(p.p0 * 0.5f * (m1_[o][k] + m2_[o][k]), s, c);
+        SinCos(b * 0.5f * (m1_[o][k] + m2_[o][k]), s, c);
         float mod = ci * c + cr * s;             // sin(2 pi phi + b avg)
         if (fabsf(mod) < EXP_DENORM) mod = 0.f;
         m2_[o][k] = m1_[o][k];
         m1_[o][k] = mod;
-        SinCos(p.p1 * mod, s, c);
+        SinCos(I * mod, s, c);
         W = cr * c - ci * s;
       } else if (M == kSRING) {
         const float pm = AccPhase(au, o, k, FastAtan2Cycles(ci, cr), p.p0);
@@ -738,6 +758,7 @@ class Explorer : public Module {
     ResetModelState(kFBFM, o);
     ResetModelState(kFSH, o);
     ResetModelState(kISH, o);
+    if (o == kSD2) for (int k = 0; k < kBands; k++) d2pp_[k] = -1.f;   // -2 accumulator: restart from the phase
   }
 
   static inline float Slide(float v, float t, float st) {
@@ -1039,7 +1060,7 @@ class Explorer : public Module {
   static inline void SinCos(float theta, float& s, float& c) {
     using namespace explorer_k;
     static_assert((EXP_SIN_SIZE & (EXP_SIN_SIZE - 1)) == 0, "power of two");
-    static_assert(EXP_FM_INDEX_MAX + EXP_FB2_MAX < 90.f, "SinCos offset covers |theta| < ~100 rad");
+    static_assert(EXP_FM_INDEX_MAX + EXP_FBFM_FB_MAX < 90.f, "SinCos offset covers |theta| < ~100 rad");
     constexpr int   kMask = EXP_SIN_SIZE - 1;
     constexpr float kScale = (float)EXP_SIN_SIZE / 6.283185307f;
     const float x  = theta * kScale + 16384.f;
@@ -1116,7 +1137,7 @@ class Explorer : public Module {
   float inv_[kBands];              // 1 / |z_k| (0 = silent)
   float ur_[kBands], ui_[kBands];  // unit phasor of the slot being run
   float wmid_[kBands];             // played-slot fitted output weight (armitage ARM_ALIGN)
-  float d2s_[kBands], d2pi_[kBands];   // -2 slot: sign continuation, previous Im of the -1 signal
+  float d2th_[kBands], d2pp_[kBands];  // -2 slot: unwrapped phase (cycles, mod 4), previous band phase (-1 = fresh)
   float fp_[kSlots][kBands];       // f'_k per slot (up / played / down / down2)
   float ifp_[kSlots][kBands];      // 1 / f'_k
   float pdcap_[kSlots][kBands];    // EXP_PD_FMAX / f'_k (ratio caps)
