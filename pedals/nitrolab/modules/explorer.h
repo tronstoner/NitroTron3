@@ -4,7 +4,7 @@
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
 // split into 84 complex bands (armitage_bands.h, included read-only), each band reshaped by one
-// of 13 models, summed, interpolated back to 48 kHz, DC-blocked, K4-filtered, soft-clipped,
+// of 9 models, summed, interpolated back to 48 kHz, DC-blocked, K4-filtered, soft-clipped,
 // FS1-muted. No envelopes / onset detector, no LFO. No pitch tracking: every band runs the
 // selected model on its OWN phase phi_k and magnitude a_k = |z'_k|; nothing picks or decides
 // per band. The model output is always full (no unshaped crossfade).
@@ -35,11 +35,11 @@
 //   linear in octaves (curve 1); LP <-> HP: fades out, swaps type from cleared state, fades in.
 //
 // DISCRETE VALUES are stepped on the knob (snap to the item): items that change the waveform
-// (cross-band partner, bit-table waveform, CZ shape, wavetable set) crossfade old -> new over
+// (cross-band partner, bit-table waveform, wavetable set) crossfade old -> new over
 // EXP_MODEL_XFADE_MS at the switch moment; snapped numbers inside a running oscillator (curated
 // FM ratio, interval) slide linearly to the new item over EXP_DISC_SLIDE_MS. Never blended between items.
 //
-// MODELS (L = EXP_FOLD_LIMIT_HZ, Fpd = EXP_PD_FMAX; "cap" = anti-fold, only with EXP_ANTIFOLD)
+// MODELS (L = EXP_FOLD_LIMIT_HZ; "cap" = anti-fold, only with EXP_ANTIFOLD)
 //  SW1 UP — FM
 //   1 RATIO FM   W = cos(2 pi phi + I_k sin(2 pi pm)),  pm += r wrap(phi - phi_prev) (the modulator runs
 //                at r x the band's own phase; for integer r identical to r phi). r = 0.5 * 16^K2 (free),
@@ -50,53 +50,43 @@
 //   4 FB FM      m = sin(2 pi phi + b (m1 + m2) / 2)  (DX7 two-sample average), W = cos(2 pi phi + I_k m);
 //                EXP_FBFM_PUSHED true: b = 3 K2, no caps; false: b = 1.5 K2, cap b_k <= L / f' - 1
 //                (armitage FB), cap I_k <= L / f' - 2; I = 12 K3^2; ratio 1.
-//   5 SHIFT RING modulator = the band itself at r x its frequency: pm += r wrap(phi - phi_prev),
-//                r = 0.25 * 16^K2 (continuous); ring = cos(2 pi phi) cos(2 pi pm)
-//                = 0.5 [cos(2 pi (phi + pm)) + cos(2 pi (phi - pm))]; W = K3 cos(2 pi phi) + ring
-//                (K3 CCW pure product, CW carrier + product). cap: sum term dropped where (1 + r) f' > L.
-//  SW1 MID — shift & phase distortion
-//   1 FREQ SHIFT W = Re(u_k e^{j 2 pi theta_k}), theta_k += s_k / 8000,
-//                s_k = s ((1 - K3) + K3 f'_k / EXP_FS_REF_HZ), s = sign(t) ((801)^|t| - 1) Hz, t = 2 K2 - 1.
-//   2 INTERVAL   proportional shift only: theta_k += f'_k (2^((st + c / 100) / 12) - 1) / 8000,
-//                st = -12 .. +12 semitones (25 equal K2 zones, noon = 0, slid 1 ms), c = 50 (2 K3 - 1) cents.
-//   3 CZ         K2 = bend b (0 = plain sine), K3 4 zones:
-//                double sine  T = (1 + b) phi - b [phi >= 0.5]   (b = 1: two sines per cycle), W = cos(2 pi T)
-//                reso tri     W = 1 - wb (1 - cos(2 pi R_k phi)), wb = (1 - b) + b tri(phi),
-//                reso trap    same, wb = (1 - b) + b min(1, 2 tri(phi)); tri = 1 - |1 - 2 phi|;
-//                             R = 1 + 7 b, cap R_k <= Fpd / f'
-//                two-seg bend W = cos(2 pi SawWarp(phi, d_k)), d = 0.5 (0.01 / 0.5)^b, d_k = max(d, dfloor_k)
-//                             (armitage's knee law and anti-fold knee floor)
-//   4 FOLD       W = cos(pi tri_s(frac(F_k phi))), tri_s(x) = x / s (x < s), (1 - x) / (1 - s) else;
-//                F = 1 + 7 K2, cap F_k <= Fpd / f'; s = 0.5 (1 - K3) (symmetric -> skewed to a ramp).
-//   5 FORMANT    W = 0.5 (1 - cos(2 pi phi / w)) cos(2 pi Fr_k phi) for phi < w, else 0 (one burst per
-//                band cycle); Fr = 0.5 * 8^K2 (0.5 -> 4), cap Fr_k <= Fpd / f'; w = K3 (CCW = silence).
-//  SW1 DOWN — harmonic & digital
-//   1 HARMONICS  H = (1 - fr) h_n0 cos(2 pi n0 phi) + fr h_n1 cos(2 pi n1 phi), n = 1 + 5 K2 = n0 + fr,
-//                n1 = n0 + 1, h_n = clamp((3800 - n f') / 400, 0, 1) (armitage ADD drop);
-//                W = (1 - K3) H + K3 cos(2 pi phi).
-//   2 WAVETABLE  W = table(set, scan, level_k)(phi), linear interpolation in phase and between
+//  SW1 MID — tables
+//   1 WAVETABLE  W = table(set, scan, level_k)(phi), linear interpolation in phase and between
 //                adjacent waves (scan = 3 K2); set = K3 zone (analog / PPG / vocal / noisy);
 //                level_k = largest band-limited version with H <= 4000 / f'_k (static per band, slot).
-//   3 BITTAB     16-step pattern v[0..15], one step per 1/16 of the band cycle, cosine-interpolated to
+//   2 BITTAB     16-step pattern v[0..15], one step per 1/16 of the band cycle, cosine-interpolated to
 //                the next step: W = v0 + e (v1 - v0), e = 0.5 (1 - cos pi f). K2 steps through 32
 //                waveforms (equal zones, 1 ms crossfade): 1..16 = LFSR patterns (+-1, 16-bit Fibonacci
 //                LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits), 17..32 = SQR
 //                v[j] = sq(j) cos(2 pi n j / 16), n = 1..16 (sampled at the step starts: n > 8 mirrors on
 //                the 16-step grid). K3 unused. Anti-fold: S_k steps (16 / 8 / 4 / 2, (S/2) f' <= L),
 //                pattern subsampled every 16 / S_k-th step.
+//  SW1 DOWN — harmonics & shift
+//   1 HARMONICS  H = (1 - fr) h_n0 cos(2 pi n0 phi) + fr h_n1 cos(2 pi n1 phi), n = 1 + 5 K2 = n0 + fr,
+//                n1 = n0 + 1, h_n = clamp((3800 - n f') / 400, 0, 1) (armitage ADD drop);
+//                W = (1 - K3) H + K3 cos(2 pi phi).
+//   2 FREQ SHIFT W = Re(u_k e^{j 2 pi theta_k}), theta_k += s_k / 8000,
+//                s_k = s ((1 - K3) + K3 f'_k / EXP_FS_REF_HZ), s = sign(t) ((801)^|t| - 1) Hz, t = 2 K2 - 1.
+//   3 INTERVAL   proportional shift only: theta_k += f'_k (2^((st + c / 100) / 12) - 1) / 8000,
+//                st = -12 .. +12 semitones (25 equal K2 zones, noon = 0, slid 1 ms), c = 50 (2 K3 - 1) cents.
+//
+// PHASE phi_k: computed once per band per slot and sample in Prep (only when a running model needs it:
+// ratio FM free / curated, harmonics, wavetable, bit table): atan of u_k in the played / +1 / -1 slots
+// (the same call on the same values the models made before), theta_k / 4 in the -2 slot (already known,
+// no atan). A model crossfade shares it.
 //
 // MODEL CHANGE (SW1, K1 zone, or a discrete K2 / K3 item that changes the waveform): old and new are
 // both computed for EXP_MODEL_XFADE_MS and crossfaded linearly; the entering model starts from cleared
 // state. A change during a fade is picked up when that fade ends.
 //
 // CONTROL MAP
-//   K1  model        equal zones: SW1 UP 5, MID 5, DOWN 3 (see MODELS)
+//   K1  model        equal zones: SW1 UP 4, MID 2, DOWN 3 (see MODELS)
 //   K2  sweep A      per model (see MODELS)
 //   K3  sweep B      per model
 //   K4  post filter  CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct, Q 0.707)
 //   K5  octave mix   CCW = played only (octave work skipped), CW = selected octave only; linear
 //   K6  dry / wet    (shell)
-//   SW1 family       UP = FM, MID = shift & phase distortion, DOWN = harmonic & digital
+//   SW1 family       UP = FM, MID = tables (wavetable, bit table), DOWN = harmonics & shift
 //   SW2 octave       UP = +1 oct, MID = -1 oct, DOWN = -2 oct
 //   FS1 wet mute     toggle, LED2 on while muted; LED1 on. FS2 unused.
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
@@ -163,12 +153,11 @@ class Explorer : public Module {
   enum { kUp = 0, kMid = 1, kDown = 2 };   // = cs.Switch() values
   enum { kSU = 0, kSP = 1, kSD = 2, kSD2 = 3, kSlots = 4 };   // slots: up, played, down, down2
   // Global model ids (family offset + K1 zone).
-  enum { kRFM = 0, kRFMC, kXFM, kFBFM, kSRING,        // SW1 UP
-         kFSH, kISH, kCZ, kFOLD, kFORM,               // SW1 MID
-         kHARM, kWT, kBIT,                            // SW1 DOWN
+  enum { kRFM = 0, kRFMC, kXFM, kFBFM,                // SW1 UP
+         kWT, kBIT,                                   // SW1 MID
+         kHARM, kFSH, kISH,                           // SW1 DOWN
          kNumModels };
-  enum { kCzDsin = 0, kCzRtri = 1, kCzRtrap = 2, kCzBend = 3 };   // CZ K3 zones
-  enum { kAccRFM = 0, kAccRFMC = 1, kAccSR = 2, kAccN = 3 };     // phase-accumulator users
+  enum { kAccRFM = 0, kAccRFMC = 1, kAccN = 2 };                 // phase-accumulator users
   enum { kRotFSH = 0, kRotISH = 1, kRotN = 2 };                  // rotation-phase users
 
   void Init(float sr) override {
@@ -195,10 +184,6 @@ class Explorer : public Module {
         const float fp = r[o] * f;                         // f'_k
         fp_[o][k] = fp;
         ifp_[o][k] = 1.f / fp;
-        pdcap_[o][k] = EXP_PD_FMAX / fp;
-        float x = (fp - EXP_CZ_FOLD_HZ) / (EXP_CZ_FOLD_TOP - EXP_CZ_FOLD_HZ);
-        x = (x < 0.f) ? 0.f : (x > 1.f) ? 1.f : x;
-        czfl_[o][k] = EXP_CZ_KNEE + (0.5f - EXP_CZ_KNEE) * x;
         const int hk = (int)(EXP_WT_FMAX / fp);           // harmonics that fit below the ceiling
         int lv = 0;
         for (int l = 0; l < EXP_WT_LEVELS; l++) if (EXP_WT_LEVEL_H[l] <= hk) lv = l;
@@ -211,7 +196,6 @@ class Explorer : public Module {
     }
     BuildBitPatterns();
     BuildTables();
-    ln_cz_knee_ = logf(EXP_CZ_KNEE / 0.5f);
     for (int o = 0; o < kSlots; o++) { ResetSlotState(o); slot_on_[o] = false; }
     dc_a_ = expf(-6.283185307f * EXP_DC_HZ / sr);
     dc_x1_ = dc_y1_ = 0.f;
@@ -262,7 +246,7 @@ class Explorer : public Module {
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
     const int model = (fam == kUp)  ? kRFM  + Quantize(k1, EXP_N_UP)
-                    : (fam == kMid) ? kFSH  + Quantize(k1, EXP_N_MID)
+                    : (fam == kMid) ? kWT   + Quantize(k1, EXP_N_MID)
                                     : kHARM + Quantize(k1, EXP_N_DOWN);
     const int zone = ZoneOf(model, k2, k3);
     var_t_ = VarKey(model, zone);
@@ -293,7 +277,7 @@ class Explorer : public Module {
     float k[5];       // K1..K5 (remapped 0..1)
     int   sw1, sw2;   // 0 UP, 1 MID, 2 DOWN
     int   model;      // global model id (kRFM .. kBIT)
-    int   zone;       // CZ shape / wavetable set (0..3), cross-band n - 1, bit-table waveform - 1, else 0
+    int   zone;       // wavetable set (0..3), cross-band n - 1, bit-table waveform - 1, else 0
     float a, b;       // sweep A / sweep B as derived values (units per model)
     bool  mute;
   };
@@ -306,16 +290,14 @@ class Explorer : public Module {
     return false;
   }
   static const char* ModelName(int m) {
-    static const char* const n[kNumModels] = { "RATIO-FM", "RATIO-FM-C", "XBAND-FM", "FB-FM", "SHIFT-RING",
-                                               "FSHIFT", "INTERVAL", "CZ", "FOLD", "FORMANT",
-                                               "HARM", "WTABLE", "BITTAB" };
+    static const char* const n[kNumModels] = { "RATIO-FM", "RATIO-FM-C", "XBAND-FM", "FB-FM",
+                                               "WTABLE", "BITTAB",
+                                               "HARM", "FSHIFT", "INTERVAL" };
     return (m >= 0 && m < kNumModels) ? n[m] : "?";
   }
   static const char* ZoneName(int m, int z) {
-    static const char* const cz[4] = { "dsine", "rtri", "rtrap", "bend" };
     static const char* const wt[4] = { "analog", "ppg", "vocal", "noisy" };
     if (z < 0 || z > 3) return "";
-    if (m == kCZ) return cz[z];
     if (m == kWT) return wt[z];
     return "";
   }
@@ -411,7 +393,7 @@ class Explorer : public Module {
 
   static int ZoneOf(int model, float k2, float k3) {
     using namespace explorer_k;
-    if (model == kCZ || model == kWT) return Quantize(k3, 4);
+    if (model == kWT) return Quantize(k3, 4);
     if (model == kXFM) return Quantize(k2, EXP_XB_N_MAX);    // partner offset n - 1
     if (model == kBIT) return Quantize(k2, EXP_BT_WAVES);    // waveform index
     return 0;
@@ -438,11 +420,6 @@ class Explorer : public Module {
       case kFBFM:                          // p0 = self-feedback b, p1 = I
         p.p0 = EXP_FBFM_FB_MAX * k2; p.p1 = EXP_FM_INDEX_MAX * k3 * k3;
         p.a = p.p0; p.b = p.p1; break;
-      case kSRING: {                       // p0 = r, p1 = carrier share
-        p.p0 = EXP_SR_RATIO_MIN * expf(k2 * logf(EXP_SR_RATIO_MAX / EXP_SR_RATIO_MIN));
-        p.p1 = k3;
-        p.a = p.p0; p.b = k3; break;
-      }
       case kFSH: {                         // p0 = fixed increment / sample, p1 = proportional increment per Hz of f'
         const float t = 2.f * k2 - 1.f;
         const float at = fabsf(t);
@@ -460,21 +437,6 @@ class Explorer : public Module {
         p.p1 = (ratio - 1.f) / sr8_;
         p.a = disc; p.b = cents; break;
       }
-      case kCZ:                            // p0 = bend b, p1 = knee d (bend zone), p2 = R (reso zones)
-        p.p0 = k2;
-        p.p1 = (k2 >= 1.f) ? EXP_CZ_KNEE : 0.5f * expf(k2 * ln_cz_knee_);
-        p.p2 = 1.f + (EXP_CZ_RES_MAX - 1.f) * k2;
-        p.a = k2; p.b = k3; break;
-      case kFOLD: {                        // p0 = F, p1 = breakpoint s, p2 = 1/s, p3 = 1/(1-s)
-        const float s = 0.5f * (1.f - k3);
-        p.p0 = 1.f + (EXP_FOLD_MAX - 1.f) * k2;
-        p.p1 = s; p.p2 = (s > 0.f) ? 1.f / s : 0.f; p.p3 = 1.f / (1.f - s);
-        p.a = p.p0; p.b = s; break;
-      }
-      case kFORM:                          // p0 = Fr, p1 = width w, p2 = 1/w
-        p.p0 = EXP_FORM_MIN * expf(k2 * logf(EXP_FORM_MAX / EXP_FORM_MIN));
-        p.p1 = k3; p.p2 = (k3 > 0.f) ? 1.f / k3 : 0.f;
-        p.a = p.p0; p.b = k3; break;
       case kHARM: {                        // n0 + p0 = harmonic n, p1 = fundamental share
         const float n = 1.f + (EXP_HARM_MAX - 1.f) * k2;
         p.n0 = (int)n;
@@ -499,14 +461,21 @@ class Explorer : public Module {
   // One 8 kHz sample of slot o: derive u_k, return the model's band sum sum_k w_k a_k W_k.
   float RunSlot(int o, bool fading) {
     if (!slot_on_[o]) { ResetSlotState(o); slot_on_[o] = true; }
-    Prep(o);
+    const int mn = var_ >> 6;
+    Prep(o, NeedsPhase(mn) || (fading && NeedsPhase(vfrom_ >> 6)));
     float sh = Shape(var_ >> 6, o, pn_);
     if (fading) sh = (1.f - mg_) * Shape(vfrom_ >> 6, o, pf_) + mg_ * sh;
     return sh;
   }
 
-  // u_k = z'_k / |z'_k| for slot o into ur_ / ui_ (0 for silent bands).
-  void Prep(int o) {
+  // Models that read the band phase phi_k (ph_).
+  static inline bool NeedsPhase(int m) {
+    return m == kRFM || m == kRFMC || m == kHARM || m == kWT || m == kBIT;
+  }
+
+  // u_k = z'_k / |z'_k| for slot o into ur_ / ui_ (0 for silent bands); with need_ph also the phase
+  // phi_k in cycles into ph_ (once per band, shared by the models and a model crossfade).
+  void Prep(int o, bool need_ph) {
     const float* __restrict mg = mag_ + 1;
     for (int k = 0; k < kBands; k++) {
       if (mg[k] == 0.f) {
@@ -540,10 +509,12 @@ class Explorer : public Module {
         d2th_[k] = th;
         d2pp_[k] = ph;
         CosSin01(0.25f * th, ur_[k], ui_[k]);     // u = e^{j theta / 4}; |z'| = |z| (mag_)
+        ph_[k] = 0.25f * th;                      // the slot phase is known: no atan
         continue;
       }
       ur_[k] = zr * iv;
       ui_[k] = zi * iv;
+      if (need_ph) ph_[k] = FastAtan2Cycles(ui_[k], ur_[k]);   // the models' former call, same values
     }
   }
 
@@ -553,19 +524,15 @@ class Explorer : public Module {
       case kRFMC:  return ShapeK<kRFMC>(o, p);
       case kXFM:   return ShapeK<kXFM>(o, p);
       case kFBFM:  return ShapeK<kFBFM>(o, p);
-      case kSRING: return ShapeK<kSRING>(o, p);
       case kFSH:   return ShapeK<kFSH>(o, p);
       case kISH:   return ShapeK<kISH>(o, p);
-      case kCZ:    return ShapeK<kCZ>(o, p);
-      case kFOLD:  return ShapeK<kFOLD>(o, p);
-      case kFORM:  return ShapeK<kFORM>(o, p);
       case kHARM:  return ShapeK<kHARM>(o, p);
       case kWT:    return ShapeK<kWT>(o, p);
       default:     return ShapeK<kBIT>(o, p);
     }
   }
 
-  // Modulator phase that runs at r x the band's own phase (ratio FM, curated, shifted ring).
+  // Modulator phase that runs at r x the band's own phase (ratio FM free / curated).
   inline float AccPhase(int u, int o, int k, float ph, float r) {
     float pm = pm_[u][o][k];
     const float pp = pp_[u][o][k];
@@ -592,22 +559,22 @@ class Explorer : public Module {
     const float* __restrict ui  = ui_;
     const float* __restrict fp  = fp_[o];
     const float* __restrict ifp = ifp_[o];
-    const float* __restrict pdc = pdcap_[o];
+    const float* __restrict phs = ph_;
     const bool played = (o == kSP);
-    constexpr int au = (M == kRFMC) ? kAccRFMC : (M == kSRING) ? kAccSR : kAccRFM;
+    constexpr int au = (M == kRFMC) ? kAccRFMC : kAccRFM;
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
       if (a == 0.f) {                            // silent band: state cleared
-        if (M == kRFM || M == kRFMC || M == kSRING) pp_[au][o][k] = -1.f;
+        if (M == kRFM || M == kRFMC) pp_[au][o][k] = -1.f;
         if (M == kFBFM) { m1_[o][k] = 0.f; m2_[o][k] = 0.f; }
         continue;
       }
       const float cr = ur[k], ci = ui[k];
       float W;
       if (M == kRFM || M == kRFMC) {
-        const float pm = AccPhase(au, o, k, FastAtan2Cycles(ci, cr), p.p0);
+        const float pm = AccPhase(au, o, k, phs[k], p.p0);
         float I = p.p2;
         if (EXP_ANTIFOLD) {
           float cap = (EXP_FOLD_LIMIT_HZ * ifp[k] - 1.f) * p.p1 - 1.f;
@@ -650,14 +617,6 @@ class Explorer : public Module {
         m1_[o][k] = mod;
         SinCos(I * mod, s, c);
         W = cr * c - ci * s;
-      } else if (M == kSRING) {
-        const float pm = AccPhase(au, o, k, FastAtan2Cycles(ci, cr), p.p0);
-        float cm, sm;
-        CosSin01(pm, cm, sm);
-        float sum = cr * cm - ci * sm;           // cos(2 pi (phi + pm)): (1 + r) f'
-        const float dif = cr * cm + ci * sm;     // cos(2 pi (phi - pm)): (1 - r) f'
-        if (EXP_ANTIFOLD && (1.f + p.p0) * fp[k] > EXP_FOLD_LIMIT_HZ) sum = 0.f;
-        W = p.p1 * cr + 0.5f * (sum + dif);
       } else if (M == kFSH || M == kISH) {
         float th = th_[ru][o][k] + p.p0 + p.p1 * fp[k];
         th -= floorf(th);
@@ -665,43 +624,8 @@ class Explorer : public Module {
         float c, s;
         CosSin01(th, c, s);
         W = cr * c - ci * s;
-      } else if (M == kCZ) {
-        const float ph = FastAtan2Cycles(ci, cr);
-        const float b = p.p0;
-        if (p.zone == kCzBend) {
-          float dk = p.p1;
-          if (EXP_ANTIFOLD && dk < czfl_[o][k]) dk = czfl_[o][k];
-          W = (dk >= 0.5f) ? cr : Cos01(SawWarp(ph, dk));
-        } else if (p.zone == kCzDsin) {
-          const float T = (1.f + b) * ph - ((ph >= 0.5f) ? b : 0.f);
-          W = Cos01(T);
-        } else {
-          float R = p.p2;
-          if (EXP_ANTIFOLD && R > pdc[k]) R = pdc[k];
-          float win = 1.f - fabsf(1.f - 2.f * ph);              // triangle window
-          if (p.zone == kCzRtrap) { win *= 2.f; if (win > 1.f) win = 1.f; }   // trapezoid
-          const float wb = (1.f - b) + b * win;
-          W = 1.f - wb * (1.f - Cos01(R * ph));
-        }
-      } else if (M == kFOLD) {
-        const float ph = FastAtan2Cycles(ci, cr);
-        float F = p.p0;
-        if (EXP_ANTIFOLD && F > pdc[k]) F = pdc[k];
-        float x = F * ph;
-        x -= (float)(int)x;
-        const float t = (x < p.p1) ? x * p.p2 : (1.f - x) * p.p3;
-        W = Cos01(0.5f * t);                     // cos(pi t)
-      } else if (M == kFORM) {
-        const float ph = FastAtan2Cycles(ci, cr);
-        if (ph < p.p1) {
-          float Fr = p.p0;
-          if (EXP_ANTIFOLD && Fr > pdc[k]) Fr = pdc[k];
-          W = 0.5f * (1.f - Cos01(ph * p.p2)) * Cos01(Fr * ph);
-        } else {
-          W = 0.f;
-        }
       } else if (M == kHARM) {
-        const float ph = FastAtan2Cycles(ci, cr);
+        const float ph = phs[k];
         const int n0 = p.n0, n1 = n0 + 1;
         float h0 = 1.f, h1 = 1.f;
         if (EXP_ANTIFOLD) {
@@ -714,7 +638,7 @@ class Explorer : public Module {
         const float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
         W = H + p.p1 * (cr - H);
       } else if (M == kWT) {
-        const float ph = FastAtan2Cycles(ci, cr);
+        const float ph = phs[k];
         const int lv = wtlvl_[o][k];
         const int16_t* t0 = explorer_wt[p.zone][p.n0][lv];
         const int16_t* t1 = explorer_wt[p.zone][p.n0 + 1][lv];
@@ -726,7 +650,7 @@ class Explorer : public Module {
         const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
         W = (v0 + p.p0 * (v1 - v0)) * (1.f / EXP_WT_I16_SCALE);
       } else {                                   // kBIT: fully smooth (cosine interpolation)
-        const float ph = FastAtan2Cycles(ci, cr);
+        const float ph = phs[k];
         const int S = btst_[o][k];
         const int stride = EXP_BT_STEPS / S;
         const float xs = ph * (float)S;
@@ -744,7 +668,7 @@ class Explorer : public Module {
 
   // Clear one model's state in slot o (on model entry).
   void ResetModelState(int m, int o) {
-    const int au = (m == kRFM) ? kAccRFM : (m == kRFMC) ? kAccRFMC : (m == kSRING) ? kAccSR : -1;
+    const int au = (m == kRFM) ? kAccRFM : (m == kRFMC) ? kAccRFMC : -1;
     const int ru = (m == kFSH) ? kRotFSH : (m == kISH) ? kRotISH : -1;
     for (int k = 0; k < kBands; k++) {
       if (au >= 0)    { pm_[au][o][k] = 0.f; pp_[au][o][k] = -1.f; }
@@ -755,7 +679,6 @@ class Explorer : public Module {
   void ResetSlotState(int o) {
     ResetModelState(kRFM, o);
     ResetModelState(kRFMC, o);
-    ResetModelState(kSRING, o);
     ResetModelState(kFBFM, o);
     ResetModelState(kFSH, o);
     ResetModelState(kISH, o);
@@ -1110,10 +1033,6 @@ class Explorer : public Module {
     c = c0 + fr * (c1 - c0);
     s = s0 + fr * (s1 - s0);
   }
-  // CZ knee warp (armitage SawWarp).
-  static inline float SawWarp(float ph, float dk) {
-    return (ph < dk) ? ph * (0.5f / dk) : 0.5f + (ph - dk) * (0.5f / (1.f - dk));
-  }
   // atan2(y, x) / 2 pi in [0, 1) (armitage FastAtan2Cycles, max error ~0.005 rad).
   static inline float FastAtan2Cycles(float y, float x) {
     const float ax = fabsf(x), ay = fabsf(y);
@@ -1137,12 +1056,11 @@ class Explorer : public Module {
   float mag_[kBands + 2];          // |z_k| at [k + 1] (0 = silent); guards at both ends
   float inv_[kBands];              // 1 / |z_k| (0 = silent)
   float ur_[kBands], ui_[kBands];  // unit phasor of the slot being run
+  float ph_[kBands];               // its phase phi_k in cycles [0, 1) (when a running model needs it)
   float wmid_[kBands];             // played-slot fitted output weight (armitage ARM_ALIGN)
   float d2th_[kBands], d2pp_[kBands];  // -2 slot: unwrapped phase (cycles, mod 4), previous band phase (-1 = fresh)
   float fp_[kSlots][kBands];       // f'_k per slot (up / played / down / down2)
   float ifp_[kSlots][kBands];      // 1 / f'_k
-  float pdcap_[kSlots][kBands];    // EXP_PD_FMAX / f'_k (ratio caps)
-  float czfl_[kSlots][kBands];     // CZ bend knee floor per band
   uint8_t wtlvl_[kSlots][kBands];  // wavetable band-limit level per band
   uint8_t btst_[kSlots][kBands];   // BITTAB steps per band (16 / 8 / 4 / 2)
   float bt_all_[explorer_k::EXP_BT_WAVES][explorer_k::EXP_BT_STEPS] = {};   // BITTAB waveforms
@@ -1154,7 +1072,6 @@ class Explorer : public Module {
   bool  slot_on_[kSlots] = { false, false, false, false };   // slot computed last sample
 
   Params pn_, pf_;                 // current / fading-out model parameters (this sample)
-  float ln_cz_knee_ = 0.f;
   float dc_a_ = 0.f, dc_x1_ = 0.f, dc_y1_ = 0.f;
   float sr8_ = 8000.f, sr_ = 48000.f;
   float ctrl_a_ = 0.f;
