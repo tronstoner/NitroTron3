@@ -8,42 +8,52 @@
 namespace explorer_k {
 
 // --- Families / models (SW1 = family, K1 = model in equal zones) -------------
-constexpr int EXP_N_UP   = 5;   // SW1 UP:   ratio FM, cross-band FM, 2-op feedback FM, ring/AM, frequency shift
-constexpr int EXP_N_MID  = 5;   // SW1 MID:  hard sync, CZ shapes, mirror/fold, formant pulses, exact harmonics
-constexpr int EXP_N_DOWN = 5;   // SW1 DOWN: wavetable, phase quantisation, Walsh, bit/rate crush, bit table
-constexpr float EXP_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new model output on any model / zone change
+constexpr int EXP_N_UP   = 5;   // SW1 UP (FM):            ratio FM, ratio FM curated, cross-band FM, 2-op feedback FM, shifted ring
+constexpr int EXP_N_MID  = 5;   // SW1 MID (shift & PD):   frequency shift, interval shift, CZ shapes, mirror/fold, formant pulses
+constexpr int EXP_N_DOWN = 3;   // SW1 DOWN (harm. & dig.): exact harmonics, wavetable, bit table
+constexpr float EXP_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new model output on any model / zone / discrete-item change
+constexpr float EXP_DISC_SLIDE_MS  = 1.f;   // ms; linear slide of a snapped numeric value (curated FM ratio, interval) to its new item
 
 // --- Anti-fold (armitage's practice: keep generated partials under the 8 kHz engine's Nyquist) ---
-// Applied only where the model has a natural per-band limit (FM index Carson caps, sync / fold /
-// formant / resonance ratio caps, CZ knee floor, harmonic drop, ring sum-term drop). false = off (A/B).
+// Applied only where the model has a natural per-band limit (FM index Carson caps on ratio / curated /
+// cross-band FM, fold / formant / CZ resonance ratio caps, CZ knee floor, harmonic drop, shifted-ring
+// sum-term drop, bit-table step count). Not on the pushed 2-op feedback FM. false = off (A/B).
 constexpr bool  EXP_ANTIFOLD      = true;
 constexpr float EXP_FOLD_LIMIT_HZ = 4000.f;   // Hz; Nyquist of the 8 kHz band engine (FM Carson caps, ring sum term)
-constexpr float EXP_PD_FMAX       = 3800.f;   // Hz; ratio caps R_k f'_k <= this (sync, CZ resonance, fold, formant; = ARM_RES_FMAX)
+constexpr float EXP_PD_FMAX       = 3800.f;   // Hz; ratio caps R_k f'_k <= this (CZ resonance, fold, formant; = ARM_RES_FMAX)
 constexpr float EXP_HARM_FMAX     = 3800.f;   // Hz; exact harmonic n f'_k above this is dropped (= ARM_ADD_FMAX)
 constexpr float EXP_HARM_FEDGE    = 400.f;    // Hz; fade width below EXP_HARM_FMAX (= ARM_ADD_FEDGE)
 
 // --- SW1 UP: FM & modulation --------------------------------------------------
-constexpr float EXP_FM_INDEX_MAX  = 12.f;    // rad; K3 index at full CW, squared taper (models 1, 2, 3)
+constexpr float EXP_FM_INDEX_MAX  = 12.f;    // rad; K3 index at full CW, squared taper (ratio FM, curated, cross-band, feedback)
 constexpr float EXP_RFM_RATIO_MIN = 0.5f;    // ratio FM: modulator ratio at K2 CCW (exponential to MAX)
 constexpr float EXP_RFM_RATIO_MAX = 8.f;     // ratio FM: modulator ratio at K2 CW
-constexpr float EXP_XB_N_MIN      = 1.f;     // cross-band FM / ring: partner offset (bands) at K2 CCW (linear, continuous)
-constexpr float EXP_XB_N_MAX      = 24.f;    // cross-band FM / ring: partner offset at K2 CW
-constexpr float EXP_FBFM_FB_MAX   = 1.5f;    // 2-op feedback FM: modulator self-feedback at K2 CW (linear from 0)
+// Ratio FM curated: K2 steps through these modulator ratios (ascending, equal zones), snapped + EXP_DISC_SLIDE_MS.
+constexpr int   EXP_FM_N_RATIOS   = 14;
+constexpr float EXP_FM_RATIOS[EXP_FM_N_RATIOS] = { 0.5f, 1.f, 1.41421356f, 1.5f, 1.61803399f, 2.f, 2.41421356f,
+                                                   2.71828183f, 3.f, 3.14159265f, 3.5f, 4.f, 5.f, 7.f };
+constexpr int   EXP_XB_N_MAX      = 24;      // cross-band FM: partner offset n = 1 .. this bands, integer, snapped (equal K2 zones)
+constexpr float EXP_FB2_MAX       = 3.f;     // 2-op feedback FM ("pushed"): modulator self-feedback at K2 CW (linear from 0); no anti-fold caps
+constexpr float EXP_SR_RATIO_MIN  = 0.25f;   // shifted ring: modulator = r x band freq, r at K2 CCW (exponential, continuous)
+constexpr float EXP_SR_RATIO_MAX  = 4.f;     // shifted ring: r at K2 CW
 constexpr float EXP_FS_MAX_HZ     = 800.f;   // frequency shift: |shift| at K2 full CW / CCW
 constexpr float EXP_FS_CURVE_HZ   = 1.f;     // frequency shift: s = sign(t) F0 ((MAX/F0 + 1)^|t| - 1), F0 = this (exponential-ish, 0 at noon)
 constexpr float EXP_FS_REF_HZ     = 800.f;   // frequency shift, K3 proportional end: shift_k = s f'_k / this (K2 end = +-100 % of the band freq)
 
-// --- SW1 MID: phase distortion ------------------------------------------------
-constexpr float EXP_SYNC_R_MAX    = 8.f;     // hard sync: slave ratio at K2 CW (linear from 1)
+// --- SW1 MID: shift & phase distortion ----------------------------------------
+constexpr int   EXP_IS_SEMI_MAX   = 12;      // interval shift: K2 = -this .. +this semitones, snapped (equal zones, noon = 0)
+constexpr float EXP_IS_DETUNE_CENTS = 50.f;  // interval shift: K3 detune +-this cents, continuous (noon = 0)
 constexpr float EXP_CZ_KNEE       = 0.01f;   // CZ two-segment bend: knee at K2 CW (d = 0.5 (KNEE / 0.5)^K2; = ARM_PD_KNEE)
 constexpr float EXP_CZ_FOLD_HZ    = 500.f;   // CZ bend anti-fold: knee floor rises from KNEE at this f'_k ... (= ARM_PD_FOLD_HZ)
 constexpr float EXP_CZ_FOLD_TOP   = 3800.f;  // ... to 0.5 (sine) at this f'_k (= ARM_PD_FOLD_TOP)
 constexpr float EXP_CZ_RES_MAX    = 8.f;     // CZ resonant triangle / trapezoid: resonance ratio at K2 CW (linear from 1; = ARM_RES_R_MAX)
 constexpr float EXP_FOLD_MAX      = 8.f;     // mirror / fold: folds at K2 CW (linear from 1)
-constexpr float EXP_FORM_MAX      = 16.f;    // formant pulses: formant ratio x band freq at K2 CW (linear from 1)
-constexpr float EXP_HARM_MAX      = 16.f;    // exact harmonics: harmonic number at K2 CW (linear from 1, continuous crossfade)
+constexpr float EXP_FORM_MIN      = 0.5f;    // formant pulses: formant ratio x band freq at K2 CCW (exponential)
+constexpr float EXP_FORM_MAX      = 4.f;     // formant pulses: at K2 CW
 
-// --- SW1 DOWN: digital ----------------------------------------------------------
+// --- SW1 DOWN: harmonic & digital ------------------------------------------------
+constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number at K2 CW (linear from 1, neighbours crossfaded)
+
 constexpr int   EXP_WT_SETS       = 4;       // wavetable sets (K3 zones): analog, PPG-style, vocal, noisy
 constexpr int   EXP_WT_WAVES      = 4;       // waves per set (K2 scans and interpolates)
 constexpr int   EXP_WT_SIZE       = 256;     // samples per single-cycle table (power of two; holds harmonics 1..127)
@@ -62,15 +72,9 @@ constexpr float EXP_WT_VOX_F[4][3]  = { { 700.f, 1220.f, 2600.f },    // a
                                         { 450.f,  800.f, 2830.f } };  // o
 constexpr float EXP_WT_VOX_BW[3]  = { 80.f, 90.f, 120.f };   // Hz; formant bandwidths
 constexpr float EXP_WT_VOX_A[3]   = { 1.f, 0.5f, 0.25f };    // formant amplitudes
-constexpr float EXP_PQ_STEPS_MAX  = 64.f;    // phase quantisation: steps per cycle at K2 CCW (exponential to MIN)
-constexpr float EXP_PQ_STEPS_MIN  = 2.f;     // phase quantisation: steps per cycle at K2 CW
-constexpr int   EXP_WAL_N_MAX     = 16;      // Walsh: highest function index on K2 (sequency 1..16, stepped)
-constexpr float EXP_CRUSH_BITS_MAX = 12.f;   // bit crush: bits at K2 CCW (linear, continuous)
-constexpr float EXP_CRUSH_BITS_MIN = 1.f;    // bit crush: bits at K2 CW
-constexpr float EXP_CRUSH_RATE_MAX = 8000.f; // Hz; per-band sample & hold rate at K3 CCW (exponential)
-constexpr float EXP_CRUSH_RATE_MIN = 100.f;  // Hz; at K3 CW
-// Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle, steps +-1.
-// K2 first half scrolls the 16 LFSR patterns (then into SQR n = 1), second half SQR n = 1 -> EXP_BT_SQR_N_MAX.
+// Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle, cosine-interpolated (fully smooth).
+// K2 STEPS through EXP_BT_WAVES waveforms (equal zones): the 16 LFSR patterns, then SQR n = 1 .. EXP_BT_SQR_N_MAX;
+// a step = EXP_MODEL_XFADE_MS crossfade, no blend. K3 unused.
 constexpr int      EXP_BT_STEPS     = 16;       // steps per band cycle (pattern length)
 constexpr int      EXP_BT_PATTERNS  = 16;       // LFSR tap sets (K2 first half)
 constexpr uint16_t EXP_BT_SEED      = 0xACE1u;  // fixed LFSR seed (every pattern starts here)
@@ -79,30 +83,51 @@ constexpr uint16_t EXP_BT_SEED      = 0xACE1u;  // fixed LFSR seed (every patter
 constexpr uint16_t EXP_BT_TAPS[EXP_BT_PATTERNS] = {
   0xB400u, 0xD008u, 0xA011u, 0x8016u, 0x9C00u, 0xE100u, 0xC014u, 0x8805u,
   0xF000u, 0xA801u, 0x8402u, 0xD300u, 0x9009u, 0xB002u, 0xC600u, 0xE008u };
-constexpr float    EXP_BT_SQR_N_MAX = 16.f;     // SQR: harmonic n at K2 CW (linear from 1, neighbours crossfaded)
+constexpr int      EXP_BT_SQR_N_MAX = 16;       // SQR waveforms: square x harmonic n = 1 .. this
+constexpr int      EXP_BT_WAVES     = EXP_BT_PATTERNS + EXP_BT_SQR_N_MAX;   // 32 stepped waveforms on K2
 // Anti-fold (EXP_ANTIFOLD): steps per band S = largest of 16 / 8 / 4 / 2 with (S / 2) f'_k <= EXP_FOLD_LIMIT_HZ
 // (the pattern's step Nyquist fits under the ceiling = at most one step per 8 kHz engine sample);
 // the pattern is subsampled (every 16 / S-th step). Static per band centre and slot.
 constexpr int      EXP_BT_STEPS_MIN = 2;        // fewest steps a band can drop to
 
-// --- Octave (SW2 select, K5 mix) ---------------------------------------------------
-constexpr float EXP_OCT_XFADE_MS  = 10.f;    // ms; linear slide of the octave-side split on an SW2 change (= ARM_XFADE_MS)
-constexpr float EXP_OCT_BOTH      = 0.5f;    // SW2 MID: up / down share of the octave side each
+// --- Octave (SW2 select: UP +1, MID -1, DOWN -2; K5 mix) -------------------------------
+constexpr float EXP_OCT_XFADE_MS  = 10.f;    // ms; linear slide between octave slots on an SW2 change (= ARM_XFADE_MS)
+
+// --- K4 = post filter on the final 48 kHz wet (armitage's K4 law, no envelopes, no resonance) ---
+// t = 2 k4 - 1, tmag = |t|^EXP_FILT_CURVE; noon = true bypass; t < 0 LP fc = FMAX (LP_MIN / FMAX)^tmag,
+// t > 0 HP fc = FMIN (HP_MAX / FMIN)^tmag; two cascaded TPT SVF stages (24 dB/oct), Q fixed per stage.
+// wet = dry + m (filtered - dry), m -> min(|t| / FADE, 1), slid at most 1 per EXP_FILT_SLIDE_MS.
+constexpr float EXP_FILT_FMIN      = 40.f;     // Hz; HP cutoff just right of noon (= ARM_FILT_FMIN)
+constexpr float EXP_FILT_FMAX      = 4000.f;   // Hz; LP cutoff just left of noon (= ARM_FILT_FMAX)
+constexpr float EXP_FILT_HP_MAX    = 4000.f;   // Hz; HP cutoff at K4 full CW (= ARM_FILT_HP_MAX)
+constexpr float EXP_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW (= ARM_FILT_LP_MIN)
+constexpr float EXP_FILT_FC_MIN    = 10.f;     // Hz; stability floor on fc (= ARM_FILT_FC_MIN)
+constexpr float EXP_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling on fc (= ARM_FILT_FC_MAX)
+constexpr float EXP_FILT_CURVE     = 1.0f;     // |t| exponent (= ARM_FILT_CURVE)
+constexpr float EXP_FILT_Q         = 0.707f;   // per-stage Q, both stages: flat, no resonance
+constexpr float EXP_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t, per block (= ARM_FILT_SMOOTH_MS)
+constexpr float EXP_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter (= ARM_FILT_FADE)
+constexpr float EXP_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass (= ARM_FILT_SNAP)
+constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide (= ARM_MUTE_SLIDE_MS as armitage uses it)
 
 // --- Control smoothing / snapping ----------------------------------------------------
-constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2..K5 at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
+constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K5 at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
 constexpr float EXP_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this (K5 = 0 skips octave work)
 
 // --- Band sum: phase alignment + gain staging (copied values from armitage_constants.h, ARM_ALIGN = true) ---
 // Played slot: odd bands negated (z -> -z) before everything, output weight w_k = 10^(W_dB(log2 f_k) / 20).
-// K4 CCW (unshaped) with K5 CCW = armitage's unshaped band sum at SW2 MID (unity vs dry).
+// The unshaped played band sum with these weights = armitage's unshaped band sum at SW2 MID (unity vs dry).
 constexpr float EXP_ALIGN_WA    = -0.1583384f;   // dB per log2(Hz)^2 (= ARM_ALIGN_WA)
 constexpr float EXP_ALIGN_WB    =  1.5180589f;   // dB per log2(Hz)   (= ARM_ALIGN_WB)
 constexpr float EXP_ALIGN_WC    = -1.9726554f;   // dB                (= ARM_ALIGN_WC)
 constexpr float EXP_ALIGN_W_FLO =  41.2f;        // Hz; weight held below (= ARM_ALIGN_W_FLO)
 constexpr float EXP_ALIGN_W_FHI = 330.f;         // Hz; weight held above (= ARM_ALIGN_W_FHI)
-constexpr float EXP_GAIN_UP     = 1.139f;        // octave-up slot gain, unity vs played at K4 CCW (= ARM_GAIN_UP)
+constexpr float EXP_GAIN_UP     = 1.139f;        // octave-up slot gain, unity vs played on the unshaped band sum (= ARM_GAIN_UP)
 constexpr float EXP_GAIN_DOWN   = 1.445f;        // octave-down slot gain (= ARM_GAIN_DOWN)
+// -2 slot gain: the -2 signal is a second Down1 stage applied to the -1 signal, the same transform the
+// -1 gain was fitted to make up once; assumed to lose the same again -> the square (2.088). Unheard,
+// unmeasured starting point.
+constexpr float EXP_GAIN_DOWN2  = EXP_GAIN_DOWN * EXP_GAIN_DOWN;
 constexpr float EXP_OUT_GAIN    = 1.487f;        // wet trim (= ARM_OUT_GAIN)
 constexpr float EXP_SILENCE     = 1e-10f;        // |z|^2 below this: band silent (= ARM_SILENCE)
 constexpr float EXP_DENORM      = 1e-12f;        // feedback FM state below this flushed to 0 (= ARM_DENORM)

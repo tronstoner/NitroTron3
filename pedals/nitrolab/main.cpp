@@ -13,7 +13,7 @@
 //                          K5 onset-triggered envelope on the K4 cutoff, K2 the same on the K3 FM index (UP))
 // SW3 MIDDLE = explorer   (sound-exploration models on a copy of armitage's band
 //                          engine — see modules/explorer.h; SW1 = family, K1 = model,
-//                          K2 / K3 = sweeps, K4 = amount, K5 = octave mix, SW2 = octave)
+//                          K2 / K3 = sweeps, K4 = post filter, K5 = octave mix, SW2 = octave +1 / -1 / -2)
 // SW3 DOWN   = empty      (pass-through placeholder)
 
 #include "daisy.h"
