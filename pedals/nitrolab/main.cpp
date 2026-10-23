@@ -11,7 +11,9 @@
 //                          unrelated to ChronoTron3's archived armitage;
 //                          SW1 = mode pair, K1 bipolar: CCW / CW model,
 //                          K5 onset-triggered envelope on the K4 cutoff, K2 the same on the K3 FM index (UP))
-// SW3 MIDDLE = empty      (pass-through placeholder)
+// SW3 MIDDLE = explorer   (sound-exploration models on a copy of armitage's band
+//                          engine — see modules/explorer.h; SW1 = family, K1 = model,
+//                          K2 / K3 = sweeps, K4 = amount, K5 = octave mix, SW2 = octave)
 // SW3 DOWN   = empty      (pass-through placeholder)
 
 #include "daisy.h"
@@ -24,6 +26,7 @@
 #include "module.h"             // pedals/nitrolab/
 
 #include "modules/armitage.h"
+#include "modules/explorer.h"
 #include "modules/empty.h"
 
 #include <math.h>
@@ -50,9 +53,9 @@ ControlSurface cs;
 Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 
 Armitage armitage;
-Empty    empty_b;
+Explorer explorer;
 Empty    empty_c;
-Module*  modules[NL_MODE_COUNT] = { &armitage, &empty_b, &empty_c };
+Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &empty_c };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
 volatile int g_active = NL_MODE_ARMITAGE;
@@ -133,7 +136,7 @@ int main() {
 
   for (int i = 0; i < NL_MODE_COUNT; i++) modules[i]->Init(sr);
 
-  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=empty, 2=DOWN=empty.
+  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=explorer, 2=DOWN=empty.
   int sel = cs.Switch(2);
   if (sel < 0 || sel >= NL_MODE_COUNT) sel = 0;
   g_active = sel;
@@ -143,9 +146,10 @@ int main() {
   hw.StartAudio(AudioCallback);
 
   uint32_t diag_hb = 0;
-  int      diag_stage = 0;          // 1 = second half of a setting line due
+  int      diag_stage = 0;          // 1 / 2 = second half of an armitage / explorer setting line due
   float    diag_cpu_last = 0.f;     // CPU peak of the last full 2 s window
   Armitage::DiagSnap diag_snap{};
+  Explorer::DiagSnap diag_xsnap{};
 
   while (true) {
     hw.DelayMs(10);
@@ -185,6 +189,29 @@ int main() {
                           d.mute ? 1 : 0,
                           (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
+      } else if (diag_stage == 2) {
+        // explorer, second half: model (+ zone), sweep A / B (derived values), mute, cpu
+        const Explorer::DiagSnap& d = diag_xsnap;
+        float cpu_pk = g_cpu.GetMaxCpuLoad();
+        if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
+        const char* zn = Explorer::ZoneName(d.model, d.zone);
+        hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " mute %d cpu %u%%",
+                          Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
+                          D2SV(d.a), D2SV(d.b), d.mute ? 1 : 0,
+                          (unsigned)(cpu_pk * 100.f + 0.5f));
+        diag_stage = 0;
+      } else if (g_active == NL_MODE_EXPLORER && explorer.DiagTake(diag_xsnap)) {
+        // explorer, first half: number / auto, knobs, switches
+        static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
+        const Explorer::DiagSnap& d = diag_xsnap;
+        char tag[12];
+        if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
+        else         snprintf(tag, sizeof(tag), "auto");
+        hw.seed.Print("XP %s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s SW2 %s | ",
+                      tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
+                      sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
+                      sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
+        diag_stage = 2;
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
         // first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
