@@ -37,6 +37,9 @@ Do not jump into code or propose changes without first understanding the project
 **Working on performance, CPU budget, or memory footprint:**
 - `docs/DSP_INVENTORY.md` — per-block code size, CPU cost, memory footprint, per-mode budget estimates, and how to re-measure them.
 
+**Working in NitroLab** (`pedals/nitrolab/`, the test-bench pedal):
+- `docs/NITROLAB.md` — the lab's working method (main module on SW3 UP, breakout/variation slots with sweepable controls) and the current slots.
+
 **Working on repo layout, `core/` vs `pedals/`, or a new pedal:**
 - `docs/ARCHITECTURE.md` — the platform/pedal/module seams and the block/module/mode/shell vocabulary.
 - `docs/ChronoTron3/` — specs and plans for the ChronoTron3 bundle (in progress).
