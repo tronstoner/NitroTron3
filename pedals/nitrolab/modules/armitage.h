@@ -93,7 +93,7 @@
 //
 //   K4 POST FILTER (final 48 kHz wet, every mode / octave; law copied from mnemonic's tone filter):
 //     two cascaded TPT SVF stages (24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
-//     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q (both stages, fixed)
+//     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q (both stages, fixed; ARM_FILT_Q_UP 0.707 = flat in ADD / FB)
 //     the K5 envelope turns the knob: t_eff = t + ARM_ENV_DEPTH e (NOT clamped to the knob's ends;
 //     fc only limited by ARM_FILT_FC_MIN/MAX for stability), smoothed like t
 //     (rising e = clockwise, falling e = counter-clockwise, from any K4 position incl. noon)
@@ -166,7 +166,7 @@
 //                           I = ARM_FM_INDEX_MAX k3_eff^2. MID / DOWN: nothing (parked PWM LFO shares the knob)
 //   K3  FM index            I = ARM_FM_INDEX_MAX * (k3 g)^2 (0 -> 12 rad; g = 1 at K2 noon), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct,
-//                           two stages, Q fixed ARM_FILT_Q 1.1), on the final wet, all modes
+//                           two stages, Q fixed ARM_FILT_Q 1.1; ADD / FB: ARM_FILT_Q_UP 0.707, no peak), on the final wet, all modes
 //   K5  envelope            bipolar, noon = off (e = 0); triggered on each onset: CCW (t2 < 0) e falls
 //                           to -1 and holds, tau 4 s (off noon) -> 0.05 s (ends); CW (t2 > 0) rise +
 //                           decay: e rises to +1 at the knob tau, then decays to 0 with tau x
@@ -1080,7 +1080,8 @@ class Armitage : public Module {
       float fc = f_hp_ ? ARM_FILT_FMIN * expf(tmag * f_lnhp_)
                        : ARM_FILT_FMAX * expf(tmag * f_lnlp_);
       fc = (fc < ARM_FILT_FC_MIN) ? ARM_FILT_FC_MIN : (fc > ARM_FILT_FC_MAX) ? ARM_FILT_FC_MAX : fc;  // stability only
-      svf_[0].Set(fc, ARM_FILT_Q, sr_);
+      const float q = (mdl_ == kADD || mdl_ == kFB) ? ARM_FILT_Q_UP : ARM_FILT_Q;   // SW1 UP: no resonance (builder 2026-10-23)
+      svf_[0].Set(fc, q, sr_);
       svf_[1].CopyCoefFrom(svf_[0]);
     }
     float m = fm_g_;

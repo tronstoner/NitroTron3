@@ -63,7 +63,8 @@ constexpr float ARM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW (
 constexpr float ARM_FILT_FC_MIN    = 10.f;     // Hz; stability floor for the envelope-pushed cutoff (not a range end)
 constexpr float ARM_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling (below Nyquist) for the envelope-pushed cutoff
 constexpr float ARM_FILT_CURVE     = 1.0f;     // |t| exponent: 1 = cutoff moves linearly in octaves with the knob
-constexpr float ARM_FILT_Q         = 1.1f;     // per-stage Q, both stages, fixed (2026-10-22: K5 resonance removed, K5 = env depth)
+constexpr float ARM_FILT_Q         = 1.1f;     // per-stage Q, both stages, fixed (2026-10-22: K5 resonance removed); SAW / PULSE / unshaped
+constexpr float ARM_FILT_Q_UP      = 0.707f;   // per-stage Q in ADD / FB (SW1 UP): flat, no resonance (builder 2026-10-23)
 constexpr float ARM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t
 constexpr float ARM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float ARM_FILT_SNAP      = 1e-4f;    // |t_smoothed| below this with target 0: bypass
