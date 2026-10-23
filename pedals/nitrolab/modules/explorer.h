@@ -71,13 +71,21 @@
 //   4 CRUSH      Wq = (floor(L cos 2 pi phi) + 0.5) / L, L = 2^(B - 1), B = 12 - 11 K2 (waveform crushed,
 //                band level a_k exact); shaped_k = a_k Wq held by a per-slot sample & hold clock at
 //                R = 8000 (100 / 8000)^K3 Hz (one clock for all bands of the slot).
+//   5 BITTAB     16-step pattern v[0..15] (+-1 / SQR values), one step per 1/16 of the band cycle.
+//                K2 first half: s = 32 K2 in [0, 16): crossfade LFSR pattern floor(s) -> the next one
+//                (pattern 15 -> SQR n = 1, so K2 noon joins continuously); second half: SQR
+//                v[j] = sq(j) cos(2 pi n j / 16), sq = +1 (j < 8) / -1, n = 1 + 15 (2 K2 - 1)
+//                (neighbouring n crossfaded; sampled at the step starts, so n > 8 mirrors on the
+//                16-step grid). K3: W = v0 + K3 e (v1 - v0), e = 0.5 (1 - cos pi f) (cosine
+//                interpolation to the next step, f = position inside the step). Anti-fold: S_k steps
+//                (16 / 8 / 4 / 2, (S/2) f' <= 4 kHz), pattern subsampled every 16 / S_k-th step.
 //
 // MODEL CHANGE (SW1, K1 zone, CZ / wavetable K3 zone, Walsh K2 index): old and new model are both
 // computed for EXP_MODEL_XFADE_MS and crossfaded linearly; the entering model starts from cleared
 // state. A change during a fade is picked up when that fade ends.
 //
 // CONTROL MAP
-//   K1  model        equal zones: SW1 UP 5, MID 5, DOWN 4 (see MODELS)
+//   K1  model        equal zones: SW1 UP 5, MID 5, DOWN 5 (see MODELS)
 //   K2  sweep A      per model (see MODELS)
 //   K3  sweep B      per model
 //   K4  amount       CCW = unshaped band (armitage's unshaped band sum), CW = model only; linear
@@ -129,7 +137,7 @@ class Explorer : public Module {
   // Global model ids (family offset + K1 zone).
   enum { kRFM = 0, kXFM, kFBFM, kRING, kFSH,          // SW1 UP
          kSYNC, kCZ, kFOLD, kFORM, kHARM,             // SW1 MID
-         kWT, kPQ, kWAL, kCRUSH,                      // SW1 DOWN
+         kWT, kPQ, kWAL, kCRUSH, kBIT,                // SW1 DOWN
          kNumModels };
   enum { kCzDsin = 0, kCzRtri = 1, kCzRtrap = 2, kCzBend = 3 };   // CZ K3 zones
 
@@ -162,9 +170,14 @@ class Explorer : public Module {
         int lv = 0;
         for (int l = 0; l < EXP_WT_LEVELS; l++) if (EXP_WT_LEVEL_H[l] <= hk) lv = l;
         wtlvl_[o][k] = (uint8_t)lv;
+        int st = EXP_BT_STEPS;                             // BITTAB steps (anti-fold: (S/2) f' <= limit)
+        if (EXP_ANTIFOLD)
+          while (st > EXP_BT_STEPS_MIN && 0.5f * (float)st * fp > EXP_FOLD_LIMIT_HZ) st >>= 1;
+        btst_[o][k] = (uint8_t)st;
       }
     }
     BuildWalsh();
+    BuildBitPatterns();
     BuildTables();
     ln_cz_knee_ = logf(EXP_CZ_KNEE / 0.5f);
     for (int o = 0; o < 3; o++) { ResetSlotState(o); slot_on_[o] = false; }
@@ -227,7 +240,7 @@ class Explorer : public Module {
     int   n;          // tap number (#n), 0 = automatic line
     float k[5];       // K1..K5 (remapped 0..1)
     int   sw1, sw2;   // 0 UP, 1 MID, 2 DOWN
-    int   model;      // global model id (kRFM .. kCRUSH)
+    int   model;      // global model id (kRFM .. kBIT)
     int   zone;       // CZ shape / wavetable set (0..3), Walsh index - 1, else 0
     float a, b;       // sweep A / sweep B as derived values (units per model)
     bool  mute;
@@ -243,7 +256,7 @@ class Explorer : public Module {
   static const char* ModelName(int m) {
     static const char* const n[kNumModels] = { "RATIO-FM", "XBAND-FM", "FB-FM", "RING-AM", "FSHIFT",
                                                "SYNC", "CZ", "FOLD", "FORMANT", "HARM",
-                                               "WTABLE", "PHASEQ", "WALSH", "CRUSH" };
+                                               "WTABLE", "PHASEQ", "WALSH", "CRUSH", "BITTAB" };
     return (m >= 0 && m < kNumModels) ? n[m] : "?";
   }
   static const char* ZoneName(int m, int z) {
@@ -321,6 +334,7 @@ class Explorer : public Module {
     float p0 = 0.f, p1 = 0.f, p2 = 0.f, p3 = 0.f;   // model-specific (see Derive)
     int   n0 = 0;               // integer part (partner offset, harmonic, Walsh index)
     int   zone = 0;
+    float bt[explorer_k::EXP_BT_STEPS] = {};   // BITTAB: blended step values for this sample
   };
 
   static inline int VarKey(int model, int zone) { return (model << 4) | (zone & 15); }
@@ -400,6 +414,32 @@ class Explorer : public Module {
       case kWAL:                           // n0 = Walsh index (1..16), p0 = blend with n0 + 1
         p.n0 = zone + 1; p.p0 = k3;
         p.a = (float)p.n0; p.b = k3; break;
+      case kBIT: {                         // bt[] = blended pattern, p0 = smooth share (K3)
+        // a = scroll display: 1..17 = LFSR pattern position (17 = SQR n = 1), 17..32 = SQR n + 16
+        float va[EXP_BT_STEPS], vb[EXP_BT_STEPS];
+        float fr;
+        if (k2 < 0.5f) {
+          const float sp = 2.f * (float)EXP_BT_PATTERNS * k2;   // [0, 16)
+          int i = (int)sp;
+          if (i > EXP_BT_PATTERNS - 1) i = EXP_BT_PATTERNS - 1;
+          fr = sp - (float)i;
+          for (int j = 0; j < EXP_BT_STEPS; j++) va[j] = bt_pat_[i][j];
+          if (i < EXP_BT_PATTERNS - 1) for (int j = 0; j < EXP_BT_STEPS; j++) vb[j] = bt_pat_[i + 1][j];
+          else                         SqrPattern(1, vb);
+          p.a = 1.f + sp;
+        } else {
+          const float n = 1.f + (EXP_BT_SQR_N_MAX - 1.f) * (2.f * k2 - 1.f);
+          int n0 = (int)n;
+          if (n0 > (int)EXP_BT_SQR_N_MAX - 1) n0 = (int)EXP_BT_SQR_N_MAX - 1;
+          fr = n - (float)n0;
+          SqrPattern(n0, va);
+          SqrPattern(n0 + 1, vb);
+          p.a = 16.f + n;
+        }
+        for (int j = 0; j < EXP_BT_STEPS; j++) p.bt[j] = va[j] + fr * (vb[j] - va[j]);
+        p.p0 = k3;
+        p.b = k3; break;
+      }
       default: {                           // kCRUSH: p0 = L = 2^(B-1), p1 = 1/L, p2 = S&H clock increment
         const float bits = EXP_CRUSH_BITS_MAX + (EXP_CRUSH_BITS_MIN - EXP_CRUSH_BITS_MAX) * k2;
         const float L = exp2f(bits - 1.f);
@@ -459,6 +499,7 @@ class Explorer : public Module {
       case kWT:   return ShapeK<kWT>(o, p);
       case kPQ:   return ShapeK<kPQ>(o, p);
       case kWAL:  return ShapeK<kWAL>(o, p);
+      case kBIT:  return ShapeK<kBIT>(o, p);
       default:    return ShapeK<kCRUSH>(o, p);
     }
   }
@@ -650,6 +691,18 @@ class Explorer : public Module {
         const int j = (int)(ph * 32.f) & 31;
         const float w0 = wal_[p.n0][j], w1 = wal_[p.n0 + 1][j];
         W = w0 + p.p0 * (w1 - w0);
+      } else if (M == kBIT) {
+        const float ph = FastAtan2Cycles(ci, cr);
+        const int S = btst_[o][k];
+        const int stride = EXP_BT_STEPS / S;
+        const float xs = ph * (float)S;
+        int j = (int)xs;
+        if (j > S - 1) j = S - 1;
+        const float f = xs - (float)j;
+        const float v0 = p.bt[j * stride];
+        const float v1 = p.bt[((j + 1 == S) ? 0 : j + 1) * stride];
+        const float e = 0.5f * (1.f - Cos01(0.5f * f));   // cosine interpolation weight
+        W = v0 + p.p0 * e * (v1 - v0);
       } else {                                   // kCRUSH
         if (tick) {
           float q = floorf(cr * p.p0);
@@ -684,6 +737,27 @@ class Explorer : public Module {
     if (v < t) { v += st; if (v > t) v = t; }
     else if (v > t) { v -= st; if (v < t) v = t; }
     return v;
+  }
+
+  // BITTAB LFSR patterns: 16-bit Fibonacci LFSR per tap set, fixed seed, first 16 output bits.
+  void BuildBitPatterns() {
+    using namespace explorer_k;
+    for (int t = 0; t < EXP_BT_PATTERNS; t++) {
+      uint16_t st = EXP_BT_SEED;
+      for (int j = 0; j < EXP_BT_STEPS; j++) {
+        const unsigned bit = (unsigned)__builtin_popcount((unsigned)(st & EXP_BT_TAPS[t])) & 1u;
+        st = (uint16_t)((st >> 1) | (bit << 15));
+        bt_pat_[t][j] = bit ? 1.f : -1.f;
+      }
+    }
+  }
+  // BITTAB SQR pattern: square (one cycle per band cycle) x harmonic n, sampled at the step starts.
+  static void SqrPattern(int n, float* v) {
+    using namespace explorer_k;
+    for (int j = 0; j < EXP_BT_STEPS; j++) {
+      const float sq = (j < EXP_BT_STEPS / 2) ? 1.f : -1.f;
+      v[j] = sq * Cos01((float)(n * j) * (1.f / (float)EXP_BT_STEPS));
+    }
   }
 
   // Walsh functions in sequency order, 32 segments: rows of the 32x32 Hadamard matrix sorted by
@@ -990,6 +1064,8 @@ class Explorer : public Module {
   float pdcap_[3][kBands];         // EXP_PD_FMAX / f'_k (ratio caps)
   float czfl_[3][kBands];          // CZ bend knee floor per band
   uint8_t wtlvl_[3][kBands];       // wavetable band-limit level per band
+  uint8_t btst_[3][kBands];        // BITTAB steps per band (16 / 8 / 4 / 2)
+  float bt_pat_[explorer_k::EXP_BT_PATTERNS][explorer_k::EXP_BT_STEPS] = {};   // BITTAB LFSR patterns (+-1)
   float wal_[explorer_k::EXP_WAL_N_MAX + 2][32] = {};   // Walsh functions, sequency 0..N_MAX + 1
 
   // Model state per slot and band

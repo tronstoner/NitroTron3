@@ -10,7 +10,7 @@ namespace explorer_k {
 // --- Families / models (SW1 = family, K1 = model in equal zones) -------------
 constexpr int EXP_N_UP   = 5;   // SW1 UP:   ratio FM, cross-band FM, 2-op feedback FM, ring/AM, frequency shift
 constexpr int EXP_N_MID  = 5;   // SW1 MID:  hard sync, CZ shapes, mirror/fold, formant pulses, exact harmonics
-constexpr int EXP_N_DOWN = 4;   // SW1 DOWN: wavetable, phase quantisation, Walsh, bit/rate crush
+constexpr int EXP_N_DOWN = 5;   // SW1 DOWN: wavetable, phase quantisation, Walsh, bit/rate crush, bit table
 constexpr float EXP_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new model output on any model / zone change
 
 // --- Anti-fold (armitage's practice: keep generated partials under the 8 kHz engine's Nyquist) ---
@@ -69,6 +69,21 @@ constexpr float EXP_CRUSH_BITS_MAX = 12.f;   // bit crush: bits at K2 CCW (linea
 constexpr float EXP_CRUSH_BITS_MIN = 1.f;    // bit crush: bits at K2 CW
 constexpr float EXP_CRUSH_RATE_MAX = 8000.f; // Hz; per-band sample & hold rate at K3 CCW (exponential)
 constexpr float EXP_CRUSH_RATE_MIN = 100.f;  // Hz; at K3 CW
+// Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle, steps +-1.
+// K2 first half scrolls the 16 LFSR patterns (then into SQR n = 1), second half SQR n = 1 -> EXP_BT_SQR_N_MAX.
+constexpr int      EXP_BT_STEPS     = 16;       // steps per band cycle (pattern length)
+constexpr int      EXP_BT_PATTERNS  = 16;       // LFSR tap sets (K2 first half)
+constexpr uint16_t EXP_BT_SEED      = 0xACE1u;  // fixed LFSR seed (every pattern starts here)
+// 16-bit Fibonacci LFSR tap masks: new bit = parity(state & mask), state = (state >> 1) | (bit << 15),
+// the pattern = the first 16 new bits (1 -> +1, 0 -> -1).
+constexpr uint16_t EXP_BT_TAPS[EXP_BT_PATTERNS] = {
+  0xB400u, 0xD008u, 0xA011u, 0x8016u, 0x9C00u, 0xE100u, 0xC014u, 0x8805u,
+  0xF000u, 0xA801u, 0x8402u, 0xD300u, 0x9009u, 0xB002u, 0xC600u, 0xE008u };
+constexpr float    EXP_BT_SQR_N_MAX = 16.f;     // SQR: harmonic n at K2 CW (linear from 1, neighbours crossfaded)
+// Anti-fold (EXP_ANTIFOLD): steps per band S = largest of 16 / 8 / 4 / 2 with (S / 2) f'_k <= EXP_FOLD_LIMIT_HZ
+// (the pattern's step Nyquist fits under the ceiling = at most one step per 8 kHz engine sample);
+// the pattern is subsampled (every 16 / S-th step). Static per band centre and slot.
+constexpr int      EXP_BT_STEPS_MIN = 2;        // fewest steps a band can drop to
 
 // --- Octave (SW2 select, K5 mix) ---------------------------------------------------
 constexpr float EXP_OCT_XFADE_MS  = 10.f;    // ms; linear slide of the octave-side split on an SW2 change (= ARM_XFADE_MS)
