@@ -40,15 +40,18 @@ endif
 BUILD_PROFILE := $(PEDAL)-$(INSTRUMENT)-diag$(DIAG)
 
 # NitroTron3m (PEDAL=nitrotron3m) slot-B module: `NT3M_SLOT_B=sprawl` (default,
-# NitroTron3 Mode B) or `NT3M_SLOT_B=armitage` (pedals/nitrolab/modules/armitage.h).
+# NitroTron3 Mode B), `NT3M_SLOT_B=armitage` (pedals/nitrolab/modules/armitage.h)
+# or `NT3M_SLOT_B=explorer` (pedals/nitrolab/modules/explorer.h).
 # Part of BUILD_PROFILE for that pedal only, so switching it forces the full
 # rebuild; other pedals' profile string is unchanged.
 NT3M_SLOT_B ?= sprawl
 ifeq ($(PEDAL),nitrotron3m)
 ifeq ($(NT3M_SLOT_B),armitage)
 C_DEFS += -DNT3M_SLOT_B_ARMITAGE
+else ifeq ($(NT3M_SLOT_B),explorer)
+C_DEFS += -DNT3M_SLOT_B_EXPLORER
 else ifneq ($(NT3M_SLOT_B),sprawl)
-$(error NT3M_SLOT_B must be sprawl or armitage (got '$(NT3M_SLOT_B)'))
+$(error NT3M_SLOT_B must be sprawl, armitage or explorer (got '$(NT3M_SLOT_B)'))
 endif
 BUILD_PROFILE := $(BUILD_PROFILE)-b$(NT3M_SLOT_B)
 endif

@@ -81,7 +81,7 @@ else
 fi
 
 echo
-echo "== nt3m_ab (NitroTron3m carve vs shipping NitroTron3: bit-exact A/B, bass + guitar; armitage slot smoke)"
+echo "== nt3m_ab (NitroTron3m carve vs shipping NitroTron3: bit-exact A/B, bass + guitar; armitage / explorer slot smokes)"
 NT3M_S="-O2 -std=c++17 -I tools/host/stub_nt3m -I src/core/blocks -I src/core/util"
 if g++ $NT3M_S -o /tmp/nt3m_ab_cmp tools/host/nt3m_ab.cpp; then
   for inst in bass guitar; do
@@ -100,6 +100,12 @@ if g++ $NT3M_S -o /tmp/nt3m_ab_cmp tools/host/nt3m_ab.cpp; then
     echo "PASS  nt3m_ab (armitage slot smoke: finite, |x| <= 10, L == R)"
   else
     echo "FAIL  nt3m_ab (armitage slot smoke)"; fail=1
+  fi
+  if g++ $NT3M_S -DAB_M -DNT3M_SLOT_B_EXPLORER -I pedals/nitrotron3m -o /tmp/nt3m_ab_exp tools/host/nt3m_ab.cpp \
+     && /tmp/nt3m_ab_exp /tmp/nt3m_ab_exp.f32; then
+    echo "PASS  nt3m_ab (explorer slot smoke: finite, |x| <= 10, L == R)"
+  else
+    echo "FAIL  nt3m_ab (explorer slot smoke)"; fail=1
   fi
 else
   echo "FAIL  nt3m_ab (compare tool build)"; fail=1

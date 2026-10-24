@@ -9,7 +9,7 @@
 // and the mode (SW3 or the recalled preset's slot). The `ControlSurface` a
 // module receives is preset_controls.h — the preset system's edit buffer, with
 // idle footswitch events — and the LEDs it receives are sinks that are never
-// shown. The modules (bordun / sprawl or armitage / schism) supply controls +
+// shown. The modules (bordun / sprawl, armitage or explorer / schism) supply controls +
 // DSP only.
 //
 // Requires daisy.h + hothouse.h + preset_controls.h included before this file.

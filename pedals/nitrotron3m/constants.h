@@ -17,12 +17,12 @@ static constexpr int   NT3M_BLOCK_SIZE = 48;
 // Mode slots (SW3 / the recalled preset's mode field): 0 = A, 1 = B, 2 = C.
 enum Nt3mMode {
   NT3M_MODE_A     = 0,   // bordun
-  NT3M_MODE_B     = 1,   // sprawl, or armitage (NT3M_SLOT_B=armitage)
+  NT3M_MODE_B     = 1,   // sprawl, or armitage / explorer (NT3M_SLOT_B=...)
   NT3M_MODE_C     = 2,   // schism
   NT3M_MODE_COUNT = 3
 };
 
-// K6 dry/wet smoothing for modules that do NOT own their output (armitage):
+// K6 dry/wet smoothing for modules that do NOT own their output (armitage, explorer):
 // the NitroLab shell's law (pedals/nitrolab/constants.h NL_MIX_SMOOTH).
 static constexpr float NT3M_MIX_SMOOTH = 0.002f;
 
@@ -40,7 +40,7 @@ constexpr bool NT3M_DIAG = false;
 #endif
 static constexpr uint32_t NT3M_DIAG_HB_MS = 2000;
 
-// armitage (pedals/nitrolab/modules/armitage.h, included directly) gates its
+// armitage / explorer (pedals/nitrolab/modules/, included directly) gate their
 // "note this setting" lines on NL_DIAG; their printer lives in the NitroLab
 // shell, so they stay off here in every build.
 constexpr bool NL_DIAG = false;

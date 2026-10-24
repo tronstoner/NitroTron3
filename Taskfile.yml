@@ -82,6 +82,14 @@ tasks:
       - make PEDAL=nitrotron3m NT3M_SLOT_B=armitage INSTRUMENT={{.INSTRUMENT}}
       - make PEDAL=nitrotron3m NT3M_SLOT_B=armitage INSTRUMENT={{.INSTRUMENT}} program-dfu
 
+  flash-nitrotron3m-explorer:
+    desc: Build + flash NitroTron3m with explorer in slot B via DFU (INSTRUMENT=bass|guitar, default bass)
+    vars:
+      INSTRUMENT: '{{.INSTRUMENT | default "bass"}}'
+    cmds:
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=explorer INSTRUMENT={{.INSTRUMENT}}
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=explorer INSTRUMENT={{.INSTRUMENT}} program-dfu
+
   clean:
     desc: Remove build output
     cmds:

@@ -10,6 +10,8 @@
 //   B  sprawl   modules/sprawl.h   NitroTron3 Mode B, carved verbatim
 //      — or —   armitage           pedals/nitrolab/modules/armitage.h (as is),
 //                                  build flag NT3M_SLOT_B=armitage
+//      — or —   explorer           pedals/nitrolab/modules/explorer.h (as is),
+//                                  build flag NT3M_SLOT_B=explorer
 //   C  schism   modules/schism.h   NitroTron3 Mode C, carved verbatim
 //
 // Build: `make PEDAL=nitrotron3m [NT3M_SLOT_B=sprawl|armitage]
@@ -26,7 +28,7 @@
 //   * The env follower and pitch tracker are shared (NT3Shared, Attach() before
 //     Init()); the YIN search runs in the main loop as in the shipping pedal.
 //   * The three NitroTron3 modules own their output (their own K6 law); a module
-//     that does not (armitage) gets the NitroLab shell's K6 equal-power mix,
+//     that does not (armitage, explorer) gets the NitroLab shell's K6 equal-power mix,
 //     reading K6 from the edit buffer.
 //   * CPU: 480 MHz on silicon rev V + FPU flush-to-zero (the NitroLab shell's
 //     setup). Neither is in the shipping pedal (400 MHz, no FTZ).
@@ -43,9 +45,17 @@
 #include "nt3_shared.h"
 
 #include "modules/bordun.h"
-#ifdef NT3M_SLOT_B_ARMITAGE
+#if defined(NT3M_SLOT_B_ARMITAGE) && defined(NT3M_SLOT_B_EXPLORER)
+#error "NT3M_SLOT_B: choose one of sprawl / armitage / explorer"
+#endif
+#if defined(NT3M_SLOT_B_ARMITAGE)
 #include "../nitrolab/modules/armitage.h"  // NitroLab's module, included as is
 using SlotB = Armitage;
+#define NT3M_SLOT_B_NITROLAB 1
+#elif defined(NT3M_SLOT_B_EXPLORER)
+#include "../nitrolab/modules/explorer.h"  // NitroLab's module, included as is
+using SlotB = Explorer;
+#define NT3M_SLOT_B_NITROLAB 1
 #else
 #include "modules/sprawl.h"
 using SlotB = Sprawl;
@@ -159,8 +169,8 @@ int main() {
   shared.tracker.Init(sr);
 
   bordun.Attach(&shared);
-#ifndef NT3M_SLOT_B_ARMITAGE
-  slot_b.Attach(&shared);
+#ifndef NT3M_SLOT_B_NITROLAB
+  slot_b.Attach(&shared);   // NitroLab modules use neither env nor tracker
 #endif
   schism.Attach(&shared);
   for (int i = 0; i < NT3M_MODE_COUNT; i++) modules[i]->Init(sr);
