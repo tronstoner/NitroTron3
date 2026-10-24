@@ -153,7 +153,7 @@ constexpr float EXP_DENORM      = 1e-12f;        // feedback FM state below this
 
 // --- Wet output chain (copied from armitage) ---------------------------------------------
 constexpr float EXP_DC_HZ     = 10.f;     // wet DC blocker (= ARM_DC_HZ)
-constexpr float EXP_SAT_T     = 0.7f;     // soft clipper knee / ceiling (= ARM_SAT_T)
+constexpr float EXP_SAT_T     = 1.0f;     // soft clipper knee / ceiling (2026-10-24: 0.7 -> 1.0, attacks were squashed; ARM_SAT_T stays 0.7)
 constexpr float EXP_SAT_TRIM  = 1.0f;     // soft clipper fixed post trim (= ARM_SAT_TRIM)
 constexpr float EXP_MUTE_SLIDE_MS = 1.0f; // FS1 wet mute slide (= ARM_MUTE_SLIDE_MS)
 constexpr int   EXP_SIN_SIZE  = 1024;     // shared sin table entries (power of two; = ARM_SIN_SIZE)
