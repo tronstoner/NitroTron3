@@ -37,6 +37,9 @@ Do not jump into code or propose changes without first understanding the project
 **Working on performance, CPU budget, or memory footprint:**
 - `docs/DSP_INVENTORY.md` — per-block code size, CPU cost, memory footprint, per-mode budget estimates, and how to re-measure them.
 
+**Working on nitrotron3m** (`pedals/nitrotron3m/`, prototype: NitroTron3 on the Module system, Armitage optional in slot B):
+- `docs/ARCHITECTURE.md` § Migration path step 6 — the carve, the preset-controls stand-in, the bit-exact A/B gate (`tools/host/nt3m_ab.cpp`). Never edit `pedals/nitrotron3/` for it; tuning still comes from `pedals/nitrotron3/constants.h`.
+
 **Working in NitroLab** (`pedals/nitrolab/`, the test-bench pedal):
 - `docs/NITROLAB.md` — the lab's working method (main module on SW3 UP, breakout/variation slots with sweepable controls) and the current slots.
 

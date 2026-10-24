@@ -97,6 +97,10 @@ src/
       modules/
         bordun.h  sprawl.h  schism.h
       constants.h         # config + INSTRUMENT profile
+    nitrotron3m/          # prototype: NitroTron3 on the Module system (step 6)
+      main.cpp  preset_controls.h  nt3_shared.h  module.h  constants.h
+      modules/
+        bordun.h  sprawl.h  schism.h        # slot B: Sprawl or ../nitrolab Armitage
     <new_pedal>/
       main.cpp
       modules/
@@ -235,7 +239,23 @@ against the v0.5.1 release. Nothing was a big-bang rewrite.
    `armitage`) against the Module interface — designed clean here rather than
    retrofitted. This is where the interface actually gets validated, and it is
    the next work *after* this branch merges.
-6. ⬜ **(Deferred, optional) Carve NitroTron3 into modules.** Retrofitting
+6. 🧪 **Prototyped as `pedals/nitrotron3m/` (2026-10-24, `a26d948`).** The shipping
+   `pedals/nitrotron3/` is untouched (byte-identical, bass + guitar). nitrotron3m =
+   Bordun / Sprawl / Schism carved **verbatim** from `pedals/nitrotron3/main.cpp`
+   into `modules/{bordun,sprawl,schism}.h` (all `OwnsOutput()`, own K6 law);
+   the unchanged `PresetSystem` (included from `../nitrotron3/preset_system.h`)
+   keeps footswitches, LEDs, flash, bypass and the DFU gesture, and feeds the
+   modules through `preset_controls.h` — a `ControlSurface` stand-in with the same
+   API backed by the preset edit buffer (footswitch events idle, so modules never
+   see FS; their LED writes go to sink LEDs). Shared `EnvFollower` + `PitchTracker`
+   live in `nt3_shared.h` (attached before `Init`). Slot B is Sprawl or NitroLab's
+   Armitage by `NT3M_SLOT_B=sprawl|armitage` (part of the build profile); presets
+   share the shipping layout (StorageData v3, QSPI offset 0). 480 MHz boost +
+   flush-to-zero; DIAG builds print a CPU heartbeat. Gate: `tools/host/nt3m_ab.cpp`
+   renders shipping vs nitrotron3m bit-exact (all three modes, SW3 switching,
+   bypass, presets). Hardware test pending. Original note on the deferred step:
+
+   **(Deferred, optional) Carve NitroTron3 into modules.** Retrofitting
    BORDUN / SPRAWL / SCHISM onto the Module interface is **not byte-identical**
    (it changes storage layout + dispatch), and NitroTron3 already ships — so it
    carries regression risk for no user-facing gain today. Leave it alone; do it

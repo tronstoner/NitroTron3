@@ -13,6 +13,14 @@ Host binaries, built and run by `tools/host/run.sh [seconds]` from the repo root
   smallest division, the clamp at T, and that every result is the exact integer
   boundary over a sweep of awkward T. Verified to fail on a round-up-only, a
   round-down-only and a float-boundary implementation.
+- **`nt3m_ab.cpp`** — the nitrotron3m carve gate. Builds the shipping
+  `pedals/nitrotron3/main.cpp` and `pedals/nitrotron3m/main.cpp` against the
+  stubs in `stub_nt3m/`, each running its real `main()` and real PresetSystem;
+  renders ~56 s of synthetic bass plucks (Karplus-Strong, double-stops, rests)
+  through a script of all SW1/SW2 positions per mode with knob sweeps, fast SW3
+  switching, FS2 bypass taps and preset save / dirty / revert / takeover /
+  recall. PASS = 0 differing samples per section (bass and guitar), plus an
+  Armitage-slot smoke run (finite, |x| <= 10, L == R).
 - **`sprawl_harness.cpp`** — runs the *real* Sprawl module on the host against
   the stubs in `stub/`, driving `Controls()` every 10 ms and `Process()` every
   48 samples like the shell does, over a synthetic bass-pluck input with K4/K2

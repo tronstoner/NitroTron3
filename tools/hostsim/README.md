@@ -150,8 +150,9 @@ Server -> client:
   tunables list again after every set / reset has been applied.
 - every 100 ms: `{"t", "cpu", "peak", "rms", "in_peak", "reinits", "src", ...}`
   plus, once the module wrote a DIAG snapshot, its fields: `"n"` (tap number,
-  0 = auto), `"mode"` (SAW / PULSE / ADD / FB / UNSHAPED), `"h"`, `"k"` (K1..K4),
-  `"sw1"`, `"sw2"`, `"beta"`, `"filt_t"`, `"fm"`, `"pwm_u"`, `"oct"`, `"mute"`,
+  0 = auto), `"mode"` (SAW / PULSE / ADD / FB / UNSHAPED), `"h"`, `"k"` (K1..K5),
+  `"sw1"`, `"sw2"`, `"beta"`, `"filt_t"`, `"fm"`, `"env_t2"`, `"env_e"` (K5 filter
+  envelope), `"envf_t2"`, `"envf_e"` (K2 FM envelope), `"oct"`, `"mute"`,
   `"diag_age_ms"`. `cpu` = host callback time / real time (0..1), `peak` /
   `rms` / `in_peak` = linear, over the last 100 ms.
 - `{"error":"..."}` for a rejected message or a rolled-back constant.
