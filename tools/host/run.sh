@@ -81,5 +81,30 @@ else
 fi
 
 echo
+echo "== nt3m_ab (NitroTron3m carve vs shipping NitroTron3: bit-exact A/B, bass + guitar; armitage slot smoke)"
+NT3M_S="-O2 -std=c++17 -I tools/host/stub_nt3m -I src/core/blocks -I src/core/util"
+if g++ $NT3M_S -o /tmp/nt3m_ab_cmp tools/host/nt3m_ab.cpp; then
+  for inst in bass guitar; do
+    NT3M_D=""; [ "$inst" = guitar ] && NT3M_D="-DNT3_INSTRUMENT_GUITAR"
+    if g++ $NT3M_S $NT3M_D -DAB_SHIP -I pedals/nitrotron3  -o /tmp/nt3m_ab_ship tools/host/nt3m_ab.cpp \
+       && g++ $NT3M_S $NT3M_D -DAB_M  -I pedals/nitrotron3m -o /tmp/nt3m_ab_m    tools/host/nt3m_ab.cpp \
+       && /tmp/nt3m_ab_ship /tmp/nt3m_ab_ship.f32 && /tmp/nt3m_ab_m /tmp/nt3m_ab_m.f32 \
+       && /tmp/nt3m_ab_cmp /tmp/nt3m_ab_ship.f32 /tmp/nt3m_ab_m.f32; then
+      echo "PASS  nt3m_ab ($inst)"
+    else
+      echo "FAIL  nt3m_ab ($inst)"; fail=1
+    fi
+  done
+  if g++ $NT3M_S -DAB_M -DNT3M_SLOT_B_ARMITAGE -I pedals/nitrotron3m -o /tmp/nt3m_ab_arm tools/host/nt3m_ab.cpp \
+     && /tmp/nt3m_ab_arm /tmp/nt3m_ab_arm.f32; then
+    echo "PASS  nt3m_ab (armitage slot smoke: finite, |x| <= 10, L == R)"
+  else
+    echo "FAIL  nt3m_ab (armitage slot smoke)"; fail=1
+  fi
+else
+  echo "FAIL  nt3m_ab (compare tool build)"; fail=1
+fi
+
+echo
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "FAILURES"
 exit "$fail"

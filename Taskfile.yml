@@ -56,6 +56,32 @@ tasks:
       - make PEDAL=nitrolab DIAG=1
       - make PEDAL=nitrolab DIAG=1 program-dfu
 
+  # NitroTron3m (prototype: NitroTron3 on the Module system). INSTRUMENT and
+  # NT3M_SLOT_B go on EVERY make call, or the profile stamp wipes build/ and the
+  # flash step rebuilds another profile. Guitar: `task flash-nitrotron3m INSTRUMENT=guitar`.
+  build-nitrotron3m:
+    desc: Build NitroTron3m (slot B = sprawl; INSTRUMENT=bass|guitar, default bass)
+    vars:
+      INSTRUMENT: '{{.INSTRUMENT | default "bass"}}'
+    cmds:
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=sprawl INSTRUMENT={{.INSTRUMENT}}
+
+  flash-nitrotron3m:
+    desc: Build + flash NitroTron3m (slot B = sprawl) via DFU (INSTRUMENT=bass|guitar, default bass)
+    vars:
+      INSTRUMENT: '{{.INSTRUMENT | default "bass"}}'
+    cmds:
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=sprawl INSTRUMENT={{.INSTRUMENT}}
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=sprawl INSTRUMENT={{.INSTRUMENT}} program-dfu
+
+  flash-nitrotron3m-armitage:
+    desc: Build + flash NitroTron3m with armitage in slot B via DFU (INSTRUMENT=bass|guitar, default bass)
+    vars:
+      INSTRUMENT: '{{.INSTRUMENT | default "bass"}}'
+    cmds:
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=armitage INSTRUMENT={{.INSTRUMENT}}
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=armitage INSTRUMENT={{.INSTRUMENT}} program-dfu
+
   clean:
     desc: Remove build output
     cmds:

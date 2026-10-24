@@ -38,6 +38,20 @@ ifeq ($(DIAG),1)
 C_DEFS += -DCT3_DIAG_BUILD
 endif
 BUILD_PROFILE := $(PEDAL)-$(INSTRUMENT)-diag$(DIAG)
+
+# NitroTron3m (PEDAL=nitrotron3m) slot-B module: `NT3M_SLOT_B=sprawl` (default,
+# NitroTron3 Mode B) or `NT3M_SLOT_B=armitage` (pedals/nitrolab/modules/armitage.h).
+# Part of BUILD_PROFILE for that pedal only, so switching it forces the full
+# rebuild; other pedals' profile string is unchanged.
+NT3M_SLOT_B ?= sprawl
+ifeq ($(PEDAL),nitrotron3m)
+ifeq ($(NT3M_SLOT_B),armitage)
+C_DEFS += -DNT3M_SLOT_B_ARMITAGE
+else ifneq ($(NT3M_SLOT_B),sprawl)
+$(error NT3M_SLOT_B must be sprawl or armitage (got '$(NT3M_SLOT_B)'))
+endif
+BUILD_PROFILE := $(BUILD_PROFILE)-b$(NT3M_SLOT_B)
+endif
 PROFILE_STAMP := build/.buildprofile
 LAST_PROFILE := $(strip $(shell cat $(PROFILE_STAMP) 2>/dev/null))
 ifneq ($(LAST_PROFILE),$(BUILD_PROFILE))
