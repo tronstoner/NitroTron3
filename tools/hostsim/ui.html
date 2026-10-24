@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>armlive</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#2c3038; --fg:#d8dbe0; --dim:#8a909b; --acc:#6fb3ff; --warn:#ff8a6f; --ok:#7fd88f; }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.4 -apple-system, system-ui, sans-serif; margin: 0; padding: 12px 16px; }
+  h2 { font-size: 13px; margin: 0 0 8px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  #conn { font-weight: 600; }
+  #conn.on { color: var(--ok); } #conn.off { color: var(--warn); }
+  #err { color: var(--warn); min-height: 1.4em; }
+  .knobs { display: flex; flex-wrap: wrap; gap: 10px; }
+  .knob { width: 128px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .knob .name { font-weight: 700; }
+  .knob .role { color: var(--dim); font-size: 11px; min-height: 2.8em; }
+  .knob svg { width: 84px; height: 84px; margin: 4px 0 0; cursor: ns-resize; touch-action: none; user-select: none; }
+  .knob svg:focus { outline: 1px solid var(--acc); outline-offset: 2px; border-radius: 50%; }
+  .knob .track { fill: none; stroke: #0d0f12; stroke-width: 7; stroke-linecap: round; }
+  .knob .fill { fill: none; stroke: var(--acc); stroke-width: 7; stroke-linecap: round; }
+  .knob .cap { fill: #2a2f38; stroke: #3a404b; stroke-width: 1; }
+  .knob .ptr { stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
+  .knob .noonmark { stroke: var(--dim); stroke-width: 2; }
+  .knob .endmark { stroke: #3a404b; stroke-width: 2; }
+  .knob .val { font-family: ui-monospace, Menlo, monospace; }
+  .knob .noon { font-size: 11px; padding: 1px 8px; margin: 2px 0 4px; }
+  .knob .mean { font-size: 11px; color: var(--acc); min-height: 3.2em; }
+  fieldset { border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px 8px; margin: 0; }
+  legend { color: var(--dim); }
+  label { cursor: pointer; }
+  button { background: #2a2f38; color: var(--fg); border: 1px solid #3a404b; border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  button:hover { background: #343a45; }
+  #fs1 { padding: 10px 18px; font-weight: 700; }
+  #mute.on { color: var(--warn); font-weight: 700; }
+  .meter { width: 260px; }
+  .bar { height: 10px; background: #0d0f12; border: 1px solid var(--line); margin: 3px 0 6px; position: relative; }
+  .bar > div { height: 100%; background: var(--acc); width: 0; }
+  .bar.peak > div { background: var(--ok); }
+  #diag { white-space: pre-wrap; word-break: break-word; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border-bottom: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: middle; }
+  th { color: var(--dim); font-weight: 600; }
+  td.name { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+  tr.set td.name { color: var(--acc); font-weight: 700; }
+  tr.fixed { color: var(--dim); }
+  td input[type=range] { width: 220px; }
+  td input[type=number] { width: 110px; background: #0d0f12; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; font-family: ui-monospace, Menlo, monospace; }
+  td.def { color: var(--dim); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  tr.main td { border-bottom: none; }
+  td.name[title] { text-decoration: underline dotted var(--dim); text-underline-offset: 3px; cursor: help; }
+  tr.note td { padding: 0 6px 4px 18px; }
+  tr.note .inl { color: var(--dim); font-size: 11px; white-space: pre-wrap; }
+  tr.note .doc { display: none; margin: 4px 0 2px; padding: 4px 8px; border-left: 2px solid var(--line); color: #b6bcc6;
+                 font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap; }
+  tr.note.showdoc .doc { display: block; }
+  tbody.sec tr.sechead td { background: #23272e; color: var(--fg); font-weight: 600; cursor: pointer; border-bottom: 1px solid var(--line); padding: 5px 6px; }
+  tbody.sec tr.sechead .tw { display: inline-block; width: 1em; color: var(--dim); }
+  tbody.sec tr.sechead .cnt { color: var(--dim); font-weight: 400; margin-left: 6px; }
+  .tablewrap { overflow-x: auto; }
+  textarea { width: 100%; height: 160px; background: #0d0f12; color: var(--fg); border: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .hint { color: var(--dim); font-size: 11px; }
+  input[type=text] { background: #0d0f12; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <div class="row" style="justify-content: space-between">
+    <div><b>armlive</b> &middot; NitroLab armitage (SW3 UP) &middot; <span id="conn" class="off">disconnected</span></div>
+    <div class="mono" id="cpu">host cpu &mdash;</div>
+  </div>
+  <div id="diag" class="mono">DIAG &mdash;</div>
+  <div id="err" class="mono"></div>
+</div>
+
+<div class="panel">
+  <h2>Controls</h2>
+  <div class="knobs" id="knobs"></div>
+  <div class="row" style="margin-top: 10px">
+    <fieldset><legend>SW1 mode pair</legend>
+      <label><input type="radio" name="sw1" value="up"> UP &middot; FB | ADD</label><br>
+      <label><input type="radio" name="sw1" value="mid"> MID &middot; SAW | PULSE</label><br>
+      <label><input type="radio" name="sw1" value="down"> DOWN &middot; unshaped</label>
+    </fieldset>
+    <fieldset><legend>SW2 octave</legend>
+      <label><input type="radio" name="sw2" value="up"> UP &middot; octave up</label><br>
+      <label><input type="radio" name="sw2" value="mid"> MID &middot; as played</label><br>
+      <label><input type="radio" name="sw2" value="down"> DOWN &middot; octave down</label>
+    </fieldset>
+    <div>
+      <button id="fs1">FS1 tap</button><br>
+      <span class="hint">wet mute toggle</span> &middot; <span id="mute">mute &mdash;</span>
+    </div>
+    <fieldset><legend>Source</legend>
+      <label><input type="radio" name="src" value="wav"> WAV loop</label>
+      <span class="hint mono" id="wavname"></span><br>
+      <label><input type="radio" name="src" value="input"> audio input (ch 1)</label><br>
+      <div style="margin-top: 6px">WAV peak level <input type="range" id="level" min="0.01" max="1" step="0.01"> <span class="mono" id="levelv"></span></div>
+      <div>input gain <input type="range" id="gain" min="0" max="8" step="0.01"> <span class="mono" id="gainv"></span></div>
+    </fieldset>
+    <div class="meter">
+      <div>out peak <span class="mono" id="peakv">&mdash;</span></div>
+      <div class="bar peak"><div id="peakb"></div></div>
+      <div>out rms <span class="mono" id="rmsv">&mdash;</span></div>
+      <div class="bar"><div id="rmsb"></div></div>
+      <div>in peak <span class="mono" id="inpv">&mdash;</span></div>
+      <div class="bar"><div id="inpb"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Constants (<span id="cfile">armitage_constants.h</span>)</h2>
+  <div class="row" style="align-items: center; margin-bottom: 6px">
+    <label><input type="checkbox" id="onlyset"> show changed only</label>
+    <label title="show every comment block from armitage_constants.h in the table (otherwise: hover a name)"><input type="checkbox" id="docs"> docs</label>
+    <button id="expandall">expand all</button> <button id="collapseall">collapse all</button>
+    <label>filter <input type="text" id="filter" placeholder="name contains"></label>
+    <button id="export">Export</button>
+    <span class="hint">Grouped by the file's <span class="mono">// --- section ---</span> headers (click to fold); under each row its inline comment, the comment block above it on hover (or all with "docs").
+      A slider applies on release, a number box on Enter / leaving it. Every change re-runs Init() (engine state restarts briefly).
+      Slider range: positive float default/10 .. default&times;10 (log); negative float &plusmn;10&times;|default|; zero default &plusmn;1. Type any value into the box.</span>
+  </div>
+  <textarea id="exportout" style="display: none" readonly></textarea>
+  <div class="tablewrap">
+    <table id="consts">
+      <thead><tr><th>name</th><th>type</th><th>slider</th><th>value</th><th>default</th><th></th></tr></thead>
+    </table>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ---- configuration --------------------------------------------------------
+const CFG = {
+  wsUrl: "ws://" + (location.hostname || "localhost") + ":8765",
+  locale: "en-US",           // number display (one helper below, change here)
+};
+
+// ---- formatting: the single source of truth for every displayed number ----
+function fmt(v, digits) {
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  return Number(v).toLocaleString(CFG.locale, { minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false });
+}
+function fmtDb(lin) {
+  if (lin === null || lin === undefined || !isFinite(lin)) return "—";
+  if (lin <= 0) return "-inf dBFS";
+  return fmt(20 * Math.log10(lin), 1) + " dBFS";
+}
+function fmtPct(frac) { return fmt(frac * 100, 1) + " %"; }
+// Constants show their exact value (shortest text that reads back as the same float).
+function fmtConst(v, type) {
+  if (type === "bool") return v ? "true" : "false";
+  return String(v);
+}
+
+// ---- knob meaning per mode (from the CONTROL MAP in pedals/nitrolab/modules/armitage.h) ----
+const KNOBS = [
+  { name: "K1", role: "model + timbre (bipolar, noon = unshaped)" },
+  { name: "K2", role: "FM envelope (SW1 UP)" },
+  { name: "K3", role: "FM index" },
+  { name: "K4", role: "post filter" },
+  { name: "K5", role: "filter envelope" },
+  { name: "K6", role: "dry / wet (shell)" },
+];
+const FILT = "CCW LP 4 kHz → 180 Hz | noon off | CW HP 40 Hz → 4 kHz (Q 1.1)";
+const FILT_UP = "CCW LP 4 kHz → 180 Hz | noon off | CW HP 40 Hz → 4 kHz (Q 0.707, flat)";
+const FMENV = "per pluck, gain on K3: CCW K3 → 0 (decay), CW 0 → K3 (rise); time 36 s off noon → 450 ms at the ends; noon off";
+const FENV = "per pluck, turns K4: CCW falls to −1 and holds, CW rises to +1 then decays; depth 0.7; tau 4 s → 0.05 s; noon off";
+const MEANING = {
+  SAW:      ["SAW (MID, CCW): knee → resonance (R 1 → 8, morph → 90 %)", "nothing (SAW; PWM LFO parked)", "nothing (SAW)", FILT, FENV, "dry → wet"],
+  PULSE:    ["PULSE (MID, CW): knee → width 50 → 0 %", "nothing (PULSE; PWM LFO parked)", "nothing (PULSE)", FILT, FENV, "dry → wet"],
+  ADD:      ["ADD (UP, CCW): harmonics 1 → 8, then push", FMENV, "FM index 0 → 12 rad (squared, × K2 gain)", FILT_UP, FENV, "dry → wet"],
+  FB:       ["FB (UP, CW): feedback beta = max · K1²", FMENV, "FM index 0 → 12 rad (squared, × K2 gain)", FILT_UP, FENV, "dry → wet"],
+  UNSHAPED: ["SW1 DOWN: unshaped band sum, K1 does nothing", "nothing (unshaped)", "nothing (unshaped)", FILT, FENV, "dry → wet"],
+};
+
+// ---- websocket ------------------------------------------------------------
+let ws = null;
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function showErr(t) { document.getElementById("err").textContent = t || ""; }
+
+function connect() {
+  ws = new WebSocket(CFG.wsUrl);
+  ws.onopen = () => { setConn(true); showErr(""); };
+  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+  ws.onerror = () => {};
+  ws.onmessage = (ev) => {
+    for (const line of String(ev.data).split("\n")) {
+      if (!line.trim()) continue;
+      let m;
+      try { m = JSON.parse(line); } catch (e) { continue; }
+      if (m.state) applyState(m.state);
+      else if (m.tunables) applyTunables(m.tunables, m.constants_file);
+      else if (m.error) showErr("server: " + m.error);
+      else if ("cpu" in m) applyStatus(m);
+    }
+  };
+}
+function setConn(on) {
+  const c = document.getElementById("conn");
+  c.textContent = on ? "connected" : "disconnected (retrying)";
+  c.className = on ? "on" : "off";
+}
+
+// ---- controls ---------------------------------------------------------------
+// Rotary knob: 270 deg travel, 0 = 7 o'clock, 0.5 = noon (marked), 1 = 5 o'clock.
+// Drag vertically (KNOB_UI.dragPx pixels = full travel; shift = KNOB_UI.fine x finer),
+// mouse wheel (KNOB_UI.wheelStep per notch, shift = fine), arrow keys when focused,
+// double-click or the "noon" button = exactly 0.5.
+const KNOB_UI = { dragPx: 200, fine: 10, wheelStep: 0.01, wheelNotchPx: 40, keyStep: 0.01 };
+const KN = { cx: 50, cy: 50, r: 38, travel: 270 };
+const SVGNS = "http://www.w3.org/2000/svg";
+function knobAngle(v) { return -KN.travel / 2 + KN.travel * v; }          // deg, 0 = up (noon)
+function polar(deg, r) { const a = (deg - 90) * Math.PI / 180; return [KN.cx + r * Math.cos(a), KN.cy + r * Math.sin(a)]; }
+function arcPath(d0, d1, r) {
+  const [x0, y0] = polar(d0, r), [x1, y1] = polar(d1, r);
+  const large = Math.abs(d1 - d0) > 180 ? 1 : 0;
+  return `M ${x0} ${y0} A ${r} ${r} 0 ${large} ${d1 > d0 ? 1 : 0} ${x1} ${y1}`;
+}
+function svgEl(tag, attrs) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+const knobEls = [];
+let knobSendPending = false;
+function buildKnobs() {
+  const box = document.getElementById("knobs");
+  KNOBS.forEach((k, i) => {
+    const d = document.createElement("div");
+    d.className = "knob";
+    d.innerHTML = `<div class="name">${k.name}</div><div class="role">${k.role}</div>`;
+    const svg = svgEl("svg", { viewBox: "0 0 100 100", tabindex: "0", role: "slider",
+      "aria-label": k.name, "aria-valuemin": "0", "aria-valuemax": "1" });
+    svg.appendChild(svgEl("path", { class: "track", d: arcPath(knobAngle(0), knobAngle(1), KN.r) }));
+    const fill = svgEl("path", { class: "fill" });
+    svg.appendChild(fill);
+    for (const [v, cls] of [[0, "endmark"], [1, "endmark"], [0.5, "noonmark"]]) {
+      const [x0, y0] = polar(knobAngle(v), KN.r + 5), [x1, y1] = polar(knobAngle(v), KN.r + 11);
+      svg.appendChild(svgEl("line", { class: cls, x1: x0, y1: y0, x2: x1, y2: y1 }));
+    }
+    svg.appendChild(svgEl("circle", { class: "cap", cx: KN.cx, cy: KN.cy, r: KN.r - 9 }));
+    const ptr = svgEl("line", { class: "ptr", x1: KN.cx, y1: KN.cy, x2: KN.cx, y2: KN.cy - (KN.r - 12) });
+    svg.appendChild(ptr);
+    d.appendChild(svg);
+    const val = document.createElement("div"); val.className = "val";
+    const noon = document.createElement("button"); noon.className = "noon"; noon.textContent = "noon";
+    const mean = document.createElement("div"); mean.className = "mean"; mean.textContent = "—";
+    d.append(val, noon, mean);
+    box.appendChild(d);
+    const ke = { v: 0.5, svg, fill, ptr, val, mean };
+    knobEls.push(ke);
+    const user = (v) => { setKnob(i, v); queueKnobs(); };
+    // drag
+    let drag = null;
+    svg.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      svg.setPointerCapture(ev.pointerId); svg.focus();
+      drag = { y: ev.clientY, v: ke.v };
+      ev.preventDefault();
+    });
+    svg.addEventListener("pointermove", (ev) => {
+      if (!drag) return;
+      const dy = drag.y - ev.clientY;
+      // rebase on every move so pressing / releasing shift mid-drag does not jump
+      drag.v = clamp01(drag.v + dy / KNOB_UI.dragPx / (ev.shiftKey ? KNOB_UI.fine : 1));
+      drag.y = ev.clientY;
+      user(drag.v);
+    });
+    const end = () => { drag = null; };
+    svg.addEventListener("pointerup", end);
+    svg.addEventListener("pointercancel", end);
+    svg.addEventListener("lostpointercapture", end);
+    // wheel: a mouse notch (>= KNOB_UI.wheelNotchPx) = one step; smaller trackpad
+    // deltas move proportionally (down to a tenth of a step per event)
+    svg.addEventListener("wheel", (ev) => {
+      ev.preventDefault();
+      const d = (ev.deltaY || ev.deltaX) * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1);
+      if (!d) return;
+      const frac = Math.max(0.1, Math.min(1, Math.abs(d) / KNOB_UI.wheelNotchPx));
+      const step = KNOB_UI.wheelStep * frac / (ev.shiftKey ? KNOB_UI.fine : 1);
+      user(clamp01(ke.v + (d < 0 ? step : -step)));
+    }, { passive: false });
+    svg.addEventListener("keydown", (ev) => {
+      const step = KNOB_UI.keyStep / (ev.shiftKey ? KNOB_UI.fine : 1);
+      if (ev.key === "ArrowUp" || ev.key === "ArrowRight") user(clamp01(ke.v + step));
+      else if (ev.key === "ArrowDown" || ev.key === "ArrowLeft") user(clamp01(ke.v - step));
+      else return;
+      ev.preventDefault();
+    });
+    svg.addEventListener("dblclick", (ev) => { ev.preventDefault(); user(0.5); });
+    noon.addEventListener("click", () => user(0.5));
+    setKnob(i, 0.5);
+  });
+}
+// Draws knob i at v (no send).
+function setKnob(i, v) {
+  const e = knobEls[i];
+  e.v = clamp01(+v);
+  const a = knobAngle(e.v);
+  e.ptr.setAttribute("transform", `rotate(${a} ${KN.cx} ${KN.cy})`);
+  e.fill.setAttribute("d", e.v > 0 ? arcPath(knobAngle(0), a, KN.r) : "");
+  e.val.textContent = fmt(e.v, 3);
+  e.svg.setAttribute("aria-valuenow", String(e.v));
+  e.svg.setAttribute("aria-valuetext", fmt(e.v, 3));
+}
+function queueKnobs() {
+  if (knobSendPending) return;
+  knobSendPending = true;
+  requestAnimationFrame(() => { knobSendPending = false; send({ k: knobEls.map(e => e.v) }); });
+}
+function setRadio(name, val) {
+  for (const el of document.querySelectorAll(`input[name=${name}]`)) el.checked = (el.value === val);
+}
+function applyState(s) {
+  s.k.forEach((v, i) => setKnob(i, v));
+  setRadio("sw1", s.sw1); setRadio("sw2", s.sw2); setRadio("src", s.src);
+  document.querySelector("input[name=src][value=input]").disabled = !s.input_ok;
+  document.querySelector("input[name=src][value=wav]").disabled = !s.wav;
+  document.getElementById("wavname").textContent = s.wav ? s.wav.split("/").pop() : "(no WAV)";
+  if (s.level > 0) { level.value = s.level; } levelv.textContent = s.level > 0 ? fmt(s.level, 2) : "as is";
+  gain.value = s.gain; gainv.textContent = fmt(s.gain, 2);
+}
+for (const n of ["sw1", "sw2", "src"])
+  for (const el of document.querySelectorAll(`input[name=${n}]`))
+    el.addEventListener("change", () => { if (el.checked) send({ [n]: el.value }); });
+document.getElementById("fs1").addEventListener("click", () => send({ fs1: 1 }));
+const level = document.getElementById("level"), levelv = document.getElementById("levelv");
+const gain = document.getElementById("gain"), gainv = document.getElementById("gainv");
+level.addEventListener("input", () => { levelv.textContent = fmt(+level.value, 2); send({ level: +level.value }); });
+gain.addEventListener("input", () => { gainv.textContent = fmt(+gain.value, 2); send({ gain: +gain.value }); });
+
+// ---- status -----------------------------------------------------------------
+function setBar(id, lin) {
+  const db = lin > 0 ? 20 * Math.log10(lin) : -120;
+  document.getElementById(id).style.width = Math.max(0, Math.min(100, (db + 60) / 60 * 100)) + "%";
+}
+function applyStatus(m) {
+  document.getElementById("cpu").textContent = "host cpu " + fmtPct(m.cpu) + " of real time · re-inits " + m.reinits;
+  document.getElementById("peakv").textContent = fmtDb(m.peak);
+  document.getElementById("rmsv").textContent = fmtDb(m.rms);
+  document.getElementById("inpv").textContent = fmtDb(m.in_peak);
+  setBar("peakb", m.peak); setBar("rmsb", m.rms); setBar("inpb", m.in_peak);
+  const mu = document.getElementById("mute");
+  if (m.mode) {
+    const swU = (s) => s.toUpperCase();
+    document.getElementById("diag").textContent =
+      `DIAG ${m.n ? "#" + m.n : "auto"}  ${m.mode}  h ${fmt(m.h, 2)}  K1..K5 ${m.k.map(x => fmt(x, 2)).join(" ")}` +
+      `  SW1 ${swU(m.sw1)}  SW2 ${swU(m.sw2)}  beta ${fmt(m.beta, 2)}  filt_t ${fmt(m.filt_t, 2)}` +
+      `  fm ${fmt(m.fm, 2)}  env t2 ${fmt(m.env_t2, 2)} e ${fmt(m.env_e, 2)}  fmenv t2 ${fmt(m.envf_t2, 2)} g ${fmt(m.envf_e, 2)}` +
+      `  mute ${m.mute ? "ON" : "off"}` +
+      `  (snapshot ${fmt(m.diag_age_ms / 1000, 1)} s old; the module writes one once the controls settled)`;
+    const mean = MEANING[m.mode];
+    if (mean) knobEls.forEach((e, i) => { e.mean.textContent = mean[i]; });
+    mu.textContent = "mute " + (m.mute ? "ON" : "off");
+    mu.className = m.mute ? "on" : "";
+  }
+}
+
+// ---- constants panel ----------------------------------------------------------
+const rows = new Map();   // name -> {t, tr, noteTr, slider, num, chk, tdD, sec}
+const sections = new Map(); // section title -> {tbody, head, cnt, tw, rows: [], collapsed}
+function sliderMap(t) {
+  // returns {toPos(v), fromPos(p)} on a 0..1000 slider, or null (no slider)
+  if (t.fixed || t.type !== "float") return null;
+  const d = t.default;
+  if (d > 0) {
+    const lo = d / 10, k = Math.log(100);
+    return { toPos: v => 1000 * Math.log(Math.max(v, 1e-30) / lo) / k, fromPos: p => lo * Math.exp(k * p / 1000) };
+  }
+  const r = d < 0 ? 10 * Math.abs(d) : 1;
+  return { toPos: v => (v + r) / (2 * r) * 1000, fromPos: p => -r + 2 * r * p / 1000 };
+}
+function sendSet(name, v) { send({ set: { [name]: v } }); }
+function buildRow(t) {
+  const tr = document.createElement("tr");
+  const tdN = document.createElement("td"); tdN.className = "name"; tdN.textContent = t.name;
+  const tdT = document.createElement("td"); tdT.textContent = t.type + (t.fixed ? " (fixed)" : "");
+  const tdS = document.createElement("td"), tdV = document.createElement("td"), tdD = document.createElement("td"), tdR = document.createElement("td");
+  tdD.className = "def";
+  const row = { t, tr, tdN, slider: null, num: null, chk: null, map: sliderMap(t), tdD };
+  if (t.type === "bool") {
+    const c = document.createElement("input"); c.type = "checkbox"; c.disabled = t.fixed;
+    c.addEventListener("change", () => sendSet(t.name, c.checked));
+    tdV.appendChild(c); row.chk = c;
+  } else {
+    const n = document.createElement("input"); n.type = "number"; n.disabled = t.fixed;
+    n.step = t.type === "float" ? "any" : "1";
+    n.addEventListener("change", () => { if (n.value !== "" && isFinite(+n.value)) sendSet(t.name, +n.value); });
+    tdV.appendChild(n); row.num = n;
+    if (row.map) {
+      const s = document.createElement("input"); s.type = "range"; s.min = 0; s.max = 1000; s.step = 1;
+      s.addEventListener("input", () => { n.value = +row.map.fromPos(+s.value).toPrecision(4); });
+      s.addEventListener("change", () => sendSet(t.name, +row.map.fromPos(+s.value).toPrecision(4)));
+      tdS.appendChild(s); row.slider = s;
+    }
+  }
+  if (!t.fixed) {
+    const b = document.createElement("button"); b.textContent = "reset";
+    b.addEventListener("click", () => send({ reset: t.name }));
+    tdR.appendChild(b);
+  }
+  tr.append(tdN, tdT, tdS, tdV, tdD, tdR);
+  tr.className = "main";
+  row.tr = tr;
+  // second row: the inline comment, and the comment block (shown with "docs")
+  const nt = document.createElement("tr"); nt.className = "note";
+  const nd = document.createElement("td"); nd.colSpan = 6;
+  const inl = document.createElement("div"); inl.className = "inl";
+  const doc = document.createElement("div"); doc.className = "doc";
+  nd.append(inl, doc); nt.appendChild(nd);
+  row.noteTr = nt; row.inl = inl; row.doc = doc;
+  return row;
+}
+function getSection(title) {
+  let sec = sections.get(title);
+  if (sec) return sec;
+  const tbody = document.createElement("tbody"); tbody.className = "sec";
+  const head = document.createElement("tr"); head.className = "sechead";
+  const td = document.createElement("td"); td.colSpan = 6;
+  const tw = document.createElement("span"); tw.className = "tw";
+  const ttl = document.createElement("span"); ttl.textContent = title || "(before the first section header)";
+  const cnt = document.createElement("span"); cnt.className = "cnt";
+  td.append(tw, ttl, cnt); head.appendChild(td); tbody.appendChild(head);
+  document.getElementById("consts").appendChild(tbody);
+  sec = { tbody, head, cnt, tw, rows: [], collapsed: false };
+  head.addEventListener("click", () => { sec.collapsed = !sec.collapsed; applyFilter(); });
+  sections.set(title, sec);
+  return sec;
+}
+function updateRow(row, t) {
+  row.t = t;
+  if (row.chk) row.chk.checked = !!t.value;
+  if (row.num && document.activeElement !== row.num) row.num.value = t.value;
+  if (row.slider) row.slider.value = row.map.toPos(t.value);
+  row.tdD.textContent = fmtConst(t.default, t.type) + (String(t.expr) !== fmtConst(t.default, t.type) ? "  = " + t.expr : "");
+  row.tdD.title = t.expr;
+  row.tr.className = "main" + (t.fixed ? " fixed" : "") + (t.set ? " set" : "");
+  const note = t.note || "", doc = t.doc || "";
+  // a block shared by a run of constants is labelled with the constant it sits above
+  const docLabel = doc && t.doc_of && t.doc_of !== t.name ? "(comment block above " + t.doc_of + ")\n" : "";
+  row.inl.textContent = note;
+  row.doc.textContent = docLabel + doc;
+  if (doc) row.tdN.title = docLabel + doc; else row.tdN.removeAttribute("title");
+}
+function applyTunables(list, file) {
+  if (file !== undefined) document.getElementById("cfile").textContent = file ? file : "armitage_constants.h - file not found, no comments";
+  for (const t of list) {
+    let row = rows.get(t.name);
+    if (!row) {
+      row = buildRow(t); rows.set(t.name, row);
+      const sec = getSection(t.section || "");
+      sec.rows.push(row); row.sec = sec;
+      sec.tbody.append(row.tr, row.noteTr);
+    }
+    updateRow(row, t);
+  }
+  applyFilter();
+  if (document.getElementById("exportout").style.display !== "none") doExport();
+}
+// Visibility: filter + changed-only + folded sections. With "docs" on, a comment
+// block shared by a run of constants is shown once, on the first visible row of the run.
+function applyFilter() {
+  const only = document.getElementById("onlyset").checked;
+  const docs = document.getElementById("docs").checked;
+  const f = document.getElementById("filter").value.trim().toUpperCase();
+  for (const sec of sections.values()) {
+    let n = 0, lastDoc = null;
+    for (const row of sec.rows) {
+      const match = (!only || row.t.set) && (!f || row.t.name.includes(f));
+      if (match) n++;
+      const show = match && !sec.collapsed;
+      row.tr.style.display = show ? "" : "none";
+      const doc = row.t.doc || "";
+      const showDoc = show && docs && doc !== "" && doc !== lastDoc;
+      if (show) lastDoc = doc;
+      row.noteTr.classList.toggle("showdoc", showDoc);
+      row.noteTr.style.display = show && (row.t.note || showDoc) ? "" : "none";
+    }
+    sec.tbody.style.display = n ? "" : "none";
+    sec.tw.textContent = sec.collapsed ? "▸" : "▾";
+    sec.cnt.textContent = (n === sec.rows.length ? n : n + " of " + sec.rows.length) + (n === 1 ? " constant" : " constants");
+  }
+}
+document.getElementById("onlyset").addEventListener("change", applyFilter);
+document.getElementById("docs").addEventListener("change", applyFilter);
+document.getElementById("expandall").addEventListener("click", () => { for (const s of sections.values()) s.collapsed = false; applyFilter(); });
+document.getElementById("collapseall").addEventListener("click", () => { for (const s of sections.values()) s.collapsed = true; applyFilter(); });
+document.getElementById("filter").addEventListener("input", applyFilter);
+
+function doExport() {
+  const out = document.getElementById("exportout");
+  const set = [...rows.values()].map(r => r.t).filter(t => t.set);
+  let txt = "// armitage_constants.h - changed tunables (name = value; was: default)\n";
+  if (!set.length) txt += "// (nothing changed)\n";
+  for (const t of set) txt += `${t.name} = ${fmtConst(t.value, t.type)};   // was ${fmtConst(t.default, t.type)}  (${t.expr})\n`;
+  if (set.length) txt += "\n// armsim / armlive: " + set.map(t => `--set ${t.name}=${fmtConst(t.value, t.type)}`).join(" ") + "\n";
+  out.value = txt;
+  out.style.display = "";
+}
+document.getElementById("export").addEventListener("click", () => { doExport(); document.getElementById("exportout").select(); });
+
+buildKnobs();
+connect();
+</script>
+</body>
+</html>
