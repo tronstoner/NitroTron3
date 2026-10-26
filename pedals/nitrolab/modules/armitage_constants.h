@@ -124,6 +124,7 @@ ARM_TUNABLE(float,    ARM_ENV_DEPTH,           0.7f);     // K4 knob travel (t u
 ARM_TUNABLE(float,    ARM_ENV_TRAVEL_TAUS,     3.9f);     // one-pole time constants per full travel (1 - e^-3.9 = 0.98)
 ARM_TUNABLE(float,    ARM_ENV_FM_TIME_RATIO,   3.0f);     // FM envelope T = this x the filter envelope's time law (2026-10-22: 12 s -> 150 ms; both sides were too fast)
 ARM_TUNABLE(float,    ARM_ENV_FM_DECAY_RATIO,  3.0f);     // K2 FM decay (CCW) / rise (CW) time / T on top (2026-10-22: T alone too fast; now 36 s -> 450 ms)
+ARM_TUNABLE(float,    ARM_ENV_FM_SLIDE_MS,     1.0f);     // ms; one-pole tau (8 kHz) on g before it scales K3 - the onset jump clicked (2026-10-26); lands exactly
 // Live follower (2026-10-26): a subtle term ON TOP of both triggered envelopes (K5 filter, K2 FM), which stay
 // exactly as above. EnvFollower (env_follower.h: |x ARM_FOLLOW_GAIN| -> 4 cascaded one-poles at ARM_FOLLOW_HZ)
 // on the raw 48 kHz input, once per 48 kHz sample next to the onset detector; no normalisation (x10 scale:

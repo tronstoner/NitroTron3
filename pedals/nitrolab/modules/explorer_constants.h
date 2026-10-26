@@ -134,6 +134,7 @@ constexpr float    EXP_ENV_TAU_FAST_S      = 0.05f;    // s; at the knob ends (=
 constexpr float    EXP_ENV_TRAVEL_TAUS     = 3.9f;     // one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
 constexpr float    EXP_ENV_FM_TIME_RATIO   = 3.0f;     // T = this x the time law (= ARM_ENV_FM_TIME_RATIO)
 constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // decay (CCW) / rise (CW) time / T (= ARM_ENV_FM_DECAY_RATIO)
+constexpr float    EXP_ENV_FM_SLIDE_MS     = 1.0f;     // ms; one-pole tau (8 kHz) on g before it scales K3, lands exactly (= ARM_ENV_FM_SLIDE_MS)
 // Live follower (2026-10-26, armitage's ARM_FOLLOW_*): a subtle term ON TOP of the triggered FM envelope (unchanged).
 // EnvFollower (env_follower.h: |x EXP_FOLLOW_GAIN| -> 4 cascaded one-poles at EXP_FOLLOW_HZ) on the raw 48 kHz input,
 // once per 48 kHz sample next to the onset detector; no normalisation. f = min(follower, 1), read per 8 kHz step.

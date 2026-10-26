@@ -27,7 +27,7 @@
 //   (EnvGain): t = 2 k4 - 1 (smoothed, lands on its target), noon = off (g = 1); CCW: each onset
 //   g = 1 -> one-pole decay to 0 in the set time, holds 0; CW: each onset g = 0 -> rise to 1, holds 1;
 //   time 36 s just off noon -> 450 ms at the ends (EXP_ENV_*). All four UP models use
-//   I = EXP_FM_INDEX_MAX (k3 g)^2, their caps applied after as before. On UP the K4 post filter is
+//   I = EXP_FM_INDEX_MAX (k3 g)^2 (g slid 1 ms, EXP_ENV_FM_SLIDE_MS: no onset click), their caps applied after as before. On UP the K4 post filter is
 //   not run: its mix slides to 0 (at most 1 per EXP_FILT_SLIDE_MS, cutoff held), then bypass; leaving UP
 //   it slides back in.
 //   + LIVE FOLLOWER on top (2026-10-26, armitage's): EnvFollower (rectifier x EXP_FOLLOW_GAIN -> 4-pole LP
@@ -229,6 +229,8 @@ class Explorer : public Module {
     on_pending_ = false;
     on_seen_ = false;
     env_fm_.Reset();
+    fm_gs_ = env_fm_.g;              // slid g starts on g (1)
+    fm_gs_a_ = 1.f - expf(-1000.f / (EXP_ENV_FM_SLIDE_MS * sr8_));
     ln_tau_ratio_ = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
     // Live follower (48 kHz, raw input) + its noon gate (8 kHz).
     fol_.Init(sr);
@@ -363,9 +365,9 @@ class Explorer : public Module {
         mfade_n_ = mfade_len_;
       }
       const bool fading = (mfade_n_ > 0);
-      // UP models: k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH on f) (the K4 envelope gain + the live follower);
-      // all others use K3 as is.
-      const float k3up = k3s_ * (env_fm_.g + EXP_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_));
+      // UP models: k3_eff = k3 (g_slid + EXP_FOLLOW_FM_DEPTH on f) (the K4 envelope gain, slid 1 ms, + the live
+      // follower); all others use K3 as is.
+      const float k3up = k3s_ * (fm_gs_ + EXP_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_));
       pn_ = Derive(var_ >> 6, var_ & 63, k2s_, IsUp(var_ >> 6) ? k3up : k3s_, DiscOf(var_ >> 6));
       if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, IsUp(vfrom_ >> 6) ? k3up : k3s_,
                                DiscOf(vfrom_ >> 6));
@@ -484,8 +486,11 @@ class Explorer : public Module {
     on_pending_ = false;
     if (onset) on_seen_ = true;
     env_fm_.Step(onset, on_seen_, 2.f * k4s_ - 1.f, sr8_, ln_tau_ratio_);
-    // Live follower on top: f = min(follower, 1); on slides toward 1 (K4 off noon) / 0 (noon), lands exactly.
     using namespace explorer_k;
+    // g jumps on an onset (CW -> 0, CCW -> 1): slide it (1 ms one-pole) before it scales K3, land exactly.
+    fm_gs_ += fm_gs_a_ * (env_fm_.g - fm_gs_);
+    if (fabsf(env_fm_.g - fm_gs_) < EXP_CTRL_SNAP) fm_gs_ = env_fm_.g;
+    // Live follower on top: f = min(follower, 1); on slides toward 1 (K4 off noon) / 0 (noon), lands exactly.
     fol_f_ = (fol_y_ < 1.f) ? fol_y_ : 1.f;
     const float on_t = (2.f * k4s_ - 1.f != 0.f) ? 1.f : 0.f;
     fol_on_ += fol_gate_a_ * (on_t - fol_on_);
@@ -1200,6 +1205,8 @@ class Explorer : public Module {
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened
   EnvGain env_fm_;
+  float fm_gs_ = 1.f;              // env_fm_.g slid (1 ms one-pole, 8 kHz); this scales K3 on UP
+  float fm_gs_a_ = 0.f;            // its coefficient (tau EXP_ENV_FM_SLIDE_MS)
   float ln_tau_ratio_ = 0.f;       // ln(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)
   // UP: live follower (on top of the FM envelope)
   EnvFollower fol_;                // rectifier + 4-pole LP, 48 kHz raw input

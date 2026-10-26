@@ -177,6 +177,7 @@
 //                           CW: the mirror - each pluck starts at 0, rises to K3 in 3 T, holds K3.
 //                           I = ARM_FM_INDEX_MAX k3_eff^2. MID / DOWN: nothing (parked PWM LFO shares the knob)
 //                           + live follower off noon: k3_eff = k3 (g + ARM_FOLLOW_FM_DEPTH f) (harder = more FM)
+//                           g enters slid (1 ms one-pole, ARM_ENV_FM_SLIDE_MS): the onset jump doesn't click
 //   K3  FM index            I = ARM_FM_INDEX_MAX * (k3 g)^2 (0 -> 12 rad; g = 1 at K2 noon), ADD / FB; SAW / PULSE / unshaped: nothing
 //   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (ARM_FILT_STAGES:
 //                           1 = 12 dB/oct, 2 = 24 dB/oct; Q fixed ARM_FILT_Q 1.1; ADD / FB: ARM_FILT_Q_UP 0.707, no peak), on the final wet, all modes
@@ -317,6 +318,8 @@ class Armitage : public Module {
     on_seen_ = false;
     env_.Reset();
     env_fm_.Reset();
+    fm_gs_ = env_fm_.g;              // slid g starts on g (1)
+    fm_gs_a_ = 1.f - expf(-1000.f / (ARM_ENV_FM_SLIDE_MS * sr8_));
     ln_tau_ratio_ = logf(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S);
     // Live follower (48 kHz, raw input) + its noon gates (8 kHz).
     fol_.Init(sr);
@@ -457,8 +460,8 @@ class Armitage : public Module {
       if (fabsf(k5_t_ - k5s_) < 1e-6f) k5s_ = k5_t_;
       k3s_ += (k3_t_ - k3s_) * ca;
       {                                          // K3 FM index: the K2 envelope gain scales the K3 knob,
-        // k3_eff = k3 (g + ARM_FOLLOW_FM_DEPTH on f) (g 0..1: exactly 0 .. exactly K3; + live follower)
-        const float k3e = k3s_ * (env_fm_.g + ARM_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_));
+        // k3_eff = k3 (g_slid + ARM_FOLLOW_FM_DEPTH on f) (g 0..1: exactly 0 .. exactly K3; + live follower)
+        const float k3e = k3s_ * (fm_gs_ + ARM_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_));
         fm_ = ARM_FM_INDEX_MAX * k3e * k3e;
       }
 
@@ -987,6 +990,9 @@ class Armitage : public Module {
     if (onset) on_seen_ = true;
     env_.Step(onset, on_seen_, 2.f * k5s_ - 1.f, sr8_, ln_tau_ratio_);      // K5 -> K4 post filter
     env_fm_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);   // K2 -> K3 FM index gain (SW1 UP)
+    // g jumps on an onset (CW -> 0, CCW -> 1): slide it (1 ms one-pole) before it scales K3, land exactly.
+    fm_gs_ += fm_gs_a_ * (env_fm_.g - fm_gs_);
+    if (fabsf(env_fm_.g - fm_gs_) < 1e-6f) fm_gs_ = env_fm_.g;
     // Live follower, added on top of both envelopes: f = min(follower, 1); dir (K5) / on (K2) slide
     // toward the knob-side target (one-pole, tau ARM_FOLLOW_GATE_MS) and land exactly on it.
     fol_f_ = (fol_y_ < 1.f) ? fol_y_ : 1.f;
@@ -1332,6 +1338,8 @@ class Armitage : public Module {
   bool  on_seen_ = false;                                // an onset has happened (before: e = 0)
   Env   env_;                      // K5 envelope -> K4 post-filter position
   EnvGain env_fm_;                 // K2 envelope -> K3 FM index gain (SW1 UP: ADD / FB)
+  float fm_gs_ = 1.f;              // env_fm_.g slid (1 ms one-pole, 8 kHz); this scales K3
+  float fm_gs_a_ = 0.f;            // its coefficient (tau ARM_ENV_FM_SLIDE_MS)
   float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)
   // Live follower (on top of the triggered envelopes)
   EnvFollower fol_;                // rectifier + 4-pole LP, 48 kHz raw input
