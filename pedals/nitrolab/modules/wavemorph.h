@@ -159,6 +159,15 @@ class WaveMorph : public Module {
     on_refr_len_ = (int)((float)WM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
+    // Spectral-flux onset detector (8 kHz band rate).
+    for (int k = 0; k < kBands; k++) flux_m_[k] = 0.f;
+    flux_mean_ = 0.f;
+    flux_a_  = 1.f - expf(-1000.f / (WM_ONSET_FLUX_SMOOTH_MS * sr8_));
+    flux_ma_ = 1.f - expf(-1000.f / (WM_ONSET_FLUX_MEAN_MS * sr8_));
+    flux_refr_ = 0;
+    flux_refr_len_ = (int)(WM_ONSET_FLUX_REFRACTORY_MS * 0.001f * sr8_ + 0.5f);
+    flux_ratio_pk_ = 0.f;
+    on_count_ = 0;
     fenv_.Reset();
     ln_ftau_ratio_ = logf(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S);
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
@@ -253,7 +262,8 @@ class WaveMorph : public Module {
     using namespace wavemorph_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
+      if (WM_ONSET_MODE == 0)                   // level detector only when selected (MODE 1: flux in EnvUpdate)
+        for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
       const float d = dec_(in + i);
       k2s_ += (k2_t_ - k2s_) * ca;              // K2: filter envelope knob
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
@@ -355,10 +365,37 @@ class WaveMorph : public Module {
     }
   };
 
+  // Spectral-flux onset detector, once per 8 kHz sample on the raw bank magnitudes mag_ (the previous
+  // band update's |z_k|, the same in every slot / model): positive per-band change against a ~10 ms
+  // smoothed magnitude, tilted toward the upper bands; onset when F > K x its running mean (adaptive, no
+  // absolute level) and above a silence floor, with a refractory. Latches on_pending_ like OnsetDetect.
+  inline void FluxDetect() {
+    using namespace wavemorph_k;
+    const float* __restrict mg = mag_ + 1;
+    constexpr float kInvTop = 1.f / (float)(kBands - 1);
+    const float tilt = WM_ONSET_FLUX_HF_TILT;
+    const float a = flux_a_;
+    float F = 0.f;
+    for (int k = 0; k < kBands; k++) {
+      const float d = mg[k] - flux_m_[k];
+      if (d > 0.f) F += (1.f + tilt * (float)k * kInvTop) * d;
+      flux_m_[k] += a * d;
+    }
+    const float mean = flux_mean_;
+    if (mean > 0.f) { const float r = F / mean; if (r > flux_ratio_pk_) flux_ratio_pk_ = r; }
+    if (flux_refr_ > 0) flux_refr_--;
+    if (flux_refr_ == 0 && F > WM_ONSET_FLUX_K * mean && F > WM_ONSET_FLUX_FLOOR) {
+      flux_refr_ = flux_refr_len_;
+      on_pending_ = true;
+    }
+    flux_mean_ = mean + flux_ma_ * (F - mean);
+  }
+
   inline void EnvUpdate() {
+    if (wavemorph_k::WM_ONSET_MODE == 1) FluxDetect();   // spectral flux (MODE 0: the 48 kHz level detector latched it)
     const bool onset = on_pending_;
     on_pending_ = false;
-    if (onset) on_seen_ = true;
+    if (onset) { on_seen_ = true; on_count_++; }
     fenv_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_ftau_ratio_);    // K4 filter envelope
   }
 
@@ -908,6 +945,13 @@ class WaveMorph : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened
+  // spectral-flux onset detector (8 kHz)
+  float flux_m_[kBands];           // per-band smoothed magnitude
+  float flux_mean_ = 0.f;          // running mean of F
+  float flux_a_ = 0.f, flux_ma_ = 0.f;   // one-pole coefficients (band smoother, mean)
+  int   flux_refr_ = 0, flux_refr_len_ = 480;   // refractory samples left / length (8 kHz)
+  float flux_ratio_pk_ = 0.f;      // DIAG: peak F / mean_F since last read
+  uint32_t on_count_ = 0;          // DIAG: onsets consumed by the envelopes
   FEnv  fenv_;                     // K2 filter envelope (all zones)
   float ln_ftau_ratio_ = 0.f;      // ln(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S)
   // K4 post filter

@@ -113,6 +113,20 @@ ARM_TUNABLE(float,    ARM_ONSET_RISE,          1.5f);     // gate > baseline x t
 ARM_TUNABLE(float,    ARM_ONSET_FLOOR,         0.0021f);  // input gate-meter units = 0.1 x ARM_REF_LEVEL (0.021); unchanged — the decimator has unity passband gain, so 48 kHz |in| and the old decimated |d| share the same level scale
                                                        // (its K4 open threshold) sits at ~0.1 of a typical passive-bass env
 ARM_TUNABLE(uint32_t, ARM_ONSET_REFRACTORY_MS, 100);      // one pluck = one onset (vestige), now counted in 48 kHz samples
+// --- Onset detector mode + spectral flux detector (2026-10-26) ---------------------------------
+// MODE 0 = the level detector above (48 kHz gate meter vs slow baseline); 1 = spectral flux on the
+// 84-band bank at the 8 kHz band rate (raw bank magnitudes |z_k|, independent of octave / model / knobs):
+//   m_k = one-pole of |z_k| (FLUX_SMOOTH_MS); F = sum_k w_k max(0, |z_k| - m_k_prev), w_k = 1 + HF_TILT k / (K - 1)
+//   (K = 84 bands: weight 1 at the lowest band rising linearly to 1 + HF_TILT at the top, so pick clicks count more);
+//   mean_F = one-pole of F (FLUX_MEAN_MS); onset when F > FLUX_K mean_F (previous mean) AND F > FLUX_FLOOR AND
+//   FLUX_REFRACTORY_MS elapsed. Latches the same onset flag the envelopes consume. Only the selected mode runs.
+ARM_TUNABLE(int, ARM_ONSET_MODE, 1);   // 0 = level detector, 1 = spectral flux
+ARM_TUNABLE(float, ARM_ONSET_FLUX_SMOOTH_MS, 10.f);   // ms; per-band magnitude smoother
+ARM_TUNABLE(float, ARM_ONSET_FLUX_HF_TILT, 1.f);   // band weight w_k = 1 + TILT k / (K - 1)
+ARM_TUNABLE(float, ARM_ONSET_FLUX_MEAN_MS, 150.f);   // ms; running mean of F (adaptive threshold, no absolute level)
+ARM_TUNABLE(float, ARM_ONSET_FLUX_K, 2.5f);   // onset: F > K x mean_F
+ARM_TUNABLE(float, ARM_ONSET_FLUX_FLOOR, 1e-3f);   // F floor (band-magnitude units): ~20 dB under the median F of a ringing-string re-pluck at 0.1 peak (~1e-2; a fresh pluck ~5e-2), above -60 dBFS input hiss (max ~6e-4)
+ARM_TUNABLE(float, ARM_ONSET_FLUX_REFRACTORY_MS, 60.f);   // ms; min. time between onsets
 ARM_TUNABLE(float,    ARM_ENV_TAU_SLOW_S,      4.0f);     // s; envelope time constant just off K5 noon
 ARM_TUNABLE(float,    ARM_ENV_TAU_FAST_S,      0.05f);    // s; at K5 full CW / CCW
 ARM_TUNABLE(float,    ARM_ENV_FALL_RATIO,      3.0f);     // CW fall tau / rise tau (plain one-pole decay after the peak)

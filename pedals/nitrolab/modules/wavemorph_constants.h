@@ -164,6 +164,20 @@ constexpr float    WM_ONSET_SLOW_COEF     = 0.0006f;  // (= EXP_ONSET_SLOW_COEF)
 constexpr float    WM_ONSET_RISE          = 1.5f;     // (= EXP_ONSET_RISE)
 constexpr float    WM_ONSET_FLOOR         = 0.0021f;  // (= EXP_ONSET_FLOOR)
 constexpr uint32_t WM_ONSET_REFRACTORY_MS = 100;      // (= EXP_ONSET_REFRACTORY_MS)
+// --- Onset detector mode + spectral flux detector (2026-10-26) ---------------------------------
+// MODE 0 = the level detector above (48 kHz gate meter vs slow baseline); 1 = spectral flux on the
+// 84-band bank at the 8 kHz band rate (raw bank magnitudes |z_k|, independent of octave / model / knobs):
+//   m_k = one-pole of |z_k| (FLUX_SMOOTH_MS); F = sum_k w_k max(0, |z_k| - m_k_prev), w_k = 1 + HF_TILT k / (K - 1)
+//   (K = 84 bands: weight 1 at the lowest band rising linearly to 1 + HF_TILT at the top, so pick clicks count more);
+//   mean_F = one-pole of F (FLUX_MEAN_MS); onset when F > FLUX_K mean_F (previous mean) AND F > FLUX_FLOOR AND
+//   FLUX_REFRACTORY_MS elapsed. Latches the same onset flag the envelopes consume. Only the selected mode runs.
+constexpr int WM_ONSET_MODE = 1;   // 0 = level detector, 1 = spectral flux
+constexpr float WM_ONSET_FLUX_SMOOTH_MS = 10.f;   // ms; per-band magnitude smoother
+constexpr float WM_ONSET_FLUX_HF_TILT = 1.f;   // band weight w_k = 1 + TILT k / (K - 1)
+constexpr float WM_ONSET_FLUX_MEAN_MS = 150.f;   // ms; running mean of F (adaptive threshold, no absolute level)
+constexpr float WM_ONSET_FLUX_K = 2.5f;   // onset: F > K x mean_F
+constexpr float WM_ONSET_FLUX_FLOOR = 1e-3f;   // F floor (band-magnitude units): ~20 dB under the median F of a ringing-string re-pluck at 0.1 peak (~1e-2; a fresh pluck ~5e-2), above -60 dBFS input hiss (max ~6e-4)
+constexpr float WM_ONSET_FLUX_REFRACTORY_MS = 60.f;   // ms; min. time between onsets
 
 // --- Control smoothing / snapping ----------------------------------------------------------
 constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3 at the 8 kHz rate
