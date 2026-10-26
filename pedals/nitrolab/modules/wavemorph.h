@@ -22,7 +22,7 @@
 //                     falls back to 0 (tau x 3); CCW: each onset e = 0 -> -1 and holds; tau 4 s (pad edge)
 //                     -> 0.05 s (ends); t_eff = t_K4 + 0.7 e, not clamped (fc only 10 Hz..20 kHz)
 //   K3  morph         m 0..1 (smoothed): position through the zone's waves / frames
-//   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct, Q 0.707 per stage)
+//   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (WM_FILT_STAGES: 1 = 12 dB/oct, 2 = 24 dB/oct; Q 0.707 per stage)
 //   K5  octave mix    CCW = played only (octave slots not computed), CW = selected octave only; linear
 //   K6  dry / wet     (shell)
 //   SW1 unused (not read)
@@ -39,9 +39,8 @@
 // (32767 / WM_ZONE_I16_SCALE[zone]); then rebuilt as 14 band-limited versions {1,2,3,4,6,8,12,16,24,32,48,64,96,127} at 256 points.
 //   1 SINE SYNC  7 frames: sin(2 pi frac(R phi)), R = 1 | 1.5 | 2 | 2.7 | 4 | 4.6 | 6.5             [time]
 //   2 TRI FOLD   fold(G tri(phi)), G = 1 | 2 | 4 | 8, fold(v) = |((v - 1) mod 4) - 2| - 1           [time]
-//   3 SAW ROUGH  saw 1/n | hollow saw odd 1/n^1.4, even 0.3/n^1.4 | needle saw 1/n^0.3 |
-//                needle saw + needle saw an octave up (even n = 2k: + (1/k)^0.3); equal RMS (the
-//                plain saw's)                                                                    [spectral]
+//   3 SAW ROUGH  3 frames: saw 1/n | sine + needle (sin + Hann spike width 0.03 at phi 0.25, height 1;
+//                re-phased) | needle saw 1/n^0.3; equal RMS (the plain saw's)      [spectral; 2 time]
 //   4 PWM        16 frames: +1 (phi < w) else -1, w = 0.5 (1 - u)^2.2: 50 % -> 0 % (silence)          [time]
 //   5 VOCAL      16 frames (= dd3d5f9): a -> e -> i -> o -> u, formants interpolated, 110 Hz reference [spectral]
 //   6 PPG CLASSIC explorer's PPG-style set: 8-step saw (8 levels) | stepped odd-harmonic stack (32 steps,
@@ -241,8 +240,10 @@ class WaveMorph : public Module {
   static const char* WaveName(int z, int i) {
     static const char* const sync[wavemorph_k::WM_SYNC_N] = { "R1", "R1.5", "R2", "R2.7", "R4", "R4.6", "R6.5" };
     if (z == 0) return (i >= 0 && i < wavemorph_k::WM_SYNC_N) ? sync[i] : "";
+    static const char* const sawr[wavemorph_k::WM_SAWR_N] = { "saw", "sinendl", "needle" };
+    if (z == 2) return (i >= 0 && i < wavemorph_k::WM_SAWR_N) ? sawr[i] : "";
     static const char* const n[wavemorph_k::WM_ZONES][wavemorph_k::WM_CORNERS] = {
-      { "", "", "", "" }, { "G1", "G2", "G4", "G8" }, { "saw", "hollow", "needle", "needle2" },
+      { "", "", "", "" }, { "G1", "G2", "G4", "G8" }, { "", "", "", "" },
       { "", "", "", "" }, { "", "", "", "" }, { "saw8", "odd32", "bits", "sine16" },
       { "tine", "clarinet", "drawbar", "mixture" }, { "harmonium", "ghost5", "bell", "lores" },
       { "ppgres", "oboe", "brass", "bassbell" }, { "syncsaw", "fuzz", "clipper", "ppgfb" } };
@@ -305,7 +306,7 @@ class WaveMorph : public Module {
       int_(acc * WM_OUT_GAIN, wet + i);
     }
     DcBlock(wet, size);
-    PostFilter(wet, size);  // K4: LP | bypass | HP, 24 dB/oct, Q WM_FILT_Q (1.1)
+    PostFilter(wet, size);  // K4: LP | bypass | HP, WM_FILT_STAGES x 12 dB/oct, Q WM_FILT_Q
     Saturate(wet, size);
     ApplyMute(wet, size);
   }
@@ -483,6 +484,12 @@ class WaveMorph : public Module {
         if (m < 0.f) m += 4.f;
         return fabsf(m - 2.f) - 1.f;
       }
+      case 2: {                                    // saw rough 2: sine + needle (Hann spike on the peak)
+        float x = sinf(6.283185307f * ph);
+        const float d = ph - WM_SNDL_POS;
+        if (fabsf(d) < 0.5f * WM_SNDL_W) x += WM_SNDL_H * 0.5f * (1.f + cosf(6.283185307f * d / WM_SNDL_W));
+        return x;
+      }
       case 3:                                      // PWM 50 % -> silence (curve: narrow end)
         return (ph < PwmWidth(u)) ? 1.f : -1.f;
       case 5:                                      // PPG classic (explorer's PPG-style set, s == 1)
@@ -514,7 +521,7 @@ class WaveMorph : public Module {
     }
   }
   static inline bool IsTimeDomain(int z, int c) {
-    return z == 0 || z == 1 || z == 3 || z == 5 || (z == 7 && c == 3) || (z == 9 && c == 0);
+    return z == 0 || z == 1 || z == 3 || z == 5 || (z == 2 && c == 1) || (z == 7 && c == 3) || (z == 9 && c == 0);
   }
 
   // PWM width at u: 0.5 (1 - u)^WM_PWM_CURVE (u = 1: 0, silence).
@@ -532,18 +539,8 @@ class WaveMorph : public Module {
     auto list = [&](const WmHarm* w, int n) { for (int i = 0; i < n; i++) put(w[i].h, w[i].a); };
 #define WM_LIST(arr) list(arr, (int)(sizeof(arr) / sizeof(arr[0])))
     switch (z) {
-      case 2:                                      // saw rough: saw | hollow | needle | needle + octave
-        for (int h = 1; h <= WM_HMAX; h++) {
-          if (c == 0) {
-            put(h, 1.f / (float)h);
-          } else if (c == 1) {
-            put(h, ((h & 1) ? 1.f : WM_HOLLOW_EVEN) * powf((float)h, -WM_HOLLOW_EXP));
-          } else {
-            float a = powf((float)h, -WM_NSAW_EXP);
-            if (c == 3 && (h & 1) == 0) a += WM_NSAW_OCT_W * powf((float)(h / 2), -WM_NSAW_EXP);
-            put(h, a);
-          }
-        }
+      case 2:                                      // saw rough: 1 saw | 3 needle saw (2 = sine + needle, time domain)
+        for (int h = 1; h <= WM_HMAX; h++) put(h, (c == 0) ? 1.f / (float)h : powf((float)h, -WM_NSAW_EXP));
         break;
       case 4: {                                    // vocal a -> e -> i -> o -> u (= dd3d5f9)
         const float v = u * (float)(WM_VOX_N - 1);
@@ -690,8 +687,9 @@ class WaveMorph : public Module {
           const float g = (pk > 0.f) ? 1.f / pk : 0.f;
           for (int h = 1; h <= WM_HMAX; h++) { A[h] *= g; B[h] *= g; }
         }
-        if (WM_ZONE_REPHASE[z]) {                     // zones 1, 2, 6, 10: one phase convention (the saw's:
+        if (WM_ZONE_REPHASE[z]) {                     // zones 1, 2, 3, 6, 10: one phase convention (the saw's:
           for (int h = 1; h <= WM_HMAX; h++) {        // sine phase, positive), magnitudes kept exactly
+            if (B[h] == 0.f && A[h] >= 0.f) continue; // already in the convention: left bit-exact
             A[h] = sqrtf(A[h] * A[h] + B[h] * B[h]);
             B[h] = 0.f;
           }
@@ -799,7 +797,8 @@ class WaveMorph : public Module {
         const float x = wet[n];
         float lp, hp, y;
         s0.Process(x, lp, hp);
-        s1.Process(hp, lp, y);
+        if (WM_FILT_STAGES == 2) s1.Process(hp, lp, y);   // second stage (24 dB/oct)
+        else                     y = hp;                   // one stage (12 dB/oct)
         wet[n] = x + m * (y - x);
       }
     } else {
@@ -809,7 +808,8 @@ class WaveMorph : public Module {
         const float x = wet[n];
         float lp, hp, y;
         s0.Process(x, lp, hp);
-        s1.Process(lp, y, hp);
+        if (WM_FILT_STAGES == 2) s1.Process(lp, y, hp);   // second stage (24 dB/oct)
+        else                     y = lp;                   // one stage (12 dB/oct)
         wet[n] = x + m * (y - x);
       }
     }

@@ -12,18 +12,21 @@ namespace wavemorph_k {
 constexpr int   WM_ZONES          = 10;      // K1 equal zones (snap, crossfade on a change)
 constexpr int   WM_CORNERS        = 4;       // waves of the 4-wave zones (2, 3, 6..10)
 constexpr int   WM_SYNC_N         = 7;       // zone 1 sine sync: frames (sync ratios)
+constexpr int   WM_SAWR_N         = 3;       // zone 3 saw rough: frames (saw | sine + needle | needle saw)
 constexpr int   WM_FRAMES16       = 16;      // frames of the continuous zones (4 PWM, 5 vocal)
 // Frames per zone F_z (every zone morphs): m = K3 -> position (F_z - 1) m, linear crossfade between
 // the two adjacent frames.
-constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_SYNC_N, WM_CORNERS, WM_CORNERS, WM_FRAMES16, WM_FRAMES16,
+constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_SYNC_N, WM_CORNERS, WM_SAWR_N, WM_FRAMES16, WM_FRAMES16,
                                              WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS };
 // Zones 3 and 6..10: each wave scaled to the plain saw's RMS (then capped to the storage headroom).
 constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, true, false, false, true, true, true, true, true };
-// Zones 1, 2, 6, 10: every frame re-phased to ONE common convention after the DFT / definition: harmonic n
+// Zones 1, 2, 3, 6, 10: every frame re-phased to ONE common convention after the DFT / definition: harmonic n
 // gets magnitude |H_n| (kept exactly) at the saw's phase (zone 3 corner 1: sine phase, positive), so
 // neighbouring frames cannot cancel in the blend; then the zone's level rule (peak 1 / RMS match).
-constexpr bool  WM_ZONE_REPHASE[WM_ZONES]   = { true, true, false, false, false, true, false, false, false, true };
-constexpr int   WM_TOTAL_FRAMES   = WM_SYNC_N + 7 * WM_CORNERS + 2 * WM_FRAMES16;   // packed table frames
+constexpr bool  WM_ZONE_REPHASE[WM_ZONES]   = { true, true, true, false, false, true, false, false, false, true };
+// (zone 3: only the sine + needle frame changes - the saw and needle saw are already positive sine phase and are
+// left bit-exact: a harmonic already at A >= 0, B = 0 is not touched)
+constexpr int   WM_TOTAL_FRAMES   = WM_SYNC_N + WM_SAWR_N + 6 * WM_CORNERS + 2 * WM_FRAMES16;   // packed table frames
 constexpr int WmSumFrames(int i = 0) { return (i >= WM_ZONES) ? 0 : WM_ZONE_FRAMES[i] + WmSumFrames(i + 1); }
 static_assert(WmSumFrames() == WM_TOTAL_FRAMES, "WM_TOTAL_FRAMES = sum of WM_ZONE_FRAMES");
 constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change
@@ -47,15 +50,15 @@ constexpr float WM_ZONE_I16_SCALE[WM_ZONES] = { WM_I16_SCALE, WM_I16_SCALE, WM_I
 constexpr float WM_SYNC_R[WM_SYNC_N]  = { 1.f, 1.5f, 2.f, 2.7f, 4.f, 4.6f, 6.5f };   // 2026-10-26: last 7 -> 6.5 (integer = plain sine)
 // Zone 2 triangle | fold: x = fold(G tri(phi)), fold reflects into [-1, 1], G per corner.
 constexpr float WM_FOLD_G[WM_CORNERS]  = { 1.f, 2.f, 4.f, 8.f };
-// Zone 3 saw rough (sine phase like the saw), n = harmonic number:
-//   1 saw 1/n | 2 hollow saw: odd 1/n^HOLLOW_EXP, even HOLLOW_EVEN / n^HOLLOW_EXP |
-//   3 needle saw 1/n^NSAW_EXP | 4 needle saw + needle saw an octave up: corner 3 plus, on even n = 2k,
-//   NSAW_OCT_W (1/k)^NSAW_EXP. Corner 1 = the plain saw (peak 1: the RMS target of zones 3, 6..10); all
-//   corners scaled to that RMS (WM_ZONE_RMS_MATCH).
-constexpr float WM_HOLLOW_EXP     = 1.0f;    // hollow saw: spectral tilt (2026-10-26: 1.4 -> 1.0, same brightness as the saw so overtones never dip in the saw -> hollow -> needle blend)
-constexpr float WM_HOLLOW_EVEN    = 0.3f;    // hollow saw: even-harmonic weight
+// Zone 3 saw rough, 3 frames (position 2 m), n = harmonic number:
+//   1 saw 1/n | 2 sine + needle: time domain sin(2 pi phi) + SNDL_H hann(phi - 0.25, width SNDL_W) (a narrow
+//   raised-cosine spike on the sine's positive peak), DFT, re-phased to the saw convention | 3 needle saw
+//   1/n^NSAW_EXP. Frame 1 = the plain saw (peak 1: the RMS target of zones 3, 6..10); all frames scaled to
+//   that RMS (WM_ZONE_RMS_MATCH).
+constexpr float WM_SNDL_W         = 0.03f;   // sine + needle: spike width (share of the cycle, Hann bump)
+constexpr float WM_SNDL_H         = 1.0f;    // sine + needle: spike height (peak ~2x the sine's)
+constexpr float WM_SNDL_POS       = 0.25f;   // sine + needle: spike centre (the sine's positive peak)
 constexpr float WM_NSAW_EXP       = 0.3f;    // needle saw: upper harmonics nearly as loud as the low ones (spiky)
-constexpr float WM_NSAW_OCT_W     = 1.0f;    // needle saw + octave: weight of the 2x series
 // Zone 4 PWM (16 frames): x = +1 (phi < w) else -1, w = 0.5 (1 - u)^WM_PWM_CURVE, u = frame / 15:
 // most of the travel at the narrow end (frames 8..15 below 10 %); frame 15 w = 0 = silence.
 constexpr float WM_PWM_CURVE      = 2.2f;
@@ -134,7 +137,9 @@ constexpr float WM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW
 constexpr float WM_FILT_FC_MIN    = 10.f;     // Hz; stability floor on fc
 constexpr float WM_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling on fc
 constexpr float WM_FILT_CURVE     = 1.0f;     // |t| exponent
-constexpr float WM_FILT_Q         = 0.707f;   // per-stage Q, both stages, all zones: flat (2026-10-26: 1.1 tried, coloured too much)
+constexpr float WM_FILT_Q         = 0.707f;   // per-stage Q, all zones: flat (2026-10-26: 1.1 tried, coloured too much)
+constexpr int   WM_FILT_STAGES    = 1;        // 1 = one TPT SVF stage (2-pole, 12 dB/oct); 2 = two cascaded stages (24 dB/oct)
+static_assert(WM_FILT_STAGES == 1 || WM_FILT_STAGES == 2, "WM_FILT_STAGES: 1 or 2");
 constexpr float WM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t, per block
 constexpr float WM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float WM_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass
