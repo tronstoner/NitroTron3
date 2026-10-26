@@ -17,7 +17,7 @@
 //                          K5 = octave mix, SW2 = octave +1 / -1 / -2)
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
 //                          modules/wavemorph.h; K1 = base wave (7 stepped zones), K2 = morph
-//                          envelope, K3 = morph (zones 6 / 7: wave select), K4 = post filter, K5 = octave mix, SW2 = octave)
+//                          envelope, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -229,9 +229,11 @@ int main() {
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        char wv[16] = "";                          // zones 6 / 7: "/<n>:<wave name>"
-        const char* wn = WaveMorph::WaveName(d.zone, d.item);
-        if (wn[0]) snprintf(wv, sizeof(wv), "/%d:%s", d.item + 1, wn);
+        char wv[40] = "";                          // zones 6 / 7: morph position "/<a>:<name>><b>:<name>"
+        const char* wa = WaveMorph::WaveName(d.zone, d.f0);
+        const char* wb = WaveMorph::WaveName(d.zone, d.f0 + 1);
+        if (wa[0]) snprintf(wv, sizeof(wv), "/%d:%s>%d:%s+%d%%", d.f0 + 1, wa, d.f0 + 2, wb,
+                            (int)(d.ff * 100.f + 0.5f));
         hw.seed.Print("WM %s %s%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " | ",
                       tag, WaveMorph::ZoneName(d.zone), wv,
                       D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]));

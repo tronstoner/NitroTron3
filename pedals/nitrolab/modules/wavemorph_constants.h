@@ -12,17 +12,17 @@ namespace wavemorph_k {
 constexpr int   WM_ZONES          = 7;       // K1 equal zones (snap, crossfade on a change)
 constexpr int   WM_CORNERS        = 4;       // corner waves of the vector zones (1 sine sync, 2 triangle fold, 3 thin saw)
 constexpr int   WM_FRAMES16       = 16;      // frames of the continuous zones (4 PWM, 5 vocal)
-constexpr int   WM_SOFT_N         = 8;       // zone 6 PPG/VS soft: waves, K3 steps through them
-constexpr int   WM_HARD_N         = 7;       // zone 7 PPG/VS hard: waves, K3 steps through them
-// Frames per zone F_z. Morph zones: m -> position (F_z - 1) m, linear crossfade between adjacent frames.
-// Stepped zones (6, 7): K3 picks wave Quantize(k3, F_z) (no blending; 1 ms crossfade at a change), K2 no effect.
+constexpr int   WM_SOFT_N         = 8;       // zone 6 PPG/VS soft: waves (= frames, list order)
+constexpr int   WM_HARD_N         = 7;       // zone 7 PPG/VS hard: waves (= frames, list order)
+// Frames per zone F_z (every zone morphs): m = K3 g -> position (F_z - 1) m, linear crossfade between
+// the two adjacent frames.
 constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_FRAMES16, WM_FRAMES16,
                                              WM_SOFT_N, WM_HARD_N };
-constexpr bool  WM_ZONE_STEPPED[WM_ZONES] = { false, false, false, false, false, true, true };
+constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, false, false, false, true, true };   // zones 6 / 7: equal-RMS waves
 constexpr int   WM_TOTAL_FRAMES   = 3 * WM_CORNERS + 2 * WM_FRAMES16 + WM_SOFT_N + WM_HARD_N;   // packed table frames
 constexpr int WmSumFrames(int i = 0) { return (i >= WM_ZONES) ? 0 : WM_ZONE_FRAMES[i] + WmSumFrames(i + 1); }
 static_assert(WmSumFrames() == WM_TOTAL_FRAMES, "WM_TOTAL_FRAMES = sum of WM_ZONE_FRAMES");
-constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change or a K3 wave step
+constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change
 constexpr int   WM_TAB_SIZE       = 256;     // samples per single-cycle table (power of two; harmonics 1..127)
 constexpr int   WM_HMAX           = WM_TAB_SIZE / 2 - 1;   // highest harmonic a table holds
 constexpr int   WM_TD_SIZE        = 1024;    // time-domain definition resolution (oversampled 4x vs the table:
