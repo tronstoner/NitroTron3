@@ -35,7 +35,8 @@ constexpr int   WM_HMAX           = WM_TAB_SIZE / 2 - 1;   // highest harmonic a
 constexpr int   WM_TD_SIZE        = 1024;    // time-domain definition resolution (oversampled 4x vs the table:
                                              // harmonics folding into 1..127 start at 897 -> ~-59 dB for 1/h spectra)
 constexpr int   WM_LEVELS         = 14;      // band-limited versions per frame
-// Harmonic count of each band-limited version; a band uses the largest H <= WM_TAB_FMAX / f'_k (static per band, slot).
+// Harmonic count of each band-limited version; a band uses the largest H <= WM_TAB_FMAX / f'_k (static per band, slot;
+// K5 CCW: largest H <= min(WM_TAB_FMAX, fc) / f'_k, re-picked per block when t moved).
 constexpr int   WM_LEVEL_H[WM_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
 constexpr float WM_TAB_FMAX       = 4000.f;  // Hz; band-engine ceiling for the table band limit (= EXP_WT_FMAX)
 constexpr float WM_I16_SCALE      = 16384.f; // int16 storage scale, default (2x headroom: |table| <= 2.0)
@@ -176,17 +177,22 @@ constexpr float    WM_ONSET_RISE          = 1.5f;     // (= EXP_ONSET_RISE)
 constexpr float    WM_ONSET_FLOOR         = 0.0021f;  // (= EXP_ONSET_FLOOR)
 constexpr uint32_t WM_ONSET_REFRACTORY_MS = 100;      // (= EXP_ONSET_REFRACTORY_MS)
 
-// --- K5 = band tilt (2026-10-26, = explorer's EXP_BTILT_*): plain dB/oct tilt by weighting each band's OUTPUT ---
-// t = 2 k5 - 1 (smoothed as K2, lands exactly); weights w_k per audio block from the smoothed t, on each
-// band's output before the band sum. f_k = the band's analysed centre (before SW2's octave). Plain tilt:
-// s = |t| SLOPE_MAX dB/oct; CCW: dB_k = -s log2(f_k / f_bot) (bottom band 0 dB, each octave up -s dB);
-// CW: dB_k = -s log2(f_top / f_k) (top band 0 dB, lows thinner); w_k = 10^(dB_k / 20)
-// (f_bot / f_top = the engine's band 0 / 83 centres, 25.38 / 1685.42 Hz). Continuous from t = 0 (no fade term).
-// t == 0: no multiply (bit-identical). No makeup gain.
-constexpr float WM_BTILT_SLOPE_MAX = 3.0f;   // dB/oct at full K5 (either side); 6 oct of bands -> ~-18 dB at the far end
+// --- K5 (2026-10-26, = explorer's EXP_BTILT_*): CCW = harmonic lowpass per band | noon off | CW = plain band tilt ---
+// t = 2 k5 - 1 (smoothed as K2, lands exactly), evaluated once per audio block (only when t moved).
+// CW (t > 0) plain tilt by weighting each band's OUTPUT before the band sum: s = t SLOPE_MAX dB/oct,
+// dB_k = -s log2(f_top / f_k) (top band 0 dB, lows thinner), w_k = 10^(dB_k / 20); f_k = analysed centre
+// (before SW2), f_top = band 83 centre 1685.42 Hz. Continuous from t = 0 (no fade term). No makeup gain.
+// CCW (t < 0) harmonic lowpass: fc = HLP_FMAX (HLP_FMIN / HLP_FMAX)^|t| (exponential); each band's table version
+// = largest H <= min(WM_TAB_FMAX, fc) / f'_k (f'_k after SW2; floor H = 1 = the plain fundamental): each band keeps
+// its level and fundamental. A band whose version moves crossfades old -> new linearly over HLP_SLIDE_MS.
+// t == 0: nothing applied (bit-identical).
+constexpr float WM_BTILT_SLOPE_MAX     = 3.0f;     // dB/oct at full K5 CW; 6 oct of bands -> ~-18 dB at the bottom band
+constexpr float WM_BTILT_HLP_FMAX      = 4000.f;   // Hz; K5 CCW harmonic lowpass fc just left of noon (= EXP_BTILT_HLP_FMAX)
+constexpr float WM_BTILT_HLP_FMIN      = 150.f;    // Hz; fc at K5 full CCW (= EXP_BTILT_HLP_FMIN)
+constexpr float WM_BTILT_HLP_SLIDE_MS  = 1.f;      // ms; linear crossfade old -> new table version per band
 
 // --- Control smoothing / snapping ----------------------------------------------------------
-constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K5 (band tilt) at the 8 kHz rate
+constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K5 (lowpass / tilt) at the 8 kHz rate
 constexpr float WM_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this
 
 // --- Band sum: alignment + gain staging (copied values from explorer_constants.h) -------------

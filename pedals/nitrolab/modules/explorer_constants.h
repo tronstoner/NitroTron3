@@ -59,7 +59,8 @@ constexpr int   EXP_WT_WAVES      = 4;       // waves per set (K2 scans and inte
 constexpr int   EXP_WT_SIZE       = 256;     // samples per single-cycle table (power of two; holds harmonics 1..127)
 constexpr int   EXP_WT_HMAX       = EXP_WT_SIZE / 2 - 1;   // highest harmonic a table can hold
 constexpr int   EXP_WT_LEVELS     = 14;      // band-limited versions per wave (see EXP_WT_LEVEL_H)
-// Harmonic count of each band-limited version; a band uses the largest H <= EXP_WT_FMAX / f'_k (static per band).
+// Harmonic count of each band-limited version; a band uses the largest H <= EXP_WT_FMAX / f'_k (static per band;
+// K5 CCW: largest H <= min(EXP_WT_FMAX, fc) / f'_k, re-picked per block when t moved).
 constexpr int   EXP_WT_LEVEL_H[EXP_WT_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
 constexpr float EXP_WT_FMAX       = 4000.f;  // Hz; band-engine ceiling for the table band limit
 constexpr float EXP_WT_I16_SCALE  = 16384.f; // int16 storage scale (peak-1 waves, 2x headroom for band-limit overshoot)
@@ -88,7 +89,8 @@ constexpr int      EXP_BT_SQR_N_MAX = 16;       // SQR waveforms: square x harmo
 constexpr int      EXP_BT_WAVES     = EXP_BT_PATTERNS + EXP_BT_SQR_N_MAX;   // 32 stepped waveforms on K2
 // Anti-fold (EXP_ANTIFOLD): steps per band S = largest of 16 / 8 / 4 / 2 with (S / 2) f'_k <= EXP_FOLD_LIMIT_HZ
 // (the pattern's step Nyquist fits under the ceiling = at most one step per 8 kHz engine sample);
-// the pattern is subsampled (every 16 / S-th step). Static per band centre and slot.
+// the pattern is subsampled (every 16 / S-th step). Static per band centre and slot (K5 CCW: limit
+// min(EXP_FOLD_LIMIT_HZ, fc), re-picked per block when t moved).
 constexpr int      EXP_BT_STEPS_MIN = 2;        // fewest steps a band can drop to
 
 // --- Octave (SW2 select: UP +1, MID played, DOWN -1; one slot) ----------------------------
@@ -113,14 +115,20 @@ constexpr float EXP_FILT_FADE      = 0.03f;    // |t| over which bypass crossfad
 constexpr float EXP_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass (= ARM_FILT_SNAP)
 constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide (= ARM_MUTE_SLIDE_MS as armitage uses it)
 
-// --- K5 = band tilt (2026-10-26): plain dB/oct tilt by weighting each band's OUTPUT, not a filter -
-// t = 2 k5 - 1 (smoothed as K2..K4, lands exactly); weights w_k per audio block from the smoothed t, on each
-// band's output before the band sum. f_k = the band's analysed centre (before SW2's octave). Plain tilt:
-// s = |t| SLOPE_MAX dB/oct; CCW: dB_k = -s log2(f_k / f_bot) (bottom band 0 dB, each octave up -s dB);
-// CW: dB_k = -s log2(f_top / f_k) (top band 0 dB, lows thinner); w_k = 10^(dB_k / 20)
-// (f_bot / f_top = the engine's band 0 / 83 centres, 25.38 / 1685.42 Hz). Continuous from t = 0 (no fade term).
-// t == 0: no multiply (bit-identical). No makeup gain.
-constexpr float EXP_BTILT_SLOPE_MAX = 3.0f;   // dB/oct at full K5 (either side); 6 oct of bands -> ~-18 dB at the far end
+// --- K5 (2026-10-26): CCW = harmonic lowpass per band | noon off | CW = plain band tilt ---------------
+// t = 2 k5 - 1 (smoothed as K2..K4, lands exactly), evaluated once per audio block (only when t moved).
+// CW (t > 0) plain tilt by weighting each band's OUTPUT before the band sum: s = t SLOPE_MAX dB/oct,
+// dB_k = -s log2(f_top / f_k) (top band 0 dB, lows thinner), w_k = 10^(dB_k / 20); f_k = analysed centre
+// (before SW2), f_top = band 83 centre 1685.42 Hz. Continuous from t = 0 (no fade term). No makeup gain.
+// CCW (t < 0) harmonic lowpass: fc = HLP_FMAX (HLP_FMIN / HLP_FMAX)^|t| (exponential); every per-band harmonic
+// ceiling C (on f'_k, after SW2) becomes min(C, fc): harmonics (HARM_FMAX, the share lost to fc goes to the
+// band's fundamental), FM caps (FOLD_LIMIT_HZ), table / bit-table picks (WT_FMAX, S). Each band keeps its level
+// and fundamental. A discrete pick that moves slides over HLP_SLIDE_MS (linear crossfade old -> new per band).
+// t == 0: nothing applied (bit-identical).
+constexpr float EXP_BTILT_SLOPE_MAX  = 3.0f;     // dB/oct at full K5 CW; 6 oct of bands -> ~-18 dB at the bottom band
+constexpr float EXP_BTILT_HLP_FMAX   = 4000.f;   // Hz; K5 CCW harmonic lowpass fc just left of noon
+constexpr float EXP_BTILT_HLP_FMIN   = 150.f;    // Hz; fc at K5 full CCW (every band above it: plain fundamental)
+constexpr float EXP_BTILT_HLP_SLIDE_MS = 1.f;    // ms; linear crossfade old -> new table version / step count per band
 
 // --- K4 on SW1 UP = triggered envelope on the K3 FM index (copied 1:1 from armitage's K2 FM envelope) ---
 // Onset detector per 48 kHz input sample, before the decimator (armitage OnsetDetect / ARM_ONSET_*):
@@ -156,7 +164,7 @@ constexpr float    EXP_FOLLOW_FM_DEPTH     = 0.15f;    // added to the FM gain g
 constexpr float    EXP_FOLLOW_GATE_MS      = 1.0f;     // ms; one-pole tau of the on gate at a K4 noon crossing (= ARM_FOLLOW_GATE_MS)
 
 // --- Control smoothing / snapping ----------------------------------------------------
-constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t), K5 (band tilt) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
+constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t), K5 (lowpass / tilt) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
 constexpr float EXP_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this
 
 // --- Band sum: phase alignment + gain staging (copied values from armitage_constants.h, ARM_ALIGN = true) ---

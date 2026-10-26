@@ -9,18 +9,23 @@
 //   W_k = lerp_frames( lerp_phase(table[zone][frame][level_k]) ),  slot = sum_k w_k a_k W_k
 //   MORPH (all zones, m = K3): F_z frames per zone (7 in zone 1, 16 in zones 4 / 5, 4 in the others);
 //   position = (F_z - 1) m, linear crossfade between the two adjacent frames;
-//   level_k = the largest band-limited version with H <= 4000 / f'_k (static per band and slot).
+//   level_k = the largest band-limited version with H <= 4000 / f'_k (static per band and slot;
+//   K5 CCW: min(4000, fc), see K5).
 // wet8 = WM_OUT_GAIN [ u G_UP up + p played + d G_DOWN down ], (u, p, d) one-hot from SW2, slid over
 //        WM_OCT_XFADE_MS on a change (old -> new slot crossfade); a slot with weight 0 is not computed
 // wet  = interpolate(wet8) -> DC blocker -> K4 post filter -> soft clipper (ceiling 1.0) -> FS1 mute
 // No pitch tracking; nothing picks or decides per band.
-// K5 BAND TILT (2026-10-26, explorer's; plain dB/oct tilt by weighting the bands, not a filter): t = 2 k5 - 1 (smoothed per
-//   8 kHz sample, lands exactly); per audio block bt_k from the smoothed t (expf per band, cached while t holds);
-//   each band's table output w_k a_k W_k is multiplied by bt_k in Shape before the band sum (every slot, both
-//   sides of a zone crossfade). f_k = analysed centre (before SW2);
-//   s = |t| WM_BTILT_SLOPE_MAX (dB/oct); CCW: dB_k = -s log2(f_k / 25.38) (bottom band 0 dB, lows kept);
-//   CW: dB_k = -s log2(1685.42 / f_k) (top band 0 dB, lows thinner) (band 0 / 83 centres);
-//   bt = 10^(dB_k / 20). Continuous from t = 0 (no fade term). t == 0: no multiply (bit-identical). No makeup.
+// K5 (2026-10-26, explorer's): t = 2 k5 - 1 (smoothed per 8 kHz sample, lands exactly), evaluated per audio
+//   block in K5Update (only when the smoothed t moved). t == 0: nothing applied (bit-identical).
+//   CW = BAND TILT (plain dB/oct tilt by weighting the bands, not a filter): s = t WM_BTILT_SLOPE_MAX (dB/oct),
+//   dB_k = -s log2(1685.42 / f_k) (top band 0 dB, lows thinner; f_k = analysed centre before SW2, band 83 centre),
+//   bt = 10^(dB_k / 20) (expf per band, cached while t holds); each band's table output w_k a_k W_k is
+//   multiplied by bt_k in Shape before the band sum (every slot, both sides of a zone crossfade). No makeup.
+//   CCW = HARMONIC LOWPASS per band: fc = 4000 (150 / 4000)^|t| Hz (WM_BTILT_HLP_FMAX / FMIN, exponential);
+//   level_k = largest version with H <= min(4000, fc) / f'_k (after SW2; floor H = 1 = plain fundamental),
+//   re-picked per block; each band keeps its level and fundamental (no tilt weights on CCW). A band whose
+//   version moves crossfades old -> new linearly over WM_BTILT_HLP_SLIDE_MS (1 ms = one 48-frame block; one
+//   fade counter, per-band old version), both sides of a zone crossfade.
 //
 // CONTROL MAP
 //   K1  base wave     10 STEPPED equal zones (below); a zone change crossfades old -> new over
@@ -36,8 +41,9 @@
 //                     inside it. WM_FOLLOW_DEPTH = 0: bit-identical.
 //   K3  morph         m 0..1 (smoothed): position through the zone's waves / frames
 //   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (WM_FILT_STAGES: 1 = 12 dB/oct, 2 = 24 dB/oct; Q 0.707 per stage)
-//   K5  band tilt     CCW darker (highs down) | noon off (bit-identical) | CW thinner (lows down)
-//                     (plain tilt, 0 -> WM_BTILT_SLOPE_MAX = 3 dB/oct at the ends, ~-18 dB at the far band; all zones and slots; see K5 BAND TILT)
+//   K5  lowpass/tilt  CCW harmonic lowpass per band fc 4 kHz -> 150 Hz (keeps each band's level + fundamental)
+//                     | noon off (bit-identical) | CW band tilt, lows thinner (0 -> WM_BTILT_SLOPE_MAX = 3 dB/oct,
+//                     ~-18 dB at the bottom band); all zones and slots (see K5)
 //   K6  dry / wet     (shell)
 //   SW1 unused (not read)
 //   SW2 octave        UP = +1 octave, MID = as played, DOWN = -1 octave (one slot; crossfade WM_OCT_XFADE_MS)
@@ -148,12 +154,26 @@ class WaveMorph : public Module {
       }
       for (int o = 0; o < kSlots; o++) {
         const float fp = r[o] * f;                         // f'_k
+        ifp_[o][k] = 1.f / fp;                            // K5 CCW re-pick
         const int hk = (int)(WM_TAB_FMAX / fp);           // harmonics that fit below the ceiling
         int lv = 0;
         for (int l = 0; l < WM_LEVELS; l++) if (WM_LEVEL_H[l] <= hk) lv = l;
         lvl_[o][k] = (uint8_t)lv;
+        lvc_[o][k] = lvf_[o][k] = (uint8_t)lv;           // K5 CCW re-picks start from the static picks
       }
     }
+    for (int h = 0; h <= WM_HMAX; h++) {                  // K5 CCW: version for H <= h (largest LEVEL_H <= h)
+      int lv = 0;
+      for (int l = 0; l < WM_LEVELS; l++) if (WM_LEVEL_H[l] <= h) lv = l;
+      lv_of_h_[h] = (uint8_t)lv;
+    }
+    hlp_on_ = hlp_was_ = false;
+    hlp_fc_ = 0.f;
+    hlp_lnr_ = logf(WM_BTILT_HLP_FMIN / WM_BTILT_HLP_FMAX);
+    pk_fade_n_ = 0;
+    pk_fade_len_ = (int)(WM_BTILT_HLP_SLIDE_MS * 0.001f * sr8_ + 0.5f);
+    if (pk_fade_len_ < 1) pk_fade_len_ = 1;
+    pk_g_ = 1.f;
     BuildTables();
     for (int o = 0; o < kSlots; o++) { ResetSlotState(o); slot_on_[o] = false; }
     dc_a_ = expf(-6.283185307f * WM_DC_HZ / sr);
@@ -166,14 +186,10 @@ class WaveMorph : public Module {
     zone_ = zone_t_ = zfrom_ = 0;
     k2s_ = k2_t_ = 0.5f;                         // K2 noon = envelope off
     k3s_ = k3_t_ = 0.f;
-    k5s_ = k5_t_ = 0.5f;                         // K5 noon = band tilt off
+    k5s_ = k5_t_ = 0.5f;                         // K5 noon = lowpass / tilt off
     bt_t_ = 0.f;
     bt_on_ = false;
-    {
-      const float fbot = armbands::ArmCenterFreq(0), ftop = armbands::ArmCenterFreq(kBands - 1);
-      bt_lnbot_ = logf(fbot);
-      bt_lntop_ = logf(ftop);
-    }
+    bt_lntop_ = logf(armbands::ArmCenterFreq(kBands - 1));
     // Onset detector (48 kHz, pre-decimator, explorer's) + K2 filter envelope (8 kHz).
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (WM_ONSET_ENV_MS * sr));
@@ -247,16 +263,22 @@ class WaveMorph : public Module {
     float ff;         // ... and the fraction toward f0 + 1
     float fe;         // K2 filter envelope e (-1..1)
     float fol;        // live follower f = min(follower, 1) at the snapshot (0..1)
-    float btt;        // K5 band tilt t = 2 k5 - 1 (raw knob)
-    float bts;        // its slope s = |t| SLOPE_MAX (dB/oct), 0 at noon
+    float btt;        // K5 t = 2 k5 - 1 (raw knob)
+    float bts;        // CW band tilt slope s = t SLOPE_MAX (dB/oct), 0 at noon / CCW
+    float hfc;        // CCW harmonic lowpass fc (Hz), 0 at noon / CW
     int   sw2;        // 0 UP (+1), 1 MID (-1), 2 DOWN (-2)
     bool  mute;
   };
   void Activate() override {
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
   }
-  // K5 band tilt slope s (dB/oct) at t: |t| SLOPE_MAX, 0 at noon.
-  static float BTiltSlope(float t) { return fabsf(t) * wavemorph_k::WM_BTILT_SLOPE_MAX; }
+  // K5 CW band tilt slope s (dB/oct) at t: t SLOPE_MAX, 0 at noon / CCW.
+  static float BTiltSlope(float t) { return (t > 0.f) ? t * wavemorph_k::WM_BTILT_SLOPE_MAX : 0.f; }
+  // K5 CCW harmonic lowpass fc (Hz) at t: HLP_FMAX (HLP_FMIN / HLP_FMAX)^|t|, 0 at noon / CW.
+  static float HlpFc(float t) {
+    using namespace wavemorph_k;
+    return (t < 0.f) ? WM_BTILT_HLP_FMAX * expf(-t * logf(WM_BTILT_HLP_FMIN / WM_BTILT_HLP_FMAX)) : 0.f;
+  }
   bool DiagTake(DiagSnap& out) {
     if (diag_tap_pend_)  { out = diag_tap_;  diag_tap_pend_ = false;  return true; }
     if (diag_auto_pend_) { out = diag_auto_; diag_auto_pend_ = false; return true; }
@@ -287,7 +309,7 @@ class WaveMorph : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     using namespace wavemorph_k;
     const float ca = ctrl_a_;
-    BTiltUpdate();                               // K5 band tilt: weights for this block (smoothed t)
+    K5Update();                                  // K5: CCW table re-pick / CW tilt weights (smoothed t)
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       for (size_t j = 0; j < kFactor; j++) {
         OnsetDetect(in[i + j]);                  // onset detector, 48 kHz |in|, pre-decimator
@@ -310,6 +332,7 @@ class WaveMorph : public Module {
       }
       const bool fading = (zfade_n_ > 0);
       zg_ = fading ? 1.f - (float)zfade_n_ / (float)(zfade_len_ + 1) : 1.f;
+      pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // K5 CCW pick slide
       morph_ = k3s_;                             // morph m = K3 (frame position per zone in Shape)
 
       // Pass 1: clock all bands, magnitudes (|z'| = |z| in every slot).
@@ -340,6 +363,7 @@ class WaveMorph : public Module {
         else slot_on_[oslot[j]] = false;
       }
       if (zfade_n_ > 0) --zfade_n_;
+      if (pk_fade_n_ > 0) --pk_fade_n_;
       int_(acc * WM_OUT_GAIN, wet + i);
     }
     DcBlock(wet, size);
@@ -410,23 +434,50 @@ class WaveMorph : public Module {
     if (fabsf(dir_t - fol_dir_) < WM_CTRL_SNAP) fol_dir_ = dir_t;
   }
 
-  // K5 band tilt weights bt_w_[k] from the smoothed t = 2 k5s_ - 1, once per audio block (84 expf only when t
-  // moved). t == 0: off (Shape skips the multiply). dB_k = -s log2(f_k / f_ref) (CCW, f_ref = f_bot) or
-  // -s log2(f_ref / f_k) (CW, f_ref = f_top); 10^(dB / 20) = exp(-s c |ln f_k - ln f_ref|), c = ln 10 / (20 ln 2).
-  void BTiltUpdate() {
+  // K5, once per audio block from the smoothed t = 2 k5s_ - 1 (nothing when t did not move).
+  //   CCW (t < 0): harmonic lowpass fc = HLP_FMAX (HLP_FMIN / HLP_FMAX)^|t| -> Repick. Leaving CCW: Repick
+  //   restores the static versions (slid). t <= 0: no tilt weights (Shape skips the multiply).
+  //   CW (t > 0): tilt weights bt_w_[k] = 10^(-s log2(f_top / f_k) / 20) = exp(-s c (ln f_top - ln f_k)),
+  //   s = t SLOPE_MAX, c = ln 10 / (20 ln 2) (84 expf only when t moved).
+  void K5Update() {
     using namespace wavemorph_k;
     const float t = 2.f * k5s_ - 1.f;
-    if (t == bt_t_) return;                      // unchanged: weights hold
+    if (t == bt_t_) return;                      // unchanged: versions / weights hold
     bt_t_ = t;
-    if (t == 0.f) { bt_on_ = false; return; }
+    hlp_on_ = (t < 0.f);
+    hlp_fc_ = hlp_on_ ? WM_BTILT_HLP_FMAX * expf(-t * hlp_lnr_) : 0.f;
+    if (hlp_on_ || hlp_was_) Repick();           // CCW, or just left it (back to the static versions)
+    hlp_was_ = hlp_on_;
+    if (t <= 0.f) { bt_on_ = false; return; }
     constexpr float c = 0.16609640f;             // ln 10 / (20 ln 2): dB per octave -> exp argument per ln f
-    const float sc = fabsf(t) * WM_BTILT_SLOPE_MAX * c;
-    if (t < 0.f) {
-      for (int k = 0; k < kBands; k++) bt_w_[k] = expf(-sc * (bt_lnf_[k] - bt_lnbot_));
-    } else {
-      for (int k = 0; k < kBands; k++) bt_w_[k] = expf(-sc * (bt_lntop_ - bt_lnf_[k]));
-    }
+    const float sc = t * WM_BTILT_SLOPE_MAX * c;
+    for (int k = 0; k < kBands; k++) bt_w_[k] = expf(-sc * (bt_lntop_ - bt_lnf_[k]));
     bt_on_ = true;
+  }
+
+  // K5 CCW: re-pick each band's table version (largest H <= min(TAB_FMAX, fc) / f'_k, floor H = 1); off CCW the
+  // static versions (lvl_). A band whose version moves keeps the old one in lvf_ and crossfades old -> new
+  // linearly over pk_fade_len_ samples (WM_BTILT_HLP_SLIDE_MS); all other bands' old = new. One shared fade
+  // counter: with 48-frame (1 ms) blocks a fade ends inside its block; a re-pick during a running fade restarts
+  // it from the band's last target.
+  void Repick() {
+    using namespace wavemorph_k;
+    const bool on = hlp_on_;
+    const float cw = (hlp_fc_ < WM_TAB_FMAX) ? hlp_fc_ : WM_TAB_FMAX;
+    bool moved = false;
+    for (int o = 0; o < kSlots; o++) {
+      for (int k = 0; k < kBands; k++) {
+        int lv = lvl_[o][k];
+        if (on) {
+          int hk = (int)(cw * ifp_[o][k]);
+          if (hk > WM_HMAX) hk = WM_HMAX;
+          lv = lv_of_h_[hk];
+        }
+        lvf_[o][k] = lvc_[o][k];
+        if (lv != lvc_[o][k]) { lvc_[o][k] = (uint8_t)lv; moved = true; }
+      }
+    }
+    pk_fade_n_ = moved ? pk_fade_len_ : 0;
   }
 
   // One 8 kHz sample of slot o: derive u_k / phi_k, return sum_k w_k a_k W_k (zone crossfade inside).
@@ -475,9 +526,12 @@ class WaveMorph : public Module {
     using namespace wavemorph_k;
     const float* __restrict mg  = mag_ + 1;
     const float* __restrict phs = ph_;
-    const uint8_t* __restrict lv = lvl_[o];
+    const uint8_t* __restrict lv = lvc_[o];                    // table version in use (K5 CCW: re-picked)
+    const uint8_t* __restrict lvf = lvf_[o];                   // version before the last re-pick
+    const int   pkf = pk_fade_n_;                              // K5 CCW version slide running
+    const float pkg = pk_g_;
     const bool played = (o == kSP);
-    const float* __restrict btw = bt_on_ ? bt_w_ : nullptr;   // K5 band tilt (nullptr at noon: no multiply)
+    const float* __restrict btw = bt_on_ ? bt_w_ : nullptr;   // K5 CW band tilt (nullptr at noon / CCW: no multiply)
     int f0;
     float ff;
     MorphPos(z, morph_, f0, ff);
@@ -496,7 +550,15 @@ class WaveMorph : public Module {
       const int   j0 = i0 & (WM_TAB_SIZE - 1), j1 = (i0 + 1) & (WM_TAB_SIZE - 1);
       const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
       const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
-      const float W = (v0 + ff * (v1 - v0)) * kScale;
+      float W = (v0 + ff * (v1 - v0)) * kScale;
+      if (pkf > 0 && lvf[k] != lv[k]) {        // K5 CCW: version moved -> linear crossfade old -> new
+        const int16_t* u0 = wavemorph_tab[fb][lvf[k]];
+        const int16_t* u1 = wavemorph_tab[fn][lvf[k]];
+        const float w0 = (float)u0[j0] + fr * (float)(u0[j1] - u0[j0]);
+        const float w1 = (float)u1[j0] + fr * (float)(u1[j1] - u1[j0]);
+        const float Wf = (w0 + ff * (w1 - w0)) * kScale;
+        W = Wf + pkg * (W - Wf);
+      }
       if (btw) acc += (played ? wmid_[k] : 1.f) * a * W * btw[k];   // K5 band tilt on the band output
       else     acc += (played ? wmid_[k] : 1.f) * a * W;            // noon: exactly as before
     }
@@ -907,6 +969,7 @@ class WaveMorph : public Module {
     s.fol = fol;
     s.btt = btt;
     s.bts = BTiltSlope(btt);
+    s.hfc = HlpFc(btt);
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -958,7 +1021,10 @@ class WaveMorph : public Module {
   float inv_[kBands];              // 1 / |z_k| (0 = silent)
   float ph_[kBands];               // phase phi_k (cycles, [0, 1)) of the slot being run
   float wmid_[kBands];             // played-slot fitted output weight (armitage ARM_ALIGN)
-  uint8_t lvl_[kSlots][kBands];    // table band-limit level per band and slot
+  uint8_t lvl_[kSlots][kBands];    // table band-limit level per band and slot (static: WM_TAB_FMAX)
+  uint8_t lvc_[kSlots][kBands], lvf_[kSlots][kBands];   // K5: version in use / before the last re-pick
+  uint8_t lv_of_h_[wavemorph_k::WM_HMAX + 1];           // largest version index with LEVEL_H <= h
+  float ifp_[kSlots][kBands];      // 1 / f'_k (K5 CCW re-pick)
   bool  slot_on_[kSlots] = { false, false, false };   // slot computed last sample
 
   float dc_a_ = 0.f, dc_x1_ = 0.f, dc_y1_ = 0.f;
@@ -976,10 +1042,16 @@ class WaveMorph : public Module {
   float k5s_ = 0.5f;               // smoothed K5 (t = 2 k5s_ - 1)
   volatile float k5_t_ = 0.5f;
   float bt_lnf_[kBands];           // ln f_k (analysed band centre, before SW2)
-  float bt_w_[kBands];             // per-band output weight 10^(dB_k / 20) (this block; valid while bt_on_)
+  float bt_w_[kBands];             // CW per-band output weight 10^(dB_k / 20) (this block; valid while bt_on_)
   float bt_t_ = 0.f;               // t the weights were computed for
   bool  bt_on_ = false;            // false at t == 0: no multiply
-  float bt_lnbot_ = 0.f, bt_lntop_ = 0.f;   // ln of the bottom / top band centre
+  float bt_lntop_ = 0.f;           // ln of the top band centre
+  // K5 CCW harmonic lowpass (per block, K5Update)
+  bool  hlp_on_ = false, hlp_was_ = false;   // CCW now / at the last K5Update
+  float hlp_fc_ = 0.f;             // fc (Hz), 0 off CCW
+  float hlp_lnr_ = 0.f;            // ln(HLP_FMIN / HLP_FMAX)
+  int   pk_fade_n_ = 0, pk_fade_len_ = 8; // version slide: samples left / length (WM_BTILT_HLP_SLIDE_MS)
+  float pk_g_ = 1.f;               // new-version weight this sample
   float og_[3] = { 0.f, 1.f, 0.f };            // slot weights (up, played, down), slid
   volatile float og_t_[3] = { 0.f, 1.f, 0.f };
   float oct_step_ = 0.f;
