@@ -16,8 +16,8 @@
 //                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index envelope),
 //                          K5 = octave mix, SW2 = octave +1 / -1 / -2)
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
-//                          modules/wavemorph.h; K1 = base wave (10 stepped zones), K2 = morph
-//                          envelope, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
+//                          modules/wavemorph.h; K1 = base wave (10 stepped zones, 4 vector corners
+//                          each), K2 = morph loop, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -212,13 +212,14 @@ int main() {
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (diag_stage == 3) {
-        // wavemorph, second half: morph (K3, envelope g, effective), octave, mute, cpu
+        // wavemorph, second half: morph (K3, loop g + direction, effective), octave, mute, cpu
         static const char* const oct_name[3] = { "+1", "-1", "-2" };
+        static const char* const dir_name[3] = { "down", "off", "up" };
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("morph k3" D2F " g" D2F " m" D2F " oct %s mute %d cpu %u%%",
-                          D2V(d.m3), D2V(d.g), D2V(d.m),
+        hw.seed.PrintLine("morph k3" D2F " g" D2F " %s m" D2F " oct %s mute %d cpu %u%%",
+                          D2V(d.m3), D2V(d.g), dir_name[(d.dir >= -1 && d.dir <= 1) ? d.dir + 1 : 1], D2V(d.m),
                           oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
                           d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
