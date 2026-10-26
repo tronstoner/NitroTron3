@@ -222,6 +222,7 @@ class Explorer : public Module {
     on_refr_len_ = (int)((float)EXP_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
+    dyn_.Init(sr, sr8_);
     env_fm_.Reset();
     ln_tau_ratio_ = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
     filt_off_ = false;
@@ -297,9 +298,11 @@ class Explorer : public Module {
     float a, b;       // sweep A / sweep B as derived values (units per model)
     float k4t;        // K4 t = 2 k4 - 1: SW1 UP = FM envelope t, else post filter t
     float envg;       // SW1 UP: FM envelope gain g (0..1) at the snapshot
+    float dyn_a, dyn_r, dyn_v, dyn_m;   // touch sensitivity: last attack strength A, reference R (gate-meter units), v = A / R, m in use
     bool  mute;
   };
   void Activate() override {
+    dyn_.fresh = true;                         // (re)activation: the next attack re-initialises R
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
   }
   bool DiagTake(DiagSnap& out) {
@@ -347,8 +350,9 @@ class Explorer : public Module {
         mfade_n_ = mfade_len_;
       }
       const bool fading = (mfade_n_ > 0);
-      // UP models: k3_eff = k3 g (the K4 envelope gain); all others use K3 as is.
-      const float k3up = k3s_ * env_fm_.g;
+      // UP models: k3_eff = k3 m g while the K4 envelope is on (m = touch sensitivity), k3 at noon;
+      // all others use K3 as is.
+      const float k3up = (2.f * k4s_ - 1.f != 0.f) ? k3s_ * dyn_.m * env_fm_.g : k3s_;
       pn_ = Derive(var_ >> 6, var_ & 63, k2s_, IsUp(var_ >> 6) ? k3up : k3s_, DiscOf(var_ >> 6));
       if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, IsUp(vfrom_ >> 6) ? k3up : k3s_,
                                DiscOf(vfrom_ >> 6));
@@ -416,6 +420,55 @@ class Explorer : public Module {
   static inline int VarKey(int model, int zone) { return (model << 6) | (zone & 63); }
   static inline bool IsUp(int m) { return m == kRFM || m == kRFMC || m == kXFM || m == kFBFM; }
 
+  // Touch sensitivity of the triggered envelopes (EXP_DYN_*, see explorer_constants.h): relative, no absolute level.
+  // 48 kHz (Track48, after the onset decision): on an onset, the attack strength A = peak of the gate
+  // meter over EXP_DYN_WIN_MS; when the window closes: v = A / R (R = running average of recent A, = A
+  // on the first onset / after silence / after (re)activation), R += EXP_DYN_AVG_W (A - R),
+  // m target = clamp(1 + EXP_DYN_AMOUNT (v - 1), 0, 1 + EXP_DYN_AMOUNT (EXP_DYN_V_MAX - 1)).
+  // 8 kHz (Step8): m keeps its value until the target is known, then slides linearly to it over
+  // EXP_DYN_SLIDE_MS. AMOUNT 0: m stays exactly 1.
+  struct Dyn {
+    float a = 0.f, r = 0.f, v = 1.f;   // last attack strength A, reference R, velocity v = A / R
+    float m = 1.f, m_t = 1.f;          // depth multiplier in use (8 kHz) / its target
+    float m_inc = 0.f;                 // per-8 kHz-sample slide step
+    float peak = 0.f;                  // gate-meter peak in the running window
+    int   win_n = 0, win_len = 720;    // window samples left / length (48 kHz)
+    int   sil_n = 0, sil_len = 96000;  // samples with the gate below the floor / silence length (48 kHz)
+    int   slide_n = 0, slide_len = 40; // slide samples left / length (8 kHz)
+    bool  fresh = true;                // next A initialises R
+    bool  ready = false;               // a new target is known, not yet picked up at 8 kHz
+    void Init(float sr, float sr8) {
+      using namespace explorer_k;
+      win_len   = (int)(EXP_DYN_WIN_MS * 0.001f * sr + 0.5f);     if (win_len < 1) win_len = 1;
+      sil_len   = (int)(EXP_DYN_SILENCE_MS * 0.001f * sr + 0.5f); if (sil_len < 1) sil_len = 1;
+      slide_len = (int)(EXP_DYN_SLIDE_MS * 0.001f * sr8 + 0.5f);  if (slide_len < 1) slide_len = 1;
+      a = r = 0.f; v = 1.f; m = m_t = 1.f; m_inc = 0.f; peak = 0.f;
+      win_n = sil_n = slide_n = 0; fresh = true; ready = false;
+    }
+    inline void Track48(float gate, bool onset, float floor) {
+      using namespace explorer_k;
+      if (gate < floor) { if (sil_n < sil_len) sil_n++; else fresh = true; }
+      else sil_n = 0;
+      if (onset) { win_n = win_len; peak = gate; }
+      else if (win_n > 0) { if (gate > peak) peak = gate; }
+      if (win_n > 0 && --win_n == 0) {        // window closed: A known
+        a = peak;
+        if (fresh) { r = a; fresh = false; }
+        v = (r > EXP_DYN_R_MIN) ? a / r : 1.f;
+        r += EXP_DYN_AVG_W * (a - r);
+        float mt = 1.f + EXP_DYN_AMOUNT * (v - 1.f);
+        const float mmax = 1.f + EXP_DYN_AMOUNT * (EXP_DYN_V_MAX - 1.f);
+        if (mt > mmax) mt = mmax;
+        if (mt < 0.f)  mt = 0.f;
+        m_t = mt;
+        ready = true;
+      }
+    }
+    inline void Step8() {
+      if (ready) { ready = false; slide_n = slide_len; m_inc = (m_t - m) / (float)slide_len; }
+      if (slide_n > 0) { m += m_inc; if (--slide_n == 0) m = m_t; }
+    }
+  };
   // UP: onset detector (armitage OnsetDetect, 1:1), once per 48 kHz sample on |in| before the decimator.
   // Fast meter -> gate meter (up at once, slow fall) -> slow baseline; onset = gate > RISE x baseline
   // and > FLOOR, then a refractory. Latches on_pending_ for EnvUpdate() (8 kHz); the refractory is far
@@ -431,6 +484,7 @@ class Explorer : public Module {
     const bool onset = (on_refr_ == 0 && on_gate_ > EXP_ONSET_FLOOR &&
                         on_gate_ > on_base_ * EXP_ONSET_RISE);
     if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
+    dyn_.Track48(on_gate_, onset, EXP_ONSET_FLOOR);   // touch sensitivity: attack strength / velocity
   }
 
   // UP: FM index envelope gain g (armitage EnvGain, 1:1). T = TIME_RATIO TAU_SLOW (FAST / SLOW)^|t|;
@@ -466,6 +520,7 @@ class Explorer : public Module {
     const bool onset = on_pending_;
     on_pending_ = false;
     if (onset) on_seen_ = true;
+    dyn_.Step8();                              // touch sensitivity: m holds, then slides to the new target
     env_fm_.Step(onset, on_seen_, 2.f * k4s_ - 1.f, sr8_, ln_tau_ratio_);
   }
 
@@ -1028,6 +1083,7 @@ class Explorer : public Module {
     s.model = model; s.zone = zone;
     s.a = a; s.b = b;
     s.k4t = k4t; s.envg = envg;
+    s.dyn_a = dyn_.a; s.dyn_r = dyn_.r; s.dyn_v = dyn_.v; s.dyn_m = dyn_.m;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1174,6 +1230,7 @@ class Explorer : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened
+  Dyn   dyn_;                      // touch sensitivity of the triggered envelopes (depth multiplier m)
   EnvGain env_fm_;
   float ln_tau_ratio_ = 0.f;       // ln(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)
   float f_m_ = 0.f, f_step_ = 0.f; // dry -> filtered mix and its per-sample slide
