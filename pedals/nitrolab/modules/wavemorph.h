@@ -5,10 +5,10 @@
 // The band engine is COPIED from explorer.h (not shared): decimate 48 -> 8 kHz, 84 complex bands
 // (armitage_bands.h, included read-only), slots played / +1 / -1 / -2 (the -2 slot = the unwrapped
 // phase accumulator / 4), band phase computed once per band / slot / sample in Prep; each band reads
-// the current zone's corner tables at its OWN phase phi_k with its magnitude a_k:
-//   W_k = lerp_corners( lerp_phase(table[zone][corner][level_k]) ),  slot = sum_k w_k a_k W_k
-//   VECTOR MORPH: 4 corner waves per zone; position = 3 m, linear crossfade between the two adjacent
-//   corners (1 -> 2 over the first third of m, 2 -> 3 the second, 3 -> 4 the last);
+// the current zone's frame tables at its OWN phase phi_k with its magnitude a_k:
+//   W_k = lerp_frames( lerp_phase(table[zone][frame][level_k]) ),  slot = sum_k w_k a_k W_k
+//   MORPH: F_z frames per zone (4 vector corners in zones 1, 2, 3, 7, 10; 16 frames in zones 4, 5, 6,
+//   8, 9); position = (F_z - 1) m, linear crossfade between the two adjacent frames;
 //   level_k = the largest band-limited version with H <= 4000 / f'_k (static per band and slot).
 // wet8 = WM_OUT_GAIN [ (1 - mix) played + mix (u G_UP up + d G_DOWN down + d2 G_DOWN2 down2) ]
 // wet  = interpolate(wet8) -> DC blocker -> K4 post filter -> soft clipper (ceiling 1.0) -> FS1 mute
@@ -31,30 +31,33 @@
 //   FS1 wet mute      toggle, LED2 on while muted; LED1 on. FS2 unused.
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 //
-// TABLES (built at Init into SDRAM, int16): per zone 4 corners (corner 1 = the exact base wave). Each
-// corner: defined in the time domain at WM_TD_SIZE (1024) points and analysed by DFT into harmonics
+// TABLES (built at Init into SDRAM, int16, packed): per zone F_z frames (frame 1 = the exact base wave),
+// u = frame / (F_z - 1). Each frame: defined in the time domain at WM_TD_SIZE (1024) points and analysed by DFT into harmonics
 // 1..127 [time], or defined directly by harmonic amplitudes / phases [spectral]; mean removed, peak
-// normalised to 1 (full-band corner), then rebuilt as 14 band-limited versions
+// normalised to 1 (full-band frame; an all-silent frame stays silent), then rebuilt as 14 band-limited versions
 // {1,2,3,4,6,8,12,16,24,32,48,64,96,127} harmonics at 256 points.
 //   1 SINE      sin(2 pi frac(R phi)), R = 1 | 2 | 4 | 7                                              [time]
 //   2 TRIANGLE  fold(G tri(phi)), G = 1 | 2 | 4 | 8, fold(v) = |((v - 1) mod 4) - 2| - 1               [time]
 //   3 SAW       (1 - mix) saw + mix sin(2 pi R phi) (1 - phi), saw = 2 phi - 1;
 //               R = 1 | 2 | 4 | 8, mix = 0 | 0.9 | 0.9 | 0.9 (armitage's SAW push at its 0.9 maximum)    [time]
-//   4 SQUARE    +1 (phi < w) else -1, w = 50 % | 25 % | 10 % | 3 %                                     [time]
-//   5 PPG GLASS (soft) fundamental 1 + 2nd harmonic 0.4 + three Gaussian clusters (sigma 0.8) at
-//               c x {1, 1.593, 2.405}, amps 0.6 / 0.3 / 0.15, rolled off (c / h) above c;
-//               c = 3 | 5 | 7 | 10; fixed random phases                                             [spectral]
-//   6 PPG AIR   (soft) fundamental 1 + 3rd harmonic 0.35 + sparse odd partials 0.4 (3 / h)^0.75:
-//               {5} | {5, 9} | {7, 11, 17} | {9, 15, 25}; sine phase                                  [spectral]
+//   4 PWM       16 frames: +1 (phi < w) else -1, w = 0.5 (1 - u)^2.2: 50 % -> 0 % (silence), frames 8..15
+//               below 10 %                                                                          [time]
+//   5 PPG GLASS (soft) 16 frames: fundamental 1 + 2nd harmonic 0.4 + three Gaussian clusters (sigma 0.8)
+//               at c x {1, 1.593, 2.405}, amps 0.6 / 0.3 / 0.15, rolled off (c / h) above c;
+//               c = 3 -> 10 continuous; fixed random phases                                         [spectral]
+//   6 PPG AIR   (soft) 16 frames: fundamental 1 + 3rd harmonic 0.35 + three partials 0.4 (3 / h)^0.75
+//               gliding along the odd harmonics (split between neighbouring odd harmonics):
+//               h 5 -> 9, 7 -> 15, 9 -> 25; sine phase                                              [spectral]
 //   7 SPECTRAL  1/h saw spectrum (sine phase) | even harmonics removed | multiples of 3 and of 4
 //               removed | sparse {1, 3, 7, 13, 21}                                                   [spectral]
-//   8 VOWEL     a | e | i | o: Lorentzian formants at 110 Hz reference (explorer's), sine phase      [spectral]
-//   9 FORMANT   0.5 (1 - cos 2 pi phi) cos(2 pi Fr phi), Fr = 0.5 | 1 | 2 | 4                       [time]
+//   8 VOCAL     16 frames (= dd3d5f9): a -> e -> i -> o -> u, formant frequencies interpolated between
+//               adjacent vowels; Lorentzian formants at 110 Hz reference (explorer's + u), sine phase [spectral]
+//   9 FORMANT   16 frames: 0.5 (1 - cos 2 pi phi) cos(2 pi Fr phi), Fr = 0.5 * 16^u (0.5 -> 8)        [time]
 //  10 ROUGH     h^E (1 - Q + Q r_h), r_h fixed random in [0, 1), fixed random phases;
 //               (E, Q) = (-1, 0) | (-0.5, 0.5) | (0, 0.75) | (0.25, 1)                               [spectral]
 //
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
-// No dynamic allocation. Tables: 10 x 4 x 14 x 256 int16 = 280 KB in SDRAM.
+// No dynamic allocation. Tables: 100 frames x 14 x 256 int16 = 700 KB in SDRAM.
 
 #include <cmath>
 #include <cstdint>
@@ -73,12 +76,12 @@
 // Sin table (filled in Init; DTCM = zero-wait-state reads). Size = WM_TD_SIZE: table builds index it exactly.
 static float DTCM_MEM_SECTION wavemorph_sin_tab[wavemorph_k::WM_SIN_SIZE];
 
-// Corner tables [zone][corner][level][sample], int16 (scale WM_I16_SCALE), SDRAM.
-static int16_t DSY_SDRAM_BSS wavemorph_tab[wavemorph_k::WM_ZONES][wavemorph_k::WM_CORNERS]
+// Frame tables, packed: [zone offset + frame][level][sample], int16 (scale WM_I16_SCALE), SDRAM.
+static int16_t DSY_SDRAM_BSS wavemorph_tab[wavemorph_k::WM_TOTAL_FRAMES]
                                           [wavemorph_k::WM_LEVELS][wavemorph_k::WM_TAB_SIZE];
 // Init-only build scratch (SDRAM: keeps DTCM free).
 struct WaveMorphScratch {
-  float x[wavemorph_k::WM_TD_SIZE];                          // time-domain corner
+  float x[wavemorph_k::WM_TD_SIZE];                          // time-domain frame
   float acc[wavemorph_k::WM_TAB_SIZE];                       // level accumulator
   float A[wavemorph_k::WM_HMAX + 1], B[wavemorph_k::WM_HMAX + 1];   // sin / cos coefficients
   float rph[wavemorph_k::WM_HMAX + 1], rr[wavemorph_k::WM_HMAX + 1]; // fixed random phase / amplitude per harmonic
@@ -231,8 +234,8 @@ class WaveMorph : public Module {
     return false;
   }
   static const char* ZoneName(int z) {
-    static const char* const n[wavemorph_k::WM_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-RESO", "SQR-PULSE",
-                                                          "PPG-GLASS", "PPG-AIR", "SPECTRAL", "VOWEL",
+    static const char* const n[wavemorph_k::WM_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-RESO", "SQR-PWM",
+                                                          "PPG-GLASS", "PPG-AIR", "SPECTRAL", "VOCAL",
                                                           "FORMANT", "ROUGH" };
     return (z >= 0 && z < wavemorph_k::WM_ZONES) ? n[z] : "?";
   }
@@ -259,15 +262,7 @@ class WaveMorph : public Module {
       }
       const bool fading = (zfade_n_ > 0);
       zg_ = fading ? 1.f - (float)zfade_n_ / (float)(zfade_len_ + 1) : 1.f;
-      // Morph m = K3 g -> corner position (WM_CORNERS - 1) m, split into corner + fraction.
-      {
-        const float pos = (float)(WM_CORNERS - 1) * (k3s_ * env_.g);
-        int f0 = (int)pos;
-        if (f0 > WM_CORNERS - 2) f0 = WM_CORNERS - 2;
-        if (f0 < 0) f0 = 0;
-        fr0_ = f0;
-        frf_ = pos - (float)f0;
-      }
+      morph_ = k3s_ * env_.g;                    // morph m = K3 g (frame position per zone in Shape)
 
       // Pass 1: clock all bands, magnitudes (|z'| = |z| in every slot).
       float* __restrict mg = mag_ + 1;
@@ -409,22 +404,27 @@ class WaveMorph : public Module {
     }
   }
 
-  // sum_k w_k a_k W_k for zone z in slot o at the current corner position.
+  // sum_k w_k a_k W_k for zone z in slot o at the current morph: position (F_z - 1) m.
   float Shape(int z, int o) {
     using namespace wavemorph_k;
     const float* __restrict mg  = mag_ + 1;
     const float* __restrict phs = ph_;
     const uint8_t* __restrict lv = lvl_[o];
     const bool played = (o == kSP);
-    const int f0 = fr0_;
-    const float ff = frf_;
+    const int nf = WM_ZONE_FRAMES[z];
+    const float pos = (float)(nf - 1) * morph_;
+    int f0 = (int)pos;
+    if (f0 > nf - 2) f0 = nf - 2;
+    if (f0 < 0) f0 = 0;
+    const float ff = pos - (float)f0;
+    const int fb = zoff_[z] + f0;              // packed frame index
     constexpr float kScale = 1.f / WM_I16_SCALE;
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
       if (a == 0.f) continue;
-      const int16_t* t0 = wavemorph_tab[z][f0][lv[k]];
-      const int16_t* t1 = wavemorph_tab[z][f0 + 1][lv[k]];
+      const int16_t* t0 = wavemorph_tab[fb][lv[k]];
+      const int16_t* t1 = wavemorph_tab[fb + 1][lv[k]];
       const float xi = phs[k] * (float)WM_TAB_SIZE;
       const int   i0 = (int)xi;
       const float fr = xi - (float)i0;
@@ -448,8 +448,8 @@ class WaveMorph : public Module {
   }
 
   // --- Table build -----------------------------------------------------------------------
-  // Time-domain definition of zone z, corner c, phi = i / WM_TD_SIZE.
-  static float TimeDomain(int z, int c, float ph) {
+  // Time-domain definition of zone z, frame c (u = c / (F_z - 1)), phi = i / WM_TD_SIZE.
+  static float TimeDomain(int z, int c, float u, float ph) {
     using namespace wavemorph_k;
     switch (z) {
       case 0: {                                    // sine | sync
@@ -469,15 +469,23 @@ class WaveMorph : public Module {
         const float res = sinf(6.283185307f * WM_RSAW_R[c] * ph) * (1.f - ph);
         return (1.f - WM_RSAW_MIX[c]) * saw + WM_RSAW_MIX[c] * res;
       }
-      case 3:                                      // square | pulses
-        return (ph < WM_PULSE_W[c]) ? 1.f : -1.f;
-      default:                                     // formant pulse (zone 9)
-        return 0.5f * (1.f - cosf(6.283185307f * ph)) * cosf(6.283185307f * WM_FORM_FR[c] * ph);
+      case 3:                                      // PWM 50 % -> silence (curve: narrow end)
+        return (ph < PwmWidth(u)) ? 1.f : -1.f;
+      default: {                                   // formant pulse (zone 9), Fr 0.5 -> 8 exponential
+        const float Fr = WM_FORM_MIN * expf(u * logf(WM_FORM_MAX / WM_FORM_MIN));
+        return 0.5f * (1.f - cosf(6.283185307f * ph)) * cosf(6.283185307f * Fr * ph);
+      }
     }
   }
 
-  // Spectral definition of zone z, corner c: A_h (sin), B_h (cos) for h = 1..WM_HMAX.
-  static void Spectral(int z, int c, float* A, float* B, const float* rph, const float* rr) {
+  // PWM width at u: 0.5 (1 - u)^WM_PWM_CURVE (u = 1: 0, silence).
+  static inline float PwmWidth(float u) {
+    using namespace wavemorph_k;
+    return (u >= 1.f) ? 0.f : 0.5f * powf(1.f - u, WM_PWM_CURVE);
+  }
+
+  // Spectral definition of zone z, frame c (u = c / (F_z - 1)): A_h (sin), B_h (cos) for h = 1..WM_HMAX.
+  static void Spectral(int z, int c, float u, float* A, float* B, const float* rph, const float* rr) {
     using namespace wavemorph_k;
     for (int h = 0; h <= WM_HMAX; h++) { A[h] = 0.f; B[h] = 0.f; }
     auto put = [&](int h, float amp, float phase) {   // amp at phase (cycles): amp sin(2 pi (h phi + phase))
@@ -489,7 +497,7 @@ class WaveMorph : public Module {
       case 4: {                                    // PPG glass (soft)
         put(1, WM_GLASS_FUND, 0.f);
         put(2, WM_GLASS_BODY, rph[2]);
-        const float cc = WM_GLASS_C[c];
+        const float cc = WM_GLASS_C0 + (WM_GLASS_C1 - WM_GLASS_C0) * u;
         for (int h = 2; h <= WM_HMAX; h++) {
           float amp = 0.f;
           for (int j = 0; j < 3; j++) {
@@ -504,9 +512,14 @@ class WaveMorph : public Module {
       case 5: {                                    // PPG air (soft)
         put(1, WM_AIR_FUND, 0.f);
         put(3, WM_AIR_BODY, 0.f);
-        for (int j = 0; j < WM_AIR_N; j++) {
-          const int h = WM_AIR_H[c][j];
-          if (h > 0) put(h, WM_AIR_PART * powf(3.f / (float)h, WM_AIR_ROLL), 0.f);
+        for (int j = 0; j < WM_AIR_N; j++) {    // partial moving along the odd harmonics
+          const float q = WM_AIR_Q0[j] + (WM_AIR_Q1[j] - WM_AIR_Q0[j]) * u;
+          const int   q0 = (int)q;
+          const float qf = q - (float)q0;
+          const float hq = 2.f * q + 1.f;         // its (fractional) position, for the roll-off
+          const float amp = WM_AIR_PART * powf(3.f / hq, WM_AIR_ROLL);
+          put(2 * q0 + 1, amp * (1.f - qf), 0.f);
+          if (qf > 0.f) put(2 * q0 + 3, amp * qf, 0.f);
         }
         break;
       }
@@ -523,12 +536,18 @@ class WaveMorph : public Module {
         }
         break;
       }
-      case 7: {                                    // vowels a | e | i | o
+      case 7: {                                    // vocal a -> e -> i -> o -> u (= dd3d5f9)
+        const float v = u * (float)(WM_VOX_N - 1);
+        int v0 = (int)v;
+        if (v0 > WM_VOX_N - 2) v0 = WM_VOX_N - 2;
+        const float vf = v - (float)v0;
+        float F[3];
+        for (int f = 0; f < 3; f++) F[f] = WM_VOX_F[v0][f] + vf * (WM_VOX_F[v0 + 1][f] - WM_VOX_F[v0][f]);
         for (int h = 1; h <= WM_HMAX; h++) {
           const float fh = (float)h * WM_VOX_F0;
           float amp = 0.f;
           for (int f = 0; f < 3; f++) {
-            const float e = (fh - WM_VOX_F[c][f]) / (0.5f * WM_VOX_BW[f]);
+            const float e = (fh - F[f]) / (0.5f * WM_VOX_BW[f]);
             amp += WM_VOX_A[f] / (1.f + e * e);
           }
           put(h, amp, 0.f);
@@ -545,7 +564,7 @@ class WaveMorph : public Module {
     }
   }
 
-  // All zones and corners: definition -> (DFT) -> mean removed, peak 1 -> 14 band-limited int16 levels.
+  // All zones and frames: definition -> (DFT) -> mean removed, peak 1 -> 14 band-limited int16 levels.
   void BuildTables() {
     using namespace wavemorph_k;
     constexpr int N = WM_TD_SIZE;
@@ -565,13 +584,18 @@ class WaveMorph : public Module {
       return (float)(seed >> 8) * (1.f / 16777216.f);
     };
     for (int h = 0; h <= WM_HMAX; h++) { rph[h] = rnd01(); rr[h] = rnd01(); }
+    int off = 0;
     for (int z = 0; z < WM_ZONES; z++) {
+      zoff_[z] = off;
+      const int nf = WM_ZONE_FRAMES[z];
+      off += nf;
       const bool spectral = (z >= 4 && z <= 7) || z == 9;
-      for (int f = 0; f < WM_CORNERS; f++) {
+      for (int f = 0; f < nf; f++) {
+        const float u = (float)f / (float)(nf - 1);
         if (!spectral) {
           // 1) time domain, mean removed, peak 1
           float mean = 0.f;
-          for (int i = 0; i < N; i++) { x[i] = TimeDomain(z, f, (float)i / (float)N); mean += x[i]; }
+          for (int i = 0; i < N; i++) { x[i] = TimeDomain(z, f, u, (float)i / (float)N); mean += x[i]; }
           mean /= (float)N;
           float pk = 0.f;
           for (int i = 0; i < N; i++) { x[i] -= mean; if (fabsf(x[i]) > pk) pk = fabsf(x[i]); }
@@ -589,8 +613,8 @@ class WaveMorph : public Module {
             B[h] = b * g * (2.f / (float)N);
           }
         } else {
-          // 1) harmonic definition; peak of the full-band corner (no DC by construction)
-          Spectral(z, f, A, B, rph, rr);
+          // 1) harmonic definition; peak of the full-band frame (no DC by construction)
+          Spectral(z, f, u, A, B, rph, rr);
           float pk = 0.f;
           for (int i = 0; i < N; i++) {
             float v = 0.f;
@@ -620,7 +644,7 @@ class WaveMorph : public Module {
             }
           }
           hdone = ht;
-          int16_t* dst = wavemorph_tab[z][f][l];
+          int16_t* dst = wavemorph_tab[zoff_[z] + f][l];
           for (int i = 0; i < WM_TAB_SIZE; i++) {
             float v = acc[i] * WM_I16_SCALE;
             v = (v > 32767.f) ? 32767.f : (v < -32768.f) ? -32768.f : v;   // int16 range (storage)
@@ -812,8 +836,8 @@ class WaveMorph : public Module {
   volatile int zone_t_ = 0;        // target zone (K1, Controls)
   int   zfade_n_ = 0, zfade_len_ = 8;
   float zg_ = 1.f;                 // new-zone gain during a fade
-  int   fr0_ = 0;                  // corner below the morph position (this sample)
-  float frf_ = 0.f;                // fraction toward fr0_ + 1
+  float morph_ = 0.f;              // morph m = K3 g (this sample)
+  int   zoff_[wavemorph_k::WM_ZONES] = {};   // packed frame offset per zone (Init)
   float k2s_ = 0.5f, k3s_ = 0.f, k5s_ = 0.f;                      // smoothed knobs
   volatile float k2_t_ = 0.5f, k3_t_ = 0.f, k5_t_ = 0.f;          // targets
   float og_[3] = { 0.f, 1.f, 0.f };            // octave slot weights (up, down, down2), slid
