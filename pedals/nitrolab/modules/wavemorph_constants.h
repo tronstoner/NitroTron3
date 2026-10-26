@@ -123,7 +123,7 @@ constexpr int   WM_CLIP_KNEE      = 24;
 // PPG feedback: saw 1/n with harmonics 1 .. N_SKIP removed.
 constexpr int   WM_PPGFB_SKIP     = 2;
 
-// --- K2 noon dead zone (filter env follower off; WaveMorph's wider pad instead of Schism's 0.05) ---
+// --- K2 noon dead zone (filter envelope off) --------------------------------------------
 constexpr float WM_ENV_PAD          = 0.08f;   // t units: k2 in [0.46, 0.54] = 8 % of the knob travel around noon
 
 // --- Octave (SW2: UP +1, MID played, DOWN -1; one slot) --------------------------------
@@ -145,24 +145,25 @@ constexpr float WM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfade
 constexpr float WM_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass
 constexpr float WM_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide
 
-// --- K2 (all zones) = envelope follower on the K4 post filter (armitage's K5 follower, 1:1; 2026-10-26:
-// replaces the onset detector + triggered envelope). NitroTron3 Schism's ladder-filter envelope:
-//   raw = EnvFollower(in) per 48 kHz input sample: pre-gain WM_EF_PRE_GAIN -> full-wave rectifier ->
-//         4-pole LP WM_EF_LP_HZ (src/core/blocks/env_follower.h)
-//   t2 = 2 k2 - 1 (smoothed): |t2| <= WM_ENV_PAD -> off; k_lin = (|t2| - PAD) / (1 - PAD),
-//   k_norm = k_lin^WM_EF_K_CURVE. Shaped copy s (48 kHz): CW (t2 > -PAD) = peak follower (instant attack,
-//   one-pole release WM_EF_REL_MS -> WM_EF_REL_MIN_MS linear in k_lin); CCW = slow rise (one-pole attack
-//   WM_EF_ATK_MS, instant snap-back). e = WM_EF_SCALE s.
-//   Filter position t_eff = t_K4 + WM_FENV_DEPTH k_norm e (not clamped to the knob ends; cutoff limited only
-//   by WM_FILT_FC_MIN / MAX), smoothed with t; both K2 sides turn K4 clockwise (LP opens, through noon, HP thins).
-constexpr float WM_EF_LP_HZ       = 50.f;     // Hz; 4-pole LP of the rectified input (= ARM_EF_LP_HZ, Schism ENV_LP_CUTOFF_HZ bass)
-constexpr float WM_EF_PRE_GAIN    = 1.f;      // input gain before the rectifier (= ARM_EF_PRE_GAIN, Schism ENV_PRE_GAIN)
-constexpr float WM_EF_K_CURVE     = 2.f;      // k_norm = k_lin^this (= ARM_EF_K_CURVE, Schism MODE_C_K3_CURVE)
-constexpr float WM_EF_SCALE       = 10.f;     // e = shaped follower x this (= ARM_EF_SCALE, Schism MODE_C_ENV_SCALE)
-constexpr float WM_EF_REL_MS      = 150.f;    // ms; CW release just outside the pad (= ARM_EF_REL_MS)
-constexpr float WM_EF_REL_MIN_MS  = 40.f;     // ms; CW release at the knob end (= ARM_EF_REL_MIN_MS)
-constexpr float WM_EF_ATK_MS      = 600.f;    // ms; CCW slow-rise attack (= ARM_EF_ATK_MS)
-constexpr float WM_FENV_DEPTH     = 0.7f;     // K4 knob travel (t units) at k_norm e = 1 (= ARM_ENV_DEPTH)
+// --- K2 (all zones) = envelope on the K4 post filter (armitage's K5 filter envelope: Env + PostFilter t_eff) ---
+// t2 = 2 k2 - 1 (smoothed), off inside WM_ENV_PAD (e = 0). Outside: s = (|t2| - PAD) / (1 - PAD),
+// tau = TAU_SLOW (TAU_FAST / TAU_SLOW)^s. CW: each onset e = 0, rises toward +1 with tau; at e >= PEAK it
+// falls back toward 0 as a one-pole with tau x FALL_RATIO. CCW: each onset e = 0, then one-pole toward -1 and
+// holds. Before the first onset e = 0. Filter position t_eff = t_K4 + DEPTH e (not clamped to the knob ends;
+// cutoff limited only by WM_FILT_FC_MIN / MAX), smoothed with t; from K4 noon the envelope pushes off noon.
+constexpr float WM_FENV_TAU_SLOW_S = 4.0f;    // s; tau at the pad edge (= ARM_ENV_TAU_SLOW_S)
+constexpr float WM_FENV_TAU_FAST_S = 0.05f;   // s; tau at the knob ends (= ARM_ENV_TAU_FAST_S)
+constexpr float WM_FENV_FALL_RATIO = 3.0f;    // CW fall tau / rise tau (= ARM_ENV_FALL_RATIO)
+constexpr float WM_FENV_PEAK       = 0.98f;   // CW: rise -> fall at this e (armitage's 0.98)
+constexpr float WM_FENV_DEPTH      = 0.7f;    // K4 knob travel (t units) at |e| = 1 (= ARM_ENV_DEPTH)
+
+// --- Onset detector (explorer's, 1:1) -------------------------------------------------------
+constexpr float    WM_ONSET_ENV_MS        = 2.6f;     // ms (= EXP_ONSET_ENV_MS)
+constexpr float    WM_ONSET_FALL_MS       = 40.f;     // ms (= EXP_ONSET_FALL_MS)
+constexpr float    WM_ONSET_SLOW_COEF     = 0.0006f;  // (= EXP_ONSET_SLOW_COEF)
+constexpr float    WM_ONSET_RISE          = 1.5f;     // (= EXP_ONSET_RISE)
+constexpr float    WM_ONSET_FLOOR         = 0.0021f;  // (= EXP_ONSET_FLOOR)
+constexpr uint32_t WM_ONSET_REFRACTORY_MS = 100;      // (= EXP_ONSET_REFRACTORY_MS)
 
 // --- Control smoothing / snapping ----------------------------------------------------------
 constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3 at the 8 kHz rate

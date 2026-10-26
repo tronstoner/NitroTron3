@@ -63,10 +63,10 @@ ARM_TUNABLE(float, ARM_FOLD_LIMIT_HZ, 4000.f);   // Hz; Nyquist of the 8 kHz ban
 //   t = 0 (noon): true bypass (filter not run, wet bit-identical).
 //   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
 //   t > 0: high-pass, fc = ARM_FILT_FMIN (ARM_FILT_HP_MAX / ARM_FILT_FMIN)^tmag   (40 Hz -> 4 kHz)
-//   Q (both stages) = ARM_FILT_Q (fixed). The K5 envelope follower turns the K4 knob itself:
-//   t_eff = t + ARM_ENV_DEPTH k_norm e, unclamped (fc limited only by ARM_FILT_FC_MIN/MAX for
-//   stability) - a louder input = clockwise (LP opens, through noon, HP thins), on either K5 side;
-//   from noon it pushes off noon (noon is alive).
+//   Q (both stages) = ARM_FILT_Q (fixed). The K5 envelope turns the K4 knob itself:
+//   t_eff = t + ARM_ENV_DEPTH e, unclamped (fc limited only by ARM_FILT_FC_MIN/MAX for
+//   stability) - rising e = clockwise (LP opens, through noon,
+//   HP thins), falling e = counter-clockwise; from noon it pushes off noon (noon is alive).
 // No makeup gain. t_eff is smoothed (one-pole, ARM_FILT_SMOOTH_MS, per audio block). Bypass <-> filter: wet = dry + m (filtered - dry), m = min(|t| / ARM_FILT_FADE, 1)
 // (linear crossfade over the first ARM_FILT_FADE of travel each side of noon; there the filter
 // sits at its range end: LP ~20 kHz / HP ~20 Hz). |t| snaps to 0 below ARM_FILT_SNAP when the
@@ -85,31 +85,45 @@ ARM_TUNABLE(float, ARM_FILT_SMOOTH_MS, 5.f);      // ms; one-pole on t
 ARM_TUNABLE(float, ARM_FILT_FADE,      0.03f);    // |t| over which bypass crossfades into the filter
 ARM_TUNABLE(float, ARM_FILT_SNAP,      1e-4f);    // |t_smoothed| below this with target 0: bypass
 
-// --- Envelope follower (2026-10-26: replaces the onset detector + triggered envelopes) ---
-// Copied 1:1 from NitroTron3's Schism (Mode C) ladder-filter envelope (pedals/nitrotron3/main.cpp
-// ProcessFreqShift; bass values from pedals/nitrotron3/constants.h), per 48 kHz input sample:
-//   raw  = EnvFollower(in): pre-gain ARM_EF_PRE_GAIN -> full-wave rectifier -> 4-pole LP at
-//          ARM_EF_LP_HZ (src/core/blocks/env_follower.h; Schism ENV_LP_CUTOFF_HZ / ENV_PRE_GAIN)
-// One shaped copy per target knob (K5 filter, K2 FM), t = 2 k - 1 (smoothed knob):
-//   |t| <= ARM_EF_DEADZONE: off (k_norm = 0); k_lin = (|t| - DZ) / (1 - DZ); k_norm = k_lin^ARM_EF_K_CURVE
-//   CW (t >= 0, incl. the deadzone) = peak follower: raw > s -> s = raw (instant), else one-pole release
-//     ARM_EF_REL_MS (just outside the deadzone) -> ARM_EF_REL_MIN_MS (knob end), linear in k_lin
-//   CCW (t < 0) = slow rise: raw > s -> one-pole attack ARM_EF_ATK_MS, else s = raw (instant snap-back)
-//   e = s * ARM_EF_SCALE (passive-bass normalisation; Schism MODE_C_ENV_SCALE)
-// Both sides OPEN the target (only the shape differs by side), no clamp on e.
-ARM_TUNABLE(float, ARM_EF_LP_HZ,      50.f);     // Hz; 4-pole LP of the rectified input (Schism ENV_LP_CUTOFF_HZ, bass)
-ARM_TUNABLE(float, ARM_EF_PRE_GAIN,   1.f);      // input gain before the rectifier (Schism ENV_PRE_GAIN)
-ARM_TUNABLE(float, ARM_EF_DEADZONE,   0.05f);    // t units; noon +- this = off (Schism K3_DEADZONE)
-ARM_TUNABLE(float, ARM_EF_K_CURVE,    2.f);      // k_norm = k_lin^this: fine near noon (Schism MODE_C_K3_CURVE)
-ARM_TUNABLE(float, ARM_EF_SCALE,      10.f);     // e = shaped follower x this (Schism MODE_C_ENV_SCALE)
-ARM_TUNABLE(float, ARM_EF_REL_MS,     150.f);    // ms; CW release just outside the deadzone (Schism MODE_C_FILTER_ENV_RELEASE_MS)
-ARM_TUNABLE(float, ARM_EF_REL_MIN_MS, 40.f);     // ms; CW release at the knob end (Schism MODE_C_FILTER_ENV_RELEASE_MIN_MS)
-ARM_TUNABLE(float, ARM_EF_ATK_MS,     600.f);    // ms; CCW slow-rise attack (Schism MODE_C_FILTER_ENV_ATTACK_MS)
-// K5 = follower on the K4 post-filter position (all modes): t_eff = t_K4 + ARM_ENV_DEPTH k_norm e
-// (unclamped; see K4). Both K5 sides turn K4 clockwise (LP opens, through noon, HP thins).
-ARM_TUNABLE(float, ARM_ENV_DEPTH,     0.7f);     // K4 knob travel (t units, 1.0 = noon to an end) at k_norm e = 1 (builder 2026-10-22)
-// K2 = follower on the K3 FM index, SW1 UP only: gain g = (1 - k_norm) + k_norm min(e, 1),
-// k3_eff = k3 g, I = ARM_FM_INDEX_MAX k3_eff^2 (noon / deadzone: g = 1, index = K3).
+// --- K5 = triggered envelope on the K4 post-filter cutoff (2026-10-22; was K2 until the same evening,
+// moved next to K4; K2 is free), bipolar t2 = 2 k5 - 1 ---
+// Onset detector (vestige's IsrCapture idiom, vestige.h / VESTIGE_ONSET_*), per 48 kHz sample on
+// the raw INPUT |in|, before the decimator (2026-10-22: moved off the decimated 8 kHz |d| because
+// the decimator's low-pass was softening the attack and missing fast plucks):
+//   env:  one-pole rise ARM_ONSET_ENV_MS, then gate meter = follows env up at once, falls with
+//         ARM_ONSET_FALL_MS (= VESTIGE_ENV_COEF 0.008 @ 48 k ~ 2.6 ms, VESTIGE_GATE_RELEASE_MS 40)
+//   base += ARM_ONSET_SLOW_COEF (gate - base)
+//   onset = refractory over && gate > ARM_ONSET_RISE base && gate > ARM_ONSET_FLOOR
+//   refractory ARM_ONSET_REFRACTORY_MS
+// The onset flag latches (on_pending_) and crosses once into the 8 kHz envelope step below; the
+// refractory (100 ms) is far longer than one 8 kHz step (0.125 ms) so an onset within a block is
+// never lost or double-counted.
+// Envelope e: noon (t2 = 0) -> e = 0 held. Before the first onset e = 0.
+//   CCW (t2 < 0, unchanged): on each onset e = 0, then per 8 kHz sample e += a (T - e), T = -1,
+//     a = 1 - exp(-1 / (tau 8000)), tau = ARM_ENV_TAU_SLOW_S (ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)^|t2|
+//     (4 s just off noon -> 0.05 s at the end): e falls to -1 and holds.
+//   CW (t2 > 0, rise + fall, 2026-10-22): on each onset e = 0, then e rises toward +1 with the
+//     knob's tau (same law as the CCW fall). Once e >= 0.98 (the peak) it falls back toward 0 as a
+//     plain one-pole decay (fast off the peak, long tail) with tau x ARM_ENV_FALL_RATIO. A new onset restarts the rise from e's current value.
+// Depth fixed: t_eff = t_K4 + ARM_ENV_DEPTH e (see K4); 0.7 = the old K5 depth knob at 2 o'clock.
+ARM_TUNABLE(float,    ARM_ONSET_ENV_MS,        2.6f);     // ms; input |in| one-pole (vestige VESTIGE_ENV_COEF 0.008 at 48 kHz), now run at 48 kHz directly
+ARM_TUNABLE(float,    ARM_ONSET_FALL_MS,       40.f);     // ms; gate-meter fall (vestige VESTIGE_GATE_RELEASE_MS), 48 kHz
+ARM_TUNABLE(float,    ARM_ONSET_SLOW_COEF,     0.0006f);  // baseline one-pole at 48 kHz (vestige's own coefficient, ~35 ms; was 0.0036 at the old 8 kHz rate)
+ARM_TUNABLE(float,    ARM_ONSET_RISE,          1.5f);     // gate > baseline x this = an attack (2026-10-22: lowered from 1.8 for the sharper 48 kHz gate meter)
+ARM_TUNABLE(float,    ARM_ONSET_FLOOR,         0.0021f);  // input gate-meter units = 0.1 x ARM_REF_LEVEL (0.021); unchanged — the decimator has unity passband gain, so 48 kHz |in| and the old decimated |d| share the same level scale
+                                                       // (its K4 open threshold) sits at ~0.1 of a typical passive-bass env
+ARM_TUNABLE(uint32_t, ARM_ONSET_REFRACTORY_MS, 100);      // one pluck = one onset (vestige), now counted in 48 kHz samples
+ARM_TUNABLE(float,    ARM_ENV_TAU_SLOW_S,      4.0f);     // s; envelope time constant just off K5 noon
+ARM_TUNABLE(float,    ARM_ENV_TAU_FAST_S,      0.05f);    // s; at K5 full CW / CCW
+ARM_TUNABLE(float,    ARM_ENV_FALL_RATIO,      3.0f);     // CW fall tau / rise tau (plain one-pole decay after the peak)
+ARM_TUNABLE(float,    ARM_ENV_DEPTH,           0.7f);     // K4 knob travel (t units, 1.0 = noon to an end) at |e| = 1; the old K5 depth knob at 2:00 (builder 2026-10-22)
+// K2 = second envelope (2026-10-22), SW1 UP only, same onset detector and time law as K5's, but a GAIN g
+// (0..1) on the K3 FM knob (k3_eff = k3 g) so start / end are exactly 0 and K3: K2 CCW = each pluck
+// starts at K3 and decays to 0 in ARM_ENV_FM_DECAY_RATIO x the K2 time T, holds 0; K2 CW = the mirror: starts at 0,
+// rises to K3 in the same time, holds K3 (no fall). The one-pole's tau = T / ARM_ENV_TRAVEL_TAUS, g snaps at the 98 % point.
+ARM_TUNABLE(float,    ARM_ENV_TRAVEL_TAUS,     3.9f);     // one-pole time constants per full travel (1 - e^-3.9 = 0.98)
+ARM_TUNABLE(float,    ARM_ENV_FM_TIME_RATIO,   3.0f);     // FM envelope T = this x the filter envelope's time law (2026-10-22: 12 s -> 150 ms; both sides were too fast)
+ARM_TUNABLE(float,    ARM_ENV_FM_DECAY_RATIO,  3.0f);     // K2 FM decay (CCW) / rise (CW) time / T on top (2026-10-22: T alone too fast; now 36 s -> 450 ms)
 // LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false
 // (it reads the envelope knob, now K5, if ever re-enabled).
 ARM_TUNABLE(bool,     ARM_LFO_ENABLE,          false);

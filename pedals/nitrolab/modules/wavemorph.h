@@ -18,12 +18,10 @@
 // CONTROL MAP
 //   K1  base wave     10 STEPPED equal zones (below); a zone change crossfades old -> new over
 //                     WM_ZONE_XFADE_MS (the voice is stateless: the entering zone starts clean)
-//   K2  filter env    armitage's K5 envelope follower (= NitroTron3 Schism's ladder-filter envelope) on the
-//       follower      K4 position (all zones): t2 = 2 k2 - 1, off inside the pad (k2 0.46..0.54); k_lin =
-//                     (|t2| - 0.08) / 0.92, k_norm = k_lin^2; CW = peak follower (instant attack, release
-//                     150 ms -> 40 ms), CCW = slow rise (600 ms attack, instant drop); e = 10 x the shaped
-//                     rectified + 4-pole-LP (50 Hz) input; t_eff = t_K4 + 0.7 k_norm e, not clamped
-//                     (fc only 10 Hz..20 kHz); both sides open (turn K4 clockwise)
+//   K2  filter env    armitage's K5 filter envelope on the K4 position (all zones): t2 = 2 k2 - 1, off
+//                     inside the pad (k2 0.46..0.54); CW: each onset e rises toward +1 (tau), at e >= 0.98
+//                     falls back to 0 (tau x 3); CCW: each onset e = 0 -> -1 and holds; tau 4 s (pad edge)
+//                     -> 0.05 s (ends); t_eff = t_K4 + 0.7 e, not clamped (fc only 10 Hz..20 kHz)
 //   K3  morph         m 0..1 (smoothed): position through the zone's waves / frames
 //   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (WM_FILT_STAGES: 1 = 12 dB/oct, 2 = 24 dB/oct; Q 0.707 per stage)
 //   K5  unused (not read; DIAG shows the raw value)
@@ -62,7 +60,6 @@
 #include <cstdint>
 #include "module.h"
 #include "knob_map.h"          // RemapKnob, Quantize
-#include "env_follower.h"      // EnvFollower (src/core/blocks, read-only): Schism's rectifier + 4-pole LP
 #include "armitage_bands.h"    // band engine (read-only use)
 #include "wavemorph_constants.h"
 
@@ -152,13 +149,18 @@ class WaveMorph : public Module {
     zfade_n_ = 0;
     oct_step_ = 1.f / (WM_OCT_XFADE_MS * 0.001f * sr8_);
     zone_ = zone_t_ = zfrom_ = 0;
-    k2s_ = k2_t_ = 0.5f;                         // K2 noon = env follower off
+    k2s_ = k2_t_ = 0.5f;                         // K2 noon = envelope off
     k3s_ = k3_t_ = 0.f;
-    // Envelope follower (48 kHz raw input, pre-decimator) + its K2 shaped target, armitage's.
-    ef_.Init(sr);
-    ef_.SetCutoff(WM_EF_LP_HZ);
-    ef_.SetPreGain(WM_EF_PRE_GAIN);
-    ef_k2_.Reset(sr);
+    // Onset detector (48 kHz, pre-decimator, explorer's) + K2 filter envelope (8 kHz).
+    on_env_ = on_gate_ = on_base_ = 0.f;
+    on_env_a_  = 1.f - expf(-1000.f / (WM_ONSET_ENV_MS * sr));
+    on_fall_a_ = 1.f - expf(-1000.f / (WM_ONSET_FALL_MS * sr));
+    on_refr_ = 0;
+    on_refr_len_ = (int)((float)WM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
+    on_pending_ = false;
+    on_seen_ = false;
+    fenv_.Reset();
+    ln_ftau_ratio_ = logf(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S);
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
     og_[1] = og_t_[1] = 1.f;                     // SW2 MID = played slot
     // K4 post filter: bypass, cleared state.
@@ -202,7 +204,7 @@ class WaveMorph : public Module {
 
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
-      DiagControls(cs, led1, kv, oct, zone, ef_k2_.kn, ef_k2_.e);
+      DiagControls(cs, led1, kv, oct, zone, fenv_.e);
     }
   }
 
@@ -213,7 +215,7 @@ class WaveMorph : public Module {
     int   zone;       // K1 zone 0..9
     int   f0;         // morph position: frame below (0-based) ...
     float ff;         // ... and the fraction toward f0 + 1
-    float efkn, efe;  // K2 filter env follower: k_norm (0 = off) and e (shaped x WM_EF_SCALE)
+    float fe;         // K2 filter envelope e (-1..1)
     int   sw2;        // 0 UP (+1), 1 MID (-1), 2 DOWN (-2)
     bool  mute;
   };
@@ -251,14 +253,11 @@ class WaveMorph : public Module {
     using namespace wavemorph_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
+      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
       const float d = dec_(in + i);
-      k2s_ += (k2_t_ - k2s_) * ca;              // K2: filter env follower knob
+      k2s_ += (k2_t_ - k2s_) * ca;              // K2: filter envelope knob
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
-      // Envelope follower (Schism's): K2 shape from the smoothed knob, then the raw follower and the
-      // shaped copy per 48 kHz input sample (pre-decimator).
-      ef_k2_.SetKnob(k2s_, sr_);
-      for (size_t j = 0; j < kFactor; j++) ef_k2_.Process(ef_.Process(in[i + j]));
-      ef_k2_.Update();
+      EnvUpdate();                               // filter envelope (consumes the 48 kHz onset flag)
       k3s_ += (k3_t_ - k3s_) * ca;
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
 
@@ -309,51 +308,59 @@ class WaveMorph : public Module {
   }
 
  private:
-  // K2: envelope follower target (armitage's EfTarget = NitroTron3 Schism's env_c_filter, 1:1, with
-  // WaveMorph's noon pad WM_ENV_PAD in place of Schism's deadzone). SetKnob (per 8 kHz step, smoothed K2):
-  // t = 2 k - 1; |t| <= WM_ENV_PAD -> k_lin = 0, else (|t| - PAD) / (1 - PAD); k_norm = k_lin^WM_EF_K_CURVE;
-  // shape = CW for t > -PAD; CW release WM_EF_REL_MS -> WM_EF_REL_MIN_MS linear in k_lin. Process (per
-  // 48 kHz sample, raw follower): CW = peak follower (instant attack, one-pole release), CCW = slow rise
-  // (one-pole attack WM_EF_ATK_MS, instant snap-back). Update: e = WM_EF_SCALE s.
-  struct EfTarget {
-    volatile float e = 0.f;        // shaped follower x WM_EF_SCALE (unclamped)
-    volatile float kn = 0.f;       // k_norm (0 = off)
-    float s = 0.f;                 // shaped follower (Schism env_c_filter)
-    float rel_a = 0.f, atk_a = 0.f;  // CW release / CCW attack one-pole coefficients (48 kHz)
-    float kl_at = -1.f;            // k_lin the release coefficient / k_norm were computed for
-    bool  cw = true;               // shape: true = peak follower, false = slow rise
-    void Reset(float sr) {
+  // Onset detector (explorer / armitage OnsetDetect, 1:1), once per 48 kHz sample on |in| before the
+  // decimator; latches on_pending_ for EnvUpdate() (8 kHz).
+  inline void OnsetDetect(float in_sample) {
+    using namespace wavemorph_k;
+    const float a = fabsf(in_sample);
+    on_env_ += on_env_a_ * (a - on_env_);
+    if (on_env_ > on_gate_) on_gate_ = on_env_;
+    else                    on_gate_ += on_fall_a_ * (on_env_ - on_gate_);
+    on_base_ += WM_ONSET_SLOW_COEF * (on_gate_ - on_base_);
+    if (on_refr_ > 0) on_refr_--;
+    const bool onset = (on_refr_ == 0 && on_gate_ > WM_ONSET_FLOOR &&
+                        on_gate_ > on_base_ * WM_ONSET_RISE);
+    if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
+  }
+
+  // K2: filter envelope e (armitage's Env, 1:1, plus the noon pad WM_ENV_PAD).
+  struct FEnv {
+    volatile float e = 0.f;        // envelope value (-1..1)
+    float at = -1.f, a = 0.f;      // |t2| the coefficients were computed for; rise / CCW one-pole coefficient
+    float fall_a = 0.f;            // CW fall one-pole coefficient (tau x WM_FENV_FALL_RATIO)
+    bool  attacking = false;       // CW only: true while e is in its rise
+    void Reset() { e = 0.f; at = -1.f; a = 0.f; fall_a = 0.f; attacking = false; }
+    inline void Step(bool onset, bool seen, float t2, float sr8, float ln_tau_ratio) {
       using namespace wavemorph_k;
-      e = kn = s = 0.f;
-      kl_at = -1.f;
-      cw = true;
-      atk_a = 1.f - expf(-1.f / (WM_EF_ATK_MS * 0.001f * sr));
-      SetKnob(0.5f, sr);
-    }
-    inline void SetKnob(float k, float sr) {
-      using namespace wavemorph_k;
-      const float t = 2.f * k - 1.f;
-      const float a = fabsf(t);
-      cw = (t > -WM_ENV_PAD);
-      const float kl = (a > WM_ENV_PAD) ? (a - WM_ENV_PAD) / (1.f - WM_ENV_PAD) : 0.f;
-      if (kl != kl_at) {
-        kl_at = kl;
-        kn = powf(kl, WM_EF_K_CURVE);
-        const float rel_ms = WM_EF_REL_MS + kl * (WM_EF_REL_MIN_MS - WM_EF_REL_MS);
-        rel_a = 1.f - expf(-1.f / (rel_ms * 0.001f * sr));
+      if (onset) { e = 0.f; attacking = (t2 > 0.f); }
+      const float am = fabsf(t2);
+      if (am <= WM_ENV_PAD || !seen) { e = 0.f; return; }
+      if (am != at) {
+        at = am;
+        const float sx = (am - WM_ENV_PAD) / (1.f - WM_ENV_PAD);
+        const float tau = WM_FENV_TAU_SLOW_S * expf(sx * ln_tau_ratio);
+        a = 1.f - expf(-1.f / (tau * sr8));
+        fall_a = 1.f - expf(-1.f / (tau * WM_FENV_FALL_RATIO * sr8));
       }
-    }
-    inline void Process(float raw) {
-      if (cw) {
-        if (raw > s) s = raw;
-        else         s += rel_a * (raw - s);
+      if (t2 > 0.f) {
+        if (attacking) {                         // CW rise toward +1
+          e += a * (1.f - e);
+          if (e >= WM_FENV_PEAK) attacking = false;
+        } else {
+          e += fall_a * (0.f - e);               // CW fall toward 0 (tau x FALL_RATIO)
+        }
       } else {
-        if (raw > s) s += atk_a * (raw - s);
-        else         s = raw;
+        e += a * (-1.f - e);                     // CCW: toward -1 and hold
       }
     }
-    inline void Update() { e = s * wavemorph_k::WM_EF_SCALE; }
   };
+
+  inline void EnvUpdate() {
+    const bool onset = on_pending_;
+    on_pending_ = false;
+    if (onset) on_seen_ = true;
+    fenv_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_ftau_ratio_);    // K4 filter envelope
+  }
 
   // One 8 kHz sample of slot o: derive u_k / phi_k, return sum_k w_k a_k W_k (zone crossfade inside).
   float RunSlot(int o, bool fading) {
@@ -726,8 +733,8 @@ class WaveMorph : public Module {
       f_sz_ = (int)size;
       f_a_ = 1.f - expf(-(float)size / (WM_FILT_SMOOTH_MS * 0.001f * sr_));
     }
-    // The K2 env follower turns the K4 knob, t_eff = t + DEPTH k_norm e (not clamped; clockwise on either K2 side).
-    const float tt = ft_t_ + WM_FENV_DEPTH * ef_k2_.kn * ef_k2_.e;
+    // Zones 6 / 7: the K2 filter envelope turns the K4 knob, t_eff = t + DEPTH e (not clamped).
+    const float tt = ft_t_ + WM_FENV_DEPTH * fenv_.e;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < WM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -818,7 +825,7 @@ class WaveMorph : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int oct, int zone, float efkn, float efe) {
+                    int oct, int zone, float fe) {
     using namespace wavemorph_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -826,7 +833,7 @@ class WaveMorph : public Module {
     for (int i = 0; i < 5; i++) s.k[i] = kv[i];
     s.zone = zone; s.sw2 = oct;
     MorphPos(zone, kv[2], s.f0, s.ff);
-    s.efkn = efkn; s.efe = efe;
+    s.fe = fe;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -895,9 +902,14 @@ class WaveMorph : public Module {
   float og_[3] = { 0.f, 1.f, 0.f };            // slot weights (up, played, down), slid
   volatile float og_t_[3] = { 0.f, 1.f, 0.f };
   float oct_step_ = 0.f;
-  // K2 filter env follower (all zones)
-  EnvFollower ef_;                 // raw follower: pre-gain -> rectifier -> 4-pole LP (WM_EF_LP_HZ)
-  EfTarget ef_k2_;                 // K2 shaped target -> K4 post-filter position
+  // K2 filter envelope
+  float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
+  float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
+  int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
+  bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
+  bool  on_seen_ = false;                                // an onset has happened
+  FEnv  fenv_;                     // K2 filter envelope (all zones)
+  float ln_ftau_ratio_ = 0.f;      // ln(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S)
   // K4 post filter
   WmSVF svf_[2];
   float ft_ = 0.f;                 // smoothed t (per block)
