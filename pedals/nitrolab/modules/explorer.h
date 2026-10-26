@@ -30,6 +30,10 @@
 //   I = EXP_FM_INDEX_MAX (k3 g)^2, their caps applied after as before. On UP the K4 post filter is
 //   not run: its mix slides to 0 (at most 1 per EXP_FILT_SLIDE_MS, cutoff held), then bypass; leaving UP
 //   it slides back in.
+//   + LIVE FOLLOWER on top (2026-10-26, armitage's): EnvFollower (rectifier x EXP_FOLLOW_GAIN -> 4-pole LP
+//   EXP_FOLLOW_HZ) on the raw 48 kHz input next to the onset detector, f = min(follower, 1) per 8 kHz step;
+//   k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH on f), on slid (one-pole, EXP_FOLLOW_GATE_MS) to 1 off K4 noon,
+//   0 at noon. EXP_FOLLOW_FM_DEPTH = 0: bit-identical.
 //
 // K4 POST FILTER (armitage's K4 law, no envelopes): EXP_FILT_STAGES TPT SVF stages (1: 12 dB/oct, 2: 24 dB/oct),
 //   Q = EXP_FILT_Q (0.707, flat) per stage; t = 2 k4 - 1 smoothed per block; noon = true bypass
@@ -90,6 +94,7 @@
 //   K4  SW1 MID / DOWN: post filter  CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (12 dB/oct x EXP_FILT_STAGES, Q 0.707)
 //       SW1 UP: FM index envelope    noon off | CCW decay K3 -> 0 per pluck | CW rise 0 -> K3 per pluck
 //                                    (36 s just off noon -> 450 ms at the ends); no post filter
+//                                    + live follower off noon: k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH f)
 //   K5  unused       (not read; DIAG shows the raw value)
 //   K6  dry / wet    (shell)
 //   SW1 family       UP = FM, MID = tables (wavetable, bit table), DOWN = harmonics & shift
@@ -109,6 +114,7 @@
 #include "knob_map.h"          // RemapKnob, Quantize
 #include "armitage_bands.h"    // band engine (read-only use)
 #include "explorer_constants.h"
+#include "env_follower.h"      // EnvFollower (live follower on top of the FM envelope)
 
 #ifndef DTCM_MEM_SECTION
 #define DTCM_MEM_SECTION       // host builds
@@ -224,6 +230,12 @@ class Explorer : public Module {
     on_seen_ = false;
     env_fm_.Reset();
     ln_tau_ratio_ = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
+    // Live follower (48 kHz, raw input) + its noon gate (8 kHz).
+    fol_.Init(sr);
+    fol_.SetCutoff(EXP_FOLLOW_HZ);
+    fol_.SetPreGain(EXP_FOLLOW_GAIN);
+    fol_y_ = fol_f_ = fol_on_ = 0.f;
+    fol_gate_a_ = 1.f - expf(-1000.f / (EXP_FOLLOW_GATE_MS * sr8_));
     filt_off_ = false;
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
     og_[1] = og_t_[1] = 1.f;                     // SW2 MID = played slot
@@ -283,7 +295,7 @@ class Explorer : public Module {
       const float kv[5] = { k1, k2, k3, k4, k5 };
       const float disc = (model == kRFMC) ? EXP_FM_RATIOS[rfmc_i_t_] : (float)ish_t_;
       const Params p = Derive(model, zone, k2, k3, disc);
-      DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, 2.f * k4 - 1.f, env_fm_.g);
+      DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, 2.f * k4 - 1.f, env_fm_.g, fol_f_);
     }
   }
 
@@ -297,6 +309,7 @@ class Explorer : public Module {
     float a, b;       // sweep A / sweep B as derived values (units per model)
     float k4t;        // K4 t = 2 k4 - 1: SW1 UP = FM envelope t, else post filter t
     float envg;       // SW1 UP: FM envelope gain g (0..1) at the snapshot
+    float fol;        // live follower f = min(follower, 1) at the snapshot (0..1)
     bool  mute;
   };
   void Activate() override {
@@ -324,7 +337,10 @@ class Explorer : public Module {
     using namespace explorer_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
+      for (size_t j = 0; j < kFactor; j++) {
+        OnsetDetect(in[i + j]);                  // onset detector, 48 kHz |in|, pre-decimator
+        fol_y_ = fol_.Process(in[i + j]);        // live follower, 48 kHz raw input
+      }
       const float d = dec_(in + i);
       k2s_ += (k2_t_ - k2s_) * ca;
       k3s_ += (k3_t_ - k3s_) * ca;
@@ -347,8 +363,9 @@ class Explorer : public Module {
         mfade_n_ = mfade_len_;
       }
       const bool fading = (mfade_n_ > 0);
-      // UP models: k3_eff = k3 g (the K4 envelope gain); all others use K3 as is.
-      const float k3up = k3s_ * env_fm_.g;
+      // UP models: k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH on f) (the K4 envelope gain + the live follower);
+      // all others use K3 as is.
+      const float k3up = k3s_ * (env_fm_.g + EXP_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_));
       pn_ = Derive(var_ >> 6, var_ & 63, k2s_, IsUp(var_ >> 6) ? k3up : k3s_, DiscOf(var_ >> 6));
       if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, IsUp(vfrom_ >> 6) ? k3up : k3s_,
                                DiscOf(vfrom_ >> 6));
@@ -467,6 +484,12 @@ class Explorer : public Module {
     on_pending_ = false;
     if (onset) on_seen_ = true;
     env_fm_.Step(onset, on_seen_, 2.f * k4s_ - 1.f, sr8_, ln_tau_ratio_);
+    // Live follower on top: f = min(follower, 1); on slides toward 1 (K4 off noon) / 0 (noon), lands exactly.
+    using namespace explorer_k;
+    fol_f_ = (fol_y_ < 1.f) ? fol_y_ : 1.f;
+    const float on_t = (2.f * k4s_ - 1.f != 0.f) ? 1.f : 0.f;
+    fol_on_ += fol_gate_a_ * (on_t - fol_on_);
+    if (fabsf(on_t - fol_on_) < EXP_CTRL_SNAP) fol_on_ = on_t;
   }
 
   static int ZoneOf(int model, float k2, float k3) {
@@ -1018,7 +1041,8 @@ class Explorer : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int oct, int model, int zone, float a, float b, float k4t, float envg) {
+                    int sw1, int oct, int model, int zone, float a, float b, float k4t, float envg,
+                    float fol) {
     using namespace explorer_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -1028,6 +1052,7 @@ class Explorer : public Module {
     s.model = model; s.zone = zone;
     s.a = a; s.b = b;
     s.k4t = k4t; s.envg = envg;
+    s.fol = fol;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1176,6 +1201,12 @@ class Explorer : public Module {
   bool  on_seen_ = false;                                // an onset has happened
   EnvGain env_fm_;
   float ln_tau_ratio_ = 0.f;       // ln(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)
+  // UP: live follower (on top of the FM envelope)
+  EnvFollower fol_;                // rectifier + 4-pole LP, 48 kHz raw input
+  float fol_y_ = 0.f;              // follower output, latest 48 kHz sample
+  volatile float fol_f_ = 0.f;     // f = min(fol_y_, 1), per 8 kHz step (DIAG reads it)
+  float fol_on_ = 0.f;             // gate: slid 1 with K4 off noon, 0 at noon
+  float fol_gate_a_ = 0.f;         // gate one-pole coefficient (8 kHz, tau EXP_FOLLOW_GATE_MS)
   float f_m_ = 0.f, f_step_ = 0.f; // dry -> filtered mix and its per-sample slide
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;
   float f_a_ = 0.f;

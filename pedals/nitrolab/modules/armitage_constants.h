@@ -124,6 +124,21 @@ ARM_TUNABLE(float,    ARM_ENV_DEPTH,           0.7f);     // K4 knob travel (t u
 ARM_TUNABLE(float,    ARM_ENV_TRAVEL_TAUS,     3.9f);     // one-pole time constants per full travel (1 - e^-3.9 = 0.98)
 ARM_TUNABLE(float,    ARM_ENV_FM_TIME_RATIO,   3.0f);     // FM envelope T = this x the filter envelope's time law (2026-10-22: 12 s -> 150 ms; both sides were too fast)
 ARM_TUNABLE(float,    ARM_ENV_FM_DECAY_RATIO,  3.0f);     // K2 FM decay (CCW) / rise (CW) time / T on top (2026-10-22: T alone too fast; now 36 s -> 450 ms)
+// Live follower (2026-10-26): a subtle term ON TOP of both triggered envelopes (K5 filter, K2 FM), which stay
+// exactly as above. EnvFollower (env_follower.h: |x ARM_FOLLOW_GAIN| -> 4 cascaded one-poles at ARM_FOLLOW_HZ)
+// on the raw 48 kHz input, once per 48 kHz sample next to the onset detector; no normalisation (x10 scale:
+// passive bass ~0.2..1, guitar much lower). f = min(follower, 1), read per 8 kHz step.
+//   K4 filter: t_eff = t_K4 + ARM_ENV_DEPTH e + ARM_FOLLOW_DEPTH dir f, dir -> sign(t2) of K5 (CW +1 = harder
+//              opens further, CCW -1 = harder closes further, noon 0 = off). No clamp beyond FC_MIN/MAX.
+//   K3 FM:     k3_eff = k3 (g + ARM_FOLLOW_FM_DEPTH on f), on -> 1 with K2 off noon, 0 at noon (g = 1 there).
+//              (CCW right after a pluck g = 1, so k3_eff can exceed K3 by up to ARM_FOLLOW_FM_DEPTH.)
+//   dir / on: one-pole at 8 kHz, tau ARM_FOLLOW_GATE_MS, toward the knob-side target, landing exactly on it
+//             (noon crossings don't click; noon is exactly off). Both depths 0 = bit-identical to without.
+ARM_TUNABLE(float,    ARM_FOLLOW_HZ,           20.f);     // Hz; follower 4-pole LP cutoff
+ARM_TUNABLE(float,    ARM_FOLLOW_GAIN,         10.f);     // follower pre-gain (x10 scale); f = min(out, 1)
+ARM_TUNABLE(float,    ARM_FOLLOW_DEPTH,        0.1f);     // K4 knob travel (t units, same as ARM_ENV_DEPTH) at f = 1, signed by K5's side
+ARM_TUNABLE(float,    ARM_FOLLOW_FM_DEPTH,     0.15f);    // added to the K2 FM gain g at f = 1 (K2 off noon)
+ARM_TUNABLE(float,    ARM_FOLLOW_GATE_MS,      1.0f);     // ms; one-pole tau of the dir / on gates at a noon crossing (8 kHz)
 // LFO parked (2026-10-22): saw formant modulation / pulse PWM below, compiled out while false
 // (it reads the envelope knob, now K5, if ever re-enabled).
 ARM_TUNABLE(bool,     ARM_LFO_ENABLE,          false);

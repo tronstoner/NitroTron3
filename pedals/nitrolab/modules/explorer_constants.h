@@ -134,6 +134,16 @@ constexpr float    EXP_ENV_TAU_FAST_S      = 0.05f;    // s; at the knob ends (=
 constexpr float    EXP_ENV_TRAVEL_TAUS     = 3.9f;     // one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
 constexpr float    EXP_ENV_FM_TIME_RATIO   = 3.0f;     // T = this x the time law (= ARM_ENV_FM_TIME_RATIO)
 constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // decay (CCW) / rise (CW) time / T (= ARM_ENV_FM_DECAY_RATIO)
+// Live follower (2026-10-26, armitage's ARM_FOLLOW_*): a subtle term ON TOP of the triggered FM envelope (unchanged).
+// EnvFollower (env_follower.h: |x EXP_FOLLOW_GAIN| -> 4 cascaded one-poles at EXP_FOLLOW_HZ) on the raw 48 kHz input,
+// once per 48 kHz sample next to the onset detector; no normalisation. f = min(follower, 1), read per 8 kHz step.
+//   UP models: k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH on f), on -> 1 with K4 off noon, 0 at noon (g = 1 there)
+//   (CCW right after a pluck g = 1, so k3_eff can exceed K3 by up to EXP_FOLLOW_FM_DEPTH).
+//   on: one-pole at 8 kHz, tau EXP_FOLLOW_GATE_MS, lands exactly (EXP_CTRL_SNAP). EXP_FOLLOW_FM_DEPTH 0 = bit-identical.
+constexpr float    EXP_FOLLOW_HZ           = 20.f;     // Hz; follower 4-pole LP cutoff (= ARM_FOLLOW_HZ)
+constexpr float    EXP_FOLLOW_GAIN         = 10.f;     // follower pre-gain, x10 scale (= ARM_FOLLOW_GAIN)
+constexpr float    EXP_FOLLOW_FM_DEPTH     = 0.15f;    // added to the FM gain g at f = 1 (= ARM_FOLLOW_FM_DEPTH)
+constexpr float    EXP_FOLLOW_GATE_MS      = 1.0f;     // ms; one-pole tau of the on gate at a K4 noon crossing (= ARM_FOLLOW_GATE_MS)
 
 // --- Control smoothing / snapping ----------------------------------------------------
 constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)

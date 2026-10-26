@@ -186,9 +186,9 @@ int main() {
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         hw.seed.PrintLine("beta" D2F " fm" D2F " filt t" D2F " env t2" D2F " e" D2F " fmenv t2" D2F " e" D2F
-                          " oct %s mute %d cpu %u%%",
+                          " fol" D2F " oct %s mute %d cpu %u%%",
                           D2V(d.beta), D2V(d.fm), D2SV(d.filt_t), D2SV(d.env_t2), D2SV(d.env_e),
-                          D2SV(d.envf_t2), D2SV(d.envf_e),
+                          D2SV(d.envf_t2), D2SV(d.envf_e), D2V(d.fol),
                           oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
                           d.mute ? 1 : 0,
                           (unsigned)(cpu_pk * 100.f + 0.5f));
@@ -201,9 +201,9 @@ int main() {
         const char* zn = Explorer::ZoneName(d.model, d.zone);
         // K4: SW1 UP = FM index envelope (t, gain g), MID / DOWN = post filter t
         if (d.sw1 == 0)
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F " mute %d cpu %u%%",
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F " fol" D2F " mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
-                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), d.mute ? 1 : 0,
+                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), D2V(d.fol), d.mute ? 1 : 0,
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         else
           hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " filt t" D2F " mute %d cpu %u%%",
@@ -217,8 +217,8 @@ int main() {
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("fenv e" D2F " oct %s mute %d cpu %u%%",
-                          D2SV(d.fe), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+        hw.seed.PrintLine("fenv e" D2F " fol" D2F " oct %s mute %d cpu %u%%",
+                          D2SV(d.fe), D2V(d.fol), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
                           d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {

@@ -710,7 +710,7 @@ int main(int argc, char** argv) {
                json::Num(diag.k[3], 4) + "," + json::Num(diag.k[4], 4) + "],\"sw1\":\"" + SwName(diag.sw1) + "\",\"sw2\":\"" + SwName(diag.sw2) +
                "\",\"beta\":" + json::Num(diag.beta, 4) + ",\"filt_t\":" + json::Num(diag.filt_t, 4) +
                ",\"fm\":" + json::Num(diag.fm, 4) + ",\"env_t2\":" + json::Num(diag.env_t2, 4) + ",\"env_e\":" + json::Num(diag.env_e, 4) +
-               ",\"envf_t2\":" + json::Num(diag.envf_t2, 4) + ",\"envf_e\":" + json::Num(diag.envf_e, 4) +
+               ",\"envf_t2\":" + json::Num(diag.envf_t2, 4) + ",\"envf_e\":" + json::Num(diag.envf_e, 4) + ",\"fol\":" + json::Num(diag.fol, 4) +
                ",\"oct\":" + std::to_string(diag.oct) + ",\"mute\":" + (diag.mute ? "true" : "false");
         }
         srv.Broadcast(s + "}");

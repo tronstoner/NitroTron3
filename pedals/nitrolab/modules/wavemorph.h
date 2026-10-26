@@ -22,6 +22,11 @@
 //                     inside the pad (k2 0.46..0.54); CW: each onset e rises toward +1 (tau), at e >= 0.98
 //                     falls back to 0 (tau x 3); CCW: each onset e = 0 -> -1 and holds; tau 4 s (pad edge)
 //                     -> 0.05 s (ends); t_eff = t_K4 + 0.7 e, not clamped (fc only 10 Hz..20 kHz)
+//                     + LIVE FOLLOWER on top (2026-10-26, armitage's): EnvFollower (rectifier x WM_FOLLOW_GAIN
+//                     -> 4-pole LP WM_FOLLOW_HZ) on the raw 48 kHz input next to the onset detector,
+//                     f = min(follower, 1) per 8 kHz step; t_eff += WM_FOLLOW_DEPTH dir f, dir slid (one-pole,
+//                     WM_FOLLOW_GATE_MS) to sign(t2) outside the pad (CW harder opens, CCW harder closes), 0
+//                     inside it. WM_FOLLOW_DEPTH = 0: bit-identical.
 //   K3  morph         m 0..1 (smoothed): position through the zone's waves / frames
 //   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (WM_FILT_STAGES: 1 = 12 dB/oct, 2 = 24 dB/oct; Q 0.707 per stage)
 //   K5  unused (not read; DIAG shows the raw value)
@@ -62,6 +67,7 @@
 #include "knob_map.h"          // RemapKnob, Quantize
 #include "armitage_bands.h"    // band engine (read-only use)
 #include "wavemorph_constants.h"
+#include "env_follower.h"      // EnvFollower (live follower on top of the filter envelope)
 
 #ifndef DTCM_MEM_SECTION
 #define DTCM_MEM_SECTION       // host builds
@@ -161,6 +167,12 @@ class WaveMorph : public Module {
     on_seen_ = false;
     fenv_.Reset();
     ln_ftau_ratio_ = logf(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S);
+    // Live follower (48 kHz, raw input) + its pad gate (8 kHz).
+    fol_.Init(sr);
+    fol_.SetCutoff(WM_FOLLOW_HZ);
+    fol_.SetPreGain(WM_FOLLOW_GAIN);
+    fol_y_ = fol_f_ = fol_dir_ = 0.f;
+    fol_gate_a_ = 1.f - expf(-1000.f / (WM_FOLLOW_GATE_MS * sr8_));
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
     og_[1] = og_t_[1] = 1.f;                     // SW2 MID = played slot
     // K4 post filter: bypass, cleared state.
@@ -204,7 +216,7 @@ class WaveMorph : public Module {
 
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
-      DiagControls(cs, led1, kv, oct, zone, fenv_.e);
+      DiagControls(cs, led1, kv, oct, zone, fenv_.e, fol_f_);
     }
   }
 
@@ -216,6 +228,7 @@ class WaveMorph : public Module {
     int   f0;         // morph position: frame below (0-based) ...
     float ff;         // ... and the fraction toward f0 + 1
     float fe;         // K2 filter envelope e (-1..1)
+    float fol;        // live follower f = min(follower, 1) at the snapshot (0..1)
     int   sw2;        // 0 UP (+1), 1 MID (-1), 2 DOWN (-2)
     bool  mute;
   };
@@ -253,7 +266,10 @@ class WaveMorph : public Module {
     using namespace wavemorph_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
+      for (size_t j = 0; j < kFactor; j++) {
+        OnsetDetect(in[i + j]);                  // onset detector, 48 kHz |in|, pre-decimator
+        fol_y_ = fol_.Process(in[i + j]);        // live follower, 48 kHz raw input
+      }
       const float d = dec_(in + i);
       k2s_ += (k2_t_ - k2s_) * ca;              // K2: filter envelope knob
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
@@ -360,6 +376,13 @@ class WaveMorph : public Module {
     on_pending_ = false;
     if (onset) on_seen_ = true;
     fenv_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_ftau_ratio_);    // K4 filter envelope
+    // Live follower on top: f = min(follower, 1); dir slides toward sign(t2) outside the pad, 0 inside, lands exactly.
+    using namespace wavemorph_k;
+    fol_f_ = (fol_y_ < 1.f) ? fol_y_ : 1.f;
+    const float t2 = 2.f * k2s_ - 1.f;
+    const float dir_t = (t2 > WM_ENV_PAD) ? 1.f : (t2 < -WM_ENV_PAD) ? -1.f : 0.f;
+    fol_dir_ += fol_gate_a_ * (dir_t - fol_dir_);
+    if (fabsf(dir_t - fol_dir_) < WM_CTRL_SNAP) fol_dir_ = dir_t;
   }
 
   // One 8 kHz sample of slot o: derive u_k / phi_k, return sum_k w_k a_k W_k (zone crossfade inside).
@@ -734,7 +757,8 @@ class WaveMorph : public Module {
       f_a_ = 1.f - expf(-(float)size / (WM_FILT_SMOOTH_MS * 0.001f * sr_));
     }
     // Zones 6 / 7: the K2 filter envelope turns the K4 knob, t_eff = t + DEPTH e (not clamped).
-    const float tt = ft_t_ + WM_FENV_DEPTH * fenv_.e;
+    // + the live follower: WM_FOLLOW_DEPTH dir f (dir = slid sign of K2's t2, 0 inside the pad).
+    const float tt = ft_t_ + WM_FENV_DEPTH * fenv_.e + WM_FOLLOW_DEPTH * (fol_dir_ * fol_f_);
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < WM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -825,7 +849,7 @@ class WaveMorph : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int oct, int zone, float fe) {
+                    int oct, int zone, float fe, float fol) {
     using namespace wavemorph_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -834,6 +858,7 @@ class WaveMorph : public Module {
     s.zone = zone; s.sw2 = oct;
     MorphPos(zone, kv[2], s.f0, s.ff);
     s.fe = fe;
+    s.fol = fol;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -910,6 +935,12 @@ class WaveMorph : public Module {
   bool  on_seen_ = false;                                // an onset has happened
   FEnv  fenv_;                     // K2 filter envelope (all zones)
   float ln_ftau_ratio_ = 0.f;      // ln(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S)
+  // Live follower (on top of the K2 filter envelope)
+  EnvFollower fol_;                // rectifier + 4-pole LP, 48 kHz raw input
+  float fol_y_ = 0.f;              // follower output, latest 48 kHz sample
+  volatile float fol_f_ = 0.f;     // f = min(fol_y_, 1), per 8 kHz step (DIAG reads it)
+  float fol_dir_ = 0.f;            // filter gate: slid sign of K2's t2 (0 inside WM_ENV_PAD)
+  float fol_gate_a_ = 0.f;         // gate one-pole coefficient (8 kHz, tau WM_FOLLOW_GATE_MS)
   // K4 post filter
   WmSVF svf_[2];
   float ft_ = 0.f;                 // smoothed t (per block)

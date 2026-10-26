@@ -156,6 +156,17 @@ constexpr float WM_FENV_TAU_FAST_S = 0.05f;   // s; tau at the knob ends (= ARM_
 constexpr float WM_FENV_FALL_RATIO = 3.0f;    // CW fall tau / rise tau (= ARM_ENV_FALL_RATIO)
 constexpr float WM_FENV_PEAK       = 0.98f;   // CW: rise -> fall at this e (armitage's 0.98)
 constexpr float WM_FENV_DEPTH      = 0.7f;    // K4 knob travel (t units) at |e| = 1 (= ARM_ENV_DEPTH)
+// Live follower (2026-10-26, armitage's ARM_FOLLOW_*): a subtle term ON TOP of the triggered K2 envelope (unchanged).
+// EnvFollower (env_follower.h: |x WM_FOLLOW_GAIN| -> 4 cascaded one-poles at WM_FOLLOW_HZ) on the raw 48 kHz input,
+// once per 48 kHz sample next to the onset detector; no normalisation. f = min(follower, 1), read per 8 kHz step.
+// t_eff = t_K4 + DEPTH e + WM_FOLLOW_DEPTH dir f, dir -> sign(t2) of K2 outside WM_ENV_PAD (CW +1 = harder opens
+// further, CCW -1 = harder closes further), 0 inside the pad (follower off with the envelope). No clamp beyond
+// FC_MIN / MAX. dir: one-pole at 8 kHz, tau WM_FOLLOW_GATE_MS, lands exactly (WM_CTRL_SNAP). WM_FOLLOW_DEPTH 0 =
+// bit-identical.
+constexpr float WM_FOLLOW_HZ       = 20.f;    // Hz; follower 4-pole LP cutoff (= ARM_FOLLOW_HZ)
+constexpr float WM_FOLLOW_GAIN     = 10.f;    // follower pre-gain, x10 scale (= ARM_FOLLOW_GAIN)
+constexpr float WM_FOLLOW_DEPTH    = 0.1f;    // K4 knob travel (t units) at f = 1, signed by K2's side (= ARM_FOLLOW_DEPTH)
+constexpr float WM_FOLLOW_GATE_MS  = 1.0f;    // ms; one-pole tau of the dir gate at a pad-edge crossing (= ARM_FOLLOW_GATE_MS)
 
 // --- Onset detector (explorer's, 1:1) -------------------------------------------------------
 constexpr float    WM_ONSET_ENV_MS        = 2.6f;     // ms (= EXP_ONSET_ENV_MS)
