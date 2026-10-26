@@ -351,7 +351,7 @@ function applyStatus(m) {
     document.getElementById("diag").textContent =
       `DIAG ${m.n ? "#" + m.n : "auto"}  ${m.mode}  h ${fmt(m.h, 2)}  K1..K5 ${m.k.map(x => fmt(x, 2)).join(" ")}` +
       `  SW1 ${swU(m.sw1)}  SW2 ${swU(m.sw2)}  beta ${fmt(m.beta, 2)}  filt_t ${fmt(m.filt_t, 2)}` +
-      `  fm ${fmt(m.fm, 2)}  env t2 ${fmt(m.env_t2, 2)} e ${fmt(m.env_e, 2)}  fmenv t2 ${fmt(m.envf_t2, 2)} g ${fmt(m.envf_e, 2)}` +
+      `  fm ${fmt(m.fm, 2)}  ef5 kn ${fmt(m.ef5_kn, 2)} e ${fmt(m.ef5_e, 2)}  ef2 kn ${fmt(m.ef2_kn, 2)} e ${fmt(m.ef2_e, 2)} g ${fmt(m.ef2_g, 2)}` +
       `  mute ${m.mute ? "ON" : "off"}` +
       `  (snapshot ${fmt(m.diag_age_ms / 1000, 1)} s old; the module writes one once the controls settled)`;
     const mean = MEANING[m.mode];

@@ -10,14 +10,14 @@
 //                          the 80-band POG engine — see modules/armitage.h;
 //                          unrelated to ChronoTron3's archived armitage;
 //                          SW1 = mode pair, K1 bipolar: CCW / CW model,
-//                          K5 onset-triggered envelope on the K4 cutoff, K2 the same on the K3 FM index (UP))
+//                          K5 envelope follower on the K4 cutoff, K2 the same on the K3 FM index (UP))
 // SW3 MIDDLE = explorer   (sound-exploration models on a copy of armitage's band
 //                          engine — see modules/explorer.h; SW1 = family, K1 = model,
-//                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index envelope),
+//                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index env follower),
 //                          SW2 = octave up / played / down; K5 unused)
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
 //                          modules/wavemorph.h; K1 = base wave (10 stepped zones), K2 = K4 filter
-//                          envelope, K3 = morph, K4 = post filter, SW2 = octave up / played / down; K5 unused)
+//                          env follower, K3 = morph, K4 = post filter, SW2 = octave up / played / down; K5 unused)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -185,10 +185,10 @@ int main() {
         const Armitage::DiagSnap& d = diag_snap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("beta" D2F " fm" D2F " filt t" D2F " env t2" D2F " e" D2F " fmenv t2" D2F " e" D2F
-                          " oct %s mute %d cpu %u%%",
-                          D2V(d.beta), D2V(d.fm), D2SV(d.filt_t), D2SV(d.env_t2), D2SV(d.env_e),
-                          D2SV(d.envf_t2), D2SV(d.envf_e),
+        hw.seed.PrintLine("beta" D2F " fm" D2F " filt t" D2F " ef5 kn" D2F " e" D2F " ef2 kn" D2F " e" D2F
+                          " g" D2F " oct %s mute %d cpu %u%%",
+                          D2V(d.beta), D2V(d.fm), D2SV(d.filt_t), D2V(d.ef5_kn), D2V(d.ef5_e),
+                          D2V(d.ef2_kn), D2V(d.ef2_e), D2V(d.ef2_g),
                           oct_name[(d.oct >= 0 && d.oct < 3) ? d.oct : 1],
                           d.mute ? 1 : 0,
                           (unsigned)(cpu_pk * 100.f + 0.5f));
@@ -199,11 +199,12 @@ int main() {
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const char* zn = Explorer::ZoneName(d.model, d.zone);
-        // K4: SW1 UP = FM index envelope (t, gain g), MID / DOWN = post filter t
+        // K4: SW1 UP = FM index env follower (t, k_norm, e, gain g), MID / DOWN = post filter t
         if (d.sw1 == 0)
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F " mute %d cpu %u%%",
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " ef t" D2F " kn" D2F " e" D2F " g" D2F " mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
-                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), d.mute ? 1 : 0,
+                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.efkn), D2V(d.efe), D2V(d.envg),
+                            d.mute ? 1 : 0,
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         else
           hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " filt t" D2F " mute %d cpu %u%%",
@@ -212,13 +213,13 @@ int main() {
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (diag_stage == 3) {
-        // wavemorph, second half: K2 filter envelope e, octave, mute, cpu
+        // wavemorph, second half: K2 filter env follower (k_norm, e), octave, mute, cpu
         static const char* const oct_name[3] = { "up", "played", "down" };
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("fenv e" D2F " oct %s mute %d cpu %u%%",
-                          D2SV(d.fe), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+        hw.seed.PrintLine("ef kn" D2F " e" D2F " oct %s mute %d cpu %u%%",
+                          D2V(d.efkn), D2V(d.efe), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
                           d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {
@@ -252,7 +253,7 @@ int main() {
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
         // first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
-        // model from (SW1 pair, sign of K1); h = |2 k1 - 1|. K5 env + K2 FM env (t2, e) in the second half.
+        // model from (SW1 pair, sign of K1); h = |2 k1 - 1|. K5 / K2 env followers (k_norm, e; K2 gain g) in the second half.
         static const char* const mode_name[5] = { "SAW", "PULSE", "ADD", "FB", "UNSHAPED" };
         const Armitage::DiagSnap& d = diag_snap;
         char tag[12];
