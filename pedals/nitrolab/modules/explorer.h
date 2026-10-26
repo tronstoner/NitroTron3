@@ -63,7 +63,8 @@
 //   1 WAVETABLE  W = table(set, scan, level_k)(phi), linear interpolation in phase and between
 //                adjacent waves (scan = 3 K2); set = K3 zone (analog / PPG / vocal / noisy);
 //                level_k = largest band-limited version with H <= 4000 / f'_k (static per band, slot).
-//   2 BITTAB     16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
+//   2 BITTAB     (PARKED: EXP_BITTAB_ENABLE = false -> SW1 MID = wavetable only, K1 does nothing there)
+//                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
 //                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
 //                pulse = v0; K3 = shape: 0 -> 0.5 crossfades tri -> saw, 0.5 -> 1 saw -> pulse (linear,
 //                continuous; Ataraxic-style triangle / saw / pulse). K2 steps through 32
@@ -91,7 +92,7 @@
 // state. A change during a fade is picked up when that fade ends.
 //
 // CONTROL MAP
-//   K1  model        equal zones: SW1 UP 4, MID 2, DOWN 3 (see MODELS)
+//   K1  model        equal zones: SW1 UP 4, MID 2 (1 while the bit table is parked), DOWN 3 (see MODELS)
 //   K2  sweep A      per model (see MODELS)
 //   K3  sweep B      per model
 //   K4  SW1 MID / DOWN: post filter  CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct, Q 0.707)
@@ -271,7 +272,7 @@ class Explorer : public Module {
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
     const int model = (fam == kUp)  ? kRFM  + Quantize(k1, EXP_N_UP)
-                    : (fam == kMid) ? kWT   + Quantize(k1, EXP_N_MID)
+                    : (fam == kMid) ? kWT   + (EXP_BITTAB_ENABLE ? Quantize(k1, EXP_N_MID) : 0)
                                     : kHARM + Quantize(k1, EXP_N_DOWN);
     const int zone = ZoneOf(model, k2, k3);
     var_t_ = VarKey(model, zone);

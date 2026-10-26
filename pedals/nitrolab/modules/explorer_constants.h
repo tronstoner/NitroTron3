@@ -9,7 +9,10 @@ namespace explorer_k {
 
 // --- Families / models (SW1 = family, K1 = model in equal zones) -------------
 constexpr int EXP_N_UP   = 4;   // SW1 UP (FM):      ratio FM, ratio FM curated, cross-band FM, 2-op feedback FM
-constexpr int EXP_N_MID  = 2;   // SW1 MID (tables): wavetable, bit table
+constexpr int EXP_N_MID  = 2;   // SW1 MID (tables): wavetable, bit table (zones used only with EXP_BITTAB_ENABLE)
+// Bit table PARKED (2026-10-26): false = SW1 MID is the wavetable only (K1 does nothing there); the bit-table
+// code stays compiled in and returns exactly as 0a42043 with true (MID = 2 K1 zones again).
+constexpr bool EXP_BITTAB_ENABLE = false;
 constexpr int EXP_N_DOWN = 3;   // SW1 DOWN:         exact harmonics, frequency shift, interval shift
 constexpr float EXP_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new model output on any model / zone / discrete-item change
 constexpr float EXP_DISC_SLIDE_MS  = 1.f;   // ms; linear slide of a snapped numeric value (curated FM ratio, interval) to its new item
