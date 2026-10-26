@@ -4,10 +4,9 @@
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
 // split into 84 complex bands (armitage_bands.h, included read-only), each band reshaped by one
-// of 9 models, summed, interpolated back to 48 kHz, DC-blocked, K4-filtered, soft-clipped,
-// FS1-muted. No envelopes / onset detector, no LFO. No pitch tracking: every band runs the
-// selected model on its OWN phase phi_k and magnitude a_k = |z'_k|; nothing picks or decides
-// per band. The model output is always full (no unshaped crossfade).
+// of the models, summed, interpolated back to 48 kHz, DC-blocked, soft-clipped, FS1-muted. No LFO.
+// No pitch tracking: every band runs the selected model on its OWN phase phi_k and magnitude
+// a_k = |z'_k|; nothing picks or decides per band. The model output is always full (no unshaped crossfade).
 //
 // SLOTS (each a full voice; SW2 selects ONE, as armitage):
 //   played  z'_k = (-1)^k z_k (phase alignment, ARM_ALIGN), output weight w_k (fitted, armitage's wmid_)
@@ -20,78 +19,45 @@
 //       (UP / MID / DOWN), slid linearly over EXP_OCT_XFADE_MS on an SW2 change (old -> new slot
 //       crossfade). A slot with weight exactly 0 is NOT computed; a slot that starts again after being
 //       idle starts from cleared model state.
-//   wet = interpolate(wet8) -> DC blocker -> K4 post filter (SW1 MID / DOWN) -> soft clipper -> FS1 mute
+//   wet = interpolate(wet8) -> DC blocker -> soft clipper -> FS1 mute
 //
-// K4 ON SW1 UP = triggered envelope on the K3 FM index (copied 1:1 from armitage's K2 FM envelope):
-//   onset detector per 48 kHz input sample before the decimator (EXP_ONSET_*); envelope gain g at 8 kHz
-//   (EnvGain): t = 2 k4 - 1 (smoothed, lands on its target), noon = off (g = 1); CCW: each onset
-//   g = 1 -> one-pole decay to 0 in the set time, holds 0; CW: each onset g = 0 -> rise to 1, holds 1;
-//   time 36 s just off noon -> 450 ms at the ends (EXP_ENV_*). All four UP models use
-//   I = EXP_FM_INDEX_MAX (k3 g)^2 (g slid 1 ms, EXP_ENV_FM_SLIDE_MS: no onset click), their caps applied after as before. On UP the K4 post filter is
-//   not run: its mix slides to 0 (at most 1 per EXP_FILT_SLIDE_MS, cutoff held), then bypass; leaving UP
-//   it slides back in.
-//   + LIVE FOLLOWER on top (2026-10-26, armitage's): EnvFollower (rectifier x EXP_FOLLOW_GAIN -> 4-pole LP
-//   EXP_FOLLOW_HZ) on the raw 48 kHz input next to the onset detector, f = min(follower, 1) per 8 kHz step;
-//   k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH on f), on slid (one-pole, EXP_FOLLOW_GATE_MS) to 1 off K4 noon,
-//   0 at noon. EXP_FOLLOW_FM_DEPTH = 0: bit-identical.
-//
-// K4 POST FILTER (armitage's K4 law, no envelopes): EXP_FILT_STAGES TPT SVF stages (1: 12 dB/oct, 2: 24 dB/oct),
-//   Q = EXP_FILT_Q (0.707, flat) per stage; t = 2 k4 - 1 smoothed per block; noon = true bypass
-//   (crossfade over |t| < EXP_FILT_FADE); CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz, cutoff
-//   linear in octaves (curve 1); LP <-> HP: fades out, swaps type from cleared state, fades in.
-//
-// K5 (2026-10-26): t = 2 k5 - 1 (smoothed per 8 kHz sample, lands exactly), evaluated per audio block in
-//   K5Update (only when the smoothed t moved). t == 0: nothing applied (bit-identical).
-//   CW = BAND TILT (plain dB/oct tilt by weighting the bands, not a filter): s = t EXP_BTILT_SLOPE_MAX (dB/oct),
-//   dB_k = -s log2(1685.42 / f_k) (top band 0 dB, lows thinner; f_k = analysed centre before SW2, band 83 centre),
-//   bt = 10^(dB_k / 20) (expf per band, cached while t holds); each band's shaped output w_k a_k W_k is
-//   multiplied by bt_k in ShapeK before the band sum (every slot, model, both sides of a model crossfade).
-//   Continuous from t = 0 (no fade term). No makeup.
-//   CCW = HARMONIC LOWPASS per band: fc = 4000 (150 / 4000)^|t| Hz (EXP_BTILT_HLP_FMAX / FMIN, exponential);
-//   every per-band harmonic ceiling on f'_k (after SW2) becomes min(ceiling, fc); each band keeps its level
-//   and fundamental, loses only harmonics above fc (no tilt weights on CCW):
-//     HARMONICS  h_n uses min(3800, fc) (edge 400 Hz kept); the share h_n(3800) - h_n(min) goes to the
-//                band's fundamental cr (n = 1 stays exactly as today)
-//     FM caps    L = min(4000, fc) in the ratio / curated / cross-band Carson caps and the GENTLE feedback FM
-//                caps (index / feedback down to 0 = plain fundamental); PUSHED feedback FM and
-//                EXP_ANTIFOLD = false have no cap and stay untouched (a cap would jump in at the noon crossing)
-//     WAVETABLE  version = largest H <= min(4000, fc) / f'_k (floor H = 1); BITTAB S with (S/2) f' <= min(L, fc)
-//                (floor S = 2); a band whose pick moves crossfades old -> new linearly over
-//                EXP_BTILT_HLP_SLIDE_MS (1 ms = one 48-frame block; one fade counter, per-band old pick)
-//     SHIFT      frequency / interval shift have no ceiling: unaffected by K5 CCW
+// K3 DAMPENER (SW1 UP / MID; not on DOWN): fc = 150 (4000 / 150)^k3 Hz (EXP_DAMP_FMIN / FMAX, k3 = smoothed
+//   K3 0..1, exponential, k3 = 1 -> exactly 4000), evaluated per audio block in DampUpdate (only when the
+//   smoothed K3 moved). Every per-band harmonic ceiling on f'_k (after SW2) becomes min(ceiling, fc); each band
+//   keeps its level and fundamental, loses only harmonics above fc. Full CW = the open ceilings (as before):
+//     FM caps    L = min(4000, fc) in the FM index / feedback caps and the XBAND index cap (down to 0 = plain
+//                fundamental); EXP_FBFM_PUSHED = true or EXP_ANTIFOLD = false: no FM caps -> dampener inert on FM
+//     WAVETABLE  version = largest H <= min(4000, fc) / f'_k (floor H = 1); BITTAB S with (S/2) f' <= L
+//                (floor S = 2); a band whose pick moves crossfades old -> new linearly over EXP_DAMP_SLIDE_MS
+//                (1 ms = one 48-frame block; one fade counter, per-band old pick)
 //
 // DISCRETE VALUES are stepped on the knob (snap to the item): items that change the waveform
-// (cross-band partner, bit-table waveform, wavetable set) crossfade old -> new over
-// EXP_MODEL_XFADE_MS at the switch moment; snapped numbers inside a running oscillator (curated
-// FM ratio, interval) slide linearly to the new item over EXP_DISC_SLIDE_MS. Never blended between items.
+// (wavetable set, FM ratio <-> XBAND, bit-table waveform) crossfade old -> new over EXP_MODEL_XFADE_MS
+// at the switch moment; snapped numbers inside a running oscillator (FM ratio, interval) slide linearly
+// to the new item over EXP_DISC_SLIDE_MS. Never blended between items.
 //
-// MODELS (L = EXP_FOLD_LIMIT_HZ; "cap" = anti-fold, only with EXP_ANTIFOLD)
-//  SW1 UP — FM
-//   1 RATIO FM   W = cos(2 pi phi + I_k sin(2 pi pm)),  pm += r wrap(phi - phi_prev) (the modulator runs
-//                at r x the band's own phase; for integer r identical to r phi). r = 0.5 * 16^K2 (free),
-//                I = 12 K3^2, cap I_k <= (L / f' - 1) / r - 1 (Carson).
-//   2 RATIO FM C the same with r stepped through EXP_FM_RATIOS (14 equal K2 zones, slid 1 ms), same cap.
-//   3 XBAND FM   W = cos(2 pi phi_k + I_k sin(2 pi phi_{k+n})), n = 1..24 integer (24 equal K2 zones,
-//                1 ms crossfade); partner beyond the top band: 0. cap I_k <= (L - f'_k) / f'_{k+n} - 1.
-//   4 FB FM      m = sin(2 pi phi + b (m1 + m2) / 2)  (DX7 two-sample average), W = cos(2 pi phi + I_k m);
-//                EXP_FBFM_PUSHED true: b = 3 K2, no caps; false: b = 1.5 K2, cap b_k <= L / f' - 1
-//                (armitage FB), cap I_k <= L / f' - 2; I = 12 K3^2; ratio 1.
-//  SW1 MID — tables
-//   1 WAVETABLE  W = table(set, scan, level_k)(phi), linear interpolation in phase and between
-//                adjacent waves (scan = 3 K2); set = K3 zone (analog / PPG / vocal / noisy);
-//                level_k = largest band-limited version with H <= 4000 / f'_k (static per band, slot;
-//                K5 CCW: min(4000, fc), see K5).
-//   2 BITTAB     (PARKED: EXP_BITTAB_ENABLE = false -> SW1 MID = wavetable only, K1 does nothing there)
+// MODELS (L = min(EXP_FOLD_LIMIT_HZ, fc); "cap" = anti-fold, only with EXP_ANTIFOLD, floor 0)
+//  SW1 UP — FM (one engine, K1 = 15 equal zones: the 14 EXP_FM_RATIOS in list order, then XBAND at full CW)
+//   FM (ratio zones)  pm += r wrap(phi - phi_prev) (modulator at r x the band's own phase; integer r = r phi),
+//                m = sin(2 pi pm + b (m1 + m2) / 2) (modulator self-feedback, DX7 two-sample average),
+//                W = cos(2 pi phi + I m); r = the zone's ratio (slid 1 ms), b = EXP_FBFM_FB_MAX K2 (GENTLE 1.5),
+//                I = EXP_FM_INDEX = 12 (fixed). GENTLE caps: I <= (L / f' - 1) / r - 1,
+//                b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN (4); PUSHED (b = 3 K2): no caps.
+//                (r = 1: the former FB FM; b = 0: the former ratio FM.)
+//   XBAND        W = cos(2 pi phi_k + I sin(2 pi phi_{k+n})), n = EXP_XB_PARTNER = 12 (fixed); partner beyond
+//                the top band: 0. I = 12, cap I <= (L - f'_k) / f'_{k+n} - 1. K2 inert.
+//  SW1 MID — tables (K1 = set, 4 equal zones)
+//   WAVETABLE    W = table(set, scan, level_k)(phi), linear interpolation in phase and between adjacent
+//                waves (scan = 3 K2); set = K1 zone (analog / PPG / vocal / noisy); level_k see K3 DAMPENER.
+//   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> a 5th K1 zone on MID)
 //                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
 //                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
-//                pulse = v0; K3 = shape: 0 -> 0.5 crossfades tri -> saw, 0.5 -> 1 saw -> pulse (linear,
-//                continuous; Ataraxic-style triangle / saw / pulse). K2 steps through 32
-//                waveforms (equal zones, 1 ms crossfade): 1..16 = LFSR patterns (+-1, 16-bit Fibonacci
-//                LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits), 17..32 = SQR
-//                v[j] = sq(j) cos(2 pi n j / 16), n = 1..16 (sampled at the step starts: n > 8 mirrors on
-//                the 16-step grid). Anti-fold: S_k steps (16 / 8 / 4 / 2, (S/2) f' <= L; K5 CCW: min(L, fc)),
-//                pattern subsampled every 16 / S_k-th step.
-//  SW1 DOWN — harmonics & shift
+//                pulse = v0; K3 = shape (and the dampener): 0 -> 0.5 crossfades tri -> saw, 0.5 -> 1 saw -> pulse.
+//                K2 steps through 32 waveforms (equal zones, 1 ms crossfade): 1..16 = LFSR patterns (+-1,
+//                16-bit Fibonacci LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits),
+//                17..32 = SQR v[j] = sq(j) cos(2 pi n j / 16), n = 1..16. Anti-fold: S_k steps (16 / 8 / 4 / 2,
+//                (S/2) f' <= L), pattern subsampled every 16 / S_k-th step.
+//  SW1 DOWN — harmonics & shift (K1 = model, 3 equal zones; no dampener)
 //   1 HARMONICS  H = (1 - fr) h_n0 cos(2 pi n0 phi) + fr h_n1 cos(2 pi n1 phi), n = 1 + 5 K2 = n0 + fr,
 //                n1 = n0 + 1, h_n = clamp((3800 - n f') / 400, 0, 1) (armitage ADD drop);
 //                W = (1 - K3) H + K3 cos(2 pi phi).
@@ -101,32 +67,39 @@
 //                st = -12 .. +12 semitones (25 equal K2 zones, noon = 0, slid 1 ms), c = 50 (2 K3 - 1) cents.
 //
 // PHASE phi_k: computed once per band per slot and sample in Prep (only when a running model needs it:
-// ratio FM free / curated, harmonics, wavetable, bit table): atan of u_k in the played / +1 / -1 slots
-// (the same call on the same values the models made before). A model crossfade shares it.
+// FM ratio zones, harmonics, wavetable, bit table): atan of u_k in the played / +1 / -1 slots. A model
+// crossfade shares it.
 //
-// MODEL CHANGE (SW1, K1 zone, or a discrete K2 / K3 item that changes the waveform): old and new are
-// both computed for EXP_MODEL_XFADE_MS and crossfaded linearly; the entering model starts from cleared
-// state. A change during a fade is picked up when that fade ends.
+// MODEL CHANGE (SW1, K1 zone, or a discrete item that changes the waveform): old and new are both computed
+// for EXP_MODEL_XFADE_MS and crossfaded linearly; the entering model starts from cleared state. A change
+// during a fade is picked up when that fade ends.
+//
+// PARKED (compile flags, code kept, not run, K4 not read):
+//   EXP_ENV_ENABLE = false       K4 FM index envelope + live follower + onset detector. true = as before on SW1 UP:
+//                                onset detector per 48 kHz input sample (EXP_ONSET_*), envelope gain g (EnvGain,
+//                                8 kHz, slid 1 ms): t = 2 k4 - 1, noon off (g = 1), CCW each onset g = 1 -> decay
+//                                to 0, CW each onset g = 0 -> rise to 1 (36 s just off noon -> 450 ms at the ends);
+//                                live follower f on top: e = g + EXP_FOLLOW_FM_DEPTH on f; I = EXP_FM_INDEX e^2.
+//   EXP_POSTFILT_ENABLE = false  K4 post filter. true = as before on SW1 MID / DOWN (not run on UP: mix slides
+//                                to 0): EXP_FILT_STAGES TPT SVF (12 dB/oct each, Q 0.707), t = 2 k4 - 1, noon
+//                                bypass (fade over |t| < EXP_FILT_FADE), CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz.
 //
 // CONTROL MAP
-//   K1  model        equal zones: SW1 UP 4, MID 2 (1 while the bit table is parked), DOWN 3 (see MODELS)
-//   K2  sweep A      per model (see MODELS)
-//   K3  sweep B      per model
-//   K4  SW1 MID / DOWN: post filter  CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (12 dB/oct x EXP_FILT_STAGES, Q 0.707)
-//       SW1 UP: FM index envelope    noon off | CCW decay K3 -> 0 per pluck | CW rise 0 -> K3 per pluck
-//                                    (36 s just off noon -> 450 ms at the ends); no post filter
-//                                    + live follower off noon: k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH f)
-//   K5  lowpass/tilt CCW harmonic lowpass per band fc 4 kHz -> 150 Hz (keeps each band's level + fundamental)
-//                    | noon off (bit-identical) | CW band tilt, lows thinner (0 -> EXP_BTILT_SLOPE_MAX = 3 dB/oct,
-//                    ~-18 dB at the bottom band); all slots; shift models: CW only (see K5)
+//   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: wavetable set;
+//                    DOWN: model (harmonics / freq shift / interval)
+//   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: wave scan; DOWN: per model (see MODELS)
+//   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open);
+//                    DOWN: per model (see MODELS)
+//   K4  unused       (parked envelope / post filter, see PARKED)
+//   K5  unused
 //   K6  dry / wet    (shell)
-//   SW1 family       UP = FM, MID = tables (wavetable, bit table), DOWN = harmonics & shift
+//   SW1 family       UP = FM, MID = tables, DOWN = harmonics & shift
 //   SW2 octave       UP = +1 oct, MID = as played, DOWN = -1 oct (one slot, crossfade EXP_OCT_XFADE_MS)
 //   FS1 wet mute     toggle, LED2 on while muted; LED1 on. FS2 unused.
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 //
-// K2, K3, K4, K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values
-// are computed per 8 kHz sample from the smoothed knobs; stepped items from the raw knob.
+// K2, K3 (and K4 with EXP_ENV_ENABLE) are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous
+// derived values are computed per 8 kHz sample from the smoothed knobs; stepped items from the raw knob.
 //
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
 // No dynamic allocation. Wavetables (int16, ~112 KB) are computed at Init into SDRAM.
@@ -188,11 +161,10 @@ class Explorer : public Module {
   enum { kUp = 0, kMid = 1, kDown = 2 };   // = cs.Switch() values
   enum { kSU = 0, kSP = 1, kSD = 2, kSlots = 3 };   // slots: up, played, down (SW2 selects one)
   // Global model ids (family offset + K1 zone).
-  enum { kRFM = 0, kRFMC, kXFM, kFBFM,                // SW1 UP
+  enum { kFM = 0, kXFM,                               // SW1 UP: FM ratio zones, XBAND zone
          kWT, kBIT,                                   // SW1 MID
          kHARM, kFSH, kISH,                           // SW1 DOWN
          kNumModels };
-  enum { kAccRFM = 0, kAccRFMC = 1, kAccN = 2 };                 // phase-accumulator users
   enum { kRotFSH = 0, kRotISH = 1, kRotN = 2 };                  // rotation-phase users
 
   void Init(float sr) override {
@@ -206,7 +178,6 @@ class Explorer : public Module {
     for (int k = 0; k < kBands; k++) {
       const float f = armbands::ArmCenterFreq(k);
       bands_[k].Init(f, sr8_, armbands::ArmBandwidth(k));
-      bt_lnf_[k] = logf(f);                                // K5 band tilt: ln f_k (analysed centre)
       {                                                    // armitage ARM_ALIGN fitted weight (played slot)
         float fc = f;
         if (fc < EXP_ALIGN_W_FLO) fc = EXP_ALIGN_W_FLO;
@@ -218,28 +189,27 @@ class Explorer : public Module {
         const float fp = r[o] * f;                         // f'_k
         fp_[o][k] = fp;
         ifp_[o][k] = 1.f / fp;
-        const int hk = (int)(EXP_WT_FMAX / fp);           // harmonics that fit below the ceiling
+        const int hk = (int)(EXP_WT_FMAX / fp);           // open picks (fc = EXP_DAMP_FMAX); DampUpdate re-picks
         int lv = 0;
         for (int l = 0; l < EXP_WT_LEVELS; l++) if (EXP_WT_LEVEL_H[l] <= hk) lv = l;
-        wtlvl_[o][k] = (uint8_t)lv;
         int st = EXP_BT_STEPS;                             // BITTAB steps (anti-fold: (S/2) f' <= limit)
         if (EXP_ANTIFOLD)
           while (st > EXP_BT_STEPS_MIN && 0.5f * (float)st * fp > EXP_FOLD_LIMIT_HZ) st >>= 1;
-        btst_[o][k] = (uint8_t)st;
-        wtlv_[o][k] = wtlvf_[o][k] = (uint8_t)lv;        // K5 CCW re-picks start from the static picks
+        wtlv_[o][k] = wtlvf_[o][k] = (uint8_t)lv;
         btsc_[o][k] = btsf_[o][k] = (uint8_t)st;
       }
     }
-    for (int h = 0; h <= EXP_WT_HMAX; h++) {             // K5 CCW: version for H <= h (largest LEVEL_H <= h)
+    for (int h = 0; h <= EXP_WT_HMAX; h++) {             // dampener: version for H <= h (largest LEVEL_H <= h)
       int lv = 0;
       for (int l = 0; l < EXP_WT_LEVELS; l++) if (EXP_WT_LEVEL_H[l] <= h) lv = l;
       wt_lv_of_h_[h] = (uint8_t)lv;
     }
-    hlp_on_ = hlp_was_ = false;
-    hlp_fc_ = 0.f;
-    hlp_lnr_ = logf(EXP_BTILT_HLP_FMIN / EXP_BTILT_HLP_FMAX);
+    damp_k_ = -1.f;                              // forces DampUpdate on the first block
+    damp_fc_ = EXP_DAMP_FMAX;
+    hc_fold_ = EXP_FOLD_LIMIT_HZ;
+    damp_lnr_ = logf(EXP_DAMP_FMAX / EXP_DAMP_FMIN);
     pk_fade_n_ = 0;
-    pk_fade_len_ = (int)(EXP_BTILT_HLP_SLIDE_MS * 0.001f * sr8_ + 0.5f);
+    pk_fade_len_ = (int)(EXP_DAMP_SLIDE_MS * 0.001f * sr8_ + 0.5f);
     if (pk_fade_len_ < 1) pk_fade_len_ = 1;
     pk_g_ = 1.f;
     BuildBitPatterns();
@@ -254,15 +224,11 @@ class Explorer : public Module {
     disc_len_ = (int)(EXP_DISC_SLIDE_MS * 0.001f * sr8_ + 0.5f);
     if (disc_len_ < 1) disc_len_ = 1;
     oct_step_ = 1.f / (EXP_OCT_XFADE_MS * 0.001f * sr8_);
-    var_ = var_t_ = vfrom_ = VarKey(kRFM, 0);
+    var_ = var_t_ = vfrom_ = VarKey(kFM, 0);
     k2s_ = k2_t_ = 0.f;
     k3s_ = k3_t_ = 0.f;
-    k4s_ = k4_t_ = 0.5f;                         // K4 noon = envelope off
-    k5s_ = k5_t_ = 0.5f;                         // K5 noon = lowpass / tilt off
-    bt_t_ = 0.f;
-    bt_on_ = false;
-    bt_lntop_ = logf(armbands::ArmCenterFreq(kBands - 1));
-    // UP: onset detector (48 kHz, pre-decimator) + FM index envelope (8 kHz), armitage's.
+    k4s_ = k4_t_ = 0.5f;                         // K4 noon = envelope off (EXP_ENV_ENABLE)
+    // UP (parked, EXP_ENV_ENABLE): onset detector (48 kHz, pre-decimator) + FM index envelope (8 kHz), armitage's.
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (EXP_ONSET_ENV_MS * sr));
     on_fall_a_ = 1.f - expf(-1000.f / (EXP_ONSET_FALL_MS * sr));
@@ -310,25 +276,34 @@ class Explorer : public Module {
     const float k1 = RemapKnob(cs.Knob(0));
     const float k2 = RemapKnob(cs.Knob(1));
     const float k3 = RemapKnob(cs.Knob(2));
-    const float k4 = RemapKnob(cs.Knob(3));
-    const float k5 = RemapKnob(cs.Knob(4));
+    const float k4 = RemapKnob(cs.Knob(3));      // read for DIAG; drives only the parked K4 parts
+    const float k5 = RemapKnob(cs.Knob(4));      // unused (DIAG only)
     int fam = cs.Switch(0);
     if (fam < kUp || fam > kDown) fam = kMid;
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
-    const int model = (fam == kUp)  ? kRFM  + Quantize(k1, EXP_N_UP)
-                    : (fam == kMid) ? kWT   + (EXP_BITTAB_ENABLE ? Quantize(k1, EXP_N_MID) : 0)
-                                    : kHARM + Quantize(k1, EXP_N_DOWN);
-    const int zone = ZoneOf(model, k2, k3);
+    int model, zone = 0;
+    if (fam == kUp) {                            // K1: FM ratio zones, last zone = XBAND
+      model = (Quantize(k1, EXP_N_UP) < EXP_FM_N_RATIOS) ? kFM : kXFM;
+    } else if (fam == kMid) {                    // K1: wavetable set (+ bit table zone when enabled)
+      const int z = Quantize(k1, EXP_N_MID);
+      if (z < EXP_WT_SETS) { model = kWT; zone = z; }
+      else                 { model = kBIT; zone = Quantize(k2, EXP_BT_WAVES); }   // waveform index
+    } else {
+      model = kHARM + Quantize(k1, EXP_N_DOWN);
+    }
     var_t_ = VarKey(model, zone);
-    rfmc_i_t_ = Quantize(k2, EXP_FM_N_RATIOS);                        // curated FM ratio item
+    int ri = Quantize(k1, EXP_N_UP);                                  // FM ratio item (held at the last
+    if (ri > EXP_FM_N_RATIOS - 1) ri = EXP_FM_N_RATIOS - 1;           // ratio in the XBAND zone)
+    rfmc_i_t_ = ri;
     ish_t_ = Quantize(k2, 2 * EXP_IS_SEMI_MAX + 1) - EXP_IS_SEMI_MAX; // interval, semitones
     k2_t_ = k2;
     k3_t_ = k3;
-    k4_t_ = k4;                                                       // UP: FM index envelope knob
-    k5_t_ = k5;                                                       // K5 band tilt
-    ft_t_ = 2.f * k4 - 1.f;                                           // MID / DOWN: K4 post filter t
-    filt_off_ = (fam == kUp);                                         // UP: no post filter
+    if (EXP_ENV_ENABLE) k4_t_ = k4;                                   // parked: UP FM index envelope knob
+    if (EXP_POSTFILT_ENABLE) {                                        // parked: MID / DOWN K4 post filter
+      ft_t_ = 2.f * k4 - 1.f;
+      filt_off_ = (fam == kUp);                                       // UP: no post filter
+    }
     og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
     og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
     og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
@@ -338,10 +313,10 @@ class Explorer : public Module {
 
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
-      const float disc = (model == kRFMC) ? EXP_FM_RATIOS[rfmc_i_t_] : (float)ish_t_;
-      const Params p = Derive(model, zone, k2, k3, disc);
-      DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, 2.f * k4 - 1.f, env_fm_.g, fol_f_,
-                   2.f * k5 - 1.f);
+      const float disc = (model == kFM) ? EXP_FM_RATIOS[rfmc_i_t_] : (float)ish_t_;
+      const Params p = Derive(model, zone, k2, k3, disc, 1.f);
+      DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
+                   env_fm_.g, fol_f_);
     }
   }
 
@@ -350,26 +325,21 @@ class Explorer : public Module {
     int   n;          // tap number (#n), 0 = automatic line
     float k[5];       // K1..K5 (remapped 0..1)
     int   sw1, sw2;   // 0 UP, 1 MID, 2 DOWN
-    int   model;      // global model id (kRFM .. kBIT)
-    int   zone;       // wavetable set (0..3), cross-band n - 1, bit-table waveform - 1, else 0
-    float a, b;       // sweep A / sweep B as derived values (units per model)
-    float k4t;        // K4 t = 2 k4 - 1: SW1 UP = FM envelope t, else post filter t
-    float envg;       // SW1 UP: FM envelope gain g (0..1) at the snapshot
-    float fol;        // live follower f = min(follower, 1) at the snapshot (0..1)
-    float btt;        // K5 t = 2 k5 - 1 (raw knob)
-    float bts;        // CW band tilt slope s = t SLOPE_MAX (dB/oct), 0 at noon / CCW
-    float hfc;        // CCW harmonic lowpass fc (Hz), 0 at noon / CW
+    int   model;      // global model id (kFM .. kISH)
+    int   zone;       // wavetable set (0..3), bit-table waveform - 1, else 0
+    float a, b;       // derived values per model (FM: ratio r / feedback b; XBAND: partner n / index)
+    float fc;         // K3 dampener fc (Hz) on SW1 UP / MID, 0 on DOWN
+    float envg;       // parked UP envelope (EXP_ENV_ENABLE): gain g (0..1) at the snapshot
+    float fol;        // parked live follower f = min(follower, 1) at the snapshot (0..1)
     bool  mute;
   };
   void Activate() override {
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
   }
-  // K5 CW band tilt slope s (dB/oct) at t: t SLOPE_MAX, 0 at noon / CCW.
-  static float BTiltSlope(float t) { return (t > 0.f) ? t * explorer_k::EXP_BTILT_SLOPE_MAX : 0.f; }
-  // K5 CCW harmonic lowpass fc (Hz) at t: HLP_FMAX (HLP_FMIN / HLP_FMAX)^|t|, 0 at noon / CW.
-  static float HlpFc(float t) {
+  // K3 dampener fc (Hz) at k3 (0..1): DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^k3, exactly DAMP_FMAX at k3 >= 1.
+  static float DampFc(float k3) {
     using namespace explorer_k;
-    return (t < 0.f) ? EXP_BTILT_HLP_FMAX * expf(-t * logf(EXP_BTILT_HLP_FMIN / EXP_BTILT_HLP_FMAX)) : 0.f;
+    return (k3 >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(k3 * logf(EXP_DAMP_FMAX / EXP_DAMP_FMIN));
   }
   bool DiagTake(DiagSnap& out) {
     if (diag_tap_pend_)  { out = diag_tap_;  diag_tap_pend_ = false;  return true; }
@@ -377,7 +347,7 @@ class Explorer : public Module {
     return false;
   }
   static const char* ModelName(int m) {
-    static const char* const n[kNumModels] = { "RATIO-FM", "RATIO-FM-C", "XBAND-FM", "FB-FM",
+    static const char* const n[kNumModels] = { "FM", "XBAND-FM",
                                                "WTABLE", "BITTAB",
                                                "HARM", "FSHIFT", "INTERVAL" };
     return (m >= 0 && m < kNumModels) ? n[m] : "?";
@@ -392,20 +362,22 @@ class Explorer : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     using namespace explorer_k;
     const float ca = ctrl_a_;
-    K5Update();                                  // K5: CCW lowpass ceilings / CW tilt weights (smoothed t)
+    DampUpdate();                                // K3 dampener: ceilings + table / bit-table picks (smoothed K3)
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      for (size_t j = 0; j < kFactor; j++) {
-        OnsetDetect(in[i + j]);                  // onset detector, 48 kHz |in|, pre-decimator
-        fol_y_ = fol_.Process(in[i + j]);        // live follower, 48 kHz raw input
-      }
+      if (EXP_ENV_ENABLE)                        // parked: onset detector + live follower (48 kHz, pre-decimator)
+        for (size_t j = 0; j < kFactor; j++) {
+          OnsetDetect(in[i + j]);
+          fol_y_ = fol_.Process(in[i + j]);
+        }
       const float d = dec_(in + i);
       k2s_ += (k2_t_ - k2s_) * ca;
       k3s_ += (k3_t_ - k3s_) * ca;
-      k4s_ += (k4_t_ - k4s_) * ca;              // UP: FM envelope knob
-      if (fabsf(k4_t_ - k4s_) < EXP_CTRL_SNAP) k4s_ = k4_t_;   // land exactly (noon: envelope fully off)
-      k5s_ += (k5_t_ - k5s_) * ca;              // K5 band tilt
-      if (fabsf(k5_t_ - k5s_) < EXP_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: tilt fully off)
-      EnvUpdate();                               // UP: FM index envelope (consumes the 48 kHz onset flag)
+      if (fabsf(k3_t_ - k3s_) < EXP_CTRL_SNAP) k3s_ = k3_t_;   // land exactly (dampener re-picks stop)
+      if (EXP_ENV_ENABLE) {                      // parked: UP FM index envelope
+        k4s_ += (k4_t_ - k4s_) * ca;
+        if (fabsf(k4_t_ - k4s_) < EXP_CTRL_SNAP) k4s_ = k4_t_;   // land exactly (noon: envelope fully off)
+        EnvUpdate();                             // consumes the 48 kHz onset flag
+      }
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
       rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
       rfmc_.Tick();
@@ -422,14 +394,13 @@ class Explorer : public Module {
         mfade_n_ = mfade_len_;
       }
       const bool fading = (mfade_n_ > 0);
-      // UP models: k3_eff = k3 (g_slid + EXP_FOLLOW_FM_DEPTH on f) (the K4 envelope gain, slid 1 ms, + the live
-      // follower); all others use K3 as is.
-      const float k3up = k3s_ * (fm_gs_ + EXP_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_));
-      pn_ = Derive(var_ >> 6, var_ & 63, k2s_, IsUp(var_ >> 6) ? k3up : k3s_, DiscOf(var_ >> 6));
-      if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, IsUp(vfrom_ >> 6) ? k3up : k3s_,
-                               DiscOf(vfrom_ >> 6));
+      // Parked UP envelope: e = g_slid + EXP_FOLLOW_FM_DEPTH on f scales the FM index (I = EXP_FM_INDEX e^2);
+      // off: e = 1.
+      const float eg = EXP_ENV_ENABLE ? fm_gs_ + EXP_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_) : 1.f;
+      pn_ = Derive(var_ >> 6, var_ & 63, k2s_, k3s_, DiscOf(var_ >> 6), eg);
+      if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, k3s_, DiscOf(vfrom_ >> 6), eg);
       mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_len_ + 1) : 1.f;
-      pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // K5 CCW pick slide
+      pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
 
       // Pass 1: clock all bands, magnitudes (|z'| = |z| in every slot).
       float* __restrict mg = mag_ + 1;
@@ -463,7 +434,7 @@ class Explorer : public Module {
       int_(acc * EXP_OUT_GAIN, wet + i);
     }
     DcBlock(wet, size);
-    PostFilter(wet, size);  // K4: LP | bypass | HP, EXP_FILT_STAGES x 12 dB/oct, Q 0.707
+    if (EXP_POSTFILT_ENABLE) PostFilter(wet, size);   // parked K4: LP | bypass | HP
     Saturate(wet, size);
     ApplyMute(wet, size);
   }
@@ -492,7 +463,6 @@ class Explorer : public Module {
   };
 
   static inline int VarKey(int model, int zone) { return (model << 6) | (zone & 63); }
-  static inline bool IsUp(int m) { return m == kRFM || m == kRFMC || m == kXFM || m == kFBFM; }
 
   // UP: onset detector (armitage OnsetDetect, 1:1), once per 48 kHz sample on |in| before the decimator.
   // Fast meter -> gate meter (up at once, slow fall) -> slow baseline; onset = gate > RISE x baseline
@@ -546,7 +516,7 @@ class Explorer : public Module {
     if (onset) on_seen_ = true;
     env_fm_.Step(onset, on_seen_, 2.f * k4s_ - 1.f, sr8_, ln_tau_ratio_);
     using namespace explorer_k;
-    // g jumps on an onset (CW -> 0, CCW -> 1): slide it (1 ms one-pole) before it scales K3, land exactly.
+    // g jumps on an onset (CW -> 0, CCW -> 1): slide it (1 ms one-pole) before it scales the index, land exactly.
     fm_gs_ += fm_gs_a_ * (env_fm_.g - fm_gs_);
     if (fabsf(env_fm_.g - fm_gs_) < EXP_CTRL_SNAP) fm_gs_ = env_fm_.g;
     // Live follower on top: f = min(follower, 1); on slides toward 1 (K4 off noon) / 0 (noon), lands exactly.
@@ -556,58 +526,39 @@ class Explorer : public Module {
     if (fabsf(on_t - fol_on_) < EXP_CTRL_SNAP) fol_on_ = on_t;
   }
 
-  // K5, once per audio block from the smoothed t = 2 k5s_ - 1 (nothing when t did not move).
-  //   CCW (t < 0): harmonic lowpass fc = HLP_FMAX (HLP_FMIN / HLP_FMAX)^|t|; the ceilings ShapeK reads
-  //   (hc_harm_ = min(HARM_FMAX, fc), hc_fold_ = min(FOLD_LIMIT_HZ, fc)) and the discrete picks (Repick) follow.
-  //   Leaving CCW: Repick restores the static picks (slid). t <= 0: no tilt weights (ShapeK skips the multiply).
-  //   CW (t > 0): tilt weights bt_w_[k] = 10^(-s log2(f_top / f_k) / 20) = exp(-s c (ln f_top - ln f_k)),
-  //   s = t SLOPE_MAX, c = ln 10 / (20 ln 2) (84 expf only when t moved).
-  void K5Update() {
+  // K3 dampener, once per audio block from the smoothed K3 (nothing when it did not move):
+  //   fc = DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^k3 (exactly DAMP_FMAX at k3 = 1); hc_fold_ = min(FOLD_LIMIT_HZ, fc)
+  //   is the L the UP models' caps read (ShapeK); the table / bit-table picks follow (Repick). Runs on every
+  //   family (the picks are read only on MID; DOWN models do not read fc).
+  void DampUpdate() {
     using namespace explorer_k;
-    const float t = 2.f * k5s_ - 1.f;
-    if (t == bt_t_) return;                      // unchanged: ceilings / picks / weights hold
-    bt_t_ = t;
-    hlp_on_ = (t < 0.f);
-    if (hlp_on_) {
-      hlp_fc_ = EXP_BTILT_HLP_FMAX * expf(-t * hlp_lnr_);
-      hc_harm_ = (hlp_fc_ < EXP_HARM_FMAX) ? hlp_fc_ : EXP_HARM_FMAX;
-      hc_fold_ = (hlp_fc_ < EXP_FOLD_LIMIT_HZ) ? hlp_fc_ : EXP_FOLD_LIMIT_HZ;
-    } else {
-      hlp_fc_ = 0.f;
-    }
-    if (hlp_on_ || hlp_was_) Repick();           // CCW, or just left it (back to the static picks)
-    hlp_was_ = hlp_on_;
-    if (t <= 0.f) { bt_on_ = false; return; }
-    constexpr float c = 0.16609640f;             // ln 10 / (20 ln 2): dB per octave -> exp argument per ln f
-    const float sc = t * EXP_BTILT_SLOPE_MAX * c;
-    for (int k = 0; k < kBands; k++) bt_w_[k] = expf(-sc * (bt_lntop_ - bt_lnf_[k]));
-    bt_on_ = true;
+    const float k = k3s_;
+    if (k == damp_k_) return;                    // unchanged: ceilings / picks hold
+    damp_k_ = k;
+    damp_fc_ = (k >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(k * damp_lnr_);
+    hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
+    Repick();
   }
 
-  // K5 CCW: re-pick each band's wavetable version (largest H <= min(WT_FMAX, fc) / f'_k, floor H = 1) and
+  // Dampener: re-pick each band's wavetable version (largest H <= min(WT_FMAX, fc) / f'_k, floor H = 1) and
   // bit-table step count (largest S of 16 / 8 / 4 / 2 with (S/2) f'_k <= min(FOLD_LIMIT_HZ, fc), floor 2;
-  // EXP_ANTIFOLD only, as the static pick); off CCW the static picks (wtlvl_, btst_). A band whose pick moves
-  // keeps its old pick in wtlvf_ / btsf_ and crossfades old -> new linearly over pk_fade_len_ samples
-  // (EXP_BTILT_HLP_SLIDE_MS); all other bands' old = new. One shared fade counter: with 48-frame (1 ms) blocks
-  // a fade ends inside its block; a re-pick during a running fade restarts it from the band's last target.
+  // EXP_ANTIFOLD only). A band whose pick moves keeps its old pick in wtlvf_ / btsf_ and crossfades old -> new
+  // linearly over pk_fade_len_ samples (EXP_DAMP_SLIDE_MS); all other bands' old = new. One shared fade counter:
+  // with 48-frame (1 ms) blocks a fade ends inside its block; a re-pick during a running fade restarts it from
+  // the band's last target.
   void Repick() {
     using namespace explorer_k;
-    const bool on = hlp_on_;
-    const float cw = (hlp_fc_ < EXP_WT_FMAX) ? hlp_fc_ : EXP_WT_FMAX;
+    const float cw = (damp_fc_ < EXP_WT_FMAX) ? damp_fc_ : EXP_WT_FMAX;
     bool moved = false;
     for (int o = 0; o < kSlots; o++) {
       for (int k = 0; k < kBands; k++) {
-        int lv = wtlvl_[o][k];
-        int st = btst_[o][k];
-        if (on) {
-          int hk = (int)(cw * ifp_[o][k]);
-          if (hk > EXP_WT_HMAX) hk = EXP_WT_HMAX;
-          lv = wt_lv_of_h_[hk];
-          if (EXP_ANTIFOLD) {
-            const float fp = fp_[o][k];
-            st = EXP_BT_STEPS;
-            while (st > EXP_BT_STEPS_MIN && 0.5f * (float)st * fp > hc_fold_) st >>= 1;
-          }
+        int hk = (int)(cw * ifp_[o][k]);
+        if (hk > EXP_WT_HMAX) hk = EXP_WT_HMAX;
+        const int lv = wt_lv_of_h_[hk];
+        int st = EXP_BT_STEPS;
+        if (EXP_ANTIFOLD) {
+          const float fp = fp_[o][k];
+          while (st > EXP_BT_STEPS_MIN && 0.5f * (float)st * fp > hc_fold_) st >>= 1;
         }
         wtlvf_[o][k] = wtlv_[o][k];
         btsf_[o][k] = btsc_[o][k];
@@ -619,35 +570,24 @@ class Explorer : public Module {
     else       pk_fade_n_ = 0;
   }
 
-  static int ZoneOf(int model, float k2, float k3) {
-    using namespace explorer_k;
-    if (model == kWT) return Quantize(k3, 4);
-    if (model == kXFM) return Quantize(k2, EXP_XB_N_MAX);    // partner offset n - 1
-    if (model == kBIT) return Quantize(k2, EXP_BT_WAVES);    // waveform index
-    return 0;
-  }
-  float DiscOf(int m) const { return (m == kRFMC) ? rfmc_.v : (m == kISH) ? ish_.v : 0.f; }
+  float DiscOf(int m) const { return (m == kFM) ? rfmc_.v : (m == kISH) ? ish_.v : 0.f; }
 
-  // Derived values per model from K2 / K3 (0..1) and the slid discrete value (curated ratio /
-  // interval semitones).
-  Params Derive(int m, int zone, float k2, float k3, float disc) const {
+  // Derived values per model from K2 / K3 (0..1), the slid discrete value (FM ratio / interval semitones)
+  // and the parked UP envelope factor eg (1 when EXP_ENV_ENABLE = false).
+  Params Derive(int m, int zone, float k2, float k3, float disc, float eg) const {
     using namespace explorer_k;
     Params p;
     p.zone = zone;
     switch (m) {
-      case kRFM: case kRFMC: {            // p0 = r, p1 = 1/r, p2 = I
-        const float r = (m == kRFMC) ? disc
-                      : EXP_RFM_RATIO_MIN * expf(k2 * logf(EXP_RFM_RATIO_MAX / EXP_RFM_RATIO_MIN));
-        p.p0 = r; p.p1 = 1.f / r; p.p2 = EXP_FM_INDEX_MAX * k3 * k3;
-        p.a = r; p.b = p.p2; break;
+      case kFM: {                          // p0 = r, p1 = 1/r, p2 = I, p3 = feedback b
+        const float r = disc;
+        p.p0 = r; p.p1 = 1.f / r; p.p2 = EXP_FM_INDEX * eg * eg; p.p3 = EXP_FBFM_FB_MAX * k2;
+        p.a = r; p.b = p.p3; break;
       }
       case kXFM:                           // n0 = partner offset, p1 = I
-        p.n0 = zone + 1;
-        p.p1 = EXP_FM_INDEX_MAX * k3 * k3;
+        p.n0 = EXP_XB_PARTNER;
+        p.p1 = EXP_FM_INDEX * eg * eg;
         p.a = (float)p.n0; p.b = p.p1; break;
-      case kFBFM:                          // p0 = self-feedback b, p1 = I
-        p.p0 = EXP_FBFM_FB_MAX * k2; p.p1 = EXP_FM_INDEX_MAX * k3 * k3;
-        p.a = p.p0; p.b = p.p1; break;
       case kFSH: {                         // p0 = fixed increment / sample, p1 = proportional increment per Hz of f'
         const float t = 2.f * k2 - 1.f;
         const float at = fabsf(t);
@@ -703,7 +643,7 @@ class Explorer : public Module {
 
   // Models that read the band phase phi_k (ph_).
   static inline bool NeedsPhase(int m) {
-    return m == kRFM || m == kRFMC || m == kHARM || m == kWT || m == kBIT;
+    return m == kFM || m == kHARM || m == kWT || m == kBIT;
   }
 
   // u_k = z'_k / |z'_k| for slot o into ur_ / ui_ (0 for silent bands); with need_ph also the phase
@@ -733,10 +673,8 @@ class Explorer : public Module {
 
   float Shape(int m, int o, const Params& p) {
     switch (m) {
-      case kRFM:   return ShapeK<kRFM>(o, p);
-      case kRFMC:  return ShapeK<kRFMC>(o, p);
+      case kFM:    return ShapeK<kFM>(o, p);
       case kXFM:   return ShapeK<kXFM>(o, p);
-      case kFBFM:  return ShapeK<kFBFM>(o, p);
       case kFSH:   return ShapeK<kFSH>(o, p);
       case kISH:   return ShapeK<kISH>(o, p);
       case kHARM:  return ShapeK<kHARM>(o, p);
@@ -745,10 +683,10 @@ class Explorer : public Module {
     }
   }
 
-  // Modulator phase that runs at r x the band's own phase (ratio FM free / curated).
-  inline float AccPhase(int u, int o, int k, float ph, float r) {
-    float pm = pm_[u][o][k];
-    const float pp = pp_[u][o][k];
+  // Modulator phase that runs at r x the band's own phase (FM ratio zones).
+  inline float AccPhase(int o, int k, float ph, float r) {
+    float pm = pm_[o][k];
+    const float pp = pp_[o][k];
     if (pp < 0.f) {
       pm = r * ph;
     } else {
@@ -758,8 +696,8 @@ class Explorer : public Module {
       pm += r * dph;
     }
     pm -= floorf(pm);
-    pm_[u][o][k] = pm;
-    pp_[u][o][k] = ph;
+    pm_[o][k] = pm;
+    pp_[o][k] = ph;
     return pm;
   }
 
@@ -774,39 +712,45 @@ class Explorer : public Module {
     const float* __restrict ifp = ifp_[o];
     const float* __restrict phs = ph_;
     const bool played = (o == kSP);
-    const float* __restrict btw = bt_on_ ? bt_w_ : nullptr;   // K5 CW band tilt (nullptr at noon / CCW: no multiply)
-    // K5 CCW harmonic lowpass: the ceilings become min(ceiling, fc) (per block, K5Update); off CCW exactly as before.
-    const bool  hlp = hlp_on_;
-    const float L   = hlp ? hc_fold_ : EXP_FOLD_LIMIT_HZ;     // FM Carson caps, ring sum term
-    const float hcm = hlp ? hc_harm_ : EXP_HARM_FMAX;         // harmonic drop
-    const int   pkf = pk_fade_n_;                             // K5 CCW discrete pick slide running
+    const float L   = hc_fold_;                               // K3 dampener: min(FOLD_LIMIT_HZ, fc) (UP caps)
+    const int   pkf = pk_fade_n_;                             // dampener discrete pick slide running
     const float pkg = pk_g_;
     const uint8_t* __restrict wlv  = wtlv_[o];
     const uint8_t* __restrict wlvf = wtlvf_[o];
     const uint8_t* __restrict bsc  = btsc_[o];
     const uint8_t* __restrict bsf  = btsf_[o];
-    constexpr int au = (M == kRFMC) ? kAccRFMC : kAccRFM;
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
       if (a == 0.f) {                            // silent band: state cleared
-        if (M == kRFM || M == kRFMC) pp_[au][o][k] = -1.f;
-        if (M == kFBFM) { m1_[o][k] = 0.f; m2_[o][k] = 0.f; }
+        if (M == kFM) { pp_[o][k] = -1.f; m1_[o][k] = 0.f; m2_[o][k] = 0.f; }
         continue;
       }
       const float cr = ur[k], ci = ui[k];
       float W;
-      if (M == kRFM || M == kRFMC) {
-        const float pm = AccPhase(au, o, k, phs[k], p.p0);
-        float I = p.p2;
-        if (EXP_ANTIFOLD) {
-          float cap = (L * ifp[k] - 1.f) * p.p1 - 1.f;
-          if (cap < 0.f) cap = 0.f;
-          if (I > cap) I = cap;
+      if (M == kFM) {
+        // m = sin(2 pi pm + b (m1 + m2) / 2), W = cos(2 pi phi + I m); pm at r x the band's phase.
+        const float pm = AccPhase(o, k, phs[k], p.p0);
+        float I = p.p2, b = p.p3;
+        if (EXP_ANTIFOLD && !EXP_FBFM_PUSHED) {  // pushed variant: no caps
+          const float x = L * ifp[k] * p.p1;     // L / (r f')
+          float ic = (x - p.p1) - 1.f;           // (L / f' - 1) / r - 1
+          if (ic < 0.f) ic = 0.f;
+          if (I > ic) I = ic;
+          float bc = (x - 1.f) * (1.f / EXP_FBFM_FB_SPAN);
+          if (bc < 0.f) bc = 0.f;
+          if (b > bc) b = bc;
         }
+        float cm, sm;
+        CosSin01(pm, cm, sm);
         float s, c;
-        SinCos(I * Sin01(pm), s, c);
+        SinCos(b * 0.5f * (m1_[o][k] + m2_[o][k]), s, c);
+        float mod = sm * c + cm * s;             // sin(2 pi pm + b avg)
+        if (fabsf(mod) < EXP_DENORM) mod = 0.f;
+        m2_[o][k] = m1_[o][k];
+        m1_[o][k] = mod;
+        SinCos(I * mod, s, c);
         W = cr * c - ci * s;
       } else if (M == kXFM) {
         const int q = k + p.n0;
@@ -823,24 +767,6 @@ class Explorer : public Module {
           W0 = cr * c - ci * s;
         }
         W = W0;
-      } else if (M == kFBFM) {
-        float b = p.p0, I = p.p1;
-        if (EXP_ANTIFOLD && !EXP_FBFM_PUSHED) {  // pushed variant: no caps
-          float bc = L * ifp[k] - 1.f;
-          if (bc < 0.f) bc = 0.f;
-          if (b > bc) b = bc;
-          float ic = L * ifp[k] - 2.f;
-          if (ic < 0.f) ic = 0.f;
-          if (I > ic) I = ic;
-        }
-        float s, c;
-        SinCos(b * 0.5f * (m1_[o][k] + m2_[o][k]), s, c);
-        float mod = ci * c + cr * s;             // sin(2 pi phi + b avg)
-        if (fabsf(mod) < EXP_DENORM) mod = 0.f;
-        m2_[o][k] = m1_[o][k];
-        m1_[o][k] = mod;
-        SinCos(I * mod, s, c);
-        W = cr * c - ci * s;
       } else if (M == kFSH || M == kISH) {
         float th = th_[ru][o][k] + p.p0 + p.p1 * fp[k];
         th -= floorf(th);
@@ -852,24 +778,14 @@ class Explorer : public Module {
         const float ph = phs[k];
         const int n0 = p.n0, n1 = n0 + 1;
         float h0 = 1.f, h1 = 1.f;
-        float fill = 0.f;                        // K5 CCW: harmonic share lost to fc -> the fundamental
         if (EXP_ANTIFOLD) {
           constexpr float ie = 1.f / EXP_HARM_FEDGE;
           h0 = (EXP_HARM_FMAX - (float)n0 * fp[k]) * ie;
           h0 = (h0 < 0.f) ? 0.f : (h0 > 1.f) ? 1.f : h0;
           h1 = (EXP_HARM_FMAX - (float)n1 * fp[k]) * ie;
           h1 = (h1 < 0.f) ? 0.f : (h1 > 1.f) ? 1.f : h1;
-          if (hlp) {                             // ceiling min(HARM_FMAX, fc), same edge
-            float g0 = (hcm - (float)n0 * fp[k]) * ie;
-            g0 = (g0 < 0.f) ? 0.f : (g0 > 1.f) ? 1.f : g0;
-            float g1 = (hcm - (float)n1 * fp[k]) * ie;
-            g1 = (g1 < 0.f) ? 0.f : (g1 > 1.f) ? 1.f : g1;
-            fill = (1.f - p.p0) * (h0 - g0) + p.p0 * (h1 - g1);
-            h0 = g0; h1 = g1;
-          }
         }
-        float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
-        if (hlp) H += fill * cr;                 // band's own fundamental (unit phasor, real part)
+        const float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
         W = H + p.p1 * (cr - H);
       } else if (M == kWT) {
         const float ph = phs[k];
@@ -883,7 +799,7 @@ class Explorer : public Module {
         const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
         const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
         W = (v0 + p.p0 * (v1 - v0)) * (1.f / EXP_WT_I16_SCALE);
-        if (pkf > 0 && wlvf[k] != lv) {          // K5 CCW: version moved -> linear crossfade old -> new
+        if (pkf > 0 && wlvf[k] != lv) {          // dampener: version moved -> linear crossfade old -> new
           const int16_t* u0 = explorer_wt[p.zone][p.n0][wlvf[k]];
           const int16_t* u1 = explorer_wt[p.zone][p.n0 + 1][wlvf[k]];
           const float w0 = (float)u0[j0] + fr * (float)(u0[j1] - u0[j0]);
@@ -895,13 +811,12 @@ class Explorer : public Module {
         const float ph = phs[k];
         const int S = bsc[k];
         W = BitStep(p, ph, S);
-        if (pkf > 0 && bsf[k] != S) {            // K5 CCW: step count moved -> linear crossfade old -> new
+        if (pkf > 0 && bsf[k] != S) {            // dampener: step count moved -> linear crossfade old -> new
           const float Wf = BitStep(p, ph, bsf[k]);
           W = Wf + pkg * (W - Wf);
         }
       }
-      if (btw) acc += (played ? wmid_[k] : 1.f) * a * W * btw[k];   // K5 band tilt on the band output
-      else     acc += (played ? wmid_[k] : 1.f) * a * W;            // noon: exactly as before
+      acc += (played ? wmid_[k] : 1.f) * a * W;
     }
     return acc;
   }
@@ -923,18 +838,14 @@ class Explorer : public Module {
 
   // Clear one model's state in slot o (on model entry).
   void ResetModelState(int m, int o) {
-    const int au = (m == kRFM) ? kAccRFM : (m == kRFMC) ? kAccRFMC : -1;
     const int ru = (m == kFSH) ? kRotFSH : (m == kISH) ? kRotISH : -1;
     for (int k = 0; k < kBands; k++) {
-      if (au >= 0)    { pm_[au][o][k] = 0.f; pp_[au][o][k] = -1.f; }
-      if (m == kFBFM) { m1_[o][k] = m2_[o][k] = 0.f; }
-      if (ru >= 0)    th_[ru][o][k] = 0.f;
+      if (m == kFM) { pm_[o][k] = 0.f; pp_[o][k] = -1.f; m1_[o][k] = m2_[o][k] = 0.f; }
+      if (ru >= 0)  th_[ru][o][k] = 0.f;
     }
   }
   void ResetSlotState(int o) {
-    ResetModelState(kRFM, o);
-    ResetModelState(kRFMC, o);
-    ResetModelState(kFBFM, o);
+    ResetModelState(kFM, o);
     ResetModelState(kFSH, o);
     ResetModelState(kISH, o);
   }
@@ -1208,8 +1119,8 @@ class Explorer : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int oct, int model, int zone, float a, float b, float k4t, float envg,
-                    float fol, float btt) {
+                    int sw1, int oct, int model, int zone, float a, float b, float fc, float envg,
+                    float fol) {
     using namespace explorer_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -1218,11 +1129,9 @@ class Explorer : public Module {
     s.sw1 = sw1; s.sw2 = oct;
     s.model = model; s.zone = zone;
     s.a = a; s.b = b;
-    s.k4t = k4t; s.envg = envg;
+    s.fc = fc;
+    s.envg = envg;
     s.fol = fol;
-    s.btt = btt;
-    s.bts = BTiltSlope(btt);
-    s.hfc = HlpFc(btt);
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1254,7 +1163,8 @@ class Explorer : public Module {
   static inline void SinCos(float theta, float& s, float& c) {
     using namespace explorer_k;
     static_assert((EXP_SIN_SIZE & (EXP_SIN_SIZE - 1)) == 0, "power of two");
-    static_assert(EXP_FM_INDEX_MAX + EXP_FBFM_FB_MAX < 90.f, "SinCos offset covers |theta| < ~100 rad");
+    static_assert(EXP_FM_INDEX * (1.f + EXP_FOLLOW_FM_DEPTH) * (1.f + EXP_FOLLOW_FM_DEPTH) + EXP_FBFM_FB_MAX < 90.f,
+                  "SinCos offset covers |theta| < ~100 rad");
     constexpr int   kMask = EXP_SIN_SIZE - 1;
     constexpr float kScale = (float)EXP_SIN_SIZE / 6.283185307f;
     const float x  = theta * kScale + 16384.f;
@@ -1330,16 +1240,14 @@ class Explorer : public Module {
   float wmid_[kBands];             // played-slot fitted output weight (armitage ARM_ALIGN)
   float fp_[kSlots][kBands];       // f'_k per slot (up / played / down)
   float ifp_[kSlots][kBands];      // 1 / f'_k
-  uint8_t wtlvl_[kSlots][kBands];  // wavetable band-limit level per band (static: EXP_WT_FMAX)
-  uint8_t btst_[kSlots][kBands];   // BITTAB steps per band (16 / 8 / 4 / 2) (static: EXP_FOLD_LIMIT_HZ)
-  uint8_t wtlv_[kSlots][kBands], wtlvf_[kSlots][kBands];   // K5: wavetable level in use / before the last re-pick
-  uint8_t btsc_[kSlots][kBands], btsf_[kSlots][kBands];    // K5: BITTAB steps in use / before the last re-pick
+  uint8_t wtlv_[kSlots][kBands], wtlvf_[kSlots][kBands];   // dampener: wavetable level in use / before the last re-pick
+  uint8_t btsc_[kSlots][kBands], btsf_[kSlots][kBands];    // dampener: BITTAB steps in use / before the last re-pick
   uint8_t wt_lv_of_h_[explorer_k::EXP_WT_HMAX + 1];        // largest version index with LEVEL_H <= h
   float bt_all_[explorer_k::EXP_BT_WAVES][explorer_k::EXP_BT_STEPS] = {};   // BITTAB waveforms
 
   // Model state per slot and band
-  float pm_[kAccN][kSlots][kBands], pp_[kAccN][kSlots][kBands];   // modulator phase, previous band phase (-1 = fresh)
-  float m1_[kSlots][kBands], m2_[kSlots][kBands];   // feedback FM: last two modulator outputs
+  float pm_[kSlots][kBands], pp_[kSlots][kBands];   // FM: modulator phase, previous band phase (-1 = fresh)
+  float m1_[kSlots][kBands], m2_[kSlots][kBands];   // FM: last two modulator outputs (self-feedback)
   float th_[kRotN][kSlots][kBands];                  // frequency / interval shift: rotation phase (cycles)
   bool  slot_on_[kSlots] = { false, false, false };   // slot computed last sample
 
@@ -1353,7 +1261,7 @@ class Explorer : public Module {
   float mg_ = 1.f;                 // new-model gain during a fade
   float k2s_ = 0.f, k3s_ = 0.f;                       // smoothed knobs
   volatile float k2_t_ = 0.f, k3_t_ = 0.f;           // targets
-  volatile int rfmc_i_t_ = 0, ish_t_ = 0;   // snapped items: curated ratio index, interval semitones
+  volatile int rfmc_i_t_ = 0, ish_t_ = 0;   // snapped items: FM ratio index, interval semitones
   DSlide rfmc_, ish_;              // their slid values
   int   disc_len_ = 8;             // EXP_DISC_SLIDE_MS in 8 kHz samples
   float og_[3] = { 0.f, 1.f, 0.f };            // slot weights (up, played, down), slid
@@ -1367,20 +1275,12 @@ class Explorer : public Module {
   // UP: K4 FM index envelope (armitage's K2 FM envelope)
   float k4s_ = 0.5f;               // smoothed K4 (envelope t = 2 k4s_ - 1)
   volatile float k4_t_ = 0.5f;
-  // K5 band tilt
-  float k5s_ = 0.5f;               // smoothed K5 (t = 2 k5s_ - 1)
-  volatile float k5_t_ = 0.5f;
-  float bt_lnf_[kBands];           // ln f_k (analysed band centre, before SW2)
-  float bt_w_[kBands];             // CW per-band output weight 10^(dB_k / 20) (this block; valid while bt_on_)
-  float bt_t_ = 0.f;               // t the weights were computed for
-  bool  bt_on_ = false;            // false at t == 0: no multiply
-  float bt_lntop_ = 0.f;           // ln of the top band centre
-  // K5 CCW harmonic lowpass (per block, K5Update)
-  bool  hlp_on_ = false, hlp_was_ = false;   // CCW now / at the last K5Update
-  float hlp_fc_ = 0.f;             // fc (Hz), 0 off CCW
-  float hlp_lnr_ = 0.f;            // ln(HLP_FMIN / HLP_FMAX)
-  float hc_harm_ = 0.f, hc_fold_ = 0.f;   // min(EXP_HARM_FMAX, fc), min(EXP_FOLD_LIMIT_HZ, fc)
-  int   pk_fade_n_ = 0, pk_fade_len_ = 8; // discrete pick slide: samples left / length (EXP_BTILT_HLP_SLIDE_MS)
+  // K3 dampener (per block, DampUpdate)
+  float damp_k_ = -1.f;            // smoothed K3 the ceilings / picks were computed for
+  float damp_fc_ = 4000.f;         // fc (Hz)
+  float damp_lnr_ = 0.f;           // ln(DAMP_FMAX / DAMP_FMIN)
+  float hc_fold_ = 4000.f;         // min(EXP_FOLD_LIMIT_HZ, fc): L of the UP caps
+  int   pk_fade_n_ = 0, pk_fade_len_ = 8; // discrete pick slide: samples left / length (EXP_DAMP_SLIDE_MS)
   float pk_g_ = 1.f;               // new-pick weight this sample
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
