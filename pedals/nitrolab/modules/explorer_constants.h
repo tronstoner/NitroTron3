@@ -69,9 +69,10 @@ constexpr float EXP_WT_VOX_F[4][3]  = { { 700.f, 1220.f, 2600.f },    // a
                                         { 450.f,  800.f, 2830.f } };  // o
 constexpr float EXP_WT_VOX_BW[3]  = { 80.f, 90.f, 120.f };   // Hz; formant bandwidths
 constexpr float EXP_WT_VOX_A[3]   = { 1.f, 0.5f, 0.25f };    // formant amplitudes
-// Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle, cosine-interpolated (fully smooth).
+// Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle.
 // K2 STEPS through EXP_BT_WAVES waveforms (equal zones): the 16 LFSR patterns, then SQR n = 1 .. EXP_BT_SQR_N_MAX;
-// a step = EXP_MODEL_XFADE_MS crossfade, no blend. K3 unused.
+// a step = EXP_MODEL_XFADE_MS crossfade, no blend. K3 = step shape, continuous: CCW triangle (linear to the
+// next step) -> noon saw (ramps on rising steps only, falls as a hard edge) -> CW pulse (hold, hard steps).
 constexpr int      EXP_BT_STEPS     = 16;       // steps per band cycle (pattern length)
 constexpr int      EXP_BT_PATTERNS  = 16;       // LFSR tap sets (K2 first half)
 constexpr uint16_t EXP_BT_SEED      = 0xACE1u;  // fixed LFSR seed (every pattern starts here)

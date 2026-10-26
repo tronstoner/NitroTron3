@@ -63,12 +63,14 @@
 //   1 WAVETABLE  W = table(set, scan, level_k)(phi), linear interpolation in phase and between
 //                adjacent waves (scan = 3 K2); set = K3 zone (analog / PPG / vocal / noisy);
 //                level_k = largest band-limited version with H <= 4000 / f'_k (static per band, slot).
-//   2 BITTAB     16-step pattern v[0..15], one step per 1/16 of the band cycle, cosine-interpolated to
-//                the next step: W = v0 + e (v1 - v0), e = 0.5 (1 - cos pi f). K2 steps through 32
+//   2 BITTAB     16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
+//                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
+//                pulse = v0; K3 = shape: 0 -> 0.5 crossfades tri -> saw, 0.5 -> 1 saw -> pulse (linear,
+//                continuous; Ataraxic-style triangle / saw / pulse). K2 steps through 32
 //                waveforms (equal zones, 1 ms crossfade): 1..16 = LFSR patterns (+-1, 16-bit Fibonacci
 //                LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits), 17..32 = SQR
 //                v[j] = sq(j) cos(2 pi n j / 16), n = 1..16 (sampled at the step starts: n > 8 mirrors on
-//                the 16-step grid). K3 unused. Anti-fold: S_k steps (16 / 8 / 4 / 2, (S/2) f' <= L),
+//                the 16-step grid). Anti-fold: S_k steps (16 / 8 / 4 / 2, (S/2) f' <= L),
 //                pattern subsampled every 16 / S_k-th step.
 //  SW1 DOWN — harmonics & shift
 //   1 HARMONICS  H = (1 - fr) h_n0 cos(2 pi n0 phi) + fr h_n1 cos(2 pi n1 phi), n = 1 + 5 K2 = n0 + fr,
@@ -539,9 +541,14 @@ class Explorer : public Module {
         p.p0 = pos - (float)p.n0;
         p.a = pos; p.b = k3; break;
       }
-      default:                             // kBIT: bt = waveform zone (0..31); a = 1..32
+      default: {                           // kBIT: bt = waveform zone (0..31); a = 1..32;
+                                           // p0 / p1 / p2 = triangle / saw / pulse weights from K3
         p.bt = bt_all_[zone];
-        p.a = (float)(zone + 1); p.b = 0.f; break;
+        const float x = (k3 < 0.5f) ? 2.f * k3 : 2.f * k3 - 1.f;
+        if (k3 < 0.5f) { p.p0 = 1.f - x; p.p1 = x;       p.p2 = 0.f; }   // tri -> saw
+        else           { p.p0 = 0.f;     p.p1 = 1.f - x; p.p2 = x;   }   // saw -> pulse
+        p.a = (float)(zone + 1); p.b = k3; break;
+      }
     }
     return p;
   }
@@ -737,7 +744,7 @@ class Explorer : public Module {
         const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
         const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
         W = (v0 + p.p0 * (v1 - v0)) * (1.f / EXP_WT_I16_SCALE);
-      } else {                                   // kBIT: fully smooth (cosine interpolation)
+      } else {                                   // kBIT: step shape tri / saw / pulse (K3)
         const float ph = phs[k];
         const int S = btst_[o][k];
         const int stride = EXP_BT_STEPS / S;
@@ -747,7 +754,9 @@ class Explorer : public Module {
         const float f = xs - (float)j;
         const float v0 = p.bt[j * stride];
         const float v1 = p.bt[((j + 1 == S) ? 0 : j + 1) * stride];
-        W = v0 + 0.5f * (1.f - Cos01(0.5f * f)) * (v1 - v0);
+        const float tri = v0 + f * (v1 - v0);    // linear to the next step
+        const float saw = (v1 > v0) ? tri : v0;    // ramps on rising steps, hard edge on falling ones
+        W = p.p0 * tri + p.p1 * saw + p.p2 * v0;   // v0 = pulse (hold, hard steps)
       }
       acc += (played ? wmid_[k] : 1.f) * a * W;
     }
