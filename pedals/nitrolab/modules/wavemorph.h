@@ -14,6 +14,13 @@
 //        WM_OCT_XFADE_MS on a change (old -> new slot crossfade); a slot with weight 0 is not computed
 // wet  = interpolate(wet8) -> DC blocker -> K4 post filter -> soft clipper (ceiling 1.0) -> FS1 mute
 // No pitch tracking; nothing picks or decides per band.
+// K5 BAND TILT (2026-10-26, explorer's; LP / HP by weighting the bands, not a filter): t = 2 k5 - 1 (smoothed per
+//   8 kHz sample, lands exactly); per audio block bt_k from the smoothed t (expf per band, cached while t holds);
+//   each band's table output w_k a_k W_k is multiplied by bt_k in Shape before the band sum (every slot, both
+//   sides of a zone crossfade). f_k = analysed centre (before SW2), n = WM_BTILT_ORDER;
+//   CCW: fc = 1685.42 (WM_BTILT_LP_FMIN / 1685.42)^|t|, bt = 1 / sqrt(1 + (f_k / fc)^2n);
+//   CW:  fc = 25.38 (WM_BTILT_HP_FMAX / 25.38)^t,       bt = 1 / sqrt(1 + (fc / f_k)^2n)   (band 83 / 0 centres);
+//   bt_eff = 1 - m (1 - bt), m = min(|t| / WM_BTILT_FADE, 1). t == 0: no multiply (bit-identical). No makeup.
 //
 // CONTROL MAP
 //   K1  base wave     10 STEPPED equal zones (below); a zone change crossfades old -> new over
@@ -29,7 +36,8 @@
 //                     inside it. WM_FOLLOW_DEPTH = 0: bit-identical.
 //   K3  morph         m 0..1 (smoothed): position through the zone's waves / frames
 //   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (WM_FILT_STAGES: 1 = 12 dB/oct, 2 = 24 dB/oct; Q 0.707 per stage)
-//   K5  unused (not read; DIAG shows the raw value)
+//   K5  band tilt     CCW LP fc 1685 Hz -> 40 Hz | noon off (bit-identical) | CW HP fc 25 Hz -> 1000 Hz
+//                     (band weights 1 / sqrt(1 + x^4), all zones and slots; see K5 BAND TILT)
 //   K6  dry / wet     (shell)
 //   SW1 unused (not read)
 //   SW2 octave        UP = +1 octave, MID = as played, DOWN = -1 octave (one slot; crossfade WM_OCT_XFADE_MS)
@@ -130,6 +138,7 @@ class WaveMorph : public Module {
     for (int k = 0; k < kBands; k++) {
       const float f = armbands::ArmCenterFreq(k);
       bands_[k].Init(f, sr8_, armbands::ArmBandwidth(k));
+      bt_lnf_[k] = logf(f);                                // K5 band tilt: ln f_k (analysed centre)
       {                                                    // armitage ARM_ALIGN fitted weight (played slot)
         float fc = f;
         if (fc < WM_ALIGN_W_FLO) fc = WM_ALIGN_W_FLO;
@@ -157,6 +166,16 @@ class WaveMorph : public Module {
     zone_ = zone_t_ = zfrom_ = 0;
     k2s_ = k2_t_ = 0.5f;                         // K2 noon = envelope off
     k3s_ = k3_t_ = 0.f;
+    k5s_ = k5_t_ = 0.5f;                         // K5 noon = band tilt off
+    bt_t_ = 0.f;
+    bt_on_ = false;
+    {
+      const float fbot = armbands::ArmCenterFreq(0), ftop = armbands::ArmCenterFreq(kBands - 1);
+      bt_lnbot_ = logf(fbot);
+      bt_lntop_ = logf(ftop);
+      bt_lnhp_  = logf(WM_BTILT_HP_FMAX / fbot);
+      bt_lnlp_  = logf(WM_BTILT_LP_FMIN / ftop);
+    }
     // Onset detector (48 kHz, pre-decimator, explorer's) + K2 filter envelope (8 kHz).
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (WM_ONSET_ENV_MS * sr));
@@ -206,6 +225,7 @@ class WaveMorph : public Module {
     zone_t_ = zone;
     k2_t_ = k2;
     k3_t_ = k3;
+    k5_t_ = k5;                               // K5 band tilt
     ft_t_ = 2.f * k4 - 1.f;                   // K4 post filter t
     og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
     og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
@@ -216,7 +236,7 @@ class WaveMorph : public Module {
 
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
-      DiagControls(cs, led1, kv, oct, zone, fenv_.e, fol_f_);
+      DiagControls(cs, led1, kv, oct, zone, fenv_.e, fol_f_, 2.f * k5 - 1.f);
     }
   }
 
@@ -229,11 +249,18 @@ class WaveMorph : public Module {
     float ff;         // ... and the fraction toward f0 + 1
     float fe;         // K2 filter envelope e (-1..1)
     float fol;        // live follower f = min(follower, 1) at the snapshot (0..1)
+    float btt;        // K5 band tilt t = 2 k5 - 1 (raw knob)
+    float btfc;       // its fc (Hz), 0 at noon
     int   sw2;        // 0 UP (+1), 1 MID (-1), 2 DOWN (-2)
     bool  mute;
   };
   void Activate() override {
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
+  }
+  // K5 band tilt fc (Hz) at t: CCW LP f_top (LP_FMIN / f_top)^|t|, CW HP f_bot (HP_FMAX / f_bot)^t, 0 at noon.
+  float BTiltFc(float t) const {
+    if (t == 0.f) return 0.f;
+    return (t < 0.f) ? expf(bt_lntop_ - t * bt_lnlp_) : expf(bt_lnbot_ + t * bt_lnhp_);
   }
   bool DiagTake(DiagSnap& out) {
     if (diag_tap_pend_)  { out = diag_tap_;  diag_tap_pend_ = false;  return true; }
@@ -265,6 +292,7 @@ class WaveMorph : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     using namespace wavemorph_k;
     const float ca = ctrl_a_;
+    BTiltUpdate();                               // K5 band tilt: weights for this block (smoothed t)
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       for (size_t j = 0; j < kFactor; j++) {
         OnsetDetect(in[i + j]);                  // onset detector, 48 kHz |in|, pre-decimator
@@ -275,6 +303,8 @@ class WaveMorph : public Module {
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
       EnvUpdate();                               // filter envelope (consumes the 48 kHz onset flag)
       k3s_ += (k3_t_ - k3s_) * ca;
+      k5s_ += (k5_t_ - k5s_) * ca;              // K5 band tilt
+      if (fabsf(k5_t_ - k5s_) < WM_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: tilt fully off)
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
 
       // Zone change: start a crossfade (picked up when no fade is running).
@@ -385,6 +415,28 @@ class WaveMorph : public Module {
     if (fabsf(dir_t - fol_dir_) < WM_CTRL_SNAP) fol_dir_ = dir_t;
   }
 
+  // K5 band tilt weights bt_w_[k] from the smoothed t = 2 k5s_ - 1, once per audio block (84 expf only when t
+  // moved). t == 0: off (Shape skips the multiply). (f / fc)^2n = exp(2n (ln f - ln fc)).
+  void BTiltUpdate() {
+    using namespace wavemorph_k;
+    const float t = 2.f * k5s_ - 1.f;
+    if (t == bt_t_) return;                      // unchanged: weights hold
+    bt_t_ = t;
+    if (t == 0.f) { bt_on_ = false; return; }
+    const float at = fabsf(t);
+    float m = at * (1.f / WM_BTILT_FADE);
+    if (m > 1.f) m = 1.f;
+    constexpr float n2 = 2.f * (float)WM_BTILT_ORDER;
+    const bool lp = (t < 0.f);
+    const float lnfc = lp ? bt_lntop_ + at * bt_lnlp_ : bt_lnbot_ + at * bt_lnhp_;
+    for (int k = 0; k < kBands; k++) {
+      const float x = expf(n2 * (lp ? bt_lnf_[k] - lnfc : lnfc - bt_lnf_[k]));
+      const float w = 1.f / sqrtf(1.f + x);
+      bt_w_[k] = 1.f - m * (1.f - w);
+    }
+    bt_on_ = true;
+  }
+
   // One 8 kHz sample of slot o: derive u_k / phi_k, return sum_k w_k a_k W_k (zone crossfade inside).
   float RunSlot(int o, bool fading) {
     if (!slot_on_[o]) { ResetSlotState(o); slot_on_[o] = true; }
@@ -433,6 +485,7 @@ class WaveMorph : public Module {
     const float* __restrict phs = ph_;
     const uint8_t* __restrict lv = lvl_[o];
     const bool played = (o == kSP);
+    const float* __restrict btw = bt_on_ ? bt_w_ : nullptr;   // K5 band tilt (nullptr at noon: no multiply)
     int f0;
     float ff;
     MorphPos(z, morph_, f0, ff);
@@ -452,7 +505,8 @@ class WaveMorph : public Module {
       const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
       const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
       const float W = (v0 + ff * (v1 - v0)) * kScale;
-      acc += (played ? wmid_[k] : 1.f) * a * W;
+      if (btw) acc += (played ? wmid_[k] : 1.f) * a * W * btw[k];   // K5 band tilt on the band output
+      else     acc += (played ? wmid_[k] : 1.f) * a * W;            // noon: exactly as before
     }
     return acc;
   }
@@ -849,7 +903,7 @@ class WaveMorph : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int oct, int zone, float fe, float fol) {
+                    int oct, int zone, float fe, float fol, float btt) {
     using namespace wavemorph_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -859,6 +913,8 @@ class WaveMorph : public Module {
     MorphPos(zone, kv[2], s.f0, s.ff);
     s.fe = fe;
     s.fol = fol;
+    s.btt = btt;
+    s.btfc = BTiltFc(btt);
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -924,6 +980,15 @@ class WaveMorph : public Module {
   int   zoff_[wavemorph_k::WM_ZONES] = {};   // packed frame offset per zone (Init)
   float k2s_ = 0.5f, k3s_ = 0.f;                      // smoothed knobs
   volatile float k2_t_ = 0.5f, k3_t_ = 0.f;          // targets
+  // K5 band tilt
+  float k5s_ = 0.5f;               // smoothed K5 (t = 2 k5s_ - 1)
+  volatile float k5_t_ = 0.5f;
+  float bt_lnf_[kBands];           // ln f_k (analysed band centre, before SW2)
+  float bt_w_[kBands];             // per-band output weight bt_eff (this block; valid while bt_on_)
+  float bt_t_ = 0.f;               // t the weights were computed for
+  bool  bt_on_ = false;            // false at t == 0: no multiply
+  float bt_lnbot_ = 0.f, bt_lntop_ = 0.f;   // ln of the bottom / top band centre
+  float bt_lnhp_ = 0.f, bt_lnlp_ = 0.f;     // ln(HP_FMAX / f_bot), ln(LP_FMIN / f_top)
   float og_[3] = { 0.f, 1.f, 0.f };            // slot weights (up, played, down), slid
   volatile float og_t_[3] = { 0.f, 1.f, 0.f };
   float oct_step_ = 0.f;

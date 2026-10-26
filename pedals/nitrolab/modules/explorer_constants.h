@@ -113,6 +113,18 @@ constexpr float EXP_FILT_FADE      = 0.03f;    // |t| over which bypass crossfad
 constexpr float EXP_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass (= ARM_FILT_SNAP)
 constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide (= ARM_MUTE_SLIDE_MS as armitage uses it)
 
+// --- K5 = band tilt (2026-10-26): LP / HP by weighting each band's OUTPUT, not a filter -----------
+// t = 2 k5 - 1 (smoothed as K2..K4, lands exactly); weights w_k per audio block from the smoothed t, on each
+// band's shaped output (all slots, all models, model crossfades) before the band sum. f_k = the band's
+// analysed centre (before SW2's octave), n = ORDER. CCW: fc = f_top (LP_FMIN / f_top)^|t|,
+// w = 1 / sqrt(1 + (f_k / fc)^2n); CW: fc = f_bot (HP_FMAX / f_bot)^t, w = 1 / sqrt(1 + (fc / f_k)^2n)
+// (f_bot / f_top = the engine's band 0 / 83 centres, 25.38 / 1685.42 Hz). Off noon w_eff = 1 - m (1 - w),
+// m = min(|t| / FADE, 1). t == 0: no multiply (bit-identical). No makeup gain.
+constexpr float EXP_BTILT_LP_FMIN  = 40.f;     // Hz; LP fc at K5 full CCW (from the top band centre)
+constexpr float EXP_BTILT_HP_FMAX  = 1000.f;   // Hz; HP fc at K5 full CW (from the bottom band centre)
+constexpr int   EXP_BTILT_ORDER    = 2;        // n: Butterworth-shaped magnitude 1 / sqrt(1 + x^2n) (12 dB/oct at n = 2)
+constexpr float EXP_BTILT_FADE     = 0.03f;    // |t| over which the weights fade in from 1 off noon
+
 // --- K4 on SW1 UP = triggered envelope on the K3 FM index (copied 1:1 from armitage's K2 FM envelope) ---
 // Onset detector per 48 kHz input sample, before the decimator (armitage OnsetDetect / ARM_ONSET_*):
 //   fast meter (ENV_MS) -> gate meter (up at once, falls with FALL_MS) -> slow baseline (SLOW_COEF);
@@ -147,7 +159,7 @@ constexpr float    EXP_FOLLOW_FM_DEPTH     = 0.15f;    // added to the FM gain g
 constexpr float    EXP_FOLLOW_GATE_MS      = 1.0f;     // ms; one-pole tau of the on gate at a K4 noon crossing (= ARM_FOLLOW_GATE_MS)
 
 // --- Control smoothing / snapping ----------------------------------------------------
-constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
+constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t), K5 (band tilt) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
 constexpr float EXP_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this
 
 // --- Band sum: phase alignment + gain staging (copied values from armitage_constants.h, ARM_ALIGN = true) ---

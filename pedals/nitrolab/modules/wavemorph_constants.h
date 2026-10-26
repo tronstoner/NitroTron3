@@ -176,8 +176,19 @@ constexpr float    WM_ONSET_RISE          = 1.5f;     // (= EXP_ONSET_RISE)
 constexpr float    WM_ONSET_FLOOR         = 0.0021f;  // (= EXP_ONSET_FLOOR)
 constexpr uint32_t WM_ONSET_REFRACTORY_MS = 100;      // (= EXP_ONSET_REFRACTORY_MS)
 
+// --- K5 = band tilt (2026-10-26, = explorer's EXP_BTILT_*): LP / HP by weighting each band's OUTPUT, not a filter ---
+// t = 2 k5 - 1 (smoothed as K2, lands exactly); weights w_k per audio block from the smoothed t, on each band's
+// table output (all slots, zone crossfades) before the band sum. f_k = the band's analysed centre (before SW2's
+// octave), n = ORDER. CCW: fc = f_top (LP_FMIN / f_top)^|t|, w = 1 / sqrt(1 + (f_k / fc)^2n); CW: fc = f_bot
+// (HP_FMAX / f_bot)^t, w = 1 / sqrt(1 + (fc / f_k)^2n) (f_bot / f_top = band 0 / 83 centres, 25.38 / 1685.42 Hz).
+// Off noon w_eff = 1 - m (1 - w), m = min(|t| / FADE, 1). t == 0: no multiply (bit-identical). No makeup gain.
+constexpr float WM_BTILT_LP_FMIN  = 40.f;     // Hz; LP fc at K5 full CCW (from the top band centre)
+constexpr float WM_BTILT_HP_FMAX  = 1000.f;   // Hz; HP fc at K5 full CW (from the bottom band centre)
+constexpr int   WM_BTILT_ORDER    = 2;        // n: magnitude 1 / sqrt(1 + x^2n) (12 dB/oct at n = 2)
+constexpr float WM_BTILT_FADE     = 0.03f;    // |t| over which the weights fade in from 1 off noon
+
 // --- Control smoothing / snapping ----------------------------------------------------------
-constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3 at the 8 kHz rate
+constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K5 (band tilt) at the 8 kHz rate
 constexpr float WM_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this
 
 // --- Band sum: alignment + gain staging (copied values from explorer_constants.h) -------------

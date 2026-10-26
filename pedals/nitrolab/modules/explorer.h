@@ -40,6 +40,14 @@
 //   (crossfade over |t| < EXP_FILT_FADE); CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz, cutoff
 //   linear in octaves (curve 1); LP <-> HP: fades out, swaps type from cleared state, fades in.
 //
+// K5 BAND TILT (2026-10-26; LP / HP by weighting the bands, not a filter): t = 2 k5 - 1 (smoothed per 8 kHz
+//   sample, lands exactly); per audio block w_k from the smoothed t (expf per band, cached while t holds);
+//   each band's shaped output w_k a_k W_k is multiplied by bt_k in ShapeK before the band sum (every slot, every
+//   model, both sides of a model crossfade). f_k = analysed centre (before SW2), n = EXP_BTILT_ORDER;
+//   CCW: fc = 1685.42 (EXP_BTILT_LP_FMIN / 1685.42)^|t|, bt = 1 / sqrt(1 + (f_k / fc)^2n);
+//   CW:  fc = 25.38 (EXP_BTILT_HP_FMAX / 25.38)^t,       bt = 1 / sqrt(1 + (fc / f_k)^2n)   (band 83 / 0 centres);
+//   bt_eff = 1 - m (1 - bt), m = min(|t| / EXP_BTILT_FADE, 1). t == 0: no multiply (bit-identical). No makeup.
+//
 // DISCRETE VALUES are stepped on the knob (snap to the item): items that change the waveform
 // (cross-band partner, bit-table waveform, wavetable set) crossfade old -> new over
 // EXP_MODEL_XFADE_MS at the switch moment; snapped numbers inside a running oscillator (curated
@@ -95,14 +103,15 @@
 //       SW1 UP: FM index envelope    noon off | CCW decay K3 -> 0 per pluck | CW rise 0 -> K3 per pluck
 //                                    (36 s just off noon -> 450 ms at the ends); no post filter
 //                                    + live follower off noon: k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH f)
-//   K5  unused       (not read; DIAG shows the raw value)
+//   K5  band tilt    CCW LP fc 1685 Hz -> 40 Hz | noon off (bit-identical) | CW HP fc 25 Hz -> 1000 Hz
+//                    (band weights 1 / sqrt(1 + x^4), all models and slots; see K5 BAND TILT)
 //   K6  dry / wet    (shell)
 //   SW1 family       UP = FM, MID = tables (wavetable, bit table), DOWN = harmonics & shift
 //   SW2 octave       UP = +1 oct, MID = as played, DOWN = -1 oct (one slot, crossfade EXP_OCT_XFADE_MS)
 //   FS1 wet mute     toggle, LED2 on while muted; LED1 on. FS2 unused.
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 //
-// K2, K3, K4 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values
+// K2, K3, K4, K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values
 // are computed per 8 kHz sample from the smoothed knobs; stepped items from the raw knob.
 //
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
@@ -183,6 +192,7 @@ class Explorer : public Module {
     for (int k = 0; k < kBands; k++) {
       const float f = armbands::ArmCenterFreq(k);
       bands_[k].Init(f, sr8_, armbands::ArmBandwidth(k));
+      bt_lnf_[k] = logf(f);                                // K5 band tilt: ln f_k (analysed centre)
       {                                                    // armitage ARM_ALIGN fitted weight (played slot)
         float fc = f;
         if (fc < EXP_ALIGN_W_FLO) fc = EXP_ALIGN_W_FLO;
@@ -220,6 +230,16 @@ class Explorer : public Module {
     k2s_ = k2_t_ = 0.f;
     k3s_ = k3_t_ = 0.f;
     k4s_ = k4_t_ = 0.5f;                         // K4 noon = envelope off
+    k5s_ = k5_t_ = 0.5f;                         // K5 noon = band tilt off
+    bt_t_ = 0.f;
+    bt_on_ = false;
+    {
+      const float fbot = armbands::ArmCenterFreq(0), ftop = armbands::ArmCenterFreq(kBands - 1);
+      bt_lnbot_ = logf(fbot);
+      bt_lntop_ = logf(ftop);
+      bt_lnhp_  = logf(EXP_BTILT_HP_FMAX / fbot);
+      bt_lnlp_  = logf(EXP_BTILT_LP_FMIN / ftop);
+    }
     // UP: onset detector (48 kHz, pre-decimator) + FM index envelope (8 kHz), armitage's.
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (EXP_ONSET_ENV_MS * sr));
@@ -284,6 +304,7 @@ class Explorer : public Module {
     k2_t_ = k2;
     k3_t_ = k3;
     k4_t_ = k4;                                                       // UP: FM index envelope knob
+    k5_t_ = k5;                                                       // K5 band tilt
     ft_t_ = 2.f * k4 - 1.f;                                           // MID / DOWN: K4 post filter t
     filt_off_ = (fam == kUp);                                         // UP: no post filter
     og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
@@ -297,7 +318,8 @@ class Explorer : public Module {
       const float kv[5] = { k1, k2, k3, k4, k5 };
       const float disc = (model == kRFMC) ? EXP_FM_RATIOS[rfmc_i_t_] : (float)ish_t_;
       const Params p = Derive(model, zone, k2, k3, disc);
-      DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, 2.f * k4 - 1.f, env_fm_.g, fol_f_);
+      DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, 2.f * k4 - 1.f, env_fm_.g, fol_f_,
+                   2.f * k5 - 1.f);
     }
   }
 
@@ -312,10 +334,17 @@ class Explorer : public Module {
     float k4t;        // K4 t = 2 k4 - 1: SW1 UP = FM envelope t, else post filter t
     float envg;       // SW1 UP: FM envelope gain g (0..1) at the snapshot
     float fol;        // live follower f = min(follower, 1) at the snapshot (0..1)
+    float btt;        // K5 band tilt t = 2 k5 - 1 (raw knob)
+    float btfc;       // its fc (Hz), 0 at noon
     bool  mute;
   };
   void Activate() override {
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
+  }
+  // K5 band tilt fc (Hz) at t: CCW LP f_top (LP_FMIN / f_top)^|t|, CW HP f_bot (HP_FMAX / f_bot)^t, 0 at noon.
+  float BTiltFc(float t) const {
+    if (t == 0.f) return 0.f;
+    return (t < 0.f) ? expf(bt_lntop_ - t * bt_lnlp_) : expf(bt_lnbot_ + t * bt_lnhp_);
   }
   bool DiagTake(DiagSnap& out) {
     if (diag_tap_pend_)  { out = diag_tap_;  diag_tap_pend_ = false;  return true; }
@@ -338,6 +367,7 @@ class Explorer : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     using namespace explorer_k;
     const float ca = ctrl_a_;
+    BTiltUpdate();                               // K5 band tilt: weights for this block (smoothed t)
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       for (size_t j = 0; j < kFactor; j++) {
         OnsetDetect(in[i + j]);                  // onset detector, 48 kHz |in|, pre-decimator
@@ -348,6 +378,8 @@ class Explorer : public Module {
       k3s_ += (k3_t_ - k3s_) * ca;
       k4s_ += (k4_t_ - k4s_) * ca;              // UP: FM envelope knob
       if (fabsf(k4_t_ - k4s_) < EXP_CTRL_SNAP) k4s_ = k4_t_;   // land exactly (noon: envelope fully off)
+      k5s_ += (k5_t_ - k5s_) * ca;              // K5 band tilt
+      if (fabsf(k5_t_ - k5s_) < EXP_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: tilt fully off)
       EnvUpdate();                               // UP: FM index envelope (consumes the 48 kHz onset flag)
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
       rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
@@ -495,6 +527,28 @@ class Explorer : public Module {
     const float on_t = (2.f * k4s_ - 1.f != 0.f) ? 1.f : 0.f;
     fol_on_ += fol_gate_a_ * (on_t - fol_on_);
     if (fabsf(on_t - fol_on_) < EXP_CTRL_SNAP) fol_on_ = on_t;
+  }
+
+  // K5 band tilt weights bt_w_[k] from the smoothed t = 2 k5s_ - 1, once per audio block (84 expf only when t
+  // moved). t == 0: off (ShapeK skips the multiply). (f / fc)^2n = exp(2n (ln f - ln fc)).
+  void BTiltUpdate() {
+    using namespace explorer_k;
+    const float t = 2.f * k5s_ - 1.f;
+    if (t == bt_t_) return;                      // unchanged: weights hold
+    bt_t_ = t;
+    if (t == 0.f) { bt_on_ = false; return; }
+    const float at = fabsf(t);
+    float m = at * (1.f / EXP_BTILT_FADE);
+    if (m > 1.f) m = 1.f;
+    constexpr float n2 = 2.f * (float)EXP_BTILT_ORDER;
+    const bool lp = (t < 0.f);
+    const float lnfc = lp ? bt_lntop_ + at * bt_lnlp_ : bt_lnbot_ + at * bt_lnhp_;
+    for (int k = 0; k < kBands; k++) {
+      const float x = expf(n2 * (lp ? bt_lnf_[k] - lnfc : lnfc - bt_lnf_[k]));
+      const float w = 1.f / sqrtf(1.f + x);
+      bt_w_[k] = 1.f - m * (1.f - w);
+    }
+    bt_on_ = true;
   }
 
   static int ZoneOf(int model, float k2, float k3) {
@@ -652,6 +706,7 @@ class Explorer : public Module {
     const float* __restrict ifp = ifp_[o];
     const float* __restrict phs = ph_;
     const bool played = (o == kSP);
+    const float* __restrict btw = bt_on_ ? bt_w_ : nullptr;   // K5 band tilt (nullptr at noon: no multiply)
     constexpr int au = (M == kRFMC) ? kAccRFMC : kAccRFM;
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
     float acc = 0.f;
@@ -754,7 +809,8 @@ class Explorer : public Module {
         const float saw = (v1 > v0) ? tri : v0;    // ramps on rising steps, hard edge on falling ones
         W = p.p0 * tri + p.p1 * saw + p.p2 * v0;   // v0 = pulse (hold, hard steps)
       }
-      acc += (played ? wmid_[k] : 1.f) * a * W;
+      if (btw) acc += (played ? wmid_[k] : 1.f) * a * W * btw[k];   // K5 band tilt on the band output
+      else     acc += (played ? wmid_[k] : 1.f) * a * W;            // noon: exactly as before
     }
     return acc;
   }
@@ -1047,7 +1103,7 @@ class Explorer : public Module {
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
                     int sw1, int oct, int model, int zone, float a, float b, float k4t, float envg,
-                    float fol) {
+                    float fol, float btt) {
     using namespace explorer_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -1058,6 +1114,8 @@ class Explorer : public Module {
     s.a = a; s.b = b;
     s.k4t = k4t; s.envg = envg;
     s.fol = fol;
+    s.btt = btt;
+    s.btfc = BTiltFc(btt);
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1199,6 +1257,15 @@ class Explorer : public Module {
   // UP: K4 FM index envelope (armitage's K2 FM envelope)
   float k4s_ = 0.5f;               // smoothed K4 (envelope t = 2 k4s_ - 1)
   volatile float k4_t_ = 0.5f;
+  // K5 band tilt
+  float k5s_ = 0.5f;               // smoothed K5 (t = 2 k5s_ - 1)
+  volatile float k5_t_ = 0.5f;
+  float bt_lnf_[kBands];           // ln f_k (analysed band centre, before SW2)
+  float bt_w_[kBands];             // per-band output weight bt_eff (this block; valid while bt_on_)
+  float bt_t_ = 0.f;               // t the weights were computed for
+  bool  bt_on_ = false;            // false at t == 0: no multiply
+  float bt_lnbot_ = 0.f, bt_lntop_ = 0.f;   // ln of the bottom / top band centre
+  float bt_lnhp_ = 0.f, bt_lnlp_ = 0.f;     // ln(HP_FMAX / f_bot), ln(LP_FMIN / f_top)
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)

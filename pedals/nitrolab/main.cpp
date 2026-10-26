@@ -14,10 +14,11 @@
 // SW3 MIDDLE = explorer   (sound-exploration models on a copy of armitage's band
 //                          engine — see modules/explorer.h; SW1 = family, K1 = model,
 //                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index envelope),
-//                          SW2 = octave up / played / down; K5 unused)
+//                          SW2 = octave up / played / down; K5 = band tilt LP | noon off | HP)
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
 //                          modules/wavemorph.h; K1 = base wave (10 stepped zones), K2 = K4 filter
-//                          envelope, K3 = morph, K4 = post filter, SW2 = octave up / played / down; K5 unused)
+//                          envelope, K3 = morph, K4 = post filter, SW2 = octave up / played / down;
+//                          K5 = band tilt LP | noon off | HP)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -194,31 +195,34 @@ int main() {
                           (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (diag_stage == 2) {
-        // explorer, second half: model (+ zone), sweep A / B (derived values), mute, cpu
+        // explorer, second half: model (+ zone), sweep A / B (derived values), K5 band tilt t / fc, mute, cpu
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const char* zn = Explorer::ZoneName(d.model, d.zone);
         // K4: SW1 UP = FM index envelope (t, gain g), MID / DOWN = post filter t
         if (d.sw1 == 0)
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F " fol" D2F " mute %d cpu %u%%",
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F " fol" D2F " tilt t" D2F " fc %u"
+                            " mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
-                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), D2V(d.fol), d.mute ? 1 : 0,
+                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), D2V(d.fol),
+                            D2SV(d.btt), (unsigned)(d.btfc + 0.5f), d.mute ? 1 : 0,
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         else
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " filt t" D2F " mute %d cpu %u%%",
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " filt t" D2F " tilt t" D2F " fc %u mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
-                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), d.mute ? 1 : 0,
-                            (unsigned)(cpu_pk * 100.f + 0.5f));
+                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2SV(d.btt), (unsigned)(d.btfc + 0.5f),
+                            d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (diag_stage == 3) {
-        // wavemorph, second half: K2 filter envelope e, octave, mute, cpu
+        // wavemorph, second half: K2 filter envelope e, follower, K5 band tilt t / fc, octave, mute, cpu
         static const char* const oct_name[3] = { "up", "played", "down" };
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("fenv e" D2F " fol" D2F " oct %s mute %d cpu %u%%",
-                          D2SV(d.fe), D2V(d.fol), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+        hw.seed.PrintLine("fenv e" D2F " fol" D2F " tilt t" D2F " fc %u oct %s mute %d cpu %u%%",
+                          D2SV(d.fe), D2V(d.fol), D2SV(d.btt), (unsigned)(d.btfc + 0.5f),
+                          oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
                           d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {
