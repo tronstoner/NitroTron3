@@ -93,7 +93,7 @@ constexpr float WM_ROUGH_Q[WM_CORNERS] = { 0.f, 0.5f, 0.75f, 1.f };     // rough
 // CW: each onset g = 0 -> rises to 1, holds 1. Before the first onset: CCW g = 1, CW g = 0.
 constexpr float WM_ENV_PAD          = 0.08f;   // t units: k2 in [0.46, 0.54] = 8 % of the knob travel around noon
 constexpr float WM_ENV_TAU_SLOW_S   = 4.0f;    // s (= EXP_ENV_TAU_SLOW_S)
-constexpr float WM_ENV_TAU_FAST_S   = 0.05f;   // s (= EXP_ENV_TAU_FAST_S)
+constexpr float WM_ENV_TAU_FAST_S   = 0.0167f; // s (2026-10-26: 0.05 -> 0.0167, fastest travel at the knob ends 450 -> 150 ms)
 constexpr float WM_ENV_TRAVEL_TAUS  = 3.9f;    // (= EXP_ENV_TRAVEL_TAUS)
 constexpr float WM_ENV_TIME_RATIO   = 3.0f;    // (= EXP_ENV_FM_TIME_RATIO)
 constexpr float WM_ENV_DECAY_RATIO  = 3.0f;    // (= EXP_ENV_FM_DECAY_RATIO)
