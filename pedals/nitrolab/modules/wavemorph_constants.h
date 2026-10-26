@@ -121,7 +121,7 @@ constexpr float WM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW
 constexpr float WM_FILT_FC_MIN    = 10.f;     // Hz; stability floor on fc
 constexpr float WM_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling on fc
 constexpr float WM_FILT_CURVE     = 1.0f;     // |t| exponent
-constexpr float WM_FILT_Q         = 1.1f;     // per-stage Q, both stages, all zones (incl. the zone 6 / 7 filter envelope): slightly wet (= ARM_FILT_Q; was 0.707 flat)
+constexpr float WM_FILT_Q         = 0.707f;   // per-stage Q, both stages, all zones (incl. the zone 6 / 7 filter envelope): flat (2026-10-26: 1.1 tried, coloured too much)
 constexpr float WM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t, per block
 constexpr float WM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float WM_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass
