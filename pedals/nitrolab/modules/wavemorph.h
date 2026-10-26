@@ -159,14 +159,21 @@ class WaveMorph : public Module {
     on_refr_len_ = (int)((float)WM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
-    // Spectral-flux onset detector (8 kHz band rate).
-    for (int k = 0; k < kBands; k++) flux_m_[k] = 0.f;
-    flux_mean_ = 0.f;
-    flux_a_  = 1.f - expf(-1000.f / (WM_ONSET_FLUX_SMOOTH_MS * sr8_));
-    flux_ma_ = 1.f - expf(-1000.f / (WM_ONSET_FLUX_MEAN_MS * sr8_));
-    flux_refr_ = 0;
-    flux_refr_len_ = (int)(WM_ONSET_FLUX_REFRACTORY_MS * 0.001f * sr8_ + 0.5f);
-    flux_ratio_pk_ = 0.f;
+    // HF transient onset detector (48 kHz input, MODE 1).
+    for (int b = 0; b < WM_ONSET_HF_BANDS; b++) {
+      const float fc = WM_ONSET_HF_F0 * (float)(1 << b);
+      const float w = 6.283185307f * fc / sr, al = sinf(w) / (2.f * WM_ONSET_HF_Q), a0 = 1.f + al;
+      hf_b0_[b] = al / a0; hf_a1_[b] = -2.f * cosf(w) / a0; hf_a2_[b] = (1.f - al) / a0;   // RBJ BPF (b1 = 0, b2 = -b0)
+      hf_z1_[b] = hf_z2_[b] = 0.f;
+      hf_env_[b] = 0.f;
+      for (int l = 0; l < WM_ONSET_HF_LAG; l++) hf_ref_[l][b] = logf(WM_ONSET_HF_E0);
+    }
+    hf_ea_ = 1.f - expf(-1000.f / (WM_ONSET_HF_ENV_MS * sr));
+    hf_hop_ = (int)(WM_ONSET_HF_HOP_MS * 0.001f * sr + 0.5f);
+    if (hf_hop_ < 1) hf_hop_ = 1;
+    hf_refr_len_ = (int)(WM_ONSET_HF_REFRACTORY_MS / WM_ONSET_HF_HOP_MS + 0.5f);
+    hf_cnt_ = 0; hf_frames_ = 0; hf_rp_ = 0; hf_hp_ = 0; hf_sum_ = 0.f; hf_refr_ = 0; hf_sf_pk_ = 0.f;
+    for (int j = 0; j < kHfHist; j++) hf_sf_[j] = 0.f;
     on_count_ = 0;
     fenv_.Reset();
     ln_ftau_ratio_ = logf(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S);
@@ -262,8 +269,10 @@ class WaveMorph : public Module {
     using namespace wavemorph_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      if (WM_ONSET_MODE == 0)                   // level detector only when selected (MODE 1: flux in EnvUpdate)
-        for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
+      for (size_t j = 0; j < kFactor; j++) {             // onset detector, 48 kHz |in| (MODE 0 level / 1 HF transient)
+        if (WM_ONSET_MODE == 0) OnsetDetect(in[i + j]);
+        else                      HfOnset(in[i + j]);
+      }
       const float d = dec_(in + i);
       k2s_ += (k2_t_ - k2s_) * ca;              // K2: filter envelope knob
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
@@ -365,34 +374,61 @@ class WaveMorph : public Module {
     }
   };
 
-  // Spectral-flux onset detector, once per 8 kHz sample on the raw bank magnitudes mag_ (the previous
-  // band update's |z_k|, the same in every slot / model): positive per-band change against a ~10 ms
-  // smoothed magnitude, tilted toward the upper bands; onset when F > K x its running mean (adaptive, no
-  // absolute level) and above a silence floor, with a refractory. Latches on_pending_ like OnsetDetect.
-  inline void FluxDetect() {
+  // HF transient onset detector (MODE 1), once per 48 kHz input sample: octave bandpasses from ONSET_HF_F0 up,
+  // per-band energy envelopes; every hop a log-energy frame, SuperFlux-style positive difference against the
+  // max-filtered frame ONSET_HF_LAG frames ago, peak picked against the running mean + ONSET_HF_DELTA. Latches
+  // on_pending_ like OnsetDetect (EnvUpdate consumes it at 8 kHz).
+  inline void HfOnset(float x) {
     using namespace wavemorph_k;
-    const float* __restrict mg = mag_ + 1;
-    constexpr float kInvTop = 1.f / (float)(kBands - 1);
-    const float tilt = WM_ONSET_FLUX_HF_TILT;
-    const float a = flux_a_;
-    float F = 0.f;
-    for (int k = 0; k < kBands; k++) {
-      const float d = mg[k] - flux_m_[k];
-      if (d > 0.f) F += (1.f + tilt * (float)k * kInvTop) * d;
-      flux_m_[k] += a * d;
+    for (int b = 0; b < WM_ONSET_HF_BANDS; b++) {
+      const float y = hf_b0_[b] * x + hf_z1_[b];
+      hf_z1_[b] = -hf_a1_[b] * y + hf_z2_[b];
+      hf_z2_[b] = -hf_b0_[b] * x - hf_a2_[b] * y;
+      hf_env_[b] += hf_ea_ * (y * y - hf_env_[b]);
     }
-    const float mean = flux_mean_;
-    if (mean > 0.f) { const float r = F / mean; if (r > flux_ratio_pk_) flux_ratio_pk_ = r; }
-    if (flux_refr_ > 0) flux_refr_--;
-    if (flux_refr_ == 0 && F > WM_ONSET_FLUX_K * mean && F > WM_ONSET_FLUX_FLOOR) {
-      flux_refr_ = flux_refr_len_;
+    if (++hf_cnt_ < hf_hop_) return;
+    hf_cnt_ = 0;
+    // frame: log energies, max filter across bands, positive difference vs the lagged reference
+    float X[WM_ONSET_HF_BANDS], Xm[WM_ONSET_HF_BANDS];
+    for (int b = 0; b < WM_ONSET_HF_BANDS; b++) X[b] = logf(hf_env_[b] + WM_ONSET_HF_E0);
+    const int half = WM_ONSET_HF_MAXW / 2;
+    for (int b = 0; b < WM_ONSET_HF_BANDS; b++) {
+      float m = X[b];
+      for (int j = 1; j <= half; j++) {
+        if (b - j >= 0 && X[b - j] > m) m = X[b - j];
+        if (b + j < WM_ONSET_HF_BANDS && X[b + j] > m) m = X[b + j];
+      }
+      Xm[b] = m;
+    }
+    float F = 0.f;
+    if (hf_frames_ >= WM_ONSET_HF_LAG) {
+      for (int b = 0; b < WM_ONSET_HF_BANDS; b++) { const float d = X[b] - hf_ref_[hf_rp_][b]; if (d > 0.f) F += d; }
+    }
+    for (int b = 0; b < WM_ONSET_HF_BANDS; b++) hf_ref_[hf_rp_][b] = Xm[b];
+    hf_rp_ = (hf_rp_ + 1) % WM_ONSET_HF_LAG;
+    // SF history (ring); candidate = the previous frame c, confirmed by this frame n
+    const int n = hf_frames_;
+    hf_sf_[n % kHfHist] = F;
+    hf_frames_++;
+    if (F > hf_sf_pk_) hf_sf_pk_ = F;
+    if (hf_refr_ > 0) hf_refr_--;
+    const int c = n - 1;
+    if (c < 0) return;
+    hf_sum_ += hf_sf_[c % kHfHist];                                   // running sum of SF over the last AVG frames up to c
+    if (c - WM_ONSET_HF_AVG >= 0) hf_sum_ -= hf_sf_[(c - WM_ONSET_HF_AVG) % kHfHist];
+    if (c <= WM_ONSET_HF_PEAK_WIN) return;
+    const float v = hf_sf_[c % kHfHist];
+    if (v < F) return;                                                // the next frame is higher: not the peak
+    for (int j = c - WM_ONSET_HF_PEAK_WIN; j < c; j++) if (hf_sf_[j % kHfHist] >= v) return;
+    const int cnt = (c + 1 < WM_ONSET_HF_AVG) ? c + 1 : WM_ONSET_HF_AVG;
+    const float mean = hf_sum_ / (float)cnt;
+    if (v >= mean + WM_ONSET_HF_DELTA && hf_refr_ == 0) {
+      hf_refr_ = hf_refr_len_;
       on_pending_ = true;
     }
-    flux_mean_ = mean + flux_ma_ * (F - mean);
   }
 
   inline void EnvUpdate() {
-    if (wavemorph_k::WM_ONSET_MODE == 1) FluxDetect();   // spectral flux (MODE 0: the 48 kHz level detector latched it)
     const bool onset = on_pending_;
     on_pending_ = false;
     if (onset) { on_seen_ = true; on_count_++; }
@@ -945,12 +981,15 @@ class WaveMorph : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened
-  // spectral-flux onset detector (8 kHz)
-  float flux_m_[kBands];           // per-band smoothed magnitude
-  float flux_mean_ = 0.f;          // running mean of F
-  float flux_a_ = 0.f, flux_ma_ = 0.f;   // one-pole coefficients (band smoother, mean)
-  int   flux_refr_ = 0, flux_refr_len_ = 480;   // refractory samples left / length (8 kHz)
-  float flux_ratio_pk_ = 0.f;      // DIAG: peak F / mean_F since last read
+  // HF transient onset detector (48 kHz input, MODE 1)
+  static constexpr int kHfHist = wavemorph_k::WM_ONSET_HF_AVG + wavemorph_k::WM_ONSET_HF_LAG + 8;   // SF history ring (>= AVG + PEAK_WIN + 2)
+  float hf_b0_[wavemorph_k::WM_ONSET_HF_BANDS], hf_a1_[wavemorph_k::WM_ONSET_HF_BANDS], hf_a2_[wavemorph_k::WM_ONSET_HF_BANDS];   // bandpass coefficients
+  float hf_z1_[wavemorph_k::WM_ONSET_HF_BANDS], hf_z2_[wavemorph_k::WM_ONSET_HF_BANDS];   // bandpass state
+  float hf_env_[wavemorph_k::WM_ONSET_HF_BANDS];               // per-band energy envelope
+  float hf_ref_[wavemorph_k::WM_ONSET_HF_LAG][wavemorph_k::WM_ONSET_HF_BANDS];   // max-filtered log frames, last LAG frames (ring)
+  float hf_sf_[kHfHist];            // SF history (ring)
+  float hf_ea_ = 0.f, hf_sum_ = 0.f, hf_sf_pk_ = 0.f;   // envelope coefficient, running SF sum (AVG window), DIAG: SF peak
+  int   hf_hop_ = 48, hf_cnt_ = 0, hf_frames_ = 0, hf_rp_ = 0, hf_hp_ = 0, hf_refr_ = 0, hf_refr_len_ = 60;
   uint32_t on_count_ = 0;          // DIAG: onsets consumed by the envelopes
   FEnv  fenv_;                     // K2 filter envelope (all zones)
   float ln_ftau_ratio_ = 0.f;      // ln(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S)

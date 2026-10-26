@@ -129,20 +129,29 @@ constexpr float    EXP_ONSET_SLOW_COEF     = 0.0006f;  // baseline one-pole at 4
 constexpr float    EXP_ONSET_RISE          = 1.5f;     // gate > baseline x this = an attack (= ARM_ONSET_RISE)
 constexpr float    EXP_ONSET_FLOOR         = 0.0021f;  // gate-meter floor, input units (= ARM_ONSET_FLOOR)
 constexpr uint32_t EXP_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (= ARM_ONSET_REFRACTORY_MS)
-// --- Onset detector mode + spectral flux detector (2026-10-26) ---------------------------------
-// MODE 0 = the level detector above (48 kHz gate meter vs slow baseline); 1 = spectral flux on the
-// 84-band bank at the 8 kHz band rate (raw bank magnitudes |z_k|, independent of octave / model / knobs):
-//   m_k = one-pole of |z_k| (FLUX_SMOOTH_MS); F = sum_k w_k max(0, |z_k| - m_k_prev), w_k = 1 + HF_TILT k / (K - 1)
-//   (K = 84 bands: weight 1 at the lowest band rising linearly to 1 + HF_TILT at the top, so pick clicks count more);
-//   mean_F = one-pole of F (FLUX_MEAN_MS); onset when F > FLUX_K mean_F (previous mean) AND F > FLUX_FLOOR AND
-//   FLUX_REFRACTORY_MS elapsed. Latches the same onset flag the envelopes consume. Only the selected mode runs.
-constexpr int EXP_ONSET_MODE = 1;   // 0 = level detector, 1 = spectral flux
-constexpr float EXP_ONSET_FLUX_SMOOTH_MS = 10.f;   // ms; per-band magnitude smoother
-constexpr float EXP_ONSET_FLUX_HF_TILT = 1.f;   // band weight w_k = 1 + TILT k / (K - 1)
-constexpr float EXP_ONSET_FLUX_MEAN_MS = 150.f;   // ms; running mean of F (adaptive threshold, no absolute level)
-constexpr float EXP_ONSET_FLUX_K = 2.0f;   // onset: F > K x mean_F (2026-10-26: 2.5 -> 1.5 missed less but retriggered on ringing notes -> 2.0)
-constexpr float EXP_ONSET_FLUX_FLOOR = 1e-3f;   // F floor (band-magnitude units): ~20 dB under the median F of a ringing-string re-pluck at 0.1 peak (~1e-2; a fresh pluck ~5e-2), above -60 dBFS input hiss (max ~6e-4)
-constexpr float EXP_ONSET_FLUX_REFRACTORY_MS = 60.f;   // ms; min. time between onsets
+// --- Onset detector mode + HF transient detector (2026-10-27) ---------------------------------
+// MODE 0 = the level detector above (48 kHz gate meter vs slow baseline); 1 = HF transient detector on the raw
+// 48 kHz input, independent of the band bank: HF_BANDS octave bandpasses (RBJ BPF, Q HF_Q) at HF_F0 x 2^b
+// (750 / 1.5k / 3k / 6k / 12k Hz) - pick attacks are sharp there, ringing strings barely move;
+// per band energy envelope e_b (one-pole on y^2, HF_ENV_MS, longer than a bass period so the waveform's own
+// per-period HF bursts average out); every HF_HOP_MS a frame X_b = ln(e_b + HF_E0) (log: level-agnostic);
+// SF = sum_b max(0, X_b - Xmax_b(HF_LAG frames ago)), Xmax = max over HF_MAXW neighbouring bands;
+// onset at frame c when SF(c) is a local max (> the HF_PEAK_WIN frames before, >= the frame after: 1 frame
+// confirmation latency), SF(c) >= mean(SF over the last HF_AVG frames) + HF_DELTA (ln units), and the
+// refractory HF_REFRACTORY_MS has elapsed. Latches the same onset flag the envelopes consume.
+constexpr int EXP_ONSET_MODE = 1;   // 0 = level detector, 1 = HF transient detector
+constexpr int EXP_ONSET_HF_BANDS = 5;   // octave bands (array size)
+constexpr float EXP_ONSET_HF_F0 = 750.f;   // Hz; lowest band centre, then x 2 per band
+constexpr float EXP_ONSET_HF_Q = 1.4f;   // bandpass Q (about one octave wide)
+constexpr float EXP_ONSET_HF_ENV_MS = 10.f;   // ms; per-band energy envelope
+constexpr float EXP_ONSET_HF_HOP_MS = 1.f;   // ms; frame hop (48 samples at 48 kHz)
+constexpr int EXP_ONSET_HF_LAG = 10;   // frames; reference lag (10 ms; array size)
+constexpr int EXP_ONSET_HF_MAXW = 3;   // bands; max filter width across bands on the reference frame
+constexpr int EXP_ONSET_HF_PEAK_WIN = 3;   // frames; SF must exceed this many frames before it
+constexpr int EXP_ONSET_HF_AVG = 100;   // frames; adaptive mean window (100 ms; array size)
+constexpr float EXP_ONSET_HF_DELTA = 2.5f;   // ln units; SF >= mean + DELTA (host: 0 false / 100 % hits from 1.5 to 4)
+constexpr float EXP_ONSET_HF_E0 = 1e-10f;   // energy floor inside the log (about -100 dBFS)
+constexpr float EXP_ONSET_HF_REFRACTORY_MS = 60.f;   // ms; min. time between onsets
 constexpr float    EXP_ENV_TAU_SLOW_S      = 4.0f;     // s; time law just off noon (= ARM_ENV_TAU_SLOW_S)
 constexpr float    EXP_ENV_TAU_FAST_S      = 0.05f;    // s; at the knob ends (= ARM_ENV_TAU_FAST_S)
 constexpr float    EXP_ENV_TRAVEL_TAUS     = 3.9f;     // one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
