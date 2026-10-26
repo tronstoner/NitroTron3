@@ -17,14 +17,12 @@
 // CONTROL MAP
 //   K1  base wave     10 STEPPED equal zones (below); a zone change crossfades old -> new over
 //                     WM_ZONE_XFADE_MS (the voice is stateless: the entering zone starts clean)
-//   K2  morph loop    looping back-and-forth linear envelope g on the morph (morph m = K3 g):
+//   K2  morph env     explorer's FM-index envelope (EnvGain) 1:1 on the morph (morph m = K3 g):
 //                     t = 2 k2 - 1 (smoothed, lands exactly); |t| <= 0.08 (k2 0.46..0.54) = off, g = 1;
-//                     CW: start g = 0, ramp up to 1 in T, down to 0 in T, up ... (loops);
-//                     CCW: start g = 1, ramp down to 0 in T, up to 1 in T, ... (loops);
-//                     each onset restarts from the side's start; entering a side (from the pad or the
-//                     other side) starts it there too, so it also runs before the first onset;
-//                     T (one ramp) = 4 s just outside the pad -> 30 ms at the knob ends (exponential)
-//   K3  morph amount  m3 0..1: the loop's target / where the morph sits (m = K3 g)
+//                     CCW: each onset g = 1 -> one-pole decay to 0, holds 0 (morph K3 -> base wave);
+//                     CW: each onset g = 0 -> rises to 1, holds 1 (base wave -> K3); travel 36 s at the
+//                     pad edge -> 450 ms at the knob ends; before the first onset CCW g = 1, CW g = 0
+//   K3  morph amount  m3 0..1: the envelope's target / where the morph sits (m = K3 g)
 //   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct, Q 0.707)
 //   K5  octave mix    CCW = played only (octave slots not computed), CW = selected octave only; linear
 //   K6  dry / wet     (shell)
@@ -157,15 +155,16 @@ class WaveMorph : public Module {
     k2s_ = k2_t_ = 0.5f;                         // K2 noon = envelope off
     k3s_ = k3_t_ = 0.f;
     k5s_ = k5_t_ = 0.f;
-    // Onset detector (48 kHz, pre-decimator, explorer's) + looping morph envelope (8 kHz).
+    // Onset detector (48 kHz, pre-decimator, explorer's) + morph envelope (8 kHz).
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (WM_ONSET_ENV_MS * sr));
     on_fall_a_ = 1.f - expf(-1000.f / (WM_ONSET_FALL_MS * sr));
     on_refr_ = 0;
     on_refr_len_ = (int)((float)WM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
+    on_seen_ = false;
     env_.Reset();
-    ln_loop_ratio_ = logf(WM_LOOP_T_FAST_S / WM_LOOP_T_SLOW_S);
+    ln_tau_ratio_ = logf(WM_ENV_TAU_FAST_S / WM_ENV_TAU_SLOW_S);
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
     og_[1] = og_t_[1] = 1.f;                     // SW2 MID = -1 slot
     // K4 post filter: bypass, cleared state.
@@ -219,8 +218,8 @@ class WaveMorph : public Module {
     float k[5];       // K1..K5 (remapped 0..1)
     int   zone;       // K1 zone 0..9
     int   sw2;        // 0 UP (+1), 1 MID (-1), 2 DOWN (-2)
-    float m3, g, m;   // morph: K3, loop gain g, effective m = K3 g
-    int   dir;        // loop: +1 rising, -1 falling, 0 off (pad)
+    float m3, g, m;   // morph: K3, envelope gain g, effective m = K3 g
+    int   dir;        // envelope side: +1 CW (rise), -1 CCW (decay), 0 off (pad)
     bool  mute;
   };
   void Activate() override {
@@ -244,9 +243,9 @@ class WaveMorph : public Module {
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
       const float d = dec_(in + i);
-      k2s_ += (k2_t_ - k2s_) * ca;              // K2: morph loop knob
+      k2s_ += (k2_t_ - k2s_) * ca;              // K2: morph envelope knob
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
-      EnvUpdate();                               // morph loop (consumes the 48 kHz onset flag)
+      EnvUpdate();                               // morph envelope (consumes the 48 kHz onset flag)
       k3s_ += (k3_t_ - k3s_) * ca;
       k5s_ += (k5_t_ - k5s_) * ca;
       if (fabsf(k5_t_ - k5s_) < WM_CTRL_SNAP) k5s_ = k5_t_;   // exact 0: octave work skipped
@@ -321,42 +320,44 @@ class WaveMorph : public Module {
     if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
   }
 
-  // K2 looping morph envelope: g in [0, 1], linear ramps (triangle), reflecting at 0 / 1.
-  //   side = sign of t outside the pad (|t| <= WM_ENV_PAD: off, g = 1, dir = 0).
-  //   start of a side: CW g = 0 rising (dir +1), CCW g = 1 falling (dir -1); applied on each onset and
-  //   whenever the side changes (from the pad or the other side).
-  //   one ramp T = SLOW (FAST / SLOW)^s, s = (|t| - PAD) / (1 - PAD) in (0, 1].
-  struct LoopEnv {
+  // K2 morph envelope gain g (explorer EnvGain, 1:1, plus the noon dead zone WM_ENV_PAD).
+  //   |t| <= PAD: off, g = 1. Outside: s = (|t| - PAD) / (1 - PAD), T = TIME_RATIO TAU_SLOW (FAST / SLOW)^s;
+  //   CCW (decay): onset -> g = 1, one-pole decay reaching 0 in DECAY_RATIO T, then holds 0.
+  //   CW (rise):   onset -> g = 0, one-pole rise reaching 1 in the same time, then holds 1.
+  // "Reaching" = the one-pole's 98 % point (tau = travel / TRAVEL_TAUS), where g snaps to the end value.
+  // Before the first onset: CCW g = 1, CW g = 0.
+  struct EnvGain {
     volatile float g = 1.f;
-    volatile int   dir = 0;        // +1 rising, -1 falling, 0 off
-    int   side = 0;                // +1 CW, -1 CCW, 0 pad
-    float at = -1.f, inc = 0.f;    // |t| the increment was computed for; g step per 8 kHz sample
-    void Reset() { g = 1.f; dir = 0; side = 0; at = -1.f; inc = 0.f; }
-    inline void Step(bool onset, float t, float sr8, float ln_ratio) {
+    volatile int   dir = 0;        // side: +1 CW (rise), -1 CCW (decay), 0 off (pad)
+    float at = -1.f, dec_a = 0.f;
+    int   phase = 0;               // 0 idle (holding), 1 decaying (CCW), 2 rising (CW)
+    void Reset() { g = 1.f; dir = 0; at = -1.f; dec_a = 0.f; phase = 0; }
+    inline void Step(bool onset, bool seen, float t2, float sr8, float ln_tau_ratio) {
       using namespace wavemorph_k;
-      const float am = fabsf(t);
-      if (am <= WM_ENV_PAD) { g = 1.f; dir = 0; side = 0; return; }
-      const int sd = (t > 0.f) ? 1 : -1;
-      if (onset || sd != side) {                 // (re)start from the side's start
-        side = sd;
-        if (sd > 0) { g = 0.f; dir = 1; } else { g = 1.f; dir = -1; }
-      }
+      const float am = fabsf(t2);
+      if (am <= WM_ENV_PAD) { g = 1.f; dir = 0; phase = 0; return; }
+      const bool cw = (t2 > 0.f);
+      dir = cw ? 1 : -1;
+      if (onset) { if (cw) { g = 0.f; phase = 2; } else { g = 1.f; phase = 1; } }
+      if (!seen) { g = cw ? 0.f : 1.f; phase = 0; return; }
       if (am != at) {
         at = am;
         const float sx = (am - WM_ENV_PAD) / (1.f - WM_ENV_PAD);
-        const float T = WM_LOOP_T_SLOW_S * expf(sx * ln_ratio);
-        inc = 1.f / (T * sr8);
+        const float T = WM_ENV_TIME_RATIO * WM_ENV_TAU_SLOW_S * expf(sx * ln_tau_ratio);
+        dec_a  = 1.f - expf(-WM_ENV_TRAVEL_TAUS / (T * WM_ENV_DECAY_RATIO * sr8));
       }
-      float v = g + (float)dir * inc;
-      if (v >= 1.f)      { v = 2.f - v; dir = -1; }   // reflect at the top
-      else if (v <= 0.f) { v = -v;      dir = 1;  }   // reflect at the bottom
-      g = v;
+      switch (phase) {
+        case 1: g += dec_a * (0.f - g);  if (g <= 0.02f) { g = 0.f; phase = 0; } break;
+        case 2: g += dec_a * (1.f - g);  if (g >= 0.98f) { g = 1.f; phase = 0; } break;
+        default: break;
+      }
     }
   };
   inline void EnvUpdate() {
     const bool onset = on_pending_;
     on_pending_ = false;
-    env_.Step(onset, 2.f * k2s_ - 1.f, sr8_, ln_loop_ratio_);
+    if (onset) on_seen_ = true;
+    env_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);
   }
 
   // One 8 kHz sample of slot o: derive u_k / phi_k, return sum_k w_k a_k W_k (zone crossfade inside).
@@ -818,13 +819,14 @@ class WaveMorph : public Module {
   float og_[3] = { 0.f, 1.f, 0.f };            // octave slot weights (up, down, down2), slid
   volatile float og_t_[3] = { 0.f, 1.f, 0.f };
   float oct_step_ = 0.f;
-  // K2 morph loop
+  // K2 morph envelope
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
-  LoopEnv env_;
-  float ln_loop_ratio_ = 0.f;      // ln(WM_LOOP_T_FAST_S / WM_LOOP_T_SLOW_S)
+  bool  on_seen_ = false;                                // an onset has happened
+  EnvGain env_;
+  float ln_tau_ratio_ = 0.f;       // ln(WM_ENV_TAU_FAST_S / WM_ENV_TAU_SLOW_S)
   // K4 post filter
   WmSVF svf_[2];
   float ft_ = 0.f;                 // smoothed t (per block)

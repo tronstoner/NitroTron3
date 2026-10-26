@@ -67,14 +67,18 @@ constexpr float WM_FORM_FR[WM_CORNERS] = { 0.5f, 1.f, 2.f, 4.f };
 constexpr float WM_ROUGH_E[WM_CORNERS] = { -1.f, -0.5f, 0.f, 0.25f };   // spectral tilt per corner
 constexpr float WM_ROUGH_Q[WM_CORNERS] = { 0.f, 0.5f, 0.75f, 1.f };     // roughness (random amplitude) depth per corner
 
-// --- K2 = looping back-and-forth morph envelope (linear triangle on g, morph = K3 g) -------------
-// t = 2 k2 - 1 (smoothed, lands exactly). |t| <= WM_ENV_PAD: off, g = 1. Outside: s = (|t| - PAD) / (1 - PAD),
-// one ramp T = WM_LOOP_T_SLOW_S (WM_LOOP_T_FAST_S / WM_LOOP_T_SLOW_S)^s. CW: start g = 0 rising; CCW: start
-// g = 1 falling; reflect at 0 / 1 (loops). Each onset restarts from the side's start; entering a side
-// (from the pad or the other side) also starts it there (so before the first onset it already runs).
-constexpr float WM_ENV_PAD        = 0.08f;   // t units: k2 in [0.46, 0.54] = 8 % of the knob travel around noon
-constexpr float WM_LOOP_T_SLOW_S  = 4.0f;    // s; one ramp just outside the pad
-constexpr float WM_LOOP_T_FAST_S  = 0.03f;   // s; one ramp at the knob ends
+// --- K2 = one-shot morph envelope (explorer's FM-index EnvGain law 1:1, plus a noon dead zone) -----
+// morph = K3 g. t = 2 k2 - 1 (smoothed, lands exactly). |t| <= WM_ENV_PAD: off, g = 1 (morph = K3).
+// Outside: s = (|t| - PAD) / (1 - PAD) in (0, 1], T = WM_ENV_TIME_RATIO WM_ENV_TAU_SLOW_S (FAST / SLOW)^s,
+// travel = WM_ENV_DECAY_RATIO T (36 s at the pad edge -> 450 ms at the knob ends); one-pole tau =
+// travel / WM_ENV_TRAVEL_TAUS, g snaps at the 98 % point. CCW: each onset g = 1 -> decays to 0, holds 0;
+// CW: each onset g = 0 -> rises to 1, holds 1. Before the first onset: CCW g = 1, CW g = 0.
+constexpr float WM_ENV_PAD          = 0.08f;   // t units: k2 in [0.46, 0.54] = 8 % of the knob travel around noon
+constexpr float WM_ENV_TAU_SLOW_S   = 4.0f;    // s (= EXP_ENV_TAU_SLOW_S)
+constexpr float WM_ENV_TAU_FAST_S   = 0.05f;   // s (= EXP_ENV_TAU_FAST_S)
+constexpr float WM_ENV_TRAVEL_TAUS  = 3.9f;    // (= EXP_ENV_TRAVEL_TAUS)
+constexpr float WM_ENV_TIME_RATIO   = 3.0f;    // (= EXP_ENV_FM_TIME_RATIO)
+constexpr float WM_ENV_DECAY_RATIO  = 3.0f;    // (= EXP_ENV_FM_DECAY_RATIO)
 
 // --- Octave (SW2: UP +1, MID -1, DOWN -2; K5 mix) -------------------------------------
 constexpr float WM_OCT_XFADE_MS   = 10.f;    // ms; linear slide between octave slots on an SW2 change (= EXP_OCT_XFADE_MS)

@@ -17,7 +17,7 @@
 //                          K5 = octave mix, SW2 = octave +1 / -1 / -2)
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
 //                          modules/wavemorph.h; K1 = base wave (10 stepped zones, 4 vector corners
-//                          each), K2 = morph loop, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
+//                          each), K2 = morph envelope, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -212,7 +212,7 @@ int main() {
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (diag_stage == 3) {
-        // wavemorph, second half: morph (K3, loop g + direction, effective), octave, mute, cpu
+        // wavemorph, second half: morph (K3, envelope g + side up / down / off, effective), octave, mute, cpu
         static const char* const oct_name[3] = { "+1", "-1", "-2" };
         static const char* const dir_name[3] = { "down", "off", "up" };
         const WaveMorph::DiagSnap& d = diag_wsnap;
