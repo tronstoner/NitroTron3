@@ -9,10 +9,11 @@ namespace explorer_k {
 
 // --- Families / K1 zones (SW1 = family, K1 = equal zones) -------------------------------
 // SW1 UP (FM): one zone per curated ratio (EXP_FM_RATIOS, list order) + the last zone (full CW) = XBAND.
-// SW1 MID (tables): one zone per wavetable set (+ one last zone = bit table, only with EXP_BITTAB_ENABLE).
+// SW1 MID (tables): WaveMorph's 10 table zones (+ one last zone = bit table, only with EXP_BITTAB_ENABLE).
 // SW1 DOWN: exact harmonics, frequency shift, interval shift.
 // Bit table PARKED (2026-10-26): false = SW1 MID is the wavetable only; the bit-table code stays compiled in.
-// true = a 5th K1 zone on MID (K2 waveform, K3 step shape, its step count also under the K3 dampener).
+// true = an 11th K1 zone on MID after the 10 table zones (K2 waveform, K3 step shape, its step count also under the
+// K3 dampener).
 constexpr bool EXP_BITTAB_ENABLE = false;
 constexpr int EXP_N_DOWN = 3;
 constexpr float EXP_MODEL_XFADE_MS = 1.f;   // ms; linear crossfade old -> new model output on any model / zone / discrete-item change
@@ -52,29 +53,102 @@ constexpr float EXP_FS_REF_HZ     = 800.f;   // frequency shift, K3 proportional
 constexpr int   EXP_IS_SEMI_MAX   = 12;      // interval shift: K2 = -this .. +this semitones, snapped (equal zones, noon = 0)
 constexpr float EXP_IS_DETUNE_CENTS = 50.f;  // interval shift: K3 detune +-this cents, continuous (noon = 0)
 
-// --- SW1 DOWN: exact harmonics / SW1 MID: wavetable, bit table -------------------------
+// --- SW1 DOWN: exact harmonics / SW1 MID: tables, bit table -------------------------
 constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number at K2 CW (linear from 1, neighbours crossfaded)
 
-constexpr int   EXP_WT_SETS       = 4;       // wavetable sets (K1 zones on SW1 MID): analog, PPG-style, vocal, noisy
-constexpr int   EXP_N_MID         = EXP_WT_SETS + (EXP_BITTAB_ENABLE ? 1 : 0);   // SW1 MID K1 zones
-constexpr int   EXP_WT_WAVES      = 4;       // waves per set (K2 scans and interpolates)
-constexpr int   EXP_WT_SIZE       = 256;     // samples per single-cycle table (power of two; holds harmonics 1..127)
-constexpr int   EXP_WT_HMAX       = EXP_WT_SIZE / 2 - 1;   // highest harmonic a table can hold
-constexpr int   EXP_WT_LEVELS     = 14;      // band-limited versions per wave (see EXP_WT_LEVEL_H)
-// Harmonic count of each band-limited version; a band uses the largest H <= min(EXP_WT_FMAX, fc) / f'_k
+// SW1 MID tables (2026-10-26, step 2): WaveMorph's 10 zones, COPIED (not shared) from wavemorph_constants.h,
+// values exact (approved, tuned there). K1 = zone (equal stepped zones, EXP_TB_ZONE_XFADE_MS crossfade on a change),
+// K2 = morph m: position (F_z - 1) m through the zone's frames, linear crossfade between the two adjacent frames.
+// Built at Init into SDRAM (explorer_tb, int16, packed [frame][version][sample]). See explorer.h TABLES.
+constexpr int   EXP_TB_ZONES          = 10;      // K1 equal zones on SW1 MID (= WM_ZONES)
+constexpr int   EXP_N_MID             = EXP_TB_ZONES + (EXP_BITTAB_ENABLE ? 1 : 0);   // SW1 MID K1 zones (+ bit table last)
+constexpr int   EXP_TB_CORNERS        = 4;       // waves of the 4-wave zones 2, 6..10 (= WM_CORNERS)
+constexpr int   EXP_TB_SYNC_N         = 7;       // zone 1 sine sync: frames (= WM_SYNC_N)
+constexpr int   EXP_TB_SAWR_N         = 3;       // zone 3 saw rough: frames (= WM_SAWR_N)
+constexpr int   EXP_TB_FRAMES16       = 16;      // frames of zones 4 PWM / 5 vocal (= WM_FRAMES16)
+// Frames per zone F_z (= WM_ZONE_FRAMES).
+constexpr int   EXP_TB_ZONE_FRAMES[EXP_TB_ZONES] = { EXP_TB_SYNC_N, EXP_TB_CORNERS, EXP_TB_SAWR_N, EXP_TB_FRAMES16,
+                                                     EXP_TB_FRAMES16, EXP_TB_CORNERS, EXP_TB_CORNERS, EXP_TB_CORNERS,
+                                                     EXP_TB_CORNERS, EXP_TB_CORNERS };
+// Zones 3 and 6..10: each wave scaled to the plain saw's RMS, then capped to the storage headroom (= WM_ZONE_RMS_MATCH).
+constexpr bool  EXP_TB_ZONE_RMS_MATCH[EXP_TB_ZONES] = { false, false, true, false, false, true, true, true, true, true };
+// Zones 1, 2, 3, 6, 10: every frame re-phased to the saw's convention (sine phase, positive; magnitudes kept),
+// then the zone's level rule again (= WM_ZONE_REPHASE).
+constexpr bool  EXP_TB_ZONE_REPHASE[EXP_TB_ZONES]   = { true, true, true, false, false, true, false, false, false, true };
+constexpr int   EXP_TB_TOTAL_FRAMES   = EXP_TB_SYNC_N + EXP_TB_SAWR_N + 6 * EXP_TB_CORNERS + 2 * EXP_TB_FRAMES16;   // packed (= WM_TOTAL_FRAMES)
+constexpr int ExpTbSumFrames(int i = 0) { return (i >= EXP_TB_ZONES) ? 0 : EXP_TB_ZONE_FRAMES[i] + ExpTbSumFrames(i + 1); }
+static_assert(ExpTbSumFrames() == EXP_TB_TOTAL_FRAMES, "EXP_TB_TOTAL_FRAMES = sum of EXP_TB_ZONE_FRAMES");
+constexpr float EXP_TB_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new zone on a K1 zone change (= WM_ZONE_XFADE_MS)
+constexpr int   EXP_TB_SIZE           = 256;     // samples per single-cycle table (power of two; harmonics 1..127) (= WM_TAB_SIZE)
+constexpr int   EXP_TB_HMAX           = EXP_TB_SIZE / 2 - 1;   // highest harmonic a table holds (= WM_HMAX)
+constexpr int   EXP_TB_TD_SIZE        = 1024;    // time-domain definition resolution, 4x oversampled (= WM_TD_SIZE)
+constexpr int   EXP_TB_LEVELS         = 14;      // band-limited versions per frame (= WM_LEVELS)
+// Harmonic count of each band-limited version (= WM_LEVEL_H); a band uses the largest H <= min(EXP_TB_FMAX, fc) / f'_k
 // (fc = K3 dampener, re-picked per block when K3 moved; floor H = 1).
-constexpr int   EXP_WT_LEVEL_H[EXP_WT_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
-constexpr float EXP_WT_FMAX       = 4000.f;  // Hz; band-engine ceiling for the table band limit
-constexpr float EXP_WT_I16_SCALE  = 16384.f; // int16 storage scale (peak-1 waves, 2x headroom for band-limit overshoot)
-constexpr uint32_t EXP_WT_SEED    = 0x5EEDu; // LCG seed for the noisy set (deterministic tables)
-// Vocal set: formants (Hz) / bandwidths (Hz) / amplitudes per vowel at fundamental EXP_WT_VOX_F0.
-constexpr float EXP_WT_VOX_F0     = 110.f;   // Hz; reference fundamental the formant positions are laid out for
-constexpr float EXP_WT_VOX_F[4][3]  = { { 700.f, 1220.f, 2600.f },    // a
-                                        { 400.f, 2000.f, 2550.f },    // e
-                                        { 280.f, 2250.f, 2890.f },    // i
-                                        { 450.f,  800.f, 2830.f } };  // o
-constexpr float EXP_WT_VOX_BW[3]  = { 80.f, 90.f, 120.f };   // Hz; formant bandwidths
-constexpr float EXP_WT_VOX_A[3]   = { 1.f, 0.5f, 0.25f };    // formant amplitudes
+constexpr int   EXP_TB_LEVEL_H[EXP_TB_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
+constexpr float EXP_TB_FMAX           = 4000.f;  // Hz; band-engine ceiling for the table band limit (= WM_TAB_FMAX)
+constexpr float EXP_TB_I16_SCALE      = 16384.f; // int16 storage scale, default: |table| <= 2.0 (= WM_I16_SCALE)
+constexpr float EXP_TB_I16_SCALE_WIDE = 6554.f;  // zones 3 / 10: |table| <= 5.0 (= WM_I16_SCALE_WIDE)
+// Storage scale per zone; the RMS-matched waves are capped to that zone's headroom 32767 / scale (= WM_ZONE_I16_SCALE).
+constexpr float EXP_TB_ZONE_I16_SCALE[EXP_TB_ZONES] = { EXP_TB_I16_SCALE, EXP_TB_I16_SCALE, EXP_TB_I16_SCALE_WIDE,
+                                                        EXP_TB_I16_SCALE, EXP_TB_I16_SCALE, EXP_TB_I16_SCALE,
+                                                        EXP_TB_I16_SCALE, EXP_TB_I16_SCALE, EXP_TB_I16_SCALE,
+                                                        EXP_TB_I16_SCALE_WIDE };
+// Zone 1 sine | sync: x = sin(2 pi frac(R phi)), R per frame (= WM_SYNC_R).
+constexpr float EXP_TB_SYNC_R[EXP_TB_SYNC_N] = { 1.f, 1.5f, 2.f, 2.7f, 4.f, 4.6f, 6.5f };
+// Zone 2 triangle | fold: x = fold(G tri(phi)), G per frame (= WM_FOLD_G).
+constexpr float EXP_TB_FOLD_G[EXP_TB_CORNERS] = { 1.f, 2.f, 4.f, 8.f };
+// Zone 3 saw rough: saw 1/n | sine + needle (time domain) | needle saw 1/n^NSAW_EXP.
+constexpr float EXP_TB_SNDL_W         = 0.015f;  // sine + needle: spike width, share of the cycle (= WM_SNDL_W)
+constexpr float EXP_TB_SNDL_H         = 2.0f;    // sine + needle: spike height (= WM_SNDL_H)
+constexpr float EXP_TB_SNDL_POS       = 0.25f;   // sine + needle: spike centre (= WM_SNDL_POS)
+constexpr float EXP_TB_NSAW_EXP       = 0.3f;    // needle saw exponent (= WM_NSAW_EXP)
+// Zone 4 PWM: x = +1 (phi < w) else -1, w = 0.5 (1 - u)^CURVE, u = frame / 15 (frame 15 = silence).
+constexpr float EXP_TB_PWM_CURVE      = 2.2f;    // (= WM_PWM_CURVE)
+// Zone 5 vocal: a -> e -> i -> o -> u, formants interpolated; amp = sum_f A_f / (1 + ((h F0 - F_f) / (BW_f / 2))^2).
+constexpr float EXP_TB_VOX_F0         = 110.f;   // Hz; reference fundamental (= WM_VOX_F0)
+constexpr int   EXP_TB_VOX_N          = 5;       // (= WM_VOX_N)
+constexpr float EXP_TB_VOX_F[EXP_TB_VOX_N][3] = { { 700.f, 1220.f, 2600.f },    // a (= WM_VOX_F)
+                                                  { 400.f, 2000.f, 2550.f },    // e
+                                                  { 280.f, 2250.f, 2890.f },    // i
+                                                  { 450.f,  800.f, 2830.f },    // o
+                                                  { 325.f,  700.f, 2530.f } };  // u
+constexpr float EXP_TB_VOX_BW[3]      = { 80.f, 90.f, 120.f };   // Hz (= WM_VOX_BW)
+constexpr float EXP_TB_VOX_A[3]       = { 1.f, 0.5f, 0.25f };    // (= WM_VOX_A)
+// Zone 6 PPG classic: 8-step saw | stepped odd-harmonic stack | bit pattern | 16-step held sine (time domain).
+constexpr int   EXP_TB_PPG_SAW_STEPS  = 8;       // (= WM_PPG_SAW_STEPS)
+constexpr int   EXP_TB_PPG_ODD_STEPS  = 32;      // (= WM_PPG_ODD_STEPS)
+constexpr float EXP_TB_PPG_ODD_A3     = 0.5f;    // (= WM_PPG_ODD_A3)
+constexpr float EXP_TB_PPG_ODD_A5     = 0.33f;   // (= WM_PPG_ODD_A5)
+constexpr float EXP_TB_PPG_ODD_LEVELS = 7.5f;    // (= WM_PPG_ODD_LEVELS)
+constexpr int   EXP_TB_PPG_BIT_STEPS  = 32;      // (= WM_PPG_BIT_STEPS)
+constexpr int   EXP_TB_PPG_SINE_STEPS = 16;      // (= WM_PPG_SINE_STEPS)
+// Zones 7..10 (sine phase unless time domain), listed harmonics {h, amp}, rest 0 (= WM_W_*).
+struct ExpTbHarm { int h; float a; };
+constexpr ExpTbHarm EXP_TB_W_TINE[]     = { {1, 1.f}, {2, .3f}, {3, .08f}, {7, .12f}, {8, .18f}, {9, .15f}, {10, .08f} };
+constexpr ExpTbHarm EXP_TB_W_CLARINET[] = { {1, 1.f}, {3, .7f}, {5, .45f}, {7, .25f}, {9, .12f}, {11, .06f}, {13, .03f} };
+constexpr ExpTbHarm EXP_TB_W_DRAWBAR[]  = { {1, 1.f}, {2, 1.f}, {3, .8f}, {4, .5f}, {6, .35f}, {8, .25f} };
+constexpr ExpTbHarm EXP_TB_W_MIXTURE[]  = { {1, 1.f}, {2, .7f}, {3, .35f}, {4, .5f}, {6, .3f}, {8, .4f}, {12, .25f}, {16, .25f}, {24, .12f} };
+constexpr ExpTbHarm EXP_TB_W_GHOST5[]   = { {1, .05f}, {3, 1.f}, {5, .8f} };
+constexpr ExpTbHarm EXP_TB_W_BELL[]     = { {1, 1.f}, {2, .15f}, {4, .3f}, {7, .25f}, {11, .45f}, {12, .35f}, {17, .3f}, {18, .22f}, {23, .12f} };
+constexpr ExpTbHarm EXP_TB_W_BASSBELL[] = { {1, 1.f}, {2, .2f}, {7, .7f}, {14, .5f} };
+// Harmonium: 1: H1, 2: H2, 3: H3, n >= 4: HN / n (= WM_HARMONIUM_*).
+constexpr float EXP_TB_HARMONIUM_H1 = 0.6f, EXP_TB_HARMONIUM_H2 = 1.f, EXP_TB_HARMONIUM_H3 = 0.9f, EXP_TB_HARMONIUM_HN = 1.2f;
+constexpr int   EXP_TB_LORES_STEPS    = 6;       // stepped lo-res sine steps (= WM_LORES_STEPS)
+constexpr int   EXP_TB_PPGRES_N       = 8;       // PPG resonant: n = 1..N: 1 - SLOPE (n - 1) (= WM_PPGRES_N)
+constexpr float EXP_TB_PPGRES_SLOPE   = 0.05f;   // (= WM_PPGRES_SLOPE)
+constexpr ExpTbHarm EXP_TB_W_OBOE[]     = { {1, .35f}, {2, .7f}, {3, .9f}, {4, 1.f}, {5, .8f}, {6, .55f}, {7, .4f}, {8, .3f} };
+constexpr float EXP_TB_OBOE_TAIL      = 0.3f;    // n > 8: TAIL (8 / n)^TAIL_EXP (= WM_OBOE_TAIL)
+constexpr float EXP_TB_OBOE_TAIL_EXP  = 1.5f;    // (= WM_OBOE_TAIL_EXP)
+constexpr float EXP_TB_BRASS_GAIN     = 3.f;     // (1 / n) (1 + GAIN exp(-((n - CENTER) / WIDTH)^2)) (= WM_BRASS_GAIN)
+constexpr float EXP_TB_BRASS_CENTER   = 8.f;     // (= WM_BRASS_CENTER)
+constexpr float EXP_TB_BRASS_WIDTH    = 2.5f;    // (= WM_BRASS_WIDTH)
+constexpr float EXP_TB_SYNCSAW_R      = 3.5f;    // sync saw 2 frac(R phi) - 1 (= WM_SYNCSAW_R)
+constexpr float EXP_TB_FUZZ_EXP       = 0.6f;    // fuzz reed 1 / n^EXP (= WM_FUZZ_EXP)
+constexpr float EXP_TB_CLIP_H1        = 0.3f;    // clipper: 1: H1; 2..KNEE: FLAT; above: FLAT (KNEE / n)^2 (= WM_CLIP_H1)
+constexpr float EXP_TB_CLIP_FLAT      = 0.8f;    // (= WM_CLIP_FLAT)
+constexpr int   EXP_TB_CLIP_KNEE      = 24;      // (= WM_CLIP_KNEE)
+constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n without harmonics 1 .. this (= WM_PPGFB_SKIP)
 // Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle.
 // (PARKED, EXP_BITTAB_ENABLE.) K2 STEPS through EXP_BT_WAVES waveforms (equal zones): the 16 LFSR patterns, then SQR n = 1 .. EXP_BT_SQR_N_MAX;
 // a step = EXP_MODEL_XFADE_MS crossfade, no blend. K3 = step shape, continuous: CCW triangle (linear to the

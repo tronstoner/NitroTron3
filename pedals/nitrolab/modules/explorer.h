@@ -27,13 +27,14 @@
 //   keeps its level and fundamental, loses only harmonics above fc. Full CW = the open ceilings (as before):
 //     FM caps    L = min(4000, fc) in the FM index / feedback caps and the XBAND index cap (down to 0 = plain
 //                fundamental); EXP_FBFM_PUSHED = true or EXP_ANTIFOLD = false: no FM caps -> dampener inert on FM
-//     WAVETABLE  version = largest H <= min(4000, fc) / f'_k (floor H = 1); BITTAB S with (S/2) f' <= L
-//                (floor S = 2); a band whose pick moves crossfades old -> new linearly over EXP_DAMP_SLIDE_MS
-//                (1 ms = one 48-frame block; one fade counter, per-band old pick)
+//     TABLES     version = largest H <= min(4000, fc) / f'_k (floor H = 1, EXP_TB_LEVEL_H); BITTAB S with
+//                (S/2) f' <= L (floor S = 2); a band whose pick moves crossfades old -> new linearly over
+//                EXP_DAMP_SLIDE_MS (1 ms = one 48-frame block; one fade counter, per-band old pick). The pick is
+//                per band and slot, not per zone: it applies to both sides of a table zone crossfade.
 //
 // DISCRETE VALUES are stepped on the knob (snap to the item): items that change the waveform
-// (wavetable set, FM ratio <-> XBAND, bit-table waveform) crossfade old -> new over EXP_MODEL_XFADE_MS
-// at the switch moment; snapped numbers inside a running oscillator (FM ratio, interval) slide linearly
+// (table zone: EXP_TB_ZONE_XFADE_MS; FM ratio <-> XBAND, bit-table waveform: EXP_MODEL_XFADE_MS) crossfade
+// old -> new at the switch moment; snapped numbers inside a running oscillator (FM ratio, interval) slide linearly
 // to the new item over EXP_DISC_SLIDE_MS. Never blended between items.
 //
 // MODELS (L = min(EXP_FOLD_LIMIT_HZ, fc); "cap" = anti-fold, only with EXP_ANTIFOLD, floor 0)
@@ -46,10 +47,13 @@
 //                (r = 1: the former FB FM; b = 0: the former ratio FM.)
 //   XBAND        W = cos(2 pi phi_k + I sin(2 pi phi_{k+n})), n = EXP_XB_PARTNER = 12 (fixed); partner beyond
 //                the top band: 0. I = 12, cap I <= (L - f'_k) / f'_{k+n} - 1. K2 inert.
-//  SW1 MID — tables (K1 = set, 4 equal zones)
-//   WAVETABLE    W = table(set, scan, level_k)(phi), linear interpolation in phase and between adjacent
-//                waves (scan = 3 K2); set = K1 zone (analog / PPG / vocal / noisy); level_k see K3 DAMPENER.
-//   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> a 5th K1 zone on MID)
+//  SW1 MID — tables (K1 = zone, 10 equal stepped zones = WaveMorph's tables, COPIED; see TABLES below)
+//   WAVETABLE    W = lerp_frames(lerp_phase(table[zone][f0][level_k]), table[zone][f0 + 1][level_k]) / scale_z:
+//                morph m = K2 (smoothed), position (F_z - 1) m, f0 = frame below (<= F_z - 2), linear crossfade
+//                between the two adjacent frames; linear interpolation in phase (256 points); scale_z =
+//                EXP_TB_ZONE_I16_SCALE[zone]; level_k see K3 DAMPENER. A K1 zone change crossfades old -> new zone
+//                over EXP_TB_ZONE_XFADE_MS (both read the same morph m and the same per-band picks); stateless.
+//   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> an 11th K1 zone on MID after the 10 table zones)
 //                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
 //                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
 //                pulse = v0; K3 = shape (and the dampener): 0 -> 0.5 crossfades tri -> saw, 0.5 -> 1 saw -> pulse.
@@ -85,9 +89,10 @@
 //                                bypass (fade over |t| < EXP_FILT_FADE), CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz.
 //
 // CONTROL MAP
-//   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: wavetable set;
-//                    DOWN: model (harmonics / freq shift / interval)
-//   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: wave scan; DOWN: per model (see MODELS)
+//   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: table zone (10, stepped,
+//                    1 ms crossfade); DOWN: model (harmonics / freq shift / interval)
+//   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through
+//                    the zone's frames; DOWN: per model (see MODELS)
 //   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open);
 //                    DOWN: per model (see MODELS)
 //   K4  unused       (parked envelope / post filter, see PARKED)
@@ -101,8 +106,31 @@
 // K2, K3 (and K4 with EXP_ENV_ENABLE) are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous
 // derived values are computed per 8 kHz sample from the smoothed knobs; stepped items from the raw knob.
 //
+// TABLES (SW1 MID; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*; built at Init into SDRAM,
+// int16, packed [frame][version][sample]): per zone F_z frames (frame 1 = the exact base wave), u = frame / (F_z - 1).
+// Each frame: defined in the time domain at EXP_TB_TD_SIZE (1024) points and analysed by DFT into harmonics 1..127
+// [time], or defined directly by harmonic amplitudes, sine phase [spectral]; mean removed, peak normalised to 1
+// (an all-silent frame stays silent); zones 1, 2, 3, 6, 10 re-phased to the saw's phase convention (sine phase,
+// positive; magnitudes kept; peak 1 again where not RMS-matched); zones 3 and 6..10 scaled to the RMS of the plain
+// saw (zone 3 frame 1, full band), then capped to the int16 storage headroom (32767 / EXP_TB_ZONE_I16_SCALE[zone]);
+// then rebuilt as 14 band-limited versions {1,2,3,4,6,8,12,16,24,32,48,64,96,127} at 256 points.
+//   1 SINE SYNC  7 frames: sin(2 pi frac(R phi)), R = 1 | 1.5 | 2 | 2.7 | 4 | 4.6 | 6.5             [time]
+//   2 TRI FOLD   fold(G tri(phi)), G = 1 | 2 | 4 | 8, fold(v) = |((v - 1) mod 4) - 2| - 1           [time]
+//   3 SAW ROUGH  3 frames: saw 1/n | sine + needle (sin + Hann spike width 0.015 at phi 0.25, height 2;
+//                re-phased) | needle saw 1/n^0.3; equal RMS (the plain saw's)        [spectral; 2 time]
+//   4 PWM        16 frames: +1 (phi < w) else -1, w = 0.5 (1 - u)^2.2: 50 % -> 0 % (silence)          [time]
+//   5 VOCAL      16 frames: a -> e -> i -> o -> u, formants interpolated, 110 Hz reference          [spectral]
+//   6 PPG CLASSIC 8-step saw (8 levels) | stepped odd-harmonic stack (32 steps, 16 levels) | bit pattern
+//                ((s 5) ^ (s >> 2)) & 15, 32 steps | 16-step held sine                             [time]
+//   7 SOFT A     tine e-piano | hollow clarinet | drawbar organ | church mixture                   [spectral]
+//   8 SOFT B     harmonium | ghost fifths | glass bell | stepped lo-res (sine held in 6 steps) [spectral; 4 time]
+//   9 HARD A     PPG resonant | nasal oboe reed | formant brass | bass bell 7/14                  [spectral]
+//  10 HARD B     sync saw (3.5x, reset per cycle) | fuzz reed | clipper | PPG feedback (saw 1/n
+//                without harmonics 1, 2)                                                    [1 time; spectral]
+//   (harmonic amplitude lists in explorer_constants.h, EXP_TB_*)
+//
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
-// No dynamic allocation. Wavetables (int16, ~112 KB) are computed at Init into SDRAM.
+// No dynamic allocation. Tables: 66 frames x 14 x 256 int16 = 462 KB in SDRAM (explorer_tb, own array).
 
 #include <cmath>
 #include <cstdint>
@@ -122,15 +150,17 @@
 // Shared read-only sin table (filled in Init; DTCM = zero-wait-state reads).
 static float DTCM_MEM_SECTION explorer_sin_tab[explorer_k::EXP_SIN_SIZE];
 
-// Band-limited wavetables [set][wave][level][sample], int16 (scale EXP_WT_I16_SCALE), SDRAM.
-static int16_t DSY_SDRAM_BSS explorer_wt[explorer_k::EXP_WT_SETS][explorer_k::EXP_WT_WAVES]
-                                        [explorer_k::EXP_WT_LEVELS][explorer_k::EXP_WT_SIZE];
-// Init-only wavetable build scratch (SDRAM: keeps DTCM free).
-struct ExplorerWtScratch {
-  float tab[explorer_k::EXP_WT_SIZE], x[explorer_k::EXP_WT_SIZE], acc[explorer_k::EXP_WT_SIZE];
-  float A[explorer_k::EXP_WT_HMAX + 1], B[explorer_k::EXP_WT_HMAX + 1];
+// SW1 MID frame tables (WaveMorph's, copied), packed: [zone offset + frame][level][sample], int16
+// (scale EXP_TB_ZONE_I16_SCALE[zone]), SDRAM. Explorer's own array (not WaveMorph's).
+static int16_t DSY_SDRAM_BSS explorer_tb[explorer_k::EXP_TB_TOTAL_FRAMES]
+                                        [explorer_k::EXP_TB_LEVELS][explorer_k::EXP_TB_SIZE];
+// Init-only table build scratch (SDRAM: keeps DTCM free).
+struct ExplorerTbScratch {
+  float x[explorer_k::EXP_TB_TD_SIZE];                                  // time-domain frame
+  float acc[explorer_k::EXP_TB_SIZE];                                   // level accumulator
+  float A[explorer_k::EXP_TB_HMAX + 1], B[explorer_k::EXP_TB_HMAX + 1];   // sin / cos coefficients
 };
-static ExplorerWtScratch DSY_SDRAM_BSS explorer_wt_scratch;
+static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
 
 // K4 post filter stage: TPT state-variable filter (a local copy of armitage's ArmSVF).
 struct ExpSVF {
@@ -189,9 +219,9 @@ class Explorer : public Module {
         const float fp = r[o] * f;                         // f'_k
         fp_[o][k] = fp;
         ifp_[o][k] = 1.f / fp;
-        const int hk = (int)(EXP_WT_FMAX / fp);           // open picks (fc = EXP_DAMP_FMAX); DampUpdate re-picks
+        const int hk = (int)(EXP_TB_FMAX / fp);           // open picks (fc = EXP_DAMP_FMAX); DampUpdate re-picks
         int lv = 0;
-        for (int l = 0; l < EXP_WT_LEVELS; l++) if (EXP_WT_LEVEL_H[l] <= hk) lv = l;
+        for (int l = 0; l < EXP_TB_LEVELS; l++) if (EXP_TB_LEVEL_H[l] <= hk) lv = l;
         int st = EXP_BT_STEPS;                             // BITTAB steps (anti-fold: (S/2) f' <= limit)
         if (EXP_ANTIFOLD)
           while (st > EXP_BT_STEPS_MIN && 0.5f * (float)st * fp > EXP_FOLD_LIMIT_HZ) st >>= 1;
@@ -199,9 +229,9 @@ class Explorer : public Module {
         btsc_[o][k] = btsf_[o][k] = (uint8_t)st;
       }
     }
-    for (int h = 0; h <= EXP_WT_HMAX; h++) {             // dampener: version for H <= h (largest LEVEL_H <= h)
+    for (int h = 0; h <= EXP_TB_HMAX; h++) {             // dampener: version for H <= h (largest LEVEL_H <= h)
       int lv = 0;
-      for (int l = 0; l < EXP_WT_LEVELS; l++) if (EXP_WT_LEVEL_H[l] <= h) lv = l;
+      for (int l = 0; l < EXP_TB_LEVELS; l++) if (EXP_TB_LEVEL_H[l] <= h) lv = l;
       wt_lv_of_h_[h] = (uint8_t)lv;
     }
     damp_k_ = -1.f;                              // forces DampUpdate on the first block
@@ -220,6 +250,9 @@ class Explorer : public Module {
     ctrl_a_ = 1.f - expf(-1000.f / (EXP_CTRL_SMOOTH_MS * sr8_));
     mfade_len_ = (int)(EXP_MODEL_XFADE_MS * 0.001f * sr8_ + 0.5f);
     if (mfade_len_ < 1) mfade_len_ = 1;
+    zfade_len_ = (int)(EXP_TB_ZONE_XFADE_MS * 0.001f * sr8_ + 0.5f);   // MID table zone change
+    if (zfade_len_ < 1) zfade_len_ = 1;
+    mfade_cur_ = mfade_len_;
     mfade_n_ = 0;
     disc_len_ = (int)(EXP_DISC_SLIDE_MS * 0.001f * sr8_ + 0.5f);
     if (disc_len_ < 1) disc_len_ = 1;
@@ -285,9 +318,9 @@ class Explorer : public Module {
     int model, zone = 0;
     if (fam == kUp) {                            // K1: FM ratio zones, last zone = XBAND
       model = (Quantize(k1, EXP_N_UP) < EXP_FM_N_RATIOS) ? kFM : kXFM;
-    } else if (fam == kMid) {                    // K1: wavetable set (+ bit table zone when enabled)
+    } else if (fam == kMid) {                    // K1: table zone (+ bit table zone when enabled)
       const int z = Quantize(k1, EXP_N_MID);
-      if (z < EXP_WT_SETS) { model = kWT; zone = z; }
+      if (z < EXP_TB_ZONES) { model = kWT; zone = z; }
       else                 { model = kBIT; zone = Quantize(k2, EXP_BT_WAVES); }   // waveform index
     } else {
       model = kHARM + Quantize(k1, EXP_N_DOWN);
@@ -326,8 +359,9 @@ class Explorer : public Module {
     float k[5];       // K1..K5 (remapped 0..1)
     int   sw1, sw2;   // 0 UP, 1 MID, 2 DOWN
     int   model;      // global model id (kFM .. kISH)
-    int   zone;       // wavetable set (0..3), bit-table waveform - 1, else 0
-    float a, b;       // derived values per model (FM: ratio r / feedback b; XBAND: partner n / index)
+    int   zone;       // table zone (0..9), bit-table waveform - 1, else 0
+    float a, b;       // derived values per model (FM: ratio r / feedback b; XBAND: partner n / index;
+                      // WTABLE: frame position (F_z - 1) m / morph m)
     float fc;         // K3 dampener fc (Hz) on SW1 UP / MID, 0 on DOWN
     float envg;       // parked UP envelope (EXP_ENV_ENABLE): gain g (0..1) at the snapshot
     float fol;        // parked live follower f = min(follower, 1) at the snapshot (0..1)
@@ -353,9 +387,10 @@ class Explorer : public Module {
     return (m >= 0 && m < kNumModels) ? n[m] : "?";
   }
   static const char* ZoneName(int m, int z) {
-    static const char* const wt[4] = { "analog", "ppg", "vocal", "noisy" };
-    if (z < 0 || z > 3) return "";
-    if (m == kWT) return wt[z];
+    static const char* const wt[explorer_k::EXP_TB_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-ROUGH", "SQR-PWM",
+                                                             "VOCAL", "PPG-CLASSIC", "SOFT-A", "SOFT-B",
+                                                             "HARD-A", "HARD-B" };   // = WaveMorph::ZoneName
+    if (m == kWT && z >= 0 && z < explorer_k::EXP_TB_ZONES) return wt[z];
     return "";
   }
 
@@ -391,7 +426,9 @@ class Explorer : public Module {
         const int mn = var_ >> 6;
         if (mn != (vfrom_ >> 6))                         // a new model starts cleared (items of the
           for (int o = 0; o < kSlots; o++) ResetModelState(mn, o);   // same model share its state)
-        mfade_n_ = mfade_len_;
+        // MID table zone -> table zone: EXP_TB_ZONE_XFADE_MS (WaveMorph's); every other change EXP_MODEL_XFADE_MS.
+        mfade_cur_ = (mn == kWT && (vfrom_ >> 6) == kWT) ? zfade_len_ : mfade_len_;
+        mfade_n_ = mfade_cur_;
       }
       const bool fading = (mfade_n_ > 0);
       // Parked UP envelope: e = g_slid + EXP_FOLLOW_FM_DEPTH on f scales the FM index (I = EXP_FM_INDEX e^2);
@@ -399,7 +436,7 @@ class Explorer : public Module {
       const float eg = EXP_ENV_ENABLE ? fm_gs_ + EXP_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_) : 1.f;
       pn_ = Derive(var_ >> 6, var_ & 63, k2s_, k3s_, DiscOf(var_ >> 6), eg);
       if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, k3s_, DiscOf(vfrom_ >> 6), eg);
-      mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_len_ + 1) : 1.f;
+      mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_cur_ + 1) : 1.f;
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
 
       // Pass 1: clock all bands, magnitudes (|z'| = |z| in every slot).
@@ -444,7 +481,7 @@ class Explorer : public Module {
   struct Params {
     float a = 0.f, b = 0.f;     // sweep A / B as displayed (DIAG)
     float p0 = 0.f, p1 = 0.f, p2 = 0.f, p3 = 0.f;   // model-specific (see Derive)
-    int   n0 = 0;               // integer item (partner offset, harmonic, scan)
+    int   n0 = 0;               // integer item (partner offset, harmonic, packed table frame)
     int   zone = 0;
     const float* bt = nullptr;  // BITTAB: the selected 16-step waveform
   };
@@ -540,7 +577,7 @@ class Explorer : public Module {
     Repick();
   }
 
-  // Dampener: re-pick each band's wavetable version (largest H <= min(WT_FMAX, fc) / f'_k, floor H = 1) and
+  // Dampener: re-pick each band's table version (largest H <= min(TB_FMAX, fc) / f'_k, floor H = 1) and
   // bit-table step count (largest S of 16 / 8 / 4 / 2 with (S/2) f'_k <= min(FOLD_LIMIT_HZ, fc), floor 2;
   // EXP_ANTIFOLD only). A band whose pick moves keeps its old pick in wtlvf_ / btsf_ and crossfades old -> new
   // linearly over pk_fade_len_ samples (EXP_DAMP_SLIDE_MS); all other bands' old = new. One shared fade counter:
@@ -548,12 +585,12 @@ class Explorer : public Module {
   // the band's last target.
   void Repick() {
     using namespace explorer_k;
-    const float cw = (damp_fc_ < EXP_WT_FMAX) ? damp_fc_ : EXP_WT_FMAX;
+    const float cw = (damp_fc_ < EXP_TB_FMAX) ? damp_fc_ : EXP_TB_FMAX;
     bool moved = false;
     for (int o = 0; o < kSlots; o++) {
       for (int k = 0; k < kBands; k++) {
         int hk = (int)(cw * ifp_[o][k]);
-        if (hk > EXP_WT_HMAX) hk = EXP_WT_HMAX;
+        if (hk > EXP_TB_HMAX) hk = EXP_TB_HMAX;
         const int lv = wt_lv_of_h_[hk];
         int st = EXP_BT_STEPS;
         if (EXP_ANTIFOLD) {
@@ -612,12 +649,17 @@ class Explorer : public Module {
         p.p0 = n - (float)p.n0; p.p1 = k3;
         p.a = n; p.b = k3; break;
       }
-      case kWT: {                          // n0 + p0 = scan position over the set's waves
-        const float pos = (float)(EXP_WT_WAVES - 1) * k2;
-        p.n0 = (int)pos;
-        if (p.n0 > EXP_WT_WAVES - 2) p.n0 = EXP_WT_WAVES - 2;
-        p.p0 = pos - (float)p.n0;
-        p.a = pos; p.b = k3; break;
+      case kWT: {                          // morph m = K2: n0 = packed frame below, p0 = fraction toward n0 + 1,
+                                           // p1 = 1 / zone storage scale (WaveMorph MorphPos / Shape)
+        const int nf = EXP_TB_ZONE_FRAMES[zone];
+        const float pos = (float)(nf - 1) * k2;
+        int f0 = (int)pos;
+        if (f0 > nf - 2) f0 = nf - 2;
+        if (f0 < 0) f0 = 0;
+        p.n0 = tb_off_[zone] + f0;
+        p.p0 = pos - (float)f0;
+        p.p1 = 1.f / EXP_TB_ZONE_I16_SCALE[zone];
+        p.a = pos; p.b = k2; break;
       }
       default: {                           // kBIT: bt = waveform zone (0..31); a = 1..32;
                                            // p0 / p1 / p2 = triangle / saw / pulse weights from K3
@@ -787,24 +829,24 @@ class Explorer : public Module {
         }
         const float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
         W = H + p.p1 * (cr - H);
-      } else if (M == kWT) {
+      } else if (M == kWT) {                     // WaveMorph's Shape: frames n0 / n0 + 1 of the packed tables
         const float ph = phs[k];
         const int lv = wlv[k];
-        const int16_t* t0 = explorer_wt[p.zone][p.n0][lv];
-        const int16_t* t1 = explorer_wt[p.zone][p.n0 + 1][lv];
-        const float xi = ph * (float)EXP_WT_SIZE;
+        const int16_t* t0 = explorer_tb[p.n0][lv];
+        const int16_t* t1 = explorer_tb[p.n0 + 1][lv];
+        const float xi = ph * (float)EXP_TB_SIZE;
         const int   i0 = (int)xi;
         const float fr = xi - (float)i0;
-        const int   j0 = i0 & (EXP_WT_SIZE - 1), j1 = (i0 + 1) & (EXP_WT_SIZE - 1);
+        const int   j0 = i0 & (EXP_TB_SIZE - 1), j1 = (i0 + 1) & (EXP_TB_SIZE - 1);
         const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
         const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
-        W = (v0 + p.p0 * (v1 - v0)) * (1.f / EXP_WT_I16_SCALE);
+        W = (v0 + p.p0 * (v1 - v0)) * p.p1;
         if (pkf > 0 && wlvf[k] != lv) {          // dampener: version moved -> linear crossfade old -> new
-          const int16_t* u0 = explorer_wt[p.zone][p.n0][wlvf[k]];
-          const int16_t* u1 = explorer_wt[p.zone][p.n0 + 1][wlvf[k]];
+          const int16_t* u0 = explorer_tb[p.n0][wlvf[k]];
+          const int16_t* u1 = explorer_tb[p.n0 + 1][wlvf[k]];
           const float w0 = (float)u0[j0] + fr * (float)(u0[j1] - u0[j0]);
           const float w1 = (float)u1[j0] + fr * (float)(u1[j1] - u1[j0]);
-          const float Wf = (w0 + p.p0 * (w1 - w0)) * (1.f / EXP_WT_I16_SCALE);
+          const float Wf = (w0 + p.p0 * (w1 - w0)) * p.p1;
           W = Wf + pkg * (W - Wf);
         }
       } else {                                   // kBIT: step shape tri / saw / pulse (K3)
@@ -953,121 +995,271 @@ class Explorer : public Module {
     if (m <= 0.f && ts == 0.f) f_on_ = false;
   }
 
-  // Wavetables: each wave is defined in the time domain (EXP_WT_SIZE samples, mean removed,
-  // peak normalised to 1), analysed into harmonics 1..EXP_WT_HMAX (DFT), then rebuilt per level
-  // from harmonics 1..EXP_WT_LEVEL_H[l] (band-limited versions), stored as int16.
+  // --- SW1 MID table build (COPIED from wavemorph.h: TimeDomain / IsTimeDomain / PwmWidth / Spectral / SynthPeak /
+  // Rms / BuildTables; WM_* -> EXP_TB_*, wavemorph_sin_tab -> explorer_sin_tab (same size and values), output into
+  // explorer_tb) --------------------------------------------------------------------------------------------------
+  // Time-domain definition of zone z, frame c (u = c / (F_z - 1)), phi = i / EXP_TB_TD_SIZE.
+  static float TbTimeDomain(int z, int c, float u, float ph) {
+    using namespace explorer_k;
+    switch (z) {
+      case 0: {                                    // sine | sync
+        float ps = EXP_TB_SYNC_R[c] * ph;
+        ps -= floorf(ps);
+        return sinf(6.283185307f * ps);
+      }
+      case 1: {                                    // triangle | fold
+        const float tri = (ph < 0.25f) ? 4.f * ph : (ph < 0.75f) ? 2.f - 4.f * ph : 4.f * ph - 4.f;
+        const float v = EXP_TB_FOLD_G[c] * tri;
+        float m = fmodf(v - 1.f, 4.f);
+        if (m < 0.f) m += 4.f;
+        return fabsf(m - 2.f) - 1.f;
+      }
+      case 2: {                                    // saw rough 2: sine + needle (Hann spike on the peak)
+        float x = sinf(6.283185307f * ph);
+        const float d = ph - EXP_TB_SNDL_POS;
+        if (fabsf(d) < 0.5f * EXP_TB_SNDL_W) x += EXP_TB_SNDL_H * 0.5f * (1.f + cosf(6.283185307f * d / EXP_TB_SNDL_W));
+        return x;
+      }
+      case 3:                                      // PWM 50 % -> silence (curve: narrow end)
+        return (ph < TbPwmWidth(u)) ? 1.f : -1.f;
+      case 5:                                      // PPG classic
+        switch (c) {
+          case 0: {                                // saw: 8 steps, 8 levels
+            const int st = (int)(ph * (float)EXP_TB_PPG_SAW_STEPS);
+            return 1.f - 2.f * (float)st / (float)(EXP_TB_PPG_SAW_STEPS - 1);
+          }
+          case 1: {                                // odd-harmonic stack, 32 steps, 16 levels
+            const float xs = floorf(ph * (float)EXP_TB_PPG_ODD_STEPS) / (float)EXP_TB_PPG_ODD_STEPS;
+            const float y = sinf(6.283185307f * xs) + EXP_TB_PPG_ODD_A3 * sinf(6.283185307f * 3.f * xs)
+                          + EXP_TB_PPG_ODD_A5 * sinf(6.283185307f * 5.f * xs);
+            return roundf(y * EXP_TB_PPG_ODD_LEVELS) / EXP_TB_PPG_ODD_LEVELS;
+          }
+          case 2: {                                // bit pattern ((s 5) ^ (s >> 2)) & 15 over 32 steps
+            const int st = (int)(ph * (float)EXP_TB_PPG_BIT_STEPS);
+            return (float)(((st * 5) ^ (st >> 2)) & 15) / 7.5f - 1.f;
+          }
+          default:                                 // sine held in 16 steps
+            return sinf(6.283185307f * floorf(ph * (float)EXP_TB_PPG_SINE_STEPS) / (float)EXP_TB_PPG_SINE_STEPS);
+        }
+      case 7:                                      // soft B 4: stepped lo-res sine (held per step)
+        return sinf(6.283185307f * floorf((float)EXP_TB_LORES_STEPS * ph) / (float)EXP_TB_LORES_STEPS);
+      default: {                                   // hard B 1: sync saw, reset each cycle
+        float ps = EXP_TB_SYNCSAW_R * ph;
+        ps -= floorf(ps);
+        return 2.f * ps - 1.f;
+      }
+    }
+  }
+  static inline bool TbIsTimeDomain(int z, int c) {
+    return z == 0 || z == 1 || z == 3 || z == 5 || (z == 2 && c == 1) || (z == 7 && c == 3) || (z == 9 && c == 0);
+  }
+
+  // PWM width at u: 0.5 (1 - u)^EXP_TB_PWM_CURVE (u = 1: 0, silence).
+  static inline float TbPwmWidth(float u) {
+    using namespace explorer_k;
+    return (u >= 1.f) ? 0.f : 0.5f * powf(1.f - u, EXP_TB_PWM_CURVE);
+  }
+
+  // Spectral definition of zone z, frame c (u = c / (F_z - 1)): A_h (sin), B_h (cos) for h = 1..EXP_TB_HMAX.
+  // Sine phase throughout (B = 0).
+  static void TbSpectral(int z, int c, float u, float* A, float* B) {
+    using namespace explorer_k;
+    for (int h = 0; h <= EXP_TB_HMAX; h++) { A[h] = 0.f; B[h] = 0.f; }
+    auto put = [&](int h, float amp) { if (h >= 1 && h <= EXP_TB_HMAX) A[h] += amp; };
+    auto list = [&](const ExpTbHarm* w, int n) { for (int i = 0; i < n; i++) put(w[i].h, w[i].a); };
+#define EXP_TB_LIST(arr) list(arr, (int)(sizeof(arr) / sizeof(arr[0])))
+    switch (z) {
+      case 2:                                      // saw rough: 1 saw | 3 needle saw (2 = sine + needle, time domain)
+        for (int h = 1; h <= EXP_TB_HMAX; h++) put(h, (c == 0) ? 1.f / (float)h : powf((float)h, -EXP_TB_NSAW_EXP));
+        break;
+      case 4: {                                    // vocal a -> e -> i -> o -> u
+        const float v = u * (float)(EXP_TB_VOX_N - 1);
+        int v0 = (int)v;
+        if (v0 > EXP_TB_VOX_N - 2) v0 = EXP_TB_VOX_N - 2;
+        const float vf = v - (float)v0;
+        float F[3];
+        for (int f = 0; f < 3; f++) F[f] = EXP_TB_VOX_F[v0][f] + vf * (EXP_TB_VOX_F[v0 + 1][f] - EXP_TB_VOX_F[v0][f]);
+        for (int h = 1; h <= EXP_TB_HMAX; h++) {
+          const float fh = (float)h * EXP_TB_VOX_F0;
+          float amp = 0.f;
+          for (int f = 0; f < 3; f++) {
+            const float e = (fh - F[f]) / (0.5f * EXP_TB_VOX_BW[f]);
+            amp += EXP_TB_VOX_A[f] / (1.f + e * e);
+          }
+          put(h, amp);
+        }
+        break;
+      }
+      case 6:                                      // soft A
+        switch (c) {
+          case 0: EXP_TB_LIST(EXP_TB_W_TINE); break;
+          case 1: EXP_TB_LIST(EXP_TB_W_CLARINET); break;
+          case 2: EXP_TB_LIST(EXP_TB_W_DRAWBAR); break;
+          default: EXP_TB_LIST(EXP_TB_W_MIXTURE); break;
+        }
+        break;
+      case 7:                                      // soft B (4 = lo-res is time domain)
+        switch (c) {
+          case 0:                                  // harmonium
+            put(1, EXP_TB_HARMONIUM_H1); put(2, EXP_TB_HARMONIUM_H2); put(3, EXP_TB_HARMONIUM_H3);
+            for (int h = 4; h <= EXP_TB_HMAX; h++) put(h, EXP_TB_HARMONIUM_HN / (float)h);
+            break;
+          case 1: EXP_TB_LIST(EXP_TB_W_GHOST5); break;
+          default: EXP_TB_LIST(EXP_TB_W_BELL); break;
+        }
+        break;
+      case 8:                                      // hard A
+        switch (c) {
+          case 0:                                  // PPG resonant
+            for (int h = 1; h <= EXP_TB_PPGRES_N; h++) put(h, 1.f - EXP_TB_PPGRES_SLOPE * (float)(h - 1));
+            break;
+          case 1:                                  // nasal oboe reed
+            EXP_TB_LIST(EXP_TB_W_OBOE);
+            for (int h = 9; h <= EXP_TB_HMAX; h++) put(h, EXP_TB_OBOE_TAIL * powf(8.f / (float)h, EXP_TB_OBOE_TAIL_EXP));
+            break;
+          case 2:                                  // formant brass
+            for (int h = 1; h <= EXP_TB_HMAX; h++) {
+              const float e = ((float)h - EXP_TB_BRASS_CENTER) / EXP_TB_BRASS_WIDTH;
+              put(h, (1.f / (float)h) * (1.f + EXP_TB_BRASS_GAIN * expf(-e * e)));
+            }
+            break;
+          default: EXP_TB_LIST(EXP_TB_W_BASSBELL); break;   // bass bell 7/14
+        }
+        break;
+      default:                                     // hard B (zone 10; 1 = sync saw is time domain)
+        switch (c) {
+          case 1:                                  // fuzz reed
+            for (int h = 1; h <= EXP_TB_HMAX; h++) put(h, powf((float)h, -EXP_TB_FUZZ_EXP));
+            break;
+          case 2:                                  // clipper
+            put(1, EXP_TB_CLIP_H1);
+            for (int h = 2; h <= EXP_TB_HMAX; h++) {
+              const float kh = (float)EXP_TB_CLIP_KNEE / (float)h;
+              put(h, (h <= EXP_TB_CLIP_KNEE) ? EXP_TB_CLIP_FLAT : EXP_TB_CLIP_FLAT * kh * kh);
+            }
+            break;
+          default:                                 // PPG feedback: saw 1/n without harmonics 1 .. SKIP
+            for (int h = EXP_TB_PPGFB_SKIP + 1; h <= EXP_TB_HMAX; h++) put(h, 1.f / (float)h);
+            break;
+        }
+        break;
+    }
+#undef EXP_TB_LIST
+  }
+
+  // Peak of the full-band (harmonics 1..EXP_TB_HMAX) frame, synthesised at EXP_TB_TD_SIZE points.
+  static float TbSynthPeak(const float* A, const float* B) {
+    using namespace explorer_k;
+    constexpr int N = EXP_TB_TD_SIZE, M = N - 1, Q = N / 4;
+    const float* tab = explorer_sin_tab;
+    float pk = 0.f;
+    for (int i = 0; i < N; i++) {
+      float v = 0.f;
+      int idx = 0;
+      for (int h = 1; h <= EXP_TB_HMAX; h++) {
+        idx = (idx + i) & M;                     // h i mod N
+        v += A[h] * tab[idx] + B[h] * tab[(idx + Q) & M];
+      }
+      if (fabsf(v) > pk) pk = fabsf(v);
+    }
+    return pk;
+  }
+  static float TbRms(const float* A, const float* B) {   // full-band RMS from the coefficients
+    float e = 0.f;
+    for (int h = 1; h <= explorer_k::EXP_TB_HMAX; h++) e += A[h] * A[h] + B[h] * B[h];
+    return sqrtf(0.5f * e);
+  }
+
+  // All zones and frames: definition -> (DFT) -> mean removed, peak 1 -> (re-phase) -> (RMS match + cap)
+  // -> 14 band-limited int16 levels. Needs explorer_sin_tab filled (Init does it first).
   void BuildTables() {
     using namespace explorer_k;
-    constexpr int N = EXP_WT_SIZE;
-    // Init-only scratch (SDRAM, see explorer_wt_scratch).
-    float* tab = explorer_wt_scratch.tab;        // sin(2 pi i / N), exact index arithmetic
-    float* x   = explorer_wt_scratch.x;          // time-domain wave
-    float* acc = explorer_wt_scratch.acc;        // level accumulator
-    float* A   = explorer_wt_scratch.A;          // harmonic coefficients (sin)
-    float* B   = explorer_wt_scratch.B;          // harmonic coefficients (cos)
-    for (int i = 0; i < N; i++) tab[i] = sinf(6.283185307f * (float)i / (float)N);
-    auto sn = [&](int i) { return tab[i & (N - 1)]; };
-    auto cs = [&](int i) { return tab[(i + N / 4) & (N - 1)]; };
-    uint32_t seed = EXP_WT_SEED;
-    auto rnd = [&]() {                           // uniform in [-1, 1)
-      seed = seed * 1664525u + 1013904223u;
-      return (float)(seed >> 8) * (2.f / 16777216.f) - 1.f;
-    };
-    for (int s = 0; s < EXP_WT_SETS; s++) {
-      for (int w = 0; w < EXP_WT_WAVES; w++) {
-        // 1) time-domain wave
-        if (s == 0) {                            // analog: sine, triangle, square, saw (series to HMAX)
-          for (int i = 0; i < N; i++) {
-            float v = 0.f;
-            for (int h = 1; h <= EXP_WT_HMAX; h++) {
-              const float sh = sn(h * i);
-              if (w == 0)      { if (h == 1) v += sh; }
-              else if (w == 1) { if (h & 1) v += ((((h - 1) / 2) & 1) ? -1.f : 1.f) * sh / (float)(h * h); }
-              else if (w == 2) { if (h & 1) v += sh / (float)h; }
-              else             { v += sh / (float)h; }
-            }
-            x[i] = v;
-          }
-        } else if (s == 1) {                     // PPG-style: stepped / low-resolution digital waves
-          for (int i = 0; i < N; i++) {
-            const float ph = (float)i / (float)N;
-            float v;
-            if (w == 0) {                        // sine held in 16 steps per cycle
-              const int st = i / (N / 16);
-              v = sn(st * (N / 16));
-            } else if (w == 1) {                 // saw: 8 steps, 8 levels
-              const int st = i / (N / 8);
-              v = 1.f - 2.f * (float)st / 7.f;
-            } else if (w == 2) {                 // odd-harmonic stack, 32 steps, 16 amplitude levels
-              const int st = i / (N / 32);
-              const int ii = st * (N / 32);
-              const float y = sn(ii) + 0.5f * sn(3 * ii) + 0.33f * sn(5 * ii);
-              v = roundf(y * 7.5f) / 7.5f;
-            } else {                             // bit pattern: ((s * 5) ^ (s >> 2)) & 15 over 32 steps
-              const int st = (int)(ph * 32.f);
-              v = (float)(((st * 5) ^ (st >> 2)) & 15) / 7.5f - 1.f;
-            }
-            x[i] = v;
-          }
-        } else if (s == 2) {                     // vocal: formant-weighted harmonics (vowels a, e, i, o)
-          for (int h = 1; h <= EXP_WT_HMAX; h++) {
-            const float fh = (float)h * EXP_WT_VOX_F0;
-            float amp = 0.f;
-            for (int f = 0; f < 3; f++) {
-              const float u = (fh - EXP_WT_VOX_F[w][f]) / (0.5f * EXP_WT_VOX_BW[f]);
-              amp += EXP_WT_VOX_A[f] / (1.f + u * u);
-            }
-            A[h] = amp;
-          }
-          for (int i = 0; i < N; i++) {
-            float v = 0.f;
-            for (int h = 1; h <= EXP_WT_HMAX; h++) v += A[h] * sn(h * i);
-            x[i] = v;
-          }
-        } else {                                 // noisy: random phases, flatter and rougher across the set
-          if (w < 3) {
-            for (int h = 1; h <= EXP_WT_HMAX; h++) {
-              const float tilt = (w == 0) ? 1.f / (float)h : (w == 1) ? 1.f / sqrtf((float)h) : 1.f;
-              const float am = (w == 0) ? tilt : tilt * (0.5f + 0.5f * fabsf(rnd()));
-              const float ph = 0.5f * (rnd() + 1.f);
-              A[h] = am * cosf(6.283185307f * ph);
-              B[h] = am * sinf(6.283185307f * ph);
-            }
+    static_assert(EXP_SIN_SIZE == EXP_TB_TD_SIZE, "table build indexes explorer_sin_tab exactly (as wavemorph)");
+    constexpr int N = EXP_TB_TD_SIZE;
+    constexpr int M = N - 1;
+    constexpr int Q = N / 4;                     // quarter period (cos offset)
+    constexpr int S = N / EXP_TB_SIZE;           // table step in the sin table
+    float* x   = explorer_tb_scratch.x;
+    float* acc = explorer_tb_scratch.acc;
+    float* A   = explorer_tb_scratch.A;
+    float* B   = explorer_tb_scratch.B;
+    const float* tab = explorer_sin_tab;
+    float rms_saw = 1.f;                         // RMS of the plain saw (zone 3 frame 1), set when built
+    int off = 0;
+    for (int z = 0; z < EXP_TB_ZONES; z++) {
+      tb_off_[z] = off;
+      const int nf = EXP_TB_ZONE_FRAMES[z];
+      off += nf;
+      for (int f = 0; f < nf; f++) {
+        const float u = (float)f / (float)(nf - 1);
+        if (TbIsTimeDomain(z, f)) {
+          // 1) time domain, mean removed, peak 1
+          float mean = 0.f;
+          for (int i = 0; i < N; i++) { x[i] = TbTimeDomain(z, f, u, (float)i / (float)N); mean += x[i]; }
+          mean /= (float)N;
+          float pk = 0.f;
+          for (int i = 0; i < N; i++) { x[i] -= mean; if (fabsf(x[i]) > pk) pk = fabsf(x[i]); }
+          const float g = (pk > 0.f) ? 1.f / pk : 0.f;
+          // 2) DFT: x = sum_h A_h sin + B_h cos (peak scale folded in)
+          for (int h = 1; h <= EXP_TB_HMAX; h++) {
+            float a = 0.f, b = 0.f;
+            int idx = 0;
             for (int i = 0; i < N; i++) {
-              float v = 0.f;
-              for (int h = 1; h <= EXP_WT_HMAX; h++) v += A[h] * sn(h * i) + B[h] * cs(h * i);
-              x[i] = v;
+              a += x[i] * tab[idx];
+              b += x[i] * tab[(idx + Q) & M];
+              idx = (idx + h) & M;
             }
-          } else {                               // single cycle of white noise
-            for (int i = 0; i < N; i++) x[i] = rnd();
+            A[h] = a * g * (2.f / (float)N);
+            B[h] = b * g * (2.f / (float)N);
+          }
+        } else {
+          // 1) harmonic definition; peak of the full-band frame (no DC by construction)
+          TbSpectral(z, f, u, A, B);
+          const float pk = TbSynthPeak(A, B);
+          const float g = (pk > 0.f) ? 1.f / pk : 0.f;
+          for (int h = 1; h <= EXP_TB_HMAX; h++) { A[h] *= g; B[h] *= g; }
+        }
+        if (EXP_TB_ZONE_REPHASE[z]) {                 // zones 1, 2, 3, 6, 10: one phase convention (the saw's:
+          for (int h = 1; h <= EXP_TB_HMAX; h++) {    // sine phase, positive), magnitudes kept exactly
+            if (B[h] == 0.f && A[h] >= 0.f) continue; // already in the convention: left bit-exact
+            A[h] = sqrtf(A[h] * A[h] + B[h] * B[h]);
+            B[h] = 0.f;
+          }
+          if (!EXP_TB_ZONE_RMS_MATCH[z]) {            // peak-normalised zones: peak 1 again after re-phasing
+            const float pk = TbSynthPeak(A, B);
+            const float g = (pk > 0.f) ? 1.f / pk : 0.f;
+            for (int h = 1; h <= EXP_TB_HMAX; h++) A[h] *= g;
           }
         }
-        // 2) mean removed, peak normalised to 1
-        float mean = 0.f;
-        for (int i = 0; i < N; i++) mean += x[i];
-        mean /= (float)N;
-        float pk = 0.f;
-        for (int i = 0; i < N; i++) { x[i] -= mean; if (fabsf(x[i]) > pk) pk = fabsf(x[i]); }
-        const float g = (pk > 0.f) ? 1.f / pk : 0.f;
-        for (int i = 0; i < N; i++) x[i] *= g;
-        // 3) DFT: x = sum_h A_h sin + B_h cos
-        for (int h = 1; h <= EXP_WT_HMAX; h++) {
-          float a = 0.f, b = 0.f;
-          for (int i = 0; i < N; i++) { a += x[i] * sn(h * i); b += x[i] * cs(h * i); }
-          A[h] = a * (2.f / (float)N);
-          B[h] = b * (2.f / (float)N);
+        if (z == 2 && f == 0) rms_saw = TbRms(A, B);  // the plain saw: RMS target of zones 3, 6..10
+        if (EXP_TB_ZONE_RMS_MATCH[z]) {               // zones 3, 6..10: equal RMS, then the storage cap
+          const float r = TbRms(A, B);
+          float g = (r > 0.f) ? rms_saw / r : 0.f;
+          for (int h = 1; h <= EXP_TB_HMAX; h++) { A[h] *= g; B[h] *= g; }
+          const float pk = TbSynthPeak(A, B);
+          const float cap = 32767.f / EXP_TB_ZONE_I16_SCALE[z];   // the zone's storage headroom
+          g = (pk > cap) ? cap / pk : 1.f;
+          for (int h = 1; h <= EXP_TB_HMAX; h++) { A[h] *= g; B[h] *= g; }
         }
-        // 4) band-limited levels (cumulative)
-        for (int i = 0; i < N; i++) acc[i] = 0.f;
+        // 3) band-limited levels (cumulative), 256 points
+        for (int i = 0; i < EXP_TB_SIZE; i++) acc[i] = 0.f;
         int hdone = 0;
-        for (int l = 0; l < EXP_WT_LEVELS; l++) {
-          const int ht = EXP_WT_LEVEL_H[l];
-          for (int h = hdone + 1; h <= ht; h++)
-            for (int i = 0; i < N; i++) acc[i] += A[h] * sn(h * i) + B[h] * cs(h * i);
+        for (int l = 0; l < EXP_TB_LEVELS; l++) {
+          const int ht = EXP_TB_LEVEL_H[l];
+          for (int h = hdone + 1; h <= ht; h++) {
+            const float a = A[h], b = B[h];
+            if (a == 0.f && b == 0.f) continue;
+            int idx = 0;
+            const int step = (h * S) & M;
+            for (int i = 0; i < EXP_TB_SIZE; i++) {
+              acc[i] += a * tab[idx] + b * tab[(idx + Q) & M];
+              idx = (idx + step) & M;
+            }
+          }
           hdone = ht;
-          int16_t* dst = explorer_wt[s][w][l];
-          for (int i = 0; i < N; i++) {
-            float v = acc[i] * EXP_WT_I16_SCALE;
+          int16_t* dst = explorer_tb[tb_off_[z] + f][l];
+          for (int i = 0; i < EXP_TB_SIZE; i++) {
+            float v = acc[i] * EXP_TB_ZONE_I16_SCALE[z];
             v = (v > 32767.f) ? 32767.f : (v < -32768.f) ? -32768.f : v;   // int16 range (storage)
             dst[i] = (int16_t)lrintf(v);
           }
@@ -1242,7 +1434,8 @@ class Explorer : public Module {
   float ifp_[kSlots][kBands];      // 1 / f'_k
   uint8_t wtlv_[kSlots][kBands], wtlvf_[kSlots][kBands];   // dampener: wavetable level in use / before the last re-pick
   uint8_t btsc_[kSlots][kBands], btsf_[kSlots][kBands];    // dampener: BITTAB steps in use / before the last re-pick
-  uint8_t wt_lv_of_h_[explorer_k::EXP_WT_HMAX + 1];        // largest version index with LEVEL_H <= h
+  uint8_t wt_lv_of_h_[explorer_k::EXP_TB_HMAX + 1];        // largest version index with LEVEL_H <= h
+  int     tb_off_[explorer_k::EXP_TB_ZONES] = {};          // MID tables: packed frame offset per zone (BuildTables)
   float bt_all_[explorer_k::EXP_BT_WAVES][explorer_k::EXP_BT_STEPS] = {};   // BITTAB waveforms
 
   // Model state per slot and band
@@ -1258,6 +1451,8 @@ class Explorer : public Module {
   int   var_ = 0, vfrom_ = 0;      // model variant (model << 6 | item): current / fading out
   volatile int var_t_ = 0;         // target variant (Controls)
   int   mfade_n_ = 0, mfade_len_ = 8;
+  int   zfade_len_ = 8;            // MID table zone change fade (EXP_TB_ZONE_XFADE_MS) in 8 kHz samples
+  int   mfade_cur_ = 8;            // length of the running fade (mfade_len_ or zfade_len_)
   float mg_ = 1.f;                 // new-model gain during a fade
   float k2s_ = 0.f, k3s_ = 0.f;                       // smoothed knobs
   volatile float k2_t_ = 0.f, k3_t_ = 0.f;           // targets

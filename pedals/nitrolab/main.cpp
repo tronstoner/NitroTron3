@@ -13,7 +13,8 @@
 //                          K5 onset-triggered envelope on the K4 cutoff, K2 the same on the K3 FM index (UP))
 // SW3 MIDDLE = explorer   (sound-exploration models on a copy of armitage's band
 //                          engine — see modules/explorer.h; SW1 = family, K1 = selection
-//                          (UP: FM ratio zones + XBAND, MID: wavetable set, DOWN: model), K2 = tone,
+//                          (UP: FM ratio zones + XBAND, MID: table zone (WaveMorph's 10, copied),
+//                          DOWN: model), K2 = tone (MID: morph),
 //                          K3 = dampener (UP / MID: per-band harmonic ceiling 150 Hz -> 4 kHz; DOWN: sweep),
 //                          SW2 = octave up / played / down; K4 / K5 unused (K4 envelope / post filter parked))
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
@@ -211,7 +212,10 @@ int main() {
         else if (d.model == Explorer::kXFM)                   // A = partner n, B = index I
           hw.seed.PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
                             (int)(d.a + 0.5f), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.sw1 == 1)                                  // tables: A = scan / waveform, B = K3
+        else if (d.model == Explorer::kWT)                    // MID tables: zone, morph m (B), frame position (A)
+          hw.seed.PrintLine("WT/%s m" D2F " pos" D2F " fc %d mute %d cpu %u%%",
+                            zn, D2V(d.b), D2V(d.a), (int)(d.fc + 0.5f), d.mute ? 1 : 0, cpu);
+        else if (d.sw1 == 1)                                  // parked bit table: A = waveform, B = K3
           hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " fc %d mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
                             D2SV(d.a), D2SV(d.b), (int)(d.fc + 0.5f), d.mute ? 1 : 0, cpu);
