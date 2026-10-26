@@ -68,7 +68,7 @@ constexpr WmHarm WM_W_DRAWBAR[]  = { {1, 1.f}, {2, 1.f}, {3, .8f}, {4, .5f}, {6,
 constexpr WmHarm WM_W_MIXTURE[]  = { {1, 1.f}, {2, .7f}, {3, .35f}, {4, .5f}, {6, .3f}, {8, .4f}, {12, .25f}, {16, .25f}, {24, .12f} };
 constexpr WmHarm WM_W_GHOST5[]   = { {1, .05f}, {3, 1.f}, {5, .8f} };
 constexpr WmHarm WM_W_BELL[]     = { {1, 1.f}, {2, .15f}, {4, .3f}, {7, .25f}, {11, .45f}, {12, .35f}, {17, .3f}, {18, .22f}, {23, .12f} };
-constexpr WmHarm WM_W_BASSBELL[] = { {1, 1.f}, {2, .2f}, {14, .7f}, {28, .5f} };
+constexpr WmHarm WM_W_BASSBELL[] = { {1, 1.f}, {2, .2f}, {7, .7f}, {14, .5f} };   // 2026-10-26: bell partials one octave lower (14/28 -> 7/14), was too high
 // Harmonium: 1: H1, 2: H2, 3: H3, n >= 4: HN / n.
 constexpr float WM_HARMONIUM_H1 = 0.6f, WM_HARMONIUM_H2 = 1.f, WM_HARMONIUM_H3 = 0.9f, WM_HARMONIUM_HN = 1.2f;
 // Stepped lo-res: sine held in this many steps per cycle (time domain: sin(2 pi floor(S phi) / S)).
