@@ -33,7 +33,8 @@
 // TABLES (built at Init into SDRAM, int16, packed): per zone F_z frames (frame 1 = the exact base wave),
 // u = frame / (F_z - 1). Each frame: defined in the time domain at WM_TD_SIZE (1024) points and analysed by
 // DFT into harmonics 1..127 [time], or defined directly by harmonic amplitudes, sine phase [spectral];
-// mean removed, peak normalised to 1 (an all-silent frame stays silent); zones 3 and 6..10 then scaled
+// mean removed, peak normalised to 1 (an all-silent frame stays silent); zones 1, 2, 6, 10 re-phased to the
+// saw's phase convention (sine phase, positive; magnitudes kept, then their level rule again); zones 3 and 6..10 then scaled
 // to the RMS of the plain saw (zone 3 corner 1, full band), then capped to the int16 storage headroom
 // (32767 / WM_ZONE_I16_SCALE[zone]); then rebuilt as 14 band-limited versions {1,2,3,4,6,8,12,16,24,32,48,64,96,127} at 256 points.
 //   1 SINE SYNC  7 frames: sin(2 pi frac(R phi)), R = 1 | 1.5 | 2 | 2.7 | 4 | 4.6 | 6.5             [time]
@@ -688,6 +689,17 @@ class WaveMorph : public Module {
           const float pk = SynthPeak(A, B);
           const float g = (pk > 0.f) ? 1.f / pk : 0.f;
           for (int h = 1; h <= WM_HMAX; h++) { A[h] *= g; B[h] *= g; }
+        }
+        if (WM_ZONE_REPHASE[z]) {                     // zones 1, 2, 6, 10: one phase convention (the saw's:
+          for (int h = 1; h <= WM_HMAX; h++) {        // sine phase, positive), magnitudes kept exactly
+            A[h] = sqrtf(A[h] * A[h] + B[h] * B[h]);
+            B[h] = 0.f;
+          }
+          if (!WM_ZONE_RMS_MATCH[z]) {                // peak-normalised zones: peak 1 again after re-phasing
+            const float pk = SynthPeak(A, B);
+            const float g = (pk > 0.f) ? 1.f / pk : 0.f;
+            for (int h = 1; h <= WM_HMAX; h++) A[h] *= g;
+          }
         }
         if (z == 2 && f == 0) rms_saw = Rms(A, B);   // the plain saw: RMS target of zones 3, 6..10
         if (WM_ZONE_RMS_MATCH[z]) {                   // zones 3, 6..10: equal RMS, then the storage cap

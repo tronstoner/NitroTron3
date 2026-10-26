@@ -19,6 +19,10 @@ constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_SYNC_N, WM_CORNERS, WM_CORNERS, 
                                              WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS };
 // Zones 3 and 6..10: each wave scaled to the plain saw's RMS (then capped to the storage headroom).
 constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, true, false, false, true, true, true, true, true };
+// Zones 1, 2, 6, 10: every frame re-phased to ONE common convention after the DFT / definition: harmonic n
+// gets magnitude |H_n| (kept exactly) at the saw's phase (zone 3 corner 1: sine phase, positive), so
+// neighbouring frames cannot cancel in the blend; then the zone's level rule (peak 1 / RMS match).
+constexpr bool  WM_ZONE_REPHASE[WM_ZONES]   = { true, true, false, false, false, true, false, false, false, true };
 constexpr int   WM_TOTAL_FRAMES   = WM_SYNC_N + 7 * WM_CORNERS + 2 * WM_FRAMES16;   // packed table frames
 constexpr int WmSumFrames(int i = 0) { return (i >= WM_ZONES) ? 0 : WM_ZONE_FRAMES[i] + WmSumFrames(i + 1); }
 static_assert(WmSumFrames() == WM_TOTAL_FRAMES, "WM_TOTAL_FRAMES = sum of WM_ZONE_FRAMES");
@@ -32,12 +36,12 @@ constexpr int   WM_LEVELS         = 14;      // band-limited versions per frame
 constexpr int   WM_LEVEL_H[WM_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
 constexpr float WM_TAB_FMAX       = 4000.f;  // Hz; band-engine ceiling for the table band limit (= EXP_WT_FMAX)
 constexpr float WM_I16_SCALE      = 16384.f; // int16 storage scale, default (2x headroom: |table| <= 2.0)
-constexpr float WM_I16_SCALE_WIDE = 6554.f;  // zone 3 saw rough: headroom |table| <= 5.0, so the needle corners
+constexpr float WM_I16_SCALE_WIDE = 6554.f;  // zones 3 / 10: headroom |table| <= 5.0, so the needle corners / fuzz / clipper
                                              // (crest ~9, full-band peak ~4.6) reach the saw's RMS uncapped; LSB 2.5x coarser
 // Storage scale per zone; the RMS-matched waves are capped to that zone's headroom 32767 / scale.
 constexpr float WM_ZONE_I16_SCALE[WM_ZONES] = { WM_I16_SCALE, WM_I16_SCALE, WM_I16_SCALE_WIDE, WM_I16_SCALE,
                                                 WM_I16_SCALE, WM_I16_SCALE, WM_I16_SCALE, WM_I16_SCALE,
-                                                WM_I16_SCALE, WM_I16_SCALE };
+                                                WM_I16_SCALE, WM_I16_SCALE_WIDE };   // zones 3, 10: wide headroom
 
 // Zone 1 sine | sync: x = sin(2 pi frac(R phi)), R per corner (non-integer: audible sync, not octaves).
 constexpr float WM_SYNC_R[WM_SYNC_N]  = { 1.f, 1.5f, 2.f, 2.7f, 4.f, 4.6f, 6.5f };   // 2026-10-26: last 7 -> 6.5 (integer = plain sine)
