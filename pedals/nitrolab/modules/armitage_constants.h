@@ -58,7 +58,7 @@ ARM_TUNABLE(bool,  ARM_ANTIFOLD,      true);     // false = no cap (for A/B comp
 ARM_TUNABLE(float, ARM_FOLD_LIMIT_HZ, 4000.f);   // Hz; Nyquist of the 8 kHz band engine
 
 // --- K4 = post filter on the final 48 kHz wet (after the DC blocker, before the soft clipper) ---
-// Copied law from mnemonic's tone filter (MNEM_FILT_*): two cascaded TPT SVF stages (24 dB/oct),
+// Copied law from mnemonic's tone filter (MNEM_FILT_*): ARM_FILT_STAGES TPT SVF stages (1: 12 dB/oct, 2: 24 dB/oct),
 // t = 2 k4 - 1, tmag = |t|^ARM_FILT_CURVE.
 //   t = 0 (noon): true bypass (filter not run, wet bit-identical).
 //   t < 0: low-pass,  fc = ARM_FILT_FMAX (ARM_FILT_LP_MIN / ARM_FILT_FMAX)^tmag   (4 kHz -> 180 Hz)
@@ -80,6 +80,7 @@ ARM_TUNABLE(float, ARM_FILT_FC_MAX,    20000.f);  // Hz; stability ceiling (belo
 ARM_TUNABLE(float, ARM_FILT_CURVE,     1.0f);     // |t| exponent: 1 = cutoff moves linearly in octaves with the knob
 ARM_TUNABLE(float, ARM_FILT_Q,         1.1f);     // per-stage Q, both stages, fixed (2026-10-22: K5 resonance removed); SAW / PULSE / unshaped
 ARM_TUNABLE(float, ARM_FILT_Q_UP,      0.707f);   // per-stage Q in ADD / FB (SW1 UP): flat, no resonance (builder 2026-10-23)
+ARM_TUNABLE(int,   ARM_FILT_STAGES,    1);        // 1 = one TPT SVF stage (2-pole, 12 dB/oct); 2 = two cascaded stages (24 dB/oct) (2026-10-26: 2 -> 1)
 ARM_TUNABLE(float, ARM_FILT_SMOOTH_MS, 5.f);      // ms; one-pole on t
 ARM_TUNABLE(float, ARM_FILT_FADE,      0.03f);    // |t| over which bypass crossfades into the filter
 ARM_TUNABLE(float, ARM_FILT_SNAP,      1e-4f);    // |t_smoothed| below this with target 0: bypass

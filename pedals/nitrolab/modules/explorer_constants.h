@@ -96,7 +96,7 @@ constexpr float EXP_OCT_XFADE_MS  = 10.f;    // ms; linear slide between octave 
 
 // --- K4 = post filter on the final 48 kHz wet (armitage's K4 law, no envelopes, no resonance) ---
 // t = 2 k4 - 1, tmag = |t|^EXP_FILT_CURVE; noon = true bypass; t < 0 LP fc = FMAX (LP_MIN / FMAX)^tmag,
-// t > 0 HP fc = FMIN (HP_MAX / FMIN)^tmag; two cascaded TPT SVF stages (24 dB/oct), Q fixed per stage.
+// t > 0 HP fc = FMIN (HP_MAX / FMIN)^tmag; EXP_FILT_STAGES TPT SVF stages (1: 12, 2: 24 dB/oct), Q fixed per stage.
 // wet = dry + m (filtered - dry), m -> min(|t| / FADE, 1), slid at most 1 per EXP_FILT_SLIDE_MS.
 constexpr float EXP_FILT_FMIN      = 40.f;     // Hz; HP cutoff just right of noon (= ARM_FILT_FMIN)
 constexpr float EXP_FILT_FMAX      = 4000.f;   // Hz; LP cutoff just left of noon (= ARM_FILT_FMAX)
@@ -105,7 +105,9 @@ constexpr float EXP_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW (
 constexpr float EXP_FILT_FC_MIN    = 10.f;     // Hz; stability floor on fc (= ARM_FILT_FC_MIN)
 constexpr float EXP_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling on fc (= ARM_FILT_FC_MAX)
 constexpr float EXP_FILT_CURVE     = 1.0f;     // |t| exponent (= ARM_FILT_CURVE)
-constexpr float EXP_FILT_Q         = 0.707f;   // per-stage Q, both stages: flat, no resonance
+constexpr float EXP_FILT_Q         = 0.707f;   // per-stage Q: flat, no resonance
+constexpr int   EXP_FILT_STAGES    = 1;        // 1 = one TPT SVF stage (2-pole, 12 dB/oct); 2 = two cascaded stages (24 dB/oct)
+static_assert(EXP_FILT_STAGES == 1 || EXP_FILT_STAGES == 2, "EXP_FILT_STAGES: 1 or 2");
 constexpr float EXP_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t, per block (= ARM_FILT_SMOOTH_MS)
 constexpr float EXP_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter (= ARM_FILT_FADE)
 constexpr float EXP_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass (= ARM_FILT_SNAP)

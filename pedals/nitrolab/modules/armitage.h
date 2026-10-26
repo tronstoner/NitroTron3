@@ -92,7 +92,7 @@
 //   soft clipper: wet = ARM_SAT_TRIM * ARM_SAT_T * tanh(wet / ARM_SAT_T)  (Pade(3,3) tanh)
 //
 //   K4 POST FILTER (final 48 kHz wet, every mode / octave; law copied from mnemonic's tone filter):
-//     two cascaded TPT SVF stages (24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
+//     ARM_FILT_STAGES TPT SVF stages (1: 12 dB/oct, 2: 24 dB/oct), t = 2 k4 - 1 smoothed (ARM_FILT_SMOOTH_MS, per block),
 //     tmag = |t|^ARM_FILT_CURVE, Q = ARM_FILT_Q (both stages, fixed; ARM_FILT_Q_UP 0.707 = flat in ADD / FB)
 //     the K5 envelope turns the knob: t_eff = t + ARM_ENV_DEPTH e (NOT clamped to the knob's ends;
 //     fc only limited by ARM_FILT_FC_MIN/MAX for stability), smoothed like t
@@ -165,8 +165,8 @@
 //                           CW: the mirror - each pluck starts at 0, rises to K3 in 3 T, holds K3.
 //                           I = ARM_FM_INDEX_MAX k3_eff^2. MID / DOWN: nothing (parked PWM LFO shares the knob)
 //   K3  FM index            I = ARM_FM_INDEX_MAX * (k3 g)^2 (0 -> 12 rad; g = 1 at K2 noon), ADD / FB; SAW / PULSE / unshaped: nothing
-//   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct,
-//                           two stages, Q fixed ARM_FILT_Q 1.1; ADD / FB: ARM_FILT_Q_UP 0.707, no peak), on the final wet, all modes
+//   K4  post filter         CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (ARM_FILT_STAGES:
+//                           1 = 12 dB/oct, 2 = 24 dB/oct; Q fixed ARM_FILT_Q 1.1; ADD / FB: ARM_FILT_Q_UP 0.707, no peak), on the final wet, all modes
 //   K5  envelope            bipolar, noon = off (e = 0); triggered on each onset: CCW (t2 < 0) e falls
 //                           to -1 and holds, tau 4 s (off noon) -> 0.05 s (ends); CW (t2 > 0) rise +
 //                           decay: e rises to +1 at the knob tau, then decays to 0 with tau x
@@ -558,7 +558,7 @@ class Armitage : public Module {
       int_(acc * ARM_OUT_GAIN, wet + i);
     }
     DcBlock(wet, size);   // wet-only DC blocker (FB carries DC); dry is untouched by the shell mix
-    PostFilter(wet, size);  // K4: LP | bypass | HP, 24 dB/oct
+    PostFilter(wet, size);  // K4: LP | bypass | HP, ARM_FILT_STAGES x 12 dB/oct
     Saturate(wet, size);    // wet soft clipper ARM_SAT_T * tanh(x / ARM_SAT_T) * ARM_SAT_TRIM
     ApplyMute(wet, size);   // FS1 test-tool mute, last step: declicked wet gain, dry untouched
   }
@@ -1039,12 +1039,13 @@ class Armitage : public Module {
   }
 
   // K4 post filter on the final 48 kHz wet (in place): LP (t < 0) | bypass (t = 0) | HP (t > 0),
-  // two cascaded SVF stages. t smoothed per block; cutoff and Q from the smoothed t; wet =
+  // ARM_FILT_STAGES SVF stages (1 or 2). t smoothed per block; cutoff and Q from the smoothed t; wet =
   // dry + m (filtered - dry), m slides (at most f_step_ per sample) toward min(|t| / ARM_FILT_FADE, 1).
   // t = 0 and m = 0: not run (bit-identical). Type change (t crossed noon): m slides to 0, then
   // the new type starts from a cleared state.
   void PostFilter(float* wet, size_t size) {
     using namespace armitage_k;
+    static_assert(ARM_FILT_STAGES == 1 || ARM_FILT_STAGES == 2, "ARM_FILT_STAGES: 1 or 2");
     if ((int)size != f_sz_) {                    // per-block one-pole on t (ARM_FILT_SMOOTH_MS)
       f_sz_ = (int)size;
       f_a_ = 1.f - expf(-(float)size / (ARM_FILT_SMOOTH_MS * 0.001f * sr_));
@@ -1095,7 +1096,8 @@ class Armitage : public Module {
         const float x = wet[n];
         float lp, hp, y;
         s0.Process(x, lp, hp);
-        s1.Process(hp, lp, y);                   // y = stage-2 HP
+        if (ARM_FILT_STAGES == 2) s1.Process(hp, lp, y);   // y = stage-2 HP
+        else                      y = hp;                  // one stage (12 dB/oct)
         wet[n] = x + m * (y - x);
       }
     } else {
@@ -1105,7 +1107,8 @@ class Armitage : public Module {
         const float x = wet[n];
         float lp, hp, y;
         s0.Process(x, lp, hp);
-        s1.Process(lp, y, hp);                   // y = stage-2 LP
+        if (ARM_FILT_STAGES == 2) s1.Process(lp, y, hp);   // y = stage-2 LP
+        else                      y = lp;                  // one stage (12 dB/oct)
         wet[n] = x + m * (y - x);
       }
     }

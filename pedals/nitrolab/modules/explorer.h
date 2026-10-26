@@ -38,7 +38,7 @@
 //   not run: its mix slides to 0 (at most 1 per EXP_FILT_SLIDE_MS, cutoff held), then bypass; leaving UP
 //   it slides back in.
 //
-// K4 POST FILTER (armitage's K4 law, no envelopes): two cascaded TPT SVF stages (24 dB/oct),
+// K4 POST FILTER (armitage's K4 law, no envelopes): EXP_FILT_STAGES TPT SVF stages (1: 12 dB/oct, 2: 24 dB/oct),
 //   Q = EXP_FILT_Q (0.707, flat) per stage; t = 2 k4 - 1 smoothed per block; noon = true bypass
 //   (crossfade over |t| < EXP_FILT_FADE); CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz, cutoff
 //   linear in octaves (curve 1); LP <-> HP: fades out, swaps type from cleared state, fades in.
@@ -95,7 +95,7 @@
 //   K1  model        equal zones: SW1 UP 4, MID 2 (1 while the bit table is parked), DOWN 3 (see MODELS)
 //   K2  sweep A      per model (see MODELS)
 //   K3  sweep B      per model
-//   K4  SW1 MID / DOWN: post filter  CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct, Q 0.707)
+//   K4  SW1 MID / DOWN: post filter  CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (12 dB/oct x EXP_FILT_STAGES, Q 0.707)
 //       SW1 UP: FM index envelope    noon off | CCW decay K3 -> 0 per pluck | CW rise 0 -> K3 per pluck
 //                                    (36 s just off noon -> 450 ms at the ends); no post filter
 //   K5  octave mix   CCW = played only (octave work skipped), CW = selected octave only; linear
@@ -398,7 +398,7 @@ class Explorer : public Module {
       int_(acc * EXP_OUT_GAIN, wet + i);
     }
     DcBlock(wet, size);
-    PostFilter(wet, size);  // K4: LP | bypass | HP, 24 dB/oct, Q 0.707
+    PostFilter(wet, size);  // K4: LP | bypass | HP, EXP_FILT_STAGES x 12 dB/oct, Q 0.707
     Saturate(wet, size);
     ApplyMute(wet, size);
   }
@@ -861,7 +861,8 @@ class Explorer : public Module {
         const float x = wet[n];
         float lp, hp, y;
         s0.Process(x, lp, hp);
-        s1.Process(hp, lp, y);
+        if (EXP_FILT_STAGES == 2) s1.Process(hp, lp, y);   // second stage (24 dB/oct)
+        else                      y = hp;                  // one stage (12 dB/oct)
         wet[n] = x + m * (y - x);
       }
     } else {
@@ -871,7 +872,8 @@ class Explorer : public Module {
         const float x = wet[n];
         float lp, hp, y;
         s0.Process(x, lp, hp);
-        s1.Process(lp, y, hp);
+        if (EXP_FILT_STAGES == 2) s1.Process(lp, y, hp);   // second stage (24 dB/oct)
+        else                      y = lp;                  // one stage (12 dB/oct)
         wet[n] = x + m * (y - x);
       }
     }
