@@ -55,8 +55,8 @@ constexpr float WM_FOLD_G[WM_CORNERS]  = { 1.f, 2.f, 4.f, 8.f };
 //   raised-cosine spike on the sine's positive peak), DFT, re-phased to the saw convention | 3 needle saw
 //   1/n^NSAW_EXP. Frame 1 = the plain saw (peak 1: the RMS target of zones 3, 6..10); all frames scaled to
 //   that RMS (WM_ZONE_RMS_MATCH).
-constexpr float WM_SNDL_W         = 0.03f;   // sine + needle: spike width (share of the cycle, Hann bump)
-constexpr float WM_SNDL_H         = 1.0f;    // sine + needle: spike height (peak ~2x the sine's)
+constexpr float WM_SNDL_W         = 0.015f;  // sine + needle: spike width (share of the cycle, Hann bump; 2026-10-26: 0.03 -> 0.015, spikier)
+constexpr float WM_SNDL_H         = 2.0f;    // sine + needle: spike height (2026-10-26: 1 -> 2, spikier; peak ~3x the sine's before re-phasing)
 constexpr float WM_SNDL_POS       = 0.25f;   // sine + needle: spike centre (the sine's positive peak)
 constexpr float WM_NSAW_EXP       = 0.3f;    // needle saw: upper harmonics nearly as loud as the low ones (spiky)
 // Zone 4 PWM (16 frames): x = +1 (phi < w) else -1, w = 0.5 (1 - u)^WM_PWM_CURVE, u = frame / 15:
