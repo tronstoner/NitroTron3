@@ -31,11 +31,16 @@ constexpr int   WM_LEVELS         = 14;      // band-limited versions per frame
 // Harmonic count of each band-limited version; a band uses the largest H <= WM_TAB_FMAX / f'_k (static per band, slot).
 constexpr int   WM_LEVEL_H[WM_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
 constexpr float WM_TAB_FMAX       = 4000.f;  // Hz; band-engine ceiling for the table band limit (= EXP_WT_FMAX)
-constexpr float WM_I16_SCALE      = 16384.f; // int16 storage scale (2x headroom: |table| <= 2.0)
-constexpr float WM_PEAK_CAP       = 32767.f / WM_I16_SCALE;   // RMS-matched waves capped to the storage headroom
+constexpr float WM_I16_SCALE      = 16384.f; // int16 storage scale, default (2x headroom: |table| <= 2.0)
+constexpr float WM_I16_SCALE_WIDE = 6554.f;  // zone 3 saw rough: headroom |table| <= 5.0, so the needle corners
+                                             // (crest ~9, full-band peak ~4.6) reach the saw's RMS uncapped; LSB 2.5x coarser
+// Storage scale per zone; the RMS-matched waves are capped to that zone's headroom 32767 / scale.
+constexpr float WM_ZONE_I16_SCALE[WM_ZONES] = { WM_I16_SCALE, WM_I16_SCALE, WM_I16_SCALE_WIDE, WM_I16_SCALE,
+                                                WM_I16_SCALE, WM_I16_SCALE, WM_I16_SCALE, WM_I16_SCALE,
+                                                WM_I16_SCALE, WM_I16_SCALE };
 
 // Zone 1 sine | sync: x = sin(2 pi frac(R phi)), R per corner (non-integer: audible sync, not octaves).
-constexpr float WM_SYNC_R[WM_SYNC_N]  = { 1.f, 1.5f, 2.f, 2.7f, 4.f, 4.6f, 7.f };
+constexpr float WM_SYNC_R[WM_SYNC_N]  = { 1.f, 1.5f, 2.f, 2.7f, 4.f, 4.6f, 6.5f };   // 2026-10-26: last 7 -> 6.5 (integer = plain sine)
 // Zone 2 triangle | fold: x = fold(G tri(phi)), fold reflects into [-1, 1], G per corner.
 constexpr float WM_FOLD_G[WM_CORNERS]  = { 1.f, 2.f, 4.f, 8.f };
 // Zone 3 saw rough (sine phase like the saw), n = harmonic number:
@@ -74,7 +79,7 @@ constexpr float WM_PPG_ODD_LEVELS = 7.5f;    // quantiser: round(y 7.5) / 7.5 (1
 constexpr int   WM_PPG_BIT_STEPS  = 32;      // bit pattern steps
 constexpr int   WM_PPG_SINE_STEPS = 16;      // held sine steps
 // Zones 7..10 PPG/VS waves (sine phase unless time domain), RMS-matched to the plain saw, capped to
-// WM_PEAK_CAP. Listed harmonics {h, amp}, rest 0.
+// the zone's storage headroom (32767 / WM_ZONE_I16_SCALE). Listed harmonics {h, amp}, rest 0.
 // 7 soft A: tine, clarinet, drawbar, mixture | 8 soft B: harmonium, ghost fifths, glass bell, lo-res |
 // 9 hard A: PPG resonant, oboe reed, formant brass, bass bell | 10 hard B: sync saw, fuzz reed, clipper, PPG feedback
 struct WmHarm { int h; float a; };

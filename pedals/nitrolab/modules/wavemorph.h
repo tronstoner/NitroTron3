@@ -35,8 +35,8 @@
 // DFT into harmonics 1..127 [time], or defined directly by harmonic amplitudes, sine phase [spectral];
 // mean removed, peak normalised to 1 (an all-silent frame stays silent); zones 3 and 6..10 then scaled
 // to the RMS of the plain saw (zone 3 corner 1, full band), then capped to the int16 storage headroom
-// (WM_PEAK_CAP); then rebuilt as 14 band-limited versions {1,2,3,4,6,8,12,16,24,32,48,64,96,127} at 256 points.
-//   1 SINE SYNC  7 frames: sin(2 pi frac(R phi)), R = 1 | 1.5 | 2 | 2.7 | 4 | 4.6 | 7               [time]
+// (32767 / WM_ZONE_I16_SCALE[zone]); then rebuilt as 14 band-limited versions {1,2,3,4,6,8,12,16,24,32,48,64,96,127} at 256 points.
+//   1 SINE SYNC  7 frames: sin(2 pi frac(R phi)), R = 1 | 1.5 | 2 | 2.7 | 4 | 4.6 | 6.5             [time]
 //   2 TRI FOLD   fold(G tri(phi)), G = 1 | 2 | 4 | 8, fold(v) = |((v - 1) mod 4) - 2| - 1           [time]
 //   3 SAW ROUGH  saw 1/n | hollow saw odd 1/n^1.4, even 0.3/n^1.4 | needle saw 1/n^0.3 |
 //                needle saw + needle saw an octave up (even n = 2k: + (1/k)^0.3); equal RMS (the
@@ -72,7 +72,7 @@
 // Sin table (filled in Init; DTCM = zero-wait-state reads). Size = WM_TD_SIZE: table builds index it exactly.
 static float DTCM_MEM_SECTION wavemorph_sin_tab[wavemorph_k::WM_SIN_SIZE];
 
-// Frame tables, packed: [zone offset + frame][level][sample], int16 (scale WM_I16_SCALE), SDRAM.
+// Frame tables, packed: [zone offset + frame][level][sample], int16 (scale WM_ZONE_I16_SCALE[zone]), SDRAM.
 static int16_t DSY_SDRAM_BSS wavemorph_tab[wavemorph_k::WM_TOTAL_FRAMES]
                                           [wavemorph_k::WM_LEVELS][wavemorph_k::WM_TAB_SIZE];
 // Init-only build scratch (SDRAM: keeps DTCM free).
@@ -238,7 +238,7 @@ class WaveMorph : public Module {
   }
   // Name of frame i of zone z (zone 1: the sync ratio; 4-wave zones), "" for the 16-frame zones (by number).
   static const char* WaveName(int z, int i) {
-    static const char* const sync[wavemorph_k::WM_SYNC_N] = { "R1", "R1.5", "R2", "R2.7", "R4", "R4.6", "R7" };
+    static const char* const sync[wavemorph_k::WM_SYNC_N] = { "R1", "R1.5", "R2", "R2.7", "R4", "R4.6", "R6.5" };
     if (z == 0) return (i >= 0 && i < wavemorph_k::WM_SYNC_N) ? sync[i] : "";
     static const char* const n[wavemorph_k::WM_ZONES][wavemorph_k::WM_CORNERS] = {
       { "", "", "", "" }, { "G1", "G2", "G4", "G8" }, { "saw", "hollow", "needle", "needle2" },
@@ -436,7 +436,7 @@ class WaveMorph : public Module {
     MorphPos(z, morph_, f0, ff);
     const int fb = zoff_[z] + f0;              // packed frame index
     const int fn = fb + 1;                     // neighbour (f0 <= F_z - 2)
-    constexpr float kScale = 1.f / WM_I16_SCALE;
+    const float kScale = 1.f / WM_ZONE_I16_SCALE[z];
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
@@ -695,7 +695,8 @@ class WaveMorph : public Module {
           float g = (r > 0.f) ? rms_saw / r : 0.f;
           for (int h = 1; h <= WM_HMAX; h++) { A[h] *= g; B[h] *= g; }
           const float pk = SynthPeak(A, B);
-          g = (pk > WM_PEAK_CAP) ? WM_PEAK_CAP / pk : 1.f;
+          const float cap = 32767.f / WM_ZONE_I16_SCALE[z];   // the zone's storage headroom
+          g = (pk > cap) ? cap / pk : 1.f;
           for (int h = 1; h <= WM_HMAX; h++) { A[h] *= g; B[h] *= g; }
         }
         // 3) band-limited levels (cumulative), 256 points
@@ -716,7 +717,7 @@ class WaveMorph : public Module {
           hdone = ht;
           int16_t* dst = wavemorph_tab[zoff_[z] + f][l];
           for (int i = 0; i < WM_TAB_SIZE; i++) {
-            float v = acc[i] * WM_I16_SCALE;
+            float v = acc[i] * WM_ZONE_I16_SCALE[z];
             v = (v > 32767.f) ? 32767.f : (v < -32768.f) ? -32768.f : v;   // int16 range (storage)
             dst[i] = (int16_t)lrintf(v);
           }
