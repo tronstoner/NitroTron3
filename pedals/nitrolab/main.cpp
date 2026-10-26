@@ -218,10 +218,15 @@ int main() {
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("morph k3" D2F " g" D2F " %s m" D2F " oct %s mute %d cpu %u%%",
-                          D2V(d.m3), D2V(d.g), dir_name[(d.dir >= -1 && d.dir <= 1) ? d.dir + 1 : 1], D2V(d.m),
-                          oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
-                          d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
+        if (d.zone >= 5)                           // zones 6 / 7: stepped wave, K2 = filter envelope e
+          hw.seed.PrintLine("fenv e" D2F " oct %s mute %d cpu %u%%",
+                            D2SV(d.fe), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+                            d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
+        else
+          hw.seed.PrintLine("morph k3" D2F " g" D2F " %s m" D2F " oct %s mute %d cpu %u%%",
+                            D2V(d.m3), D2V(d.g), dir_name[(d.dir >= -1 && d.dir <= 1) ? d.dir + 1 : 1], D2V(d.m),
+                            oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+                            d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {
         // wavemorph, first half: number / auto, zone, knobs
@@ -229,11 +234,9 @@ int main() {
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        char wv[40] = "";                          // zones 6 / 7: morph position "/<a>:<name>><b>:<name>"
-        const char* wa = WaveMorph::WaveName(d.zone, d.f0);
-        const char* wb = WaveMorph::WaveName(d.zone, d.f0 + 1);
-        if (wa[0]) snprintf(wv, sizeof(wv), "/%d:%s>%d:%s+%d%%", d.f0 + 1, wa, d.f0 + 2, wb,
-                            (int)(d.ff * 100.f + 0.5f));
+        char wv[24] = "";                          // zones 6 / 7: stepped wave "/<n>:<name>"
+        const char* wn = WaveMorph::WaveName(d.zone, d.f0);
+        if (wn[0]) snprintf(wv, sizeof(wv), "/%d:%s", d.f0 + 1, wn);
         hw.seed.Print("WM %s %s%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " | ",
                       tag, WaveMorph::ZoneName(d.zone), wv,
                       D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]));

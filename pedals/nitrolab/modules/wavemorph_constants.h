@@ -10,7 +10,7 @@ namespace wavemorph_k {
 
 // --- Zones (K1, stepped) / tables -----------------------------------------------------
 constexpr int   WM_ZONES          = 7;       // K1 equal zones (snap, crossfade on a change)
-constexpr int   WM_CORNERS        = 4;       // corner waves of the vector zones (1 sine sync, 2 triangle fold, 3 thin saw)
+constexpr int   WM_CORNERS        = 4;       // corner waves of the vector zones (1 sine sync, 2 triangle fold, 3 saw soft)
 constexpr int   WM_FRAMES16       = 16;      // frames of the continuous zones (4 PWM, 5 vocal)
 constexpr int   WM_SOFT_N         = 8;       // zone 6 PPG/VS soft: waves (= frames, list order)
 constexpr int   WM_HARD_N         = 7;       // zone 7 PPG/VS hard: waves (= frames, list order)
@@ -18,11 +18,14 @@ constexpr int   WM_HARD_N         = 7;       // zone 7 PPG/VS hard: waves (= fra
 // the two adjacent frames.
 constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_FRAMES16, WM_FRAMES16,
                                              WM_SOFT_N, WM_HARD_N };
-constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, false, false, false, true, true };   // zones 6 / 7: equal-RMS waves
+constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, true, false, false, true, true };   // zones 3, 6, 7: equal-RMS waves
+// Stepped zones (6, 7): K3 picks wave Quantize(k3, F_z) - no blending, no morph; a step crossfades over
+// WM_ZONE_XFADE_MS (zone + wave key); K2 there = the K4 filter envelope (WM_FENV_*), not the morph envelope.
+constexpr bool  WM_ZONE_STEPPED[WM_ZONES]   = { false, false, false, false, false, true, true };
 constexpr int   WM_TOTAL_FRAMES   = 3 * WM_CORNERS + 2 * WM_FRAMES16 + WM_SOFT_N + WM_HARD_N;   // packed table frames
 constexpr int WmSumFrames(int i = 0) { return (i >= WM_ZONES) ? 0 : WM_ZONE_FRAMES[i] + WmSumFrames(i + 1); }
 static_assert(WmSumFrames() == WM_TOTAL_FRAMES, "WM_TOTAL_FRAMES = sum of WM_ZONE_FRAMES");
-constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change
+constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change or a K3 wave step
 constexpr int   WM_TAB_SIZE       = 256;     // samples per single-cycle table (power of two; harmonics 1..127)
 constexpr int   WM_HMAX           = WM_TAB_SIZE / 2 - 1;   // highest harmonic a table holds
 constexpr int   WM_TD_SIZE        = 1024;    // time-domain definition resolution (oversampled 4x vs the table:
@@ -38,11 +41,12 @@ constexpr float WM_PEAK_CAP       = 32767.f / WM_I16_SCALE;   // zones 6 / 7: eq
 constexpr float WM_SYNC_R[WM_CORNERS]  = { 1.f, 1.5f, 2.7f, 4.6f };
 // Zone 2 triangle | fold: x = fold(G tri(phi)), fold reflects into [-1, 1], G per corner.
 constexpr float WM_FOLD_G[WM_CORNERS]  = { 1.f, 2.f, 4.f, 8.f };
-// Zone 3 thin saw: weighted sum of saw series (sine phase) at 1x / 2x / 3x the cycle rate:
-//   A_h = W1 / h + W2 / (h / 2) [h even] + W3 / (h / 3) [h multiple of 3]; mean removed, peak 1.
-constexpr float WM_TSAW_W1[WM_CORNERS] = { 1.f, 1.f,  1.f,  0.3f };   // 1x saw (fundamental region; 0.3 = pulled back)
-constexpr float WM_TSAW_W2[WM_CORNERS] = { 0.f, 0.7f, 0.f,  0.7f };   // 2x saw (octave up)
-constexpr float WM_TSAW_W3[WM_CORNERS] = { 0.f, 0.f,  0.7f, 0.7f };   // 3x saw (octave + fifth)
+// Zone 3 saw soft (subtractive path, sine phase like the saw): A_n = W_odd / n^E for odd n, W_even / n^E
+// for even n; per corner (E, W_odd, W_even). Corner 1 = the plain saw (peak 1: the RMS target of zones 3 / 6 / 7);
+// all corners scaled to that RMS (WM_ZONE_RMS_MATCH).
+constexpr float WM_SSAW_EXP[WM_CORNERS]    = { 1.f, 1.4f, 1.4f, 1.8f };   // saw | dark saw | hollow saw | soft square
+constexpr float WM_SSAW_W_ODD[WM_CORNERS]  = { 1.f, 1.f,  1.f,  1.f };
+constexpr float WM_SSAW_W_EVEN[WM_CORNERS] = { 1.f, 1.f,  0.3f, 0.f };    // hollow saw: even 0.3; soft square: odd only
 // Zone 4 PWM (16 frames): x = +1 (phi < w) else -1, w = 0.5 (1 - u)^WM_PWM_CURVE, u = frame / 15:
 // most of the travel at the narrow end (frames 8..15 below 10 %); frame 15 w = 0 = silence.
 constexpr float WM_PWM_CURVE      = 2.2f;
@@ -109,7 +113,7 @@ constexpr float WM_ENV_DECAY_RATIO  = 3.0f;    // (= EXP_ENV_FM_DECAY_RATIO)
 // --- Octave (SW2: UP +1, MID -1, DOWN -2; K5 mix) -------------------------------------
 constexpr float WM_OCT_XFADE_MS   = 10.f;    // ms; linear slide between octave slots on an SW2 change (= EXP_OCT_XFADE_MS)
 
-// --- K4 = post filter (explorer's, Q 0.707, all zones) ----------------------------------
+// --- K4 = post filter (explorer's law, Q 1.1, all zones) ----------------------------------
 constexpr float WM_FILT_FMIN      = 40.f;     // Hz; HP cutoff just right of noon
 constexpr float WM_FILT_FMAX      = 4000.f;   // Hz; LP cutoff just left of noon
 constexpr float WM_FILT_HP_MAX    = 4000.f;   // Hz; HP cutoff at K4 full CW
@@ -117,11 +121,23 @@ constexpr float WM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW
 constexpr float WM_FILT_FC_MIN    = 10.f;     // Hz; stability floor on fc
 constexpr float WM_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling on fc
 constexpr float WM_FILT_CURVE     = 1.0f;     // |t| exponent
-constexpr float WM_FILT_Q         = 0.707f;   // per-stage Q, both stages: flat
+constexpr float WM_FILT_Q         = 1.1f;     // per-stage Q, both stages, all zones (incl. the zone 6 / 7 filter envelope): slightly wet (= ARM_FILT_Q; was 0.707 flat)
 constexpr float WM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t, per block
 constexpr float WM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float WM_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass
 constexpr float WM_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide
+
+// --- K2 in zones 6 / 7 = envelope on the K4 post filter (armitage's K5 filter envelope: Env + PostFilter t_eff) ---
+// t2 = 2 k2 - 1 (smoothed), off inside WM_ENV_PAD (e = 0). Outside: s = (|t2| - PAD) / (1 - PAD),
+// tau = TAU_SLOW (TAU_FAST / TAU_SLOW)^s. CW: each onset e = 0, rises toward +1 with tau; at e >= PEAK it
+// falls back toward 0 as a one-pole with tau x FALL_RATIO. CCW: each onset e = 0, then one-pole toward -1 and
+// holds. Before the first onset e = 0. Filter position t_eff = t_K4 + DEPTH e (not clamped to the knob ends;
+// cutoff limited only by WM_FILT_FC_MIN / MAX), smoothed with t; from K4 noon the envelope pushes off noon.
+constexpr float WM_FENV_TAU_SLOW_S = 4.0f;    // s; tau at the pad edge (= ARM_ENV_TAU_SLOW_S)
+constexpr float WM_FENV_TAU_FAST_S = 0.05f;   // s; tau at the knob ends (= ARM_ENV_TAU_FAST_S)
+constexpr float WM_FENV_FALL_RATIO = 3.0f;    // CW fall tau / rise tau (= ARM_ENV_FALL_RATIO)
+constexpr float WM_FENV_PEAK       = 0.98f;   // CW: rise -> fall at this e (armitage's 0.98)
+constexpr float WM_FENV_DEPTH      = 0.7f;    // K4 knob travel (t units) at |e| = 1 (= ARM_ENV_DEPTH)
 
 // --- Onset detector (explorer's, 1:1) -------------------------------------------------------
 constexpr float    WM_ONSET_ENV_MS        = 2.6f;     // ms (= EXP_ONSET_ENV_MS)
