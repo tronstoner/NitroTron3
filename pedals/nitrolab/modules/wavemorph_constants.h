@@ -48,7 +48,7 @@ constexpr float WM_FOLD_G[WM_CORNERS]  = { 1.f, 2.f, 4.f, 8.f };
 //   3 needle saw 1/n^NSAW_EXP | 4 needle saw + needle saw an octave up: corner 3 plus, on even n = 2k,
 //   NSAW_OCT_W (1/k)^NSAW_EXP. Corner 1 = the plain saw (peak 1: the RMS target of zones 3, 6..10); all
 //   corners scaled to that RMS (WM_ZONE_RMS_MATCH).
-constexpr float WM_HOLLOW_EXP     = 1.4f;    // hollow saw: spectral tilt
+constexpr float WM_HOLLOW_EXP     = 1.0f;    // hollow saw: spectral tilt (2026-10-26: 1.4 -> 1.0, same brightness as the saw so overtones never dip in the saw -> hollow -> needle blend)
 constexpr float WM_HOLLOW_EVEN    = 0.3f;    // hollow saw: even-harmonic weight
 constexpr float WM_NSAW_EXP       = 0.3f;    // needle saw: upper harmonics nearly as loud as the low ones (spiky)
 constexpr float WM_NSAW_OCT_W     = 1.0f;    // needle saw + octave: weight of the 2x series
