@@ -10,15 +10,16 @@ namespace wavemorph_k {
 
 // --- Zones (K1, stepped) / tables -----------------------------------------------------
 constexpr int   WM_ZONES          = 10;      // K1 equal zones (snap, crossfade on a change)
-constexpr int   WM_CORNERS        = 4;       // waves of the 4-wave zones (all but 4 PWM and 5 vocal)
+constexpr int   WM_CORNERS        = 4;       // waves of the 4-wave zones (2, 3, 6..10)
+constexpr int   WM_SYNC_N         = 7;       // zone 1 sine sync: frames (sync ratios)
 constexpr int   WM_FRAMES16       = 16;      // frames of the continuous zones (4 PWM, 5 vocal)
 // Frames per zone F_z (every zone morphs): m = K3 -> position (F_z - 1) m, linear crossfade between
 // the two adjacent frames.
-constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_FRAMES16, WM_FRAMES16,
+constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_SYNC_N, WM_CORNERS, WM_CORNERS, WM_FRAMES16, WM_FRAMES16,
                                              WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS };
 // Zones 3 and 6..10: each wave scaled to the plain saw's RMS (then capped to the storage headroom).
 constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, true, false, false, true, true, true, true, true };
-constexpr int   WM_TOTAL_FRAMES   = 8 * WM_CORNERS + 2 * WM_FRAMES16;   // packed table frames
+constexpr int   WM_TOTAL_FRAMES   = WM_SYNC_N + 7 * WM_CORNERS + 2 * WM_FRAMES16;   // packed table frames
 constexpr int WmSumFrames(int i = 0) { return (i >= WM_ZONES) ? 0 : WM_ZONE_FRAMES[i] + WmSumFrames(i + 1); }
 static_assert(WmSumFrames() == WM_TOTAL_FRAMES, "WM_TOTAL_FRAMES = sum of WM_ZONE_FRAMES");
 constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change
@@ -34,15 +35,18 @@ constexpr float WM_I16_SCALE      = 16384.f; // int16 storage scale (2x headroom
 constexpr float WM_PEAK_CAP       = 32767.f / WM_I16_SCALE;   // RMS-matched waves capped to the storage headroom
 
 // Zone 1 sine | sync: x = sin(2 pi frac(R phi)), R per corner (non-integer: audible sync, not octaves).
-constexpr float WM_SYNC_R[WM_CORNERS]  = { 1.f, 1.5f, 2.7f, 4.6f };
+constexpr float WM_SYNC_R[WM_SYNC_N]  = { 1.f, 1.5f, 2.f, 2.7f, 4.f, 4.6f, 7.f };
 // Zone 2 triangle | fold: x = fold(G tri(phi)), fold reflects into [-1, 1], G per corner.
 constexpr float WM_FOLD_G[WM_CORNERS]  = { 1.f, 2.f, 4.f, 8.f };
-// Zone 3 saw soft (subtractive path, sine phase like the saw): A_n = W_odd / n^E for odd n, W_even / n^E
-// for even n; per corner (E, W_odd, W_even). Corner 1 = the plain saw (peak 1: the RMS target of zones 3, 6..10);
-// all corners scaled to that RMS (WM_ZONE_RMS_MATCH).
-constexpr float WM_SSAW_EXP[WM_CORNERS]    = { 1.f, 1.4f, 1.4f, 1.8f };   // saw | dark saw | hollow saw | soft square
-constexpr float WM_SSAW_W_ODD[WM_CORNERS]  = { 1.f, 1.f,  1.f,  1.f };
-constexpr float WM_SSAW_W_EVEN[WM_CORNERS] = { 1.f, 1.f,  0.3f, 0.f };    // hollow saw: even 0.3; soft square: odd only
+// Zone 3 saw rough (sine phase like the saw), n = harmonic number:
+//   1 saw 1/n | 2 hollow saw: odd 1/n^HOLLOW_EXP, even HOLLOW_EVEN / n^HOLLOW_EXP |
+//   3 needle saw 1/n^NSAW_EXP | 4 needle saw + needle saw an octave up: corner 3 plus, on even n = 2k,
+//   NSAW_OCT_W (1/k)^NSAW_EXP. Corner 1 = the plain saw (peak 1: the RMS target of zones 3, 6..10); all
+//   corners scaled to that RMS (WM_ZONE_RMS_MATCH).
+constexpr float WM_HOLLOW_EXP     = 1.4f;    // hollow saw: spectral tilt
+constexpr float WM_HOLLOW_EVEN    = 0.3f;    // hollow saw: even-harmonic weight
+constexpr float WM_NSAW_EXP       = 0.3f;    // needle saw: upper harmonics nearly as loud as the low ones (spiky)
+constexpr float WM_NSAW_OCT_W     = 1.0f;    // needle saw + octave: weight of the 2x series
 // Zone 4 PWM (16 frames): x = +1 (phi < w) else -1, w = 0.5 (1 - u)^WM_PWM_CURVE, u = frame / 15:
 // most of the travel at the narrow end (frames 8..15 below 10 %); frame 15 w = 0 = silence.
 constexpr float WM_PWM_CURVE      = 2.2f;

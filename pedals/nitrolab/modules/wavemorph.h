@@ -7,7 +7,7 @@
 // phase accumulator / 4), band phase computed once per band / slot / sample in Prep; each band reads
 // the current zone's frame tables at its OWN phase phi_k with its magnitude a_k:
 //   W_k = lerp_frames( lerp_phase(table[zone][frame][level_k]) ),  slot = sum_k w_k a_k W_k
-//   MORPH (all zones, m = K3): F_z frames per zone (4 waves in every zone but 4 PWM and 5 vocal, 16 there);
+//   MORPH (all zones, m = K3): F_z frames per zone (7 in zone 1, 16 in zones 4 / 5, 4 in the others);
 //   position = (F_z - 1) m, linear crossfade between the two adjacent frames;
 //   level_k = the largest band-limited version with H <= 4000 / f'_k (static per band and slot).
 // wet8 = WM_OUT_GAIN [ (1 - mix) played + mix (u G_UP up + d G_DOWN down + d2 G_DOWN2 down2) ]
@@ -36,10 +36,11 @@
 // mean removed, peak normalised to 1 (an all-silent frame stays silent); zones 3 and 6..10 then scaled
 // to the RMS of the plain saw (zone 3 corner 1, full band), then capped to the int16 storage headroom
 // (WM_PEAK_CAP); then rebuilt as 14 band-limited versions {1,2,3,4,6,8,12,16,24,32,48,64,96,127} at 256 points.
-//   1 SINE SYNC  sin(2 pi frac(R phi)), R = 1 | 1.5 | 2.7 | 4.6                                     [time]
+//   1 SINE SYNC  7 frames: sin(2 pi frac(R phi)), R = 1 | 1.5 | 2 | 2.7 | 4 | 4.6 | 7               [time]
 //   2 TRI FOLD   fold(G tri(phi)), G = 1 | 2 | 4 | 8, fold(v) = |((v - 1) mod 4) - 2| - 1           [time]
-//   3 SAW SOFT   saw 1/n | dark saw 1/n^1.4 | hollow saw odd 1/n^1.4, even 0.3/n^1.4 |
-//                soft square odd 1/n^1.8; equal RMS (the plain saw's)                             [spectral]
+//   3 SAW ROUGH  saw 1/n | hollow saw odd 1/n^1.4, even 0.3/n^1.4 | needle saw 1/n^0.3 |
+//                needle saw + needle saw an octave up (even n = 2k: + (1/k)^0.3); equal RMS (the
+//                plain saw's)                                                                    [spectral]
 //   4 PWM        16 frames: +1 (phi < w) else -1, w = 0.5 (1 - u)^2.2: 50 % -> 0 % (silence)          [time]
 //   5 VOCAL      16 frames (= dd3d5f9): a -> e -> i -> o -> u, formants interpolated, 110 Hz reference [spectral]
 //   6 PPG CLASSIC explorer's PPG-style set: 8-step saw (8 levels) | stepped odd-harmonic stack (32 steps,
@@ -230,15 +231,17 @@ class WaveMorph : public Module {
     return false;
   }
   static const char* ZoneName(int z) {
-    static const char* const n[wavemorph_k::WM_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-SOFT", "SQR-PWM",
+    static const char* const n[wavemorph_k::WM_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-ROUGH", "SQR-PWM",
                                                           "VOCAL", "PPG-CLASSIC", "SOFT-A", "SOFT-B",
                                                           "HARD-A", "HARD-B" };
     return (z >= 0 && z < wavemorph_k::WM_ZONES) ? n[z] : "?";
   }
-  // Name of frame i of zone z (4-wave zones), "" for the 16-frame zones (shown by number).
+  // Name of frame i of zone z (zone 1: the sync ratio; 4-wave zones), "" for the 16-frame zones (by number).
   static const char* WaveName(int z, int i) {
+    static const char* const sync[wavemorph_k::WM_SYNC_N] = { "R1", "R1.5", "R2", "R2.7", "R4", "R4.6", "R7" };
+    if (z == 0) return (i >= 0 && i < wavemorph_k::WM_SYNC_N) ? sync[i] : "";
     static const char* const n[wavemorph_k::WM_ZONES][wavemorph_k::WM_CORNERS] = {
-      { "R1", "R1.5", "R2.7", "R4.6" }, { "G1", "G2", "G4", "G8" }, { "saw", "dark", "hollow", "softsq" },
+      { "", "", "", "" }, { "G1", "G2", "G4", "G8" }, { "saw", "hollow", "needle", "needle2" },
       { "", "", "", "" }, { "", "", "", "" }, { "saw8", "odd32", "bits", "sine16" },
       { "tine", "clarinet", "drawbar", "mixture" }, { "harmonium", "ghost5", "bell", "lores" },
       { "ppgres", "oboe", "brass", "bassbell" }, { "syncsaw", "fuzz", "clipper", "ppgfb" } };
@@ -528,10 +531,17 @@ class WaveMorph : public Module {
     auto list = [&](const WmHarm* w, int n) { for (int i = 0; i < n; i++) put(w[i].h, w[i].a); };
 #define WM_LIST(arr) list(arr, (int)(sizeof(arr) / sizeof(arr[0])))
     switch (z) {
-      case 2:                                      // saw soft: saw | dark | hollow | soft square
+      case 2:                                      // saw rough: saw | hollow | needle | needle + octave
         for (int h = 1; h <= WM_HMAX; h++) {
-          const float w = (h & 1) ? WM_SSAW_W_ODD[c] : WM_SSAW_W_EVEN[c];
-          if (w != 0.f) put(h, w * powf((float)h, -WM_SSAW_EXP[c]));
+          if (c == 0) {
+            put(h, 1.f / (float)h);
+          } else if (c == 1) {
+            put(h, ((h & 1) ? 1.f : WM_HOLLOW_EVEN) * powf((float)h, -WM_HOLLOW_EXP));
+          } else {
+            float a = powf((float)h, -WM_NSAW_EXP);
+            if (c == 3 && (h & 1) == 0) a += WM_NSAW_OCT_W * powf((float)(h / 2), -WM_NSAW_EXP);
+            put(h, a);
+          }
         }
         break;
       case 4: {                                    // vocal a -> e -> i -> o -> u (= dd3d5f9)
