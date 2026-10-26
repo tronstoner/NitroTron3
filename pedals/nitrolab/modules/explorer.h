@@ -40,13 +40,13 @@
 //   (crossfade over |t| < EXP_FILT_FADE); CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz, cutoff
 //   linear in octaves (curve 1); LP <-> HP: fades out, swaps type from cleared state, fades in.
 //
-// K5 BAND TILT (2026-10-26; LP / HP by weighting the bands, not a filter): t = 2 k5 - 1 (smoothed per 8 kHz
+// K5 BAND TILT (2026-10-26; plain dB/oct tilt by weighting the bands, not a filter): t = 2 k5 - 1 (smoothed per 8 kHz
 //   sample, lands exactly); per audio block w_k from the smoothed t (expf per band, cached while t holds);
 //   each band's shaped output w_k a_k W_k is multiplied by bt_k in ShapeK before the band sum (every slot, every
-//   model, both sides of a model crossfade). f_k = analysed centre (before SW2), n = EXP_BTILT_ORDER;
-//   CCW: fc = 1685.42 (EXP_BTILT_LP_FMIN / 1685.42)^|t|, bt = 1 / sqrt(1 + (f_k / fc)^2n);
-//   CW:  fc = 25.38 (EXP_BTILT_HP_FMAX / 25.38)^t,       bt = 1 / sqrt(1 + (fc / f_k)^2n)   (band 83 / 0 centres);
-//   bt_eff = 1 - m (1 - bt), m = min(|t| / EXP_BTILT_FADE, 1). t == 0: no multiply (bit-identical). No makeup.
+//   model, both sides of a model crossfade). f_k = analysed centre (before SW2);
+//   s = |t| EXP_BTILT_SLOPE_MAX (dB/oct); CCW: dB_k = -s log2(f_k / 25.38) (bottom band 0 dB, lows kept);
+//   CW: dB_k = -s log2(1685.42 / f_k) (top band 0 dB, lows thinner) (band 0 / 83 centres);
+//   bt = 10^(dB_k / 20). Continuous from t = 0 (no fade term). t == 0: no multiply (bit-identical). No makeup.
 //
 // DISCRETE VALUES are stepped on the knob (snap to the item): items that change the waveform
 // (cross-band partner, bit-table waveform, wavetable set) crossfade old -> new over
@@ -103,8 +103,8 @@
 //       SW1 UP: FM index envelope    noon off | CCW decay K3 -> 0 per pluck | CW rise 0 -> K3 per pluck
 //                                    (36 s just off noon -> 450 ms at the ends); no post filter
 //                                    + live follower off noon: k3_eff = k3 (g + EXP_FOLLOW_FM_DEPTH f)
-//   K5  band tilt    CCW LP fc 1685 Hz -> 40 Hz | noon off (bit-identical) | CW HP fc 25 Hz -> 1000 Hz
-//                    (band weights 1 / sqrt(1 + x^4), all models and slots; see K5 BAND TILT)
+//   K5  band tilt    CCW darker (highs down) | noon off (bit-identical) | CW thinner (lows down)
+//                    (plain tilt, 0 -> EXP_BTILT_SLOPE_MAX = 3 dB/oct at the ends, ~-18 dB at the far band; all models and slots; see K5 BAND TILT)
 //   K6  dry / wet    (shell)
 //   SW1 family       UP = FM, MID = tables (wavetable, bit table), DOWN = harmonics & shift
 //   SW2 octave       UP = +1 oct, MID = as played, DOWN = -1 oct (one slot, crossfade EXP_OCT_XFADE_MS)
@@ -237,8 +237,6 @@ class Explorer : public Module {
       const float fbot = armbands::ArmCenterFreq(0), ftop = armbands::ArmCenterFreq(kBands - 1);
       bt_lnbot_ = logf(fbot);
       bt_lntop_ = logf(ftop);
-      bt_lnhp_  = logf(EXP_BTILT_HP_FMAX / fbot);
-      bt_lnlp_  = logf(EXP_BTILT_LP_FMIN / ftop);
     }
     // UP: onset detector (48 kHz, pre-decimator) + FM index envelope (8 kHz), armitage's.
     on_env_ = on_gate_ = on_base_ = 0.f;
@@ -335,17 +333,14 @@ class Explorer : public Module {
     float envg;       // SW1 UP: FM envelope gain g (0..1) at the snapshot
     float fol;        // live follower f = min(follower, 1) at the snapshot (0..1)
     float btt;        // K5 band tilt t = 2 k5 - 1 (raw knob)
-    float btfc;       // its fc (Hz), 0 at noon
+    float bts;        // its slope s = |t| SLOPE_MAX (dB/oct), 0 at noon
     bool  mute;
   };
   void Activate() override {
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
   }
-  // K5 band tilt fc (Hz) at t: CCW LP f_top (LP_FMIN / f_top)^|t|, CW HP f_bot (HP_FMAX / f_bot)^t, 0 at noon.
-  float BTiltFc(float t) const {
-    if (t == 0.f) return 0.f;
-    return (t < 0.f) ? expf(bt_lntop_ - t * bt_lnlp_) : expf(bt_lnbot_ + t * bt_lnhp_);
-  }
+  // K5 band tilt slope s (dB/oct) at t: |t| SLOPE_MAX, 0 at noon.
+  static float BTiltSlope(float t) { return fabsf(t) * explorer_k::EXP_BTILT_SLOPE_MAX; }
   bool DiagTake(DiagSnap& out) {
     if (diag_tap_pend_)  { out = diag_tap_;  diag_tap_pend_ = false;  return true; }
     if (diag_auto_pend_) { out = diag_auto_; diag_auto_pend_ = false; return true; }
@@ -530,23 +525,20 @@ class Explorer : public Module {
   }
 
   // K5 band tilt weights bt_w_[k] from the smoothed t = 2 k5s_ - 1, once per audio block (84 expf only when t
-  // moved). t == 0: off (ShapeK skips the multiply). (f / fc)^2n = exp(2n (ln f - ln fc)).
+  // moved). t == 0: off (ShapeK skips the multiply). dB_k = -s log2(f_k / f_ref) (CCW, f_ref = f_bot) or
+  // -s log2(f_ref / f_k) (CW, f_ref = f_top); 10^(dB / 20) = exp(-s c |ln f_k - ln f_ref|), c = ln 10 / (20 ln 2).
   void BTiltUpdate() {
     using namespace explorer_k;
     const float t = 2.f * k5s_ - 1.f;
     if (t == bt_t_) return;                      // unchanged: weights hold
     bt_t_ = t;
     if (t == 0.f) { bt_on_ = false; return; }
-    const float at = fabsf(t);
-    float m = at * (1.f / EXP_BTILT_FADE);
-    if (m > 1.f) m = 1.f;
-    constexpr float n2 = 2.f * (float)EXP_BTILT_ORDER;
-    const bool lp = (t < 0.f);
-    const float lnfc = lp ? bt_lntop_ + at * bt_lnlp_ : bt_lnbot_ + at * bt_lnhp_;
-    for (int k = 0; k < kBands; k++) {
-      const float x = expf(n2 * (lp ? bt_lnf_[k] - lnfc : lnfc - bt_lnf_[k]));
-      const float w = 1.f / sqrtf(1.f + x);
-      bt_w_[k] = 1.f - m * (1.f - w);
+    constexpr float c = 0.16609640f;             // ln 10 / (20 ln 2): dB per octave -> exp argument per ln f
+    const float sc = fabsf(t) * EXP_BTILT_SLOPE_MAX * c;
+    if (t < 0.f) {
+      for (int k = 0; k < kBands; k++) bt_w_[k] = expf(-sc * (bt_lnf_[k] - bt_lnbot_));
+    } else {
+      for (int k = 0; k < kBands; k++) bt_w_[k] = expf(-sc * (bt_lntop_ - bt_lnf_[k]));
     }
     bt_on_ = true;
   }
@@ -1115,7 +1107,7 @@ class Explorer : public Module {
     s.k4t = k4t; s.envg = envg;
     s.fol = fol;
     s.btt = btt;
-    s.btfc = BTiltFc(btt);
+    s.bts = BTiltSlope(btt);
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1261,11 +1253,10 @@ class Explorer : public Module {
   float k5s_ = 0.5f;               // smoothed K5 (t = 2 k5s_ - 1)
   volatile float k5_t_ = 0.5f;
   float bt_lnf_[kBands];           // ln f_k (analysed band centre, before SW2)
-  float bt_w_[kBands];             // per-band output weight bt_eff (this block; valid while bt_on_)
+  float bt_w_[kBands];             // per-band output weight 10^(dB_k / 20) (this block; valid while bt_on_)
   float bt_t_ = 0.f;               // t the weights were computed for
   bool  bt_on_ = false;            // false at t == 0: no multiply
   float bt_lnbot_ = 0.f, bt_lntop_ = 0.f;   // ln of the bottom / top band centre
-  float bt_lnhp_ = 0.f, bt_lnlp_ = 0.f;     // ln(HP_FMAX / f_bot), ln(LP_FMIN / f_top)
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)

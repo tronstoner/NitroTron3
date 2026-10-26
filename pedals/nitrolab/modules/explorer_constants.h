@@ -113,17 +113,14 @@ constexpr float EXP_FILT_FADE      = 0.03f;    // |t| over which bypass crossfad
 constexpr float EXP_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass (= ARM_FILT_SNAP)
 constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide (= ARM_MUTE_SLIDE_MS as armitage uses it)
 
-// --- K5 = band tilt (2026-10-26): LP / HP by weighting each band's OUTPUT, not a filter -----------
+// --- K5 = band tilt (2026-10-26): plain dB/oct tilt by weighting each band's OUTPUT, not a filter -
 // t = 2 k5 - 1 (smoothed as K2..K4, lands exactly); weights w_k per audio block from the smoothed t, on each
-// band's shaped output (all slots, all models, model crossfades) before the band sum. f_k = the band's
-// analysed centre (before SW2's octave), n = ORDER. CCW: fc = f_top (LP_FMIN / f_top)^|t|,
-// w = 1 / sqrt(1 + (f_k / fc)^2n); CW: fc = f_bot (HP_FMAX / f_bot)^t, w = 1 / sqrt(1 + (fc / f_k)^2n)
-// (f_bot / f_top = the engine's band 0 / 83 centres, 25.38 / 1685.42 Hz). Off noon w_eff = 1 - m (1 - w),
-// m = min(|t| / FADE, 1). t == 0: no multiply (bit-identical). No makeup gain.
-constexpr float EXP_BTILT_LP_FMIN  = 40.f;     // Hz; LP fc at K5 full CCW (from the top band centre)
-constexpr float EXP_BTILT_HP_FMAX  = 1000.f;   // Hz; HP fc at K5 full CW (from the bottom band centre)
-constexpr int   EXP_BTILT_ORDER    = 4;        // n: Butterworth-shaped magnitude 1 / sqrt(1 + x^2n); 4 = 24 dB/oct (tuned 2026-10-26: 2 not ideal, 1 went the wrong way)
-constexpr float EXP_BTILT_FADE     = 0.03f;    // |t| over which the weights fade in from 1 off noon
+// band's output before the band sum. f_k = the band's analysed centre (before SW2's octave). Plain tilt:
+// s = |t| SLOPE_MAX dB/oct; CCW: dB_k = -s log2(f_k / f_bot) (bottom band 0 dB, each octave up -s dB);
+// CW: dB_k = -s log2(f_top / f_k) (top band 0 dB, lows thinner); w_k = 10^(dB_k / 20)
+// (f_bot / f_top = the engine's band 0 / 83 centres, 25.38 / 1685.42 Hz). Continuous from t = 0 (no fade term).
+// t == 0: no multiply (bit-identical). No makeup gain.
+constexpr float EXP_BTILT_SLOPE_MAX = 3.0f;   // dB/oct at full K5 (either side); 6 oct of bands -> ~-18 dB at the far end
 
 // --- K4 on SW1 UP = triggered envelope on the K3 FM index (copied 1:1 from armitage's K2 FM envelope) ---
 // Onset detector per 48 kHz input sample, before the decimator (armitage OnsetDetect / ARM_ONSET_*):
