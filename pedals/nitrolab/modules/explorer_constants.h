@@ -140,7 +140,7 @@ constexpr int EXP_ONSET_MODE = 1;   // 0 = level detector, 1 = spectral flux
 constexpr float EXP_ONSET_FLUX_SMOOTH_MS = 10.f;   // ms; per-band magnitude smoother
 constexpr float EXP_ONSET_FLUX_HF_TILT = 1.f;   // band weight w_k = 1 + TILT k / (K - 1)
 constexpr float EXP_ONSET_FLUX_MEAN_MS = 150.f;   // ms; running mean of F (adaptive threshold, no absolute level)
-constexpr float EXP_ONSET_FLUX_K = 2.5f;   // onset: F > K x mean_F
+constexpr float EXP_ONSET_FLUX_K = 1.5f;   // onset: F > K x mean_F (2026-10-26: 2.5 -> 1.5, ringing re-plucks)
 constexpr float EXP_ONSET_FLUX_FLOOR = 1e-3f;   // F floor (band-magnitude units): ~20 dB under the median F of a ringing-string re-pluck at 0.1 peak (~1e-2; a fresh pluck ~5e-2), above -60 dBFS input hiss (max ~6e-4)
 constexpr float EXP_ONSET_FLUX_REFRACTORY_MS = 60.f;   // ms; min. time between onsets
 constexpr float    EXP_ENV_TAU_SLOW_S      = 4.0f;     // s; time law just off noon (= ARM_ENV_TAU_SLOW_S)
