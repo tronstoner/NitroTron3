@@ -3,14 +3,15 @@
 // wavemorph — vector-synthesis wavetable voice on the band engine.  SW3 DOWN on NitroLab.
 //
 // The band engine is COPIED from explorer.h (not shared): decimate 48 -> 8 kHz, 84 complex bands
-// (armitage_bands.h, included read-only), slots played / +1 / -1 / -2 (the -2 slot = the unwrapped
-// phase accumulator / 4), band phase computed once per band / slot / sample in Prep; each band reads
+// (armitage_bands.h, included read-only), slots played / +1 / -1 (SW2 picks one, as armitage), band phase
+// computed once per band / slot / sample in Prep; each band reads
 // the current zone's frame tables at its OWN phase phi_k with its magnitude a_k:
 //   W_k = lerp_frames( lerp_phase(table[zone][frame][level_k]) ),  slot = sum_k w_k a_k W_k
 //   MORPH (all zones, m = K3): F_z frames per zone (7 in zone 1, 16 in zones 4 / 5, 4 in the others);
 //   position = (F_z - 1) m, linear crossfade between the two adjacent frames;
 //   level_k = the largest band-limited version with H <= 4000 / f'_k (static per band and slot).
-// wet8 = WM_OUT_GAIN [ (1 - mix) played + mix (u G_UP up + d G_DOWN down + d2 G_DOWN2 down2) ]
+// wet8 = WM_OUT_GAIN [ u G_UP up + p played + d G_DOWN down ], (u, p, d) one-hot from SW2, slid over
+//        WM_OCT_XFADE_MS on a change (old -> new slot crossfade); a slot with weight 0 is not computed
 // wet  = interpolate(wet8) -> DC blocker -> K4 post filter -> soft clipper (ceiling 1.0) -> FS1 mute
 // No pitch tracking; nothing picks or decides per band.
 //
@@ -23,10 +24,10 @@
 //                     -> 0.05 s (ends); t_eff = t_K4 + 0.7 e, not clamped (fc only 10 Hz..20 kHz)
 //   K3  morph         m 0..1 (smoothed): position through the zone's waves / frames
 //   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (WM_FILT_STAGES: 1 = 12 dB/oct, 2 = 24 dB/oct; Q 0.707 per stage)
-//   K5  octave mix    CCW = played only (octave slots not computed), CW = selected octave only; linear
+//   K5  unused (not read; DIAG shows the raw value)
 //   K6  dry / wet     (shell)
 //   SW1 unused (not read)
-//   SW2 octave        UP = +1, MID = -1, DOWN = -2 (slid over WM_OCT_XFADE_MS)
+//   SW2 octave        UP = +1 octave, MID = as played, DOWN = -1 octave (one slot; crossfade WM_OCT_XFADE_MS)
 //   FS1 wet mute      toggle, LED2 on while muted; LED1 on. FS2 unused.
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 //
@@ -110,7 +111,7 @@ class WaveMorph : public Module {
   static constexpr int kBands  = armbands::kArmBands;
   static constexpr int kFactor = armbands::kArmFactor;
   enum { kUp = 0, kMid = 1, kDown = 2 };   // = cs.Switch() values
-  enum { kSU = 0, kSP = 1, kSD = 2, kSD2 = 3, kSlots = 4 };   // slots: up, played, down, down2
+  enum { kSU = 0, kSP = 1, kSD = 2, kSlots = 3 };   // slots: up, played, down (SW2 selects one)
 
   void Init(float sr) override {
     using namespace wavemorph_k;
@@ -119,7 +120,7 @@ class WaveMorph : public Module {
     for (int i = 0; i < WM_SIN_SIZE; i++)
       wavemorph_sin_tab[i] = sinf(6.283185307f * (float)i / (float)WM_SIN_SIZE);
     for (int k = 0; k < kBands + 2; k++) mag_[k] = 0.f;
-    static const float r[kSlots] = { 2.f, 1.f, 0.5f, 0.25f };   // up / played / down / down2
+    static const float r[kSlots] = { 2.f, 1.f, 0.5f };          // up / played / down
     for (int k = 0; k < kBands; k++) {
       const float f = armbands::ArmCenterFreq(k);
       bands_[k].Init(f, sr8_, armbands::ArmBandwidth(k));
@@ -130,8 +131,6 @@ class WaveMorph : public Module {
         const float x = log2f(fc);
         wmid_[k] = powf(10.f, (WM_ALIGN_WA * x * x + WM_ALIGN_WB * x + WM_ALIGN_WC) / 20.f);
       }
-      d2th_[k] = 0.f;
-      d2pp_[k] = -1.f;
       for (int o = 0; o < kSlots; o++) {
         const float fp = r[o] * f;                         // f'_k
         const int hk = (int)(WM_TAB_FMAX / fp);           // harmonics that fit below the ceiling
@@ -152,7 +151,6 @@ class WaveMorph : public Module {
     zone_ = zone_t_ = zfrom_ = 0;
     k2s_ = k2_t_ = 0.5f;                         // K2 noon = envelope off
     k3s_ = k3_t_ = 0.f;
-    k5s_ = k5_t_ = 0.f;
     // Onset detector (48 kHz, pre-decimator, explorer's) + K2 filter envelope (8 kHz).
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (WM_ONSET_ENV_MS * sr));
@@ -164,7 +162,7 @@ class WaveMorph : public Module {
     fenv_.Reset();
     ln_ftau_ratio_ = logf(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S);
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
-    og_[1] = og_t_[1] = 1.f;                     // SW2 MID = -1 slot
+    og_[1] = og_t_[1] = 1.f;                     // SW2 MID = played slot
     // K4 post filter: bypass, cleared state.
     ft_ = ft_t_ = 0.f;
     f_on_ = false;
@@ -196,11 +194,10 @@ class WaveMorph : public Module {
     zone_t_ = zone;
     k2_t_ = k2;
     k3_t_ = k3;
-    k5_t_ = k5;
     ft_t_ = 2.f * k4 - 1.f;                   // K4 post filter t
-    og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1
-    og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> -1
-    og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -2
+    og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
+    og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
+    og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
 
     led1.Set(1.f);
     led2.Set(mute_ ? 1.f : 0.f);
@@ -262,8 +259,6 @@ class WaveMorph : public Module {
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
       EnvUpdate();                               // filter envelope (consumes the 48 kHz onset flag)
       k3s_ += (k3_t_ - k3s_) * ca;
-      k5s_ += (k5_t_ - k5s_) * ca;
-      if (fabsf(k5_t_ - k5s_) < WM_CTRL_SNAP) k5s_ = k5_t_;   // exact 0: octave work skipped
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
 
       // Zone change: start a crossfade (picked up when no fade is running).
@@ -293,12 +288,13 @@ class WaveMorph : public Module {
         }
       }
 
-      const float mix = k5s_;
-      static constexpr int   oslot[3] = { kSU, kSD, kSD2 };
-      static constexpr float ogain[3] = { WM_GAIN_UP, WM_GAIN_DOWN, WM_GAIN_DOWN2 };
-      float acc = (1.f - mix) * RunSlot(kSP, fading);   // played slot: always computed
+      // SW2: one voice (up / played / down); on a change the old and the new slot crossfade
+      // (weights slid over WM_OCT_XFADE_MS); a slot with weight 0 is not computed.
+      static constexpr int   oslot[3] = { kSU, kSP, kSD };
+      static constexpr float ogain[3] = { WM_GAIN_UP, 1.f, WM_GAIN_DOWN };
+      float acc = 0.f;
       for (int j = 0; j < 3; j++) {
-        const float g = mix * og_[j];
+        const float g = og_[j];
         if (g != 0.f) acc += g * ogain[j] * RunSlot(oslot[j], fading);
         else slot_on_[oslot[j]] = false;
       }
@@ -380,7 +376,6 @@ class WaveMorph : public Module {
     const float* __restrict mg = mag_ + 1;
     for (int k = 0; k < kBands; k++) {
       if (mg[k] == 0.f) {
-        if (o == kSD2) d2pp_[k] = -1.f;          // -2 accumulator restarts from the phase on return
         continue;
       }
       const float iv = inv_[k];
@@ -390,26 +385,8 @@ class WaveMorph : public Module {
         if (k & 1) { zr = -zr; zi = -zi; }        // phase alignment (armitage ARM_ALIGN)
       } else if (o == kSU) {
         bands_[k].ArmUp1(iv, zr, zi);
-      } else if (o == kSD) {
+      } else {                                    // kSD
         bands_[k].ArmDown1(iv, zr, zi);
-      } else {                                    // -2: unwrapped band phase / 4 (cycles: theta in [0, 4))
-        const float ph = FastAtan2Cycles(bands_[k].Im(), bands_[k].Re());   // raw z, as Down1
-        float th = d2th_[k];
-        const float pp = d2pp_[k];
-        if (pp < 0.f) {
-          th = ph;                                // (re)start from the current phase
-        } else {
-          float dph = ph - pp;                    // wrap into (-0.5, 0.5] cycles = (-pi, pi]
-          if (dph > 0.5f) dph -= 1.f;
-          else if (dph <= -0.5f) dph += 1.f;
-          th += dph;
-          if (th >= 4.f) th -= 4.f;               // mod 4 cycles = 8 pi: theta / 4 continuous
-          else if (th < 0.f) th += 4.f;
-        }
-        d2th_[k] = th;
-        d2pp_[k] = ph;
-        ph_[k] = 0.25f * th;                      // the slot phase is known: no atan
-        continue;
       }
       ph_[k] = FastAtan2Cycles(zi * iv, zr * iv);
     }
@@ -457,9 +434,7 @@ class WaveMorph : public Module {
     return acc;
   }
 
-  void ResetSlotState(int o) {
-    if (o == kSD2) for (int k = 0; k < kBands; k++) d2pp_[k] = -1.f;   // -2 accumulator: restart from the phase
-  }
+  void ResetSlotState(int o) { (void)o; }   // the voice keeps no per-slot state
 
   static inline float Slide(float v, float t, float st) {
     if (v < t) { v += st; if (v > t) v = t; }
@@ -910,9 +885,8 @@ class WaveMorph : public Module {
   float inv_[kBands];              // 1 / |z_k| (0 = silent)
   float ph_[kBands];               // phase phi_k (cycles, [0, 1)) of the slot being run
   float wmid_[kBands];             // played-slot fitted output weight (armitage ARM_ALIGN)
-  float d2th_[kBands], d2pp_[kBands];  // -2 slot: unwrapped phase (cycles, mod 4), previous band phase (-1 = fresh)
   uint8_t lvl_[kSlots][kBands];    // table band-limit level per band and slot
-  bool  slot_on_[kSlots] = { false, false, false, false };   // slot computed last sample
+  bool  slot_on_[kSlots] = { false, false, false };   // slot computed last sample
 
   float dc_a_ = 0.f, dc_x1_ = 0.f, dc_y1_ = 0.f;
   float sr8_ = 8000.f, sr_ = 48000.f;
@@ -923,9 +897,9 @@ class WaveMorph : public Module {
   float zg_ = 1.f;                 // new-zone gain during a fade
   float morph_ = 0.f;              // morph m = K3 (smoothed, this sample)
   int   zoff_[wavemorph_k::WM_ZONES] = {};   // packed frame offset per zone (Init)
-  float k2s_ = 0.5f, k3s_ = 0.f, k5s_ = 0.f;                      // smoothed knobs
-  volatile float k2_t_ = 0.5f, k3_t_ = 0.f, k5_t_ = 0.f;          // targets
-  float og_[3] = { 0.f, 1.f, 0.f };            // octave slot weights (up, down, down2), slid
+  float k2s_ = 0.5f, k3s_ = 0.f;                      // smoothed knobs
+  volatile float k2_t_ = 0.5f, k3_t_ = 0.f;          // targets
+  float og_[3] = { 0.f, 1.f, 0.f };            // slot weights (up, played, down), slid
   volatile float og_t_[3] = { 0.f, 1.f, 0.f };
   float oct_step_ = 0.f;
   // K2 filter envelope

@@ -91,7 +91,7 @@ constexpr int      EXP_BT_WAVES     = EXP_BT_PATTERNS + EXP_BT_SQR_N_MAX;   // 3
 // the pattern is subsampled (every 16 / S-th step). Static per band centre and slot.
 constexpr int      EXP_BT_STEPS_MIN = 2;        // fewest steps a band can drop to
 
-// --- Octave (SW2 select: UP +1, MID -1, DOWN -2; K5 mix) -------------------------------
+// --- Octave (SW2 select: UP +1, MID played, DOWN -1; one slot) ----------------------------
 constexpr float EXP_OCT_XFADE_MS  = 10.f;    // ms; linear slide between octave slots on an SW2 change (= ARM_XFADE_MS)
 
 // --- K4 = post filter on the final 48 kHz wet (armitage's K4 law, no envelopes, no resonance) ---
@@ -136,8 +136,8 @@ constexpr float    EXP_ENV_FM_TIME_RATIO   = 3.0f;     // T = this x the time la
 constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // decay (CCW) / rise (CW) time / T (= ARM_ENV_FM_DECAY_RATIO)
 
 // --- Control smoothing / snapping ----------------------------------------------------
-constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t), K5 at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
-constexpr float EXP_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this (K5 = 0 skips octave work)
+constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (UP envelope t) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
+constexpr float EXP_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this
 
 // --- Band sum: phase alignment + gain staging (copied values from armitage_constants.h, ARM_ALIGN = true) ---
 // Played slot: odd bands negated (z -> -z) before everything, output weight w_k = 10^(W_dB(log2 f_k) / 20).
@@ -149,10 +149,6 @@ constexpr float EXP_ALIGN_W_FLO =  41.2f;        // Hz; weight held below (= ARM
 constexpr float EXP_ALIGN_W_FHI = 330.f;         // Hz; weight held above (= ARM_ALIGN_W_FHI)
 constexpr float EXP_GAIN_UP     = 1.139f;        // octave-up slot gain, unity vs played on the unshaped band sum (= ARM_GAIN_UP)
 constexpr float EXP_GAIN_DOWN   = 1.445f;        // octave-down slot gain (= ARM_GAIN_DOWN)
-// -2 slot gain: the -2 signal is a second Down1 stage applied to the -1 signal, the same transform the
-// -1 gain was fitted to make up once; assumed to lose the same again -> the square (2.088). Unheard,
-// unmeasured starting point.
-constexpr float EXP_GAIN_DOWN2  = EXP_GAIN_DOWN * EXP_GAIN_DOWN;
 constexpr float EXP_OUT_GAIN    = 1.487f;        // wet trim (= ARM_OUT_GAIN)
 constexpr float EXP_SILENCE     = 1e-10f;        // |z|^2 below this: band silent (= ARM_SILENCE)
 constexpr float EXP_DENORM      = 1e-12f;        // feedback FM state below this flushed to 0 (= ARM_DENORM)

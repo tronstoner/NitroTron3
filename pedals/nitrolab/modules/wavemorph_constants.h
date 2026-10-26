@@ -126,7 +126,7 @@ constexpr int   WM_PPGFB_SKIP     = 2;
 // --- K2 noon dead zone (filter envelope off) --------------------------------------------
 constexpr float WM_ENV_PAD          = 0.08f;   // t units: k2 in [0.46, 0.54] = 8 % of the knob travel around noon
 
-// --- Octave (SW2: UP +1, MID -1, DOWN -2; K5 mix) -------------------------------------
+// --- Octave (SW2: UP +1, MID played, DOWN -1; one slot) --------------------------------
 constexpr float WM_OCT_XFADE_MS   = 10.f;    // ms; linear slide between octave slots on an SW2 change (= EXP_OCT_XFADE_MS)
 
 // --- K4 = post filter (explorer's law, all zones) ----------------------------------
@@ -166,7 +166,7 @@ constexpr float    WM_ONSET_FLOOR         = 0.0021f;  // (= EXP_ONSET_FLOOR)
 constexpr uint32_t WM_ONSET_REFRACTORY_MS = 100;      // (= EXP_ONSET_REFRACTORY_MS)
 
 // --- Control smoothing / snapping ----------------------------------------------------------
-constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K5 at the 8 kHz rate
+constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3 at the 8 kHz rate
 constexpr float WM_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this
 
 // --- Band sum: alignment + gain staging (copied values from explorer_constants.h) -------------
@@ -177,7 +177,6 @@ constexpr float WM_ALIGN_W_FLO =  41.2f;        // Hz; weight held below
 constexpr float WM_ALIGN_W_FHI = 330.f;         // Hz; weight held above
 constexpr float WM_GAIN_UP     = 1.139f;        // octave-up slot gain (= EXP_GAIN_UP)
 constexpr float WM_GAIN_DOWN   = 1.445f;        // octave-down slot gain (= EXP_GAIN_DOWN)
-constexpr float WM_GAIN_DOWN2  = WM_GAIN_DOWN * WM_GAIN_DOWN;   // -2 slot gain (= EXP_GAIN_DOWN2)
 constexpr float WM_OUT_GAIN    = 1.487f;        // wet trim (= EXP_OUT_GAIN)
 constexpr float WM_SILENCE     = 1e-10f;        // |z|^2 below this: band silent
 

@@ -14,10 +14,10 @@
 // SW3 MIDDLE = explorer   (sound-exploration models on a copy of armitage's band
 //                          engine — see modules/explorer.h; SW1 = family, K1 = model,
 //                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index envelope),
-//                          K5 = octave mix, SW2 = octave +1 / -1 / -2)
+//                          SW2 = octave up / played / down; K5 unused)
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
 //                          modules/wavemorph.h; K1 = base wave (10 stepped zones), K2 = K4 filter
-//                          envelope, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
+//                          envelope, K3 = morph, K4 = post filter, SW2 = octave up / played / down; K5 unused)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -213,7 +213,7 @@ int main() {
         diag_stage = 0;
       } else if (diag_stage == 3) {
         // wavemorph, second half: K2 filter envelope e, octave, mute, cpu
-        static const char* const oct_name[3] = { "+1", "-1", "-2" };
+        static const char* const oct_name[3] = { "up", "played", "down" };
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
@@ -243,10 +243,11 @@ int main() {
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        hw.seed.Print("XP %s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s SW2 %s | ",
+        static const char* const oct_name[3] = { "up", "played", "down" };
+        hw.seed.Print("XP %s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s oct %s | ",
                       tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
                       sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
-                      sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
+                      oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
         diag_stage = 2;
       } else if (g_active == NL_MODE_ARMITAGE && armitage.DiagTake(diag_snap)) {
         // first half: number / auto, knobs, switches
