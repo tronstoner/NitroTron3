@@ -113,29 +113,6 @@ ARM_TUNABLE(float,    ARM_ONSET_RISE,          1.5f);     // gate > baseline x t
 ARM_TUNABLE(float,    ARM_ONSET_FLOOR,         0.0021f);  // input gate-meter units = 0.1 x ARM_REF_LEVEL (0.021); unchanged — the decimator has unity passband gain, so 48 kHz |in| and the old decimated |d| share the same level scale
                                                        // (its K4 open threshold) sits at ~0.1 of a typical passive-bass env
 ARM_TUNABLE(uint32_t, ARM_ONSET_REFRACTORY_MS, 100);      // one pluck = one onset (vestige), now counted in 48 kHz samples
-// --- Onset detector mode + HF transient detector (2026-10-27) ---------------------------------
-// MODE 0 = the level detector above (48 kHz gate meter vs slow baseline); 1 = HF transient detector on the raw
-// 48 kHz input, independent of the band bank: HF_BANDS octave bandpasses (RBJ BPF, Q HF_Q) at HF_F0 x 2^b
-// (750 / 1.5k / 3k / 6k / 12k Hz) - pick attacks are sharp there, ringing strings barely move;
-// per band energy envelope e_b (one-pole on y^2, HF_ENV_MS, longer than a bass period so the waveform's own
-// per-period HF bursts average out); every HF_HOP_MS a frame X_b = ln(e_b + HF_E0) (log: level-agnostic);
-// SF = sum_b max(0, X_b - Xmax_b(HF_LAG frames ago)), Xmax = max over HF_MAXW neighbouring bands;
-// onset at frame c when SF(c) is a local max (> the HF_PEAK_WIN frames before, >= the frame after: 1 frame
-// confirmation latency), SF(c) >= mean(SF over the last HF_AVG frames) + HF_DELTA (ln units), and the
-// refractory HF_REFRACTORY_MS has elapsed. Latches the same onset flag the envelopes consume.
-ARM_TUNABLE(int, ARM_ONSET_MODE, 1);   // 0 = level detector, 1 = HF transient detector
-ARM_FIXED(int, ARM_ONSET_HF_BANDS, 5);   // octave bands (array size)
-ARM_TUNABLE(float, ARM_ONSET_HF_F0, 750.f);   // Hz; lowest band centre, then x 2 per band
-ARM_TUNABLE(float, ARM_ONSET_HF_Q, 1.4f);   // bandpass Q (about one octave wide)
-ARM_TUNABLE(float, ARM_ONSET_HF_ENV_MS, 10.f);   // ms; per-band energy envelope
-ARM_TUNABLE(float, ARM_ONSET_HF_HOP_MS, 1.f);   // ms; frame hop (48 samples at 48 kHz)
-ARM_FIXED(int, ARM_ONSET_HF_LAG, 10);   // frames; reference lag (10 ms; array size)
-ARM_TUNABLE(int, ARM_ONSET_HF_MAXW, 3);   // bands; max filter width across bands on the reference frame
-ARM_TUNABLE(int, ARM_ONSET_HF_PEAK_WIN, 3);   // frames; SF must exceed this many frames before it
-ARM_FIXED(int, ARM_ONSET_HF_AVG, 100);   // frames; adaptive mean window (100 ms; array size)
-ARM_TUNABLE(float, ARM_ONSET_HF_DELTA, 2.5f);   // ln units; SF >= mean + DELTA (host: 0 false / 100 % hits from 1.5 to 4)
-ARM_TUNABLE(float, ARM_ONSET_HF_E0, 1e-10f);   // energy floor inside the log (about -100 dBFS)
-ARM_TUNABLE(float, ARM_ONSET_HF_REFRACTORY_MS, 60.f);   // ms; min. time between onsets
 ARM_TUNABLE(float,    ARM_ENV_TAU_SLOW_S,      4.0f);     // s; envelope time constant just off K5 noon
 ARM_TUNABLE(float,    ARM_ENV_TAU_FAST_S,      0.05f);    // s; at K5 full CW / CCW
 ARM_TUNABLE(float,    ARM_ENV_FALL_RATIO,      3.0f);     // CW fall tau / rise tau (plain one-pole decay after the peak)

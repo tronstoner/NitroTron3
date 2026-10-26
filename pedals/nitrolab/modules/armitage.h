@@ -300,22 +300,6 @@ class Armitage : public Module {
     on_refr_len_ = (int)((float)ARM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
-    // HF transient onset detector (48 kHz input, MODE 1).
-    for (int b = 0; b < ARM_ONSET_HF_BANDS; b++) {
-      const float fc = ARM_ONSET_HF_F0 * (float)(1 << b);
-      const float w = 6.283185307f * fc / sr, al = sinf(w) / (2.f * ARM_ONSET_HF_Q), a0 = 1.f + al;
-      hf_b0_[b] = al / a0; hf_a1_[b] = -2.f * cosf(w) / a0; hf_a2_[b] = (1.f - al) / a0;   // RBJ BPF (b1 = 0, b2 = -b0)
-      hf_z1_[b] = hf_z2_[b] = 0.f;
-      hf_env_[b] = 0.f;
-      for (int l = 0; l < ARM_ONSET_HF_LAG; l++) hf_ref_[l][b] = logf(ARM_ONSET_HF_E0);
-    }
-    hf_ea_ = 1.f - expf(-1000.f / (ARM_ONSET_HF_ENV_MS * sr));
-    hf_hop_ = (int)(ARM_ONSET_HF_HOP_MS * 0.001f * sr + 0.5f);
-    if (hf_hop_ < 1) hf_hop_ = 1;
-    hf_refr_len_ = (int)(ARM_ONSET_HF_REFRACTORY_MS / ARM_ONSET_HF_HOP_MS + 0.5f);
-    hf_cnt_ = 0; hf_frames_ = 0; hf_rp_ = 0; hf_hp_ = 0; hf_sum_ = 0.f; hf_refr_ = 0; hf_sf_pk_ = 0.f;
-    for (int j = 0; j < kHfHist; j++) hf_sf_[j] = 0.f;
-    on_count_ = 0;
     env_.Reset();
     env_fm_.Reset();
     ln_tau_ratio_ = logf(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S);
@@ -437,10 +421,7 @@ class Armitage : public Module {
     using namespace armitage_k;
     const float ca = ctrl_a_;
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      for (size_t j = 0; j < kFactor; j++) {             // onset detector, 48 kHz |in| (MODE 0 level / 1 HF transient)
-        if (ARM_ONSET_MODE == 0) OnsetDetect(in[i + j]);
-        else                      HfOnset(in[i + j]);
-      }
+      for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
       const float d = dec_(in + i);
       EnvUpdate();                               // K5 / K2 triggered envelopes (consume the 48 kHz onset flag)
       bx_  += (bx_t_ - bx_) * ca;
@@ -974,64 +955,10 @@ class Armitage : public Module {
       }
     }
   };
-  // HF transient onset detector (MODE 1), once per 48 kHz input sample: octave bandpasses from ONSET_HF_F0 up,
-  // per-band energy envelopes; every hop a log-energy frame, SuperFlux-style positive difference against the
-  // max-filtered frame ONSET_HF_LAG frames ago, peak picked against the running mean + ONSET_HF_DELTA. Latches
-  // on_pending_ like OnsetDetect (EnvUpdate consumes it at 8 kHz).
-  inline void HfOnset(float x) {
-    using namespace armitage_k;
-    for (int b = 0; b < ARM_ONSET_HF_BANDS; b++) {
-      const float y = hf_b0_[b] * x + hf_z1_[b];
-      hf_z1_[b] = -hf_a1_[b] * y + hf_z2_[b];
-      hf_z2_[b] = -hf_b0_[b] * x - hf_a2_[b] * y;
-      hf_env_[b] += hf_ea_ * (y * y - hf_env_[b]);
-    }
-    if (++hf_cnt_ < hf_hop_) return;
-    hf_cnt_ = 0;
-    // frame: log energies, max filter across bands, positive difference vs the lagged reference
-    float X[ARM_ONSET_HF_BANDS], Xm[ARM_ONSET_HF_BANDS];
-    for (int b = 0; b < ARM_ONSET_HF_BANDS; b++) X[b] = logf(hf_env_[b] + ARM_ONSET_HF_E0);
-    const int half = ARM_ONSET_HF_MAXW / 2;
-    for (int b = 0; b < ARM_ONSET_HF_BANDS; b++) {
-      float m = X[b];
-      for (int j = 1; j <= half; j++) {
-        if (b - j >= 0 && X[b - j] > m) m = X[b - j];
-        if (b + j < ARM_ONSET_HF_BANDS && X[b + j] > m) m = X[b + j];
-      }
-      Xm[b] = m;
-    }
-    float F = 0.f;
-    if (hf_frames_ >= ARM_ONSET_HF_LAG) {
-      for (int b = 0; b < ARM_ONSET_HF_BANDS; b++) { const float d = X[b] - hf_ref_[hf_rp_][b]; if (d > 0.f) F += d; }
-    }
-    for (int b = 0; b < ARM_ONSET_HF_BANDS; b++) hf_ref_[hf_rp_][b] = Xm[b];
-    hf_rp_ = (hf_rp_ + 1) % ARM_ONSET_HF_LAG;
-    // SF history (ring); candidate = the previous frame c, confirmed by this frame n
-    const int n = hf_frames_;
-    hf_sf_[n % kHfHist] = F;
-    hf_frames_++;
-    if (F > hf_sf_pk_) hf_sf_pk_ = F;
-    if (hf_refr_ > 0) hf_refr_--;
-    const int c = n - 1;
-    if (c < 0) return;
-    hf_sum_ += hf_sf_[c % kHfHist];                                   // running sum of SF over the last AVG frames up to c
-    if (c - ARM_ONSET_HF_AVG >= 0) hf_sum_ -= hf_sf_[(c - ARM_ONSET_HF_AVG) % kHfHist];
-    if (c <= ARM_ONSET_HF_PEAK_WIN) return;
-    const float v = hf_sf_[c % kHfHist];
-    if (v < F) return;                                                // the next frame is higher: not the peak
-    for (int j = c - ARM_ONSET_HF_PEAK_WIN; j < c; j++) if (hf_sf_[j % kHfHist] >= v) return;
-    const int cnt = (c + 1 < ARM_ONSET_HF_AVG) ? c + 1 : ARM_ONSET_HF_AVG;
-    const float mean = hf_sum_ / (float)cnt;
-    if (v >= mean + ARM_ONSET_HF_DELTA && hf_refr_ == 0) {
-      hf_refr_ = hf_refr_len_;
-      on_pending_ = true;
-    }
-  }
-
   inline void EnvUpdate() {
     const bool onset = on_pending_;
     on_pending_ = false;
-    if (onset) { on_seen_ = true; on_count_++; }
+    if (onset) on_seen_ = true;
     env_.Step(onset, on_seen_, 2.f * k5s_ - 1.f, sr8_, ln_tau_ratio_);      // K5 -> K4 post filter
     env_fm_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);   // K2 -> K3 FM index gain (SW1 UP)
   }
@@ -1365,16 +1292,6 @@ class Armitage : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired this 8 kHz step, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened (before: e = 0)
-  // HF transient onset detector (48 kHz input, MODE 1)
-  static constexpr int kHfHist = armitage_k::ARM_ONSET_HF_AVG + armitage_k::ARM_ONSET_HF_LAG + 8;   // SF history ring (>= AVG + PEAK_WIN + 2)
-  float hf_b0_[armitage_k::ARM_ONSET_HF_BANDS], hf_a1_[armitage_k::ARM_ONSET_HF_BANDS], hf_a2_[armitage_k::ARM_ONSET_HF_BANDS];   // bandpass coefficients
-  float hf_z1_[armitage_k::ARM_ONSET_HF_BANDS], hf_z2_[armitage_k::ARM_ONSET_HF_BANDS];   // bandpass state
-  float hf_env_[armitage_k::ARM_ONSET_HF_BANDS];               // per-band energy envelope
-  float hf_ref_[armitage_k::ARM_ONSET_HF_LAG][armitage_k::ARM_ONSET_HF_BANDS];   // max-filtered log frames, last LAG frames (ring)
-  float hf_sf_[kHfHist];            // SF history (ring)
-  float hf_ea_ = 0.f, hf_sum_ = 0.f, hf_sf_pk_ = 0.f;   // envelope coefficient, running SF sum (AVG window), DIAG: SF peak
-  int   hf_hop_ = 48, hf_cnt_ = 0, hf_frames_ = 0, hf_rp_ = 0, hf_hp_ = 0, hf_refr_ = 0, hf_refr_len_ = 60;
-  uint32_t on_count_ = 0;          // DIAG: onsets consumed by the envelopes
   Env   env_;                      // K5 envelope -> K4 post-filter position
   EnvGain env_fm_;                 // K2 envelope -> K3 FM index gain (SW1 UP: ADD / FB)
   float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)

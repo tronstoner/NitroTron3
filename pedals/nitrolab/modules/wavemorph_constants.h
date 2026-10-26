@@ -164,29 +164,6 @@ constexpr float    WM_ONSET_SLOW_COEF     = 0.0006f;  // (= EXP_ONSET_SLOW_COEF)
 constexpr float    WM_ONSET_RISE          = 1.5f;     // (= EXP_ONSET_RISE)
 constexpr float    WM_ONSET_FLOOR         = 0.0021f;  // (= EXP_ONSET_FLOOR)
 constexpr uint32_t WM_ONSET_REFRACTORY_MS = 100;      // (= EXP_ONSET_REFRACTORY_MS)
-// --- Onset detector mode + HF transient detector (2026-10-27) ---------------------------------
-// MODE 0 = the level detector above (48 kHz gate meter vs slow baseline); 1 = HF transient detector on the raw
-// 48 kHz input, independent of the band bank: HF_BANDS octave bandpasses (RBJ BPF, Q HF_Q) at HF_F0 x 2^b
-// (750 / 1.5k / 3k / 6k / 12k Hz) - pick attacks are sharp there, ringing strings barely move;
-// per band energy envelope e_b (one-pole on y^2, HF_ENV_MS, longer than a bass period so the waveform's own
-// per-period HF bursts average out); every HF_HOP_MS a frame X_b = ln(e_b + HF_E0) (log: level-agnostic);
-// SF = sum_b max(0, X_b - Xmax_b(HF_LAG frames ago)), Xmax = max over HF_MAXW neighbouring bands;
-// onset at frame c when SF(c) is a local max (> the HF_PEAK_WIN frames before, >= the frame after: 1 frame
-// confirmation latency), SF(c) >= mean(SF over the last HF_AVG frames) + HF_DELTA (ln units), and the
-// refractory HF_REFRACTORY_MS has elapsed. Latches the same onset flag the envelopes consume.
-constexpr int WM_ONSET_MODE = 1;   // 0 = level detector, 1 = HF transient detector
-constexpr int WM_ONSET_HF_BANDS = 5;   // octave bands (array size)
-constexpr float WM_ONSET_HF_F0 = 750.f;   // Hz; lowest band centre, then x 2 per band
-constexpr float WM_ONSET_HF_Q = 1.4f;   // bandpass Q (about one octave wide)
-constexpr float WM_ONSET_HF_ENV_MS = 10.f;   // ms; per-band energy envelope
-constexpr float WM_ONSET_HF_HOP_MS = 1.f;   // ms; frame hop (48 samples at 48 kHz)
-constexpr int WM_ONSET_HF_LAG = 10;   // frames; reference lag (10 ms; array size)
-constexpr int WM_ONSET_HF_MAXW = 3;   // bands; max filter width across bands on the reference frame
-constexpr int WM_ONSET_HF_PEAK_WIN = 3;   // frames; SF must exceed this many frames before it
-constexpr int WM_ONSET_HF_AVG = 100;   // frames; adaptive mean window (100 ms; array size)
-constexpr float WM_ONSET_HF_DELTA = 2.5f;   // ln units; SF >= mean + DELTA (host: 0 false / 100 % hits from 1.5 to 4)
-constexpr float WM_ONSET_HF_E0 = 1e-10f;   // energy floor inside the log (about -100 dBFS)
-constexpr float WM_ONSET_HF_REFRACTORY_MS = 60.f;   // ms; min. time between onsets
 
 // --- Control smoothing / snapping ----------------------------------------------------------
 constexpr float WM_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3 at the 8 kHz rate
