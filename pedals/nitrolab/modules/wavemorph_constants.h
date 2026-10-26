@@ -184,7 +184,7 @@ constexpr uint32_t WM_ONSET_REFRACTORY_MS = 100;      // (= EXP_ONSET_REFRACTORY
 // Off noon w_eff = 1 - m (1 - w), m = min(|t| / FADE, 1). t == 0: no multiply (bit-identical). No makeup gain.
 constexpr float WM_BTILT_LP_FMIN  = 40.f;     // Hz; LP fc at K5 full CCW (from the top band centre)
 constexpr float WM_BTILT_HP_FMAX  = 1000.f;   // Hz; HP fc at K5 full CW (from the bottom band centre)
-constexpr int   WM_BTILT_ORDER    = 1;        // n: magnitude 1 / sqrt(1 + x^2n); 1 = 6 dB/oct (tuned 2026-10-26, 2 was too steep)
+constexpr int   WM_BTILT_ORDER    = 4;        // n: magnitude 1 / sqrt(1 + x^2n); 4 = 24 dB/oct (tuned 2026-10-26: 2 not ideal, 1 went the wrong way)
 constexpr float WM_BTILT_FADE     = 0.03f;    // |t| over which the weights fade in from 1 off noon
 
 // --- Control smoothing / snapping ----------------------------------------------------------

@@ -122,7 +122,7 @@ constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slid
 // m = min(|t| / FADE, 1). t == 0: no multiply (bit-identical). No makeup gain.
 constexpr float EXP_BTILT_LP_FMIN  = 40.f;     // Hz; LP fc at K5 full CCW (from the top band centre)
 constexpr float EXP_BTILT_HP_FMAX  = 1000.f;   // Hz; HP fc at K5 full CW (from the bottom band centre)
-constexpr int   EXP_BTILT_ORDER    = 1;        // n: Butterworth-shaped magnitude 1 / sqrt(1 + x^2n); 1 = 6 dB/oct (tuned 2026-10-26, 2 was too steep)
+constexpr int   EXP_BTILT_ORDER    = 4;        // n: Butterworth-shaped magnitude 1 / sqrt(1 + x^2n); 4 = 24 dB/oct (tuned 2026-10-26: 2 not ideal, 1 went the wrong way)
 constexpr float EXP_BTILT_FADE     = 0.03f;    // |t| over which the weights fade in from 1 off noon
 
 // --- K4 on SW1 UP = triggered envelope on the K3 FM index (copied 1:1 from armitage's K2 FM envelope) ---
