@@ -44,10 +44,6 @@ static inline int DiagHundredths(float x) { return (x > 0.f) ? (int)(x * 100.f +
 #define D2V(x) ' ', DiagHundredths(x) / 100, DiagHundredths(x) % 100
 // Signed variant (armitage K4 post filter t in [-1, 1]): the sign slot carries '-'.
 #define D2SV(x) ((x) < 0.f ? '-' : ' '), DiagHundredths(fabsf(x)) / 100, DiagHundredths(fabsf(x)) % 100
-// Touch sensitivity of the triggered envelopes (all three modules): last attack strength A and the
-// reference R in gate-meter units x 1000, velocity v = A / R, depth multiplier m in use.
-#define DYNF " dyn A" D2F " R" D2F " v" D2F " m" D2F
-#define DYNV(d) D2V((d).dyn_a * 1000.f), D2V((d).dyn_r * 1000.f), D2V((d).dyn_v), D2V((d).dyn_m)
 
 using namespace daisy;
 using clevelandmusicco::Hothouse;
@@ -205,9 +201,9 @@ int main() {
         const char* zn = Explorer::ZoneName(d.model, d.zone);
         // K4: SW1 UP = FM index envelope (t, gain g), MID / DOWN = post filter t
         if (d.sw1 == 0)
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F DYNF " mute %d cpu %u%%",
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " env t" D2F " g" D2F " mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
-                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), DYNV(d), d.mute ? 1 : 0,
+                            D2SV(d.a), D2SV(d.b), D2SV(d.k4t), D2V(d.envg), d.mute ? 1 : 0,
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         else
           hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " filt t" D2F " mute %d cpu %u%%",
@@ -221,8 +217,8 @@ int main() {
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("fenv e" D2F DYNF " oct %s mute %d cpu %u%%",
-                          D2SV(d.fe), DYNV(d), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+        hw.seed.PrintLine("fenv e" D2F " oct %s mute %d cpu %u%%",
+                          D2SV(d.fe), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
                           d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {
@@ -262,11 +258,11 @@ int main() {
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s %s h" D2F " SW2 %s" DYNF " | ",
+        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s %s h" D2F " SW2 %s | ",
                       tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
                       sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
                       mode_name[(d.mode >= 0 && d.mode < 5) ? d.mode : 4], D2V(d.h),
-                      sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1], DYNV(d));
+                      sw_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
         diag_stage = 1;
       } else if (now - diag_hb >= 2000) {
         diag_hb = now;

@@ -128,24 +128,6 @@ ARM_TUNABLE(float,    ARM_ENV_FM_DECAY_RATIO,  3.0f);     // K2 FM decay (CCW) /
 // (it reads the envelope knob, now K5, if ever re-enabled).
 ARM_TUNABLE(bool,     ARM_LFO_ENABLE,          false);
 
-// --- Touch sensitivity of the triggered envelopes (2026-10-26) ---
-// Relative, no absolute level: at each onset the attack strength A = peak of the onset detector's gate
-// meter over the ARM_DYN_WIN_MS after it (48 kHz). Reference R = running average of recent A, updated
-// once per onset after A is known: v = A / R (R before this update), then R += ARM_DYN_AVG_W (A - R).
-// R = A (v = 1) on the first onset, after silence (gate below the detector floor for ARM_DYN_SILENCE_MS)
-// and after module (re)activation. Depth multiplier m = 1 + AMOUNT (v - 1), clamped to
-// [0, 1 + AMOUNT (V_MAX - 1)]. Until A is known the previous m stays; then m slides linearly to the new
-// value over ARM_DYN_SLIDE_MS (8 kHz). Filter envelope: t_eff = t + DEPTH m e. FM envelope: k3_eff = k3 m g
-// while the envelope is on (outside noon), k3 at noon. AMOUNT 0 = m exactly 1 = the plain envelopes.
-ARM_TUNABLE(float,    ARM_DYN_WIN_MS,        15.f);  // ms; attack-strength window after the onset (gate-meter peak, 48 kHz)
-ARM_TUNABLE(float,    ARM_DYN_AVG_W,         0.25f);  // reference R one-pole weight per onset (running average of recent attacks)
-ARM_TUNABLE(float, ARM_DYN_AMOUNT, 1.0f);  // 0 = not touch-sensitive (bit-identical), 1 = fully: m = v
-ARM_TUNABLE(float, ARM_DYN_REF, 0.05f);   // gate-meter attack strength that gives the normal envelope depth (m = 1); harder plucks open further, softer less (2026-10-26: fixed reference replaces the running average)
-ARM_TUNABLE(float,    ARM_DYN_V_MAX,         3.f);  // velocity cap (only against extreme outliers): m <= 1 + AMOUNT (V_MAX - 1)
-ARM_TUNABLE(float,    ARM_DYN_SLIDE_MS,      5.f);  // ms; m slides linearly to its new value once A is known (no jump)
-ARM_TUNABLE(float,    ARM_DYN_SILENCE_MS,    2000.f);  // ms; gate below the onset floor this long = silence: next onset re-initialises R = A
-ARM_TUNABLE(float,    ARM_DYN_R_MIN,         1e-6f);  // guard: R below this -> v = 1 (R >= the onset floor in practice)
-
 // --- (parked, ARM_LFO_ENABLE) K2 = PWM (SAW / PULSE only; ADD / FB: K2 unused), bipolar t2 = 2 k2 - 1 ---
 // t2 >= 0 (noon -> CW): nothing (reserved). t2 < 0: u = -t2 in (0, 1], one triangle LFO in [-1, 1]
 // shared by all bands (phase at 8 kHz). Travel = mnemonic's K3 pre-effect law (MNEM_PRE_*):

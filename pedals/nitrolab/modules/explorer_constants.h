@@ -121,23 +121,6 @@ constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slid
 //   t = 2 k4 - 1 (smoothed, lands exactly on its target): t = 0 -> off, g = 1.
 //   T = EXP_ENV_FM_TIME_RATIO EXP_ENV_TAU_SLOW_S (EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)^|t|, travel time
 //   = EXP_ENV_FM_DECAY_RATIO T (36 s just off noon -> 450 ms at the ends); one-pole tau = travel / EXP_ENV_TRAVEL_TAUS,
-// --- Touch sensitivity of the triggered envelopes (2026-10-26) ---
-// Relative, no absolute level: at each onset the attack strength A = peak of the onset detector's gate
-// meter over the EXP_DYN_WIN_MS after it (48 kHz). Reference R = running average of recent A, updated
-// once per onset after A is known: v = A / R (R before this update), then R += EXP_DYN_AVG_W (A - R).
-// R = A (v = 1) on the first onset, after silence (gate below the detector floor for EXP_DYN_SILENCE_MS)
-// and after module (re)activation. Depth multiplier m = 1 + AMOUNT (v - 1), clamped to
-// [0, 1 + AMOUNT (V_MAX - 1)]. Until A is known the previous m stays; then m slides linearly to the new
-// value over EXP_DYN_SLIDE_MS (8 kHz). Filter envelope: t_eff = t + DEPTH m e. FM envelope: k3_eff = k3 m g
-// while the envelope is on (outside noon), k3 at noon. AMOUNT 0 = m exactly 1 = the plain envelopes.
-constexpr float EXP_DYN_WIN_MS       = 15.f;  // ms; attack-strength window after the onset (gate-meter peak, 48 kHz)
-constexpr float EXP_DYN_AVG_W        = 0.25f;  // reference R one-pole weight per onset (running average of recent attacks)
-constexpr float EXP_DYN_REF = 0.05f;  // gate-meter attack strength that gives the normal envelope depth (m = 1); harder plucks open further, softer less (2026-10-26: fixed reference replaces the running average)
-constexpr float EXP_DYN_AMOUNT = 1.0f;  // 0 = not touch-sensitive (bit-identical), 1 = fully: m = v
-constexpr float EXP_DYN_V_MAX        = 3.f;  // velocity cap (only against extreme outliers): m <= 1 + AMOUNT (V_MAX - 1)
-constexpr float EXP_DYN_SLIDE_MS     = 5.f;  // ms; m slides linearly to its new value once A is known (no jump)
-constexpr float EXP_DYN_SILENCE_MS   = 2000.f;  // ms; gate below the onset floor this long = silence: next onset re-initialises R = A
-constexpr float EXP_DYN_R_MIN        = 1e-6f;  // guard: R below this -> v = 1 (R >= the onset floor in practice)
 //   g snaps at the 98 % point. CCW: each onset g = 1, decays to 0, holds 0. CW: each onset g = 0, rises to 1,
 //   holds 1. Before the first onset: CCW g = 1, CW g = 0.
 constexpr float    EXP_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (= ARM_ONSET_ENV_MS)

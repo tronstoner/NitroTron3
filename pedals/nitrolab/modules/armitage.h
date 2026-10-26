@@ -300,7 +300,6 @@ class Armitage : public Module {
     on_refr_len_ = (int)((float)ARM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
-    dyn_.Init(sr, sr8_);
     env_.Reset();
     env_fm_.Reset();
     ln_tau_ratio_ = logf(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S);
@@ -405,12 +404,10 @@ class Armitage : public Module {
     float env_t2;            // K5: t2 = 2 k5 - 1 (0 = env off; sign = direction, |t2| = speed)
     float env_e;             // K5 envelope value e at the snapshot (-1..1); depth fixed ARM_ENV_DEPTH
     float envf_t2, envf_e;   // K2 envelope (-> K3 FM index gain, SW1 UP): t2 = 2 k2 - 1, g (0..1)
-    float dyn_a, dyn_r, dyn_v, dyn_m;   // touch sensitivity: last attack strength A, reference R (gate-meter units), v = A / R, m in use
     int   oct;               // 0 up, 1 played, 2 down
     bool  mute;              // FS1 wet mute state
   };
   void Activate() override {
-    dyn_.fresh = true;                         // (re)activation: the next attack re-initialises R
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
   }
   // Takes the next pending line (tap first). Returns false when none.
@@ -435,8 +432,7 @@ class Armitage : public Module {
       if (fabsf(k5_t_ - k5s_) < 1e-6f) k5s_ = k5_t_;
       k3s_ += (k3_t_ - k3s_) * ca;
       {                                          // K3 FM index: the K2 envelope gain scales the K3 knob,
-        // k3_eff = k3 m g while the K2 envelope is on (g 0..1: 0 .. K3 m, m = touch sensitivity); noon: k3
-        const float k3e = (2.f * k2s_ - 1.f != 0.f) ? k3s_ * dyn_.m * env_fm_.g : k3s_;
+        const float k3e = k3s_ * env_fm_.g;      // k3_eff = k3 g (g 0..1: exactly 0 .. exactly K3)
         fm_ = ARM_FM_INDEX_MAX * k3e * k3e;
       }
 
@@ -874,54 +870,6 @@ class Armitage : public Module {
     return BandOut<kFB, O>(s, k, zr, zi, mag, inv, fmo, c);
   }
 
-  // Touch sensitivity of the triggered envelopes (ARM_DYN_*, see armitage_constants.h): relative, no absolute level.
-  // 48 kHz (Track48, after the onset decision): on an onset, the attack strength A = peak of the gate
-  // meter over ARM_DYN_WIN_MS; when the window closes: v = A / R (R = running average of recent A, = A
-  // on the first onset / after silence / after (re)activation), R += ARM_DYN_AVG_W (A - R),
-  // m target = clamp(1 + ARM_DYN_AMOUNT (v - 1), 0, 1 + ARM_DYN_AMOUNT (ARM_DYN_V_MAX - 1)).
-  // 8 kHz (Step8): m keeps its value until the target is known, then slides linearly to it over
-  // ARM_DYN_SLIDE_MS. AMOUNT 0: m stays exactly 1.
-  struct Dyn {
-    float a = 0.f, r = 0.f, v = 1.f;   // last attack strength A, reference R, velocity v = A / R
-    float m = 1.f, m_t = 1.f;          // depth multiplier in use (8 kHz) / its target
-    float m_inc = 0.f;                 // per-8 kHz-sample slide step
-    float peak = 0.f;                  // gate-meter peak in the running window
-    int   win_n = 0, win_len = 720;    // window samples left / length (48 kHz)
-    int   sil_n = 0, sil_len = 96000;  // samples with the gate below the floor / silence length (48 kHz)
-    int   slide_n = 0, slide_len = 40; // slide samples left / length (8 kHz)
-    bool  fresh = true;                // next A initialises R
-    bool  ready = false;               // a new target is known, not yet picked up at 8 kHz
-    void Init(float sr, float sr8) {
-      using namespace armitage_k;
-      win_len   = (int)(ARM_DYN_WIN_MS * 0.001f * sr + 0.5f);     if (win_len < 1) win_len = 1;
-      sil_len   = (int)(ARM_DYN_SILENCE_MS * 0.001f * sr + 0.5f); if (sil_len < 1) sil_len = 1;
-      slide_len = (int)(ARM_DYN_SLIDE_MS * 0.001f * sr8 + 0.5f);  if (slide_len < 1) slide_len = 1;
-      a = r = 0.f; v = 1.f; m = m_t = 1.f; m_inc = 0.f; peak = 0.f;
-      win_n = sil_n = slide_n = 0; fresh = true; ready = false;
-    }
-    inline void Track48(float gate, bool onset, float floor) {
-      using namespace armitage_k;
-      if (gate < floor) { if (sil_n < sil_len) sil_n++; else fresh = true; }
-      else sil_n = 0;
-      if (onset) { win_n = win_len; peak = gate; }
-      else if (win_n > 0) { if (gate > peak) peak = gate; }
-      if (win_n > 0 && --win_n == 0) {        // window closed: A known
-        a = peak;
-        r = ARM_DYN_REF;                       // fixed reference (tuned constant), no running average
-        v = a / ARM_DYN_REF;
-        float mt = 1.f + ARM_DYN_AMOUNT * (v - 1.f);
-        const float mmax = 1.f + ARM_DYN_AMOUNT * (ARM_DYN_V_MAX - 1.f);
-        if (mt > mmax) mt = mmax;
-        if (mt < 0.f)  mt = 0.f;
-        m_t = mt;
-        ready = true;
-      }
-    }
-    inline void Step8() {
-      if (ready) { ready = false; slide_n = slide_len; m_inc = (m_t - m) / (float)slide_len; }
-      if (slide_n > 0) { m += m_inc; if (--slide_n == 0) m = m_t; }
-    }
-  };
   // K2: onset detector (vestige IsrCapture idiom), run once per 48 kHz sample on |in|,
   // before the decimator (the decimator's low-pass softens the attack otherwise). Fast
   // meter -> gate meter (up at once, slow fall) -> slow baseline; onset = gate >
@@ -940,7 +888,6 @@ class Armitage : public Module {
     const bool onset = (on_refr_ == 0 && on_gate_ > ARM_ONSET_FLOOR &&
                         on_gate_ > on_base_ * ARM_ONSET_RISE);
     if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
-    dyn_.Track48(on_gate_, onset, ARM_ONSET_FLOOR);   // touch sensitivity: attack strength / velocity
   }
 
   // K2: the triggered envelope e, once per 8 kHz sample, driven by the 48 kHz onset flag.
@@ -1012,7 +959,6 @@ class Armitage : public Module {
     const bool onset = on_pending_;
     on_pending_ = false;
     if (onset) on_seen_ = true;
-    dyn_.Step8();                              // touch sensitivity: m holds, then slides to the new target
     env_.Step(onset, on_seen_, 2.f * k5s_ - 1.f, sr8_, ln_tau_ratio_);      // K5 -> K4 post filter
     env_fm_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);   // K2 -> K3 FM index gain (SW1 UP)
   }
@@ -1109,8 +1055,7 @@ class Armitage : public Module {
     // envelope simply pushes off noon. Smoothed with t (ARM_FILT_SMOOTH_MS).
     // No clamp to the knob's ends: the envelope may push the LP corner below ARM_FILT_LP_MIN and the
     // HP corner above ARM_FILT_HP_MAX; only the stability limits ARM_FILT_FC_MIN/MAX apply to fc.
-    // Touch sensitivity: the envelope's depth x m (m = 1 + ARM_DYN_AMOUNT (v - 1), per onset).
-    const float tt = ft_t_ + ARM_ENV_DEPTH * dyn_.m * env_.e;
+    const float tt = ft_t_ + ARM_ENV_DEPTH * env_.e;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < ARM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -1189,7 +1134,6 @@ class Armitage : public Module {
     s.beta = beta; s.filt_t = ft; s.fm = fm;
     s.env_t2 = t2; s.env_e = e;
     s.envf_t2 = t2f; s.envf_e = ef;
-    s.dyn_a = dyn_.a; s.dyn_r = dyn_.r; s.dyn_v = dyn_.v; s.dyn_m = dyn_.m;
     s.mute = mute_;
 
     // FS1 tap: numbered line + LED1 blink-off.
@@ -1348,7 +1292,6 @@ class Armitage : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired this 8 kHz step, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened (before: e = 0)
-  Dyn   dyn_;                      // touch sensitivity of the triggered envelopes (depth multiplier m)
   Env   env_;                      // K5 envelope -> K4 post-filter position
   EnvGain env_fm_;                 // K2 envelope -> K3 FM index gain (SW1 UP: ADD / FB)
   float ln_tau_ratio_ = 0.f;       // ln(ARM_ENV_TAU_FAST_S / ARM_ENV_TAU_SLOW_S)

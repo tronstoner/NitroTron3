@@ -159,7 +159,6 @@ class WaveMorph : public Module {
     on_refr_len_ = (int)((float)WM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
-    dyn_.Init(sr, sr8_);
     fenv_.Reset();
     ln_ftau_ratio_ = logf(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S);
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
@@ -217,12 +216,10 @@ class WaveMorph : public Module {
     int   f0;         // morph position: frame below (0-based) ...
     float ff;         // ... and the fraction toward f0 + 1
     float fe;         // K2 filter envelope e (-1..1)
-    float dyn_a, dyn_r, dyn_v, dyn_m;   // touch sensitivity: last attack strength A, reference R (gate-meter units), v = A / R, m in use
     int   sw2;        // 0 UP (+1), 1 MID (-1), 2 DOWN (-2)
     bool  mute;
   };
   void Activate() override {
-    dyn_.fresh = true;                         // (re)activation: the next attack re-initialises R
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
   }
   bool DiagTake(DiagSnap& out) {
@@ -311,54 +308,6 @@ class WaveMorph : public Module {
   }
 
  private:
-  // Touch sensitivity of the triggered envelopes (WM_DYN_*, see wavemorph_constants.h): relative, no absolute level.
-  // 48 kHz (Track48, after the onset decision): on an onset, the attack strength A = peak of the gate
-  // meter over WM_DYN_WIN_MS; when the window closes: v = A / R (R = running average of recent A, = A
-  // on the first onset / after silence / after (re)activation), R += WM_DYN_AVG_W (A - R),
-  // m target = clamp(1 + WM_DYN_AMOUNT (v - 1), 0, 1 + WM_DYN_AMOUNT (WM_DYN_V_MAX - 1)).
-  // 8 kHz (Step8): m keeps its value until the target is known, then slides linearly to it over
-  // WM_DYN_SLIDE_MS. AMOUNT 0: m stays exactly 1.
-  struct Dyn {
-    float a = 0.f, r = 0.f, v = 1.f;   // last attack strength A, reference R, velocity v = A / R
-    float m = 1.f, m_t = 1.f;          // depth multiplier in use (8 kHz) / its target
-    float m_inc = 0.f;                 // per-8 kHz-sample slide step
-    float peak = 0.f;                  // gate-meter peak in the running window
-    int   win_n = 0, win_len = 720;    // window samples left / length (48 kHz)
-    int   sil_n = 0, sil_len = 96000;  // samples with the gate below the floor / silence length (48 kHz)
-    int   slide_n = 0, slide_len = 40; // slide samples left / length (8 kHz)
-    bool  fresh = true;                // next A initialises R
-    bool  ready = false;               // a new target is known, not yet picked up at 8 kHz
-    void Init(float sr, float sr8) {
-      using namespace wavemorph_k;
-      win_len   = (int)(WM_DYN_WIN_MS * 0.001f * sr + 0.5f);     if (win_len < 1) win_len = 1;
-      sil_len   = (int)(WM_DYN_SILENCE_MS * 0.001f * sr + 0.5f); if (sil_len < 1) sil_len = 1;
-      slide_len = (int)(WM_DYN_SLIDE_MS * 0.001f * sr8 + 0.5f);  if (slide_len < 1) slide_len = 1;
-      a = r = 0.f; v = 1.f; m = m_t = 1.f; m_inc = 0.f; peak = 0.f;
-      win_n = sil_n = slide_n = 0; fresh = true; ready = false;
-    }
-    inline void Track48(float gate, bool onset, float floor) {
-      using namespace wavemorph_k;
-      if (gate < floor) { if (sil_n < sil_len) sil_n++; else fresh = true; }
-      else sil_n = 0;
-      if (onset) { win_n = win_len; peak = gate; }
-      else if (win_n > 0) { if (gate > peak) peak = gate; }
-      if (win_n > 0 && --win_n == 0) {        // window closed: A known
-        a = peak;
-        r = WM_DYN_REF;                       // fixed reference (tuned constant), no running average
-        v = a / WM_DYN_REF;
-        float mt = 1.f + WM_DYN_AMOUNT * (v - 1.f);
-        const float mmax = 1.f + WM_DYN_AMOUNT * (WM_DYN_V_MAX - 1.f);
-        if (mt > mmax) mt = mmax;
-        if (mt < 0.f)  mt = 0.f;
-        m_t = mt;
-        ready = true;
-      }
-    }
-    inline void Step8() {
-      if (ready) { ready = false; slide_n = slide_len; m_inc = (m_t - m) / (float)slide_len; }
-      if (slide_n > 0) { m += m_inc; if (--slide_n == 0) m = m_t; }
-    }
-  };
   // Onset detector (explorer / armitage OnsetDetect, 1:1), once per 48 kHz sample on |in| before the
   // decimator; latches on_pending_ for EnvUpdate() (8 kHz).
   inline void OnsetDetect(float in_sample) {
@@ -372,7 +321,6 @@ class WaveMorph : public Module {
     const bool onset = (on_refr_ == 0 && on_gate_ > WM_ONSET_FLOOR &&
                         on_gate_ > on_base_ * WM_ONSET_RISE);
     if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
-    dyn_.Track48(on_gate_, onset, WM_ONSET_FLOOR);   // touch sensitivity: attack strength / velocity
   }
 
   // K2: filter envelope e (armitage's Env, 1:1, plus the noon pad WM_ENV_PAD).
@@ -411,7 +359,6 @@ class WaveMorph : public Module {
     const bool onset = on_pending_;
     on_pending_ = false;
     if (onset) on_seen_ = true;
-    dyn_.Step8();                              // touch sensitivity: m holds, then slides to the new target
     fenv_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_ftau_ratio_);    // K4 filter envelope
   }
 
@@ -787,8 +734,7 @@ class WaveMorph : public Module {
       f_a_ = 1.f - expf(-(float)size / (WM_FILT_SMOOTH_MS * 0.001f * sr_));
     }
     // Zones 6 / 7: the K2 filter envelope turns the K4 knob, t_eff = t + DEPTH e (not clamped).
-    // Touch sensitivity: the envelope's depth x m (m = 1 + WM_DYN_AMOUNT (v - 1), per onset).
-    const float tt = ft_t_ + WM_FENV_DEPTH * dyn_.m * fenv_.e;
+    const float tt = ft_t_ + WM_FENV_DEPTH * fenv_.e;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < WM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -888,7 +834,6 @@ class WaveMorph : public Module {
     s.zone = zone; s.sw2 = oct;
     MorphPos(zone, kv[2], s.f0, s.ff);
     s.fe = fe;
-    s.dyn_a = dyn_.a; s.dyn_r = dyn_.r; s.dyn_v = dyn_.v; s.dyn_m = dyn_.m;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -963,7 +908,6 @@ class WaveMorph : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened
-  Dyn   dyn_;                      // touch sensitivity of the triggered envelopes (depth multiplier m)
   FEnv  fenv_;                     // K2 filter envelope (all zones)
   float ln_ftau_ratio_ = 0.f;      // ln(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S)
   // K4 post filter
