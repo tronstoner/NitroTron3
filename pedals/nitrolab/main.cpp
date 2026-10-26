@@ -15,7 +15,9 @@
 //                          engine — see modules/explorer.h; SW1 = family, K1 = model,
 //                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index envelope),
 //                          K5 = octave mix, SW2 = octave +1 / -1 / -2)
-// SW3 DOWN   = empty      (pass-through placeholder)
+// SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
+//                          modules/wavemorph.h; K1 = base wave (10 stepped zones), K2 = morph
+//                          envelope, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -28,7 +30,7 @@
 
 #include "modules/armitage.h"
 #include "modules/explorer.h"
-#include "modules/empty.h"
+#include "modules/wavemorph.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -55,8 +57,8 @@ Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 
 Armitage armitage;
 Explorer explorer;
-Empty    empty_c;
-Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &empty_c };
+WaveMorph wavemorph;
+Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &wavemorph };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
 volatile int g_active = NL_MODE_ARMITAGE;
@@ -137,7 +139,7 @@ int main() {
 
   for (int i = 0; i < NL_MODE_COUNT; i++) modules[i]->Init(sr);
 
-  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=explorer, 2=DOWN=empty.
+  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=explorer, 2=DOWN=wavemorph.
   int sel = cs.Switch(2);
   if (sel < 0 || sel >= NL_MODE_COUNT) sel = 0;
   g_active = sel;
@@ -147,10 +149,11 @@ int main() {
   hw.StartAudio(AudioCallback);
 
   uint32_t diag_hb = 0;
-  int      diag_stage = 0;          // 1 / 2 = second half of an armitage / explorer setting line due
+  int      diag_stage = 0;          // 1 / 2 / 3 = second half of an armitage / explorer / wavemorph setting line due
   float    diag_cpu_last = 0.f;     // CPU peak of the last full 2 s window
   Armitage::DiagSnap diag_snap{};
   Explorer::DiagSnap diag_xsnap{};
+  WaveMorph::DiagSnap diag_wsnap{};
 
   while (true) {
     hw.DelayMs(10);
@@ -208,6 +211,27 @@ int main() {
                             D2SV(d.a), D2SV(d.b), D2SV(d.k4t), d.mute ? 1 : 0,
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
+      } else if (diag_stage == 3) {
+        // wavemorph, second half: morph (K3, envelope g, effective), octave, mute, cpu
+        static const char* const oct_name[3] = { "+1", "-1", "-2" };
+        const WaveMorph::DiagSnap& d = diag_wsnap;
+        float cpu_pk = g_cpu.GetMaxCpuLoad();
+        if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
+        hw.seed.PrintLine("morph k3" D2F " g" D2F " m" D2F " oct %s mute %d cpu %u%%",
+                          D2V(d.m3), D2V(d.g), D2V(d.m),
+                          oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+                          d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
+        diag_stage = 0;
+      } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {
+        // wavemorph, first half: number / auto, zone, knobs
+        const WaveMorph::DiagSnap& d = diag_wsnap;
+        char tag[12];
+        if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
+        else         snprintf(tag, sizeof(tag), "auto");
+        hw.seed.Print("WM %s %s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " | ",
+                      tag, WaveMorph::ZoneName(d.zone),
+                      D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]));
+        diag_stage = 3;
       } else if (g_active == NL_MODE_EXPLORER && explorer.DiagTake(diag_xsnap)) {
         // explorer, first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
