@@ -344,9 +344,8 @@ class WaveMorph : public Module {
       else if (win_n > 0) { if (gate > peak) peak = gate; }
       if (win_n > 0 && --win_n == 0) {        // window closed: A known
         a = peak;
-        if (fresh) { r = a; fresh = false; }
-        v = (r > WM_DYN_R_MIN) ? a / r : 1.f;
-        r += WM_DYN_AVG_W * (a - r);
+        r = WM_DYN_REF;                       // fixed reference (tuned constant), no running average
+        v = a / WM_DYN_REF;
         float mt = 1.f + WM_DYN_AMOUNT * (v - 1.f);
         const float mmax = 1.f + WM_DYN_AMOUNT * (WM_DYN_V_MAX - 1.f);
         if (mt > mmax) mt = mmax;

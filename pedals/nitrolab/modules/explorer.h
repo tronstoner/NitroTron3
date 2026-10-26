@@ -453,9 +453,8 @@ class Explorer : public Module {
       else if (win_n > 0) { if (gate > peak) peak = gate; }
       if (win_n > 0 && --win_n == 0) {        // window closed: A known
         a = peak;
-        if (fresh) { r = a; fresh = false; }
-        v = (r > EXP_DYN_R_MIN) ? a / r : 1.f;
-        r += EXP_DYN_AVG_W * (a - r);
+        r = EXP_DYN_REF;                       // fixed reference (tuned constant), no running average
+        v = a / EXP_DYN_REF;
         float mt = 1.f + EXP_DYN_AMOUNT * (v - 1.f);
         const float mmax = 1.f + EXP_DYN_AMOUNT * (EXP_DYN_V_MAX - 1.f);
         if (mt > mmax) mt = mmax;

@@ -139,7 +139,8 @@ ARM_TUNABLE(bool,     ARM_LFO_ENABLE,          false);
 // while the envelope is on (outside noon), k3 at noon. AMOUNT 0 = m exactly 1 = the plain envelopes.
 ARM_TUNABLE(float,    ARM_DYN_WIN_MS,        15.f);  // ms; attack-strength window after the onset (gate-meter peak, 48 kHz)
 ARM_TUNABLE(float,    ARM_DYN_AVG_W,         0.25f);  // reference R one-pole weight per onset (running average of recent attacks)
-ARM_TUNABLE(float,    ARM_DYN_AMOUNT,        0.5f);  // 0 = not touch-sensitive (bit-identical), 1 = fully: m = v
+ARM_TUNABLE(float, ARM_DYN_AMOUNT, 1.0f);  // 0 = not touch-sensitive (bit-identical), 1 = fully: m = v
+ARM_TUNABLE(float, ARM_DYN_REF, 0.05f);   // gate-meter attack strength that gives the normal envelope depth (m = 1); harder plucks open further, softer less (2026-10-26: fixed reference replaces the running average)
 ARM_TUNABLE(float,    ARM_DYN_V_MAX,         3.f);  // velocity cap (only against extreme outliers): m <= 1 + AMOUNT (V_MAX - 1)
 ARM_TUNABLE(float,    ARM_DYN_SLIDE_MS,      5.f);  // ms; m slides linearly to its new value once A is known (no jump)
 ARM_TUNABLE(float,    ARM_DYN_SILENCE_MS,    2000.f);  // ms; gate below the onset floor this long = silence: next onset re-initialises R = A
