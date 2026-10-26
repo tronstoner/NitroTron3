@@ -9,23 +9,19 @@
 namespace wavemorph_k {
 
 // --- Zones (K1, stepped) / tables -----------------------------------------------------
-constexpr int   WM_ZONES          = 7;       // K1 equal zones (snap, crossfade on a change)
-constexpr int   WM_CORNERS        = 4;       // corner waves of the vector zones (1 sine sync, 2 triangle fold, 3 saw soft)
+constexpr int   WM_ZONES          = 10;      // K1 equal zones (snap, crossfade on a change)
+constexpr int   WM_CORNERS        = 4;       // waves of the 4-wave zones (all but 4 PWM and 5 vocal)
 constexpr int   WM_FRAMES16       = 16;      // frames of the continuous zones (4 PWM, 5 vocal)
-constexpr int   WM_SOFT_N         = 8;       // zone 6 PPG/VS soft: waves (= frames, list order)
-constexpr int   WM_HARD_N         = 7;       // zone 7 PPG/VS hard: waves (= frames, list order)
-// Frames per zone F_z (every zone morphs): m = K3 g -> position (F_z - 1) m, linear crossfade between
+// Frames per zone F_z (every zone morphs): m = K3 -> position (F_z - 1) m, linear crossfade between
 // the two adjacent frames.
 constexpr int   WM_ZONE_FRAMES[WM_ZONES] = { WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_FRAMES16, WM_FRAMES16,
-                                             WM_SOFT_N, WM_HARD_N };
-constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, true, false, false, true, true };   // zones 3, 6, 7: equal-RMS waves
-// Stepped zones (6, 7): K3 picks wave Quantize(k3, F_z) - no blending, no morph; a step crossfades over
-// WM_ZONE_XFADE_MS (zone + wave key); K2 there = the K4 filter envelope (WM_FENV_*), not the morph envelope.
-constexpr bool  WM_ZONE_STEPPED[WM_ZONES]   = { false, false, false, false, false, true, true };
-constexpr int   WM_TOTAL_FRAMES   = 3 * WM_CORNERS + 2 * WM_FRAMES16 + WM_SOFT_N + WM_HARD_N;   // packed table frames
+                                             WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS, WM_CORNERS };
+// Zones 3 and 6..10: each wave scaled to the plain saw's RMS (then capped to the storage headroom).
+constexpr bool  WM_ZONE_RMS_MATCH[WM_ZONES] = { false, false, true, false, false, true, true, true, true, true };
+constexpr int   WM_TOTAL_FRAMES   = 8 * WM_CORNERS + 2 * WM_FRAMES16;   // packed table frames
 constexpr int WmSumFrames(int i = 0) { return (i >= WM_ZONES) ? 0 : WM_ZONE_FRAMES[i] + WmSumFrames(i + 1); }
 static_assert(WmSumFrames() == WM_TOTAL_FRAMES, "WM_TOTAL_FRAMES = sum of WM_ZONE_FRAMES");
-constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change or a K3 wave step
+constexpr float WM_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new on a K1 zone change
 constexpr int   WM_TAB_SIZE       = 256;     // samples per single-cycle table (power of two; harmonics 1..127)
 constexpr int   WM_HMAX           = WM_TAB_SIZE / 2 - 1;   // highest harmonic a table holds
 constexpr int   WM_TD_SIZE        = 1024;    // time-domain definition resolution (oversampled 4x vs the table:
@@ -35,14 +31,14 @@ constexpr int   WM_LEVELS         = 14;      // band-limited versions per frame
 constexpr int   WM_LEVEL_H[WM_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
 constexpr float WM_TAB_FMAX       = 4000.f;  // Hz; band-engine ceiling for the table band limit (= EXP_WT_FMAX)
 constexpr float WM_I16_SCALE      = 16384.f; // int16 storage scale (2x headroom: |table| <= 2.0)
-constexpr float WM_PEAK_CAP       = 32767.f / WM_I16_SCALE;   // zones 6 / 7: equal-RMS waves capped to the storage headroom
+constexpr float WM_PEAK_CAP       = 32767.f / WM_I16_SCALE;   // RMS-matched waves capped to the storage headroom
 
 // Zone 1 sine | sync: x = sin(2 pi frac(R phi)), R per corner (non-integer: audible sync, not octaves).
 constexpr float WM_SYNC_R[WM_CORNERS]  = { 1.f, 1.5f, 2.7f, 4.6f };
 // Zone 2 triangle | fold: x = fold(G tri(phi)), fold reflects into [-1, 1], G per corner.
 constexpr float WM_FOLD_G[WM_CORNERS]  = { 1.f, 2.f, 4.f, 8.f };
 // Zone 3 saw soft (subtractive path, sine phase like the saw): A_n = W_odd / n^E for odd n, W_even / n^E
-// for even n; per corner (E, W_odd, W_even). Corner 1 = the plain saw (peak 1: the RMS target of zones 3 / 6 / 7);
+// for even n; per corner (E, W_odd, W_even). Corner 1 = the plain saw (peak 1: the RMS target of zones 3, 6..10);
 // all corners scaled to that RMS (WM_ZONE_RMS_MATCH).
 constexpr float WM_SSAW_EXP[WM_CORNERS]    = { 1.f, 1.4f, 1.4f, 1.8f };   // saw | dark saw | hollow saw | soft square
 constexpr float WM_SSAW_W_ODD[WM_CORNERS]  = { 1.f, 1.f,  1.f,  1.f };
@@ -63,8 +59,20 @@ constexpr float WM_VOX_F[WM_VOX_N][3] = { { 700.f, 1220.f, 2600.f },    // a (= 
 constexpr float WM_VOX_BW[3]      = { 80.f, 90.f, 120.f };   // Hz (= EXP_WT_VOX_BW)
 constexpr float WM_VOX_A[3]       = { 1.f, 0.5f, 0.25f };    // (= EXP_WT_VOX_A)
 
-// Zones 6 / 7 PPG/VS waves (sine phase unless time domain). Each wave is scaled to the RMS of the plain
-// saw table (zone 3 corner 1, full band), then capped to WM_PEAK_CAP. Listed harmonics {h, amp}, rest 0.
+// Zone 6 PPG classic = explorer's PPG-style wavetable set (explorer.h BuildTables, s == 1), time domain, in
+// this order: 8-step saw (8 levels) | stepped odd-harmonic stack (32 steps, 16 levels) | bit pattern
+// ((s 5) ^ (s >> 2)) & 15 over 32 steps | 16-step held sine.
+constexpr int   WM_PPG_SAW_STEPS  = 8;       // (= explorer: saw 8 steps, 8 levels)
+constexpr int   WM_PPG_ODD_STEPS  = 32;      // (= explorer: sin + 0.5 sin 3 + 0.33 sin 5, 32 steps)
+constexpr float WM_PPG_ODD_A3     = 0.5f;
+constexpr float WM_PPG_ODD_A5     = 0.33f;
+constexpr float WM_PPG_ODD_LEVELS = 7.5f;    // quantiser: round(y 7.5) / 7.5 (16 levels)
+constexpr int   WM_PPG_BIT_STEPS  = 32;      // bit pattern steps
+constexpr int   WM_PPG_SINE_STEPS = 16;      // held sine steps
+// Zones 7..10 PPG/VS waves (sine phase unless time domain), RMS-matched to the plain saw, capped to
+// WM_PEAK_CAP. Listed harmonics {h, amp}, rest 0.
+// 7 soft A: tine, clarinet, drawbar, mixture | 8 soft B: harmonium, ghost fifths, glass bell, lo-res |
+// 9 hard A: PPG resonant, oboe reed, formant brass, bass bell | 10 hard B: sync saw, fuzz reed, clipper, PPG feedback
 struct WmHarm { int h; float a; };
 constexpr WmHarm WM_W_TINE[]     = { {1, 1.f}, {2, .3f}, {3, .08f}, {7, .12f}, {8, .18f}, {9, .15f}, {10, .08f} };
 constexpr WmHarm WM_W_CLARINET[] = { {1, 1.f}, {3, .7f}, {5, .45f}, {7, .25f}, {9, .12f}, {11, .06f}, {13, .03f} };
@@ -96,24 +104,16 @@ constexpr float WM_FUZZ_EXP       = 0.6f;
 constexpr float WM_CLIP_H1        = 0.3f;
 constexpr float WM_CLIP_FLAT      = 0.8f;
 constexpr int   WM_CLIP_KNEE      = 24;
+// PPG feedback: saw 1/n with harmonics 1 .. N_SKIP removed.
+constexpr int   WM_PPGFB_SKIP     = 2;
 
-// --- K2 = one-shot morph envelope (explorer's FM-index EnvGain law 1:1, plus a noon dead zone) -----
-// morph = K3 g. t = 2 k2 - 1 (smoothed, lands exactly). |t| <= WM_ENV_PAD: off, g = 1 (morph = K3).
-// Outside: s = (|t| - PAD) / (1 - PAD) in (0, 1], T = WM_ENV_TIME_RATIO WM_ENV_TAU_SLOW_S (FAST / SLOW)^s,
-// travel = WM_ENV_DECAY_RATIO T (36 s at the pad edge -> 450 ms at the knob ends); one-pole tau =
-// travel / WM_ENV_TRAVEL_TAUS, g snaps at the 98 % point. CCW: each onset g = 1 -> decays to 0, holds 0;
-// CW: each onset g = 0 -> rises to 1, holds 1. Before the first onset: CCW g = 1, CW g = 0.
+// --- K2 noon dead zone (filter envelope off) --------------------------------------------
 constexpr float WM_ENV_PAD          = 0.08f;   // t units: k2 in [0.46, 0.54] = 8 % of the knob travel around noon
-constexpr float WM_ENV_TAU_SLOW_S   = 4.0f;    // s (= EXP_ENV_TAU_SLOW_S)
-constexpr float WM_ENV_TAU_FAST_S   = 0.0167f; // s (2026-10-26: 0.05 -> 0.0167, fastest travel at the knob ends 450 -> 150 ms)
-constexpr float WM_ENV_TRAVEL_TAUS  = 3.9f;    // (= EXP_ENV_TRAVEL_TAUS)
-constexpr float WM_ENV_TIME_RATIO   = 3.0f;    // (= EXP_ENV_FM_TIME_RATIO)
-constexpr float WM_ENV_DECAY_RATIO  = 3.0f;    // (= EXP_ENV_FM_DECAY_RATIO)
 
 // --- Octave (SW2: UP +1, MID -1, DOWN -2; K5 mix) -------------------------------------
 constexpr float WM_OCT_XFADE_MS   = 10.f;    // ms; linear slide between octave slots on an SW2 change (= EXP_OCT_XFADE_MS)
 
-// --- K4 = post filter (explorer's law, Q 1.1, all zones) ----------------------------------
+// --- K4 = post filter (explorer's law, all zones) ----------------------------------
 constexpr float WM_FILT_FMIN      = 40.f;     // Hz; HP cutoff just right of noon
 constexpr float WM_FILT_FMAX      = 4000.f;   // Hz; LP cutoff just left of noon
 constexpr float WM_FILT_HP_MAX    = 4000.f;   // Hz; HP cutoff at K4 full CW
@@ -121,13 +121,13 @@ constexpr float WM_FILT_LP_MIN    = 180.f;    // Hz; LP cutoff at K4 full CCW
 constexpr float WM_FILT_FC_MIN    = 10.f;     // Hz; stability floor on fc
 constexpr float WM_FILT_FC_MAX    = 20000.f;  // Hz; stability ceiling on fc
 constexpr float WM_FILT_CURVE     = 1.0f;     // |t| exponent
-constexpr float WM_FILT_Q         = 0.707f;   // per-stage Q, both stages, all zones (incl. the zone 6 / 7 filter envelope): flat (2026-10-26: 1.1 tried, coloured too much)
+constexpr float WM_FILT_Q         = 0.707f;   // per-stage Q, both stages, all zones: flat (2026-10-26: 1.1 tried, coloured too much)
 constexpr float WM_FILT_SMOOTH_MS = 5.f;      // ms; one-pole on t, per block
 constexpr float WM_FILT_FADE      = 0.03f;    // |t| over which bypass crossfades into the filter
 constexpr float WM_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with target 0: bypass
 constexpr float WM_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide
 
-// --- K2 in zones 6 / 7 = envelope on the K4 post filter (armitage's K5 filter envelope: Env + PostFilter t_eff) ---
+// --- K2 (all zones) = envelope on the K4 post filter (armitage's K5 filter envelope: Env + PostFilter t_eff) ---
 // t2 = 2 k2 - 1 (smoothed), off inside WM_ENV_PAD (e = 0). Outside: s = (|t2| - PAD) / (1 - PAD),
 // tau = TAU_SLOW (TAU_FAST / TAU_SLOW)^s. CW: each onset e = 0, rises toward +1 with tau; at e >= PEAK it
 // falls back toward 0 as a one-pole with tau x FALL_RATIO. CCW: each onset e = 0, then one-pole toward -1 and

@@ -16,7 +16,7 @@
 //                          K2 / K3 = sweeps, K4 = post filter (SW1 UP: FM index envelope),
 //                          K5 = octave mix, SW2 = octave +1 / -1 / -2)
 // SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
-//                          modules/wavemorph.h; K1 = base wave (7 stepped zones), K2 = morph
+//                          modules/wavemorph.h; K1 = base wave (10 stepped zones), K2 = K4 filter
 //                          envelope, K3 = morph, K4 = post filter, K5 = octave mix, SW2 = octave)
 
 #include "daisy.h"
@@ -212,31 +212,26 @@ int main() {
                             (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (diag_stage == 3) {
-        // wavemorph, second half: morph (K3, envelope g + side up / down / off, effective), octave, mute, cpu
+        // wavemorph, second half: K2 filter envelope e, octave, mute, cpu
         static const char* const oct_name[3] = { "+1", "-1", "-2" };
-        static const char* const dir_name[3] = { "down", "off", "up" };
         const WaveMorph::DiagSnap& d = diag_wsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        if (d.zone >= 5)                           // zones 6 / 7: stepped wave, K2 = filter envelope e
-          hw.seed.PrintLine("fenv e" D2F " oct %s mute %d cpu %u%%",
-                            D2SV(d.fe), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
-                            d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
-        else
-          hw.seed.PrintLine("morph k3" D2F " g" D2F " %s m" D2F " oct %s mute %d cpu %u%%",
-                            D2V(d.m3), D2V(d.g), dir_name[(d.dir >= -1 && d.dir <= 1) ? d.dir + 1 : 1], D2V(d.m),
-                            oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
-                            d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
+        hw.seed.PrintLine("fenv e" D2F " oct %s mute %d cpu %u%%",
+                          D2SV(d.fe), oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
+                          d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {
-        // wavemorph, first half: number / auto, zone, knobs
+        // wavemorph, first half: number / auto, zone + the two waves being blended + fraction, knobs
         const WaveMorph::DiagSnap& d = diag_wsnap;
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        char wv[24] = "";                          // zones 6 / 7: stepped wave "/<n>:<name>"
-        const char* wn = WaveMorph::WaveName(d.zone, d.f0);
-        if (wn[0]) snprintf(wv, sizeof(wv), "/%d:%s", d.f0 + 1, wn);
+        char wv[40];
+        const char* wa = WaveMorph::WaveName(d.zone, d.f0);
+        const char* wb = WaveMorph::WaveName(d.zone, d.f0 + 1);
+        if (wa[0]) snprintf(wv, sizeof(wv), " %s>%s+%d%%", wa, wb, (int)(d.ff * 100.f + 0.5f));
+        else       snprintf(wv, sizeof(wv), " f%d>f%d+%d%%", d.f0 + 1, d.f0 + 2, (int)(d.ff * 100.f + 0.5f));
         hw.seed.Print("WM %s %s%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " | ",
                       tag, WaveMorph::ZoneName(d.zone), wv,
                       D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]));

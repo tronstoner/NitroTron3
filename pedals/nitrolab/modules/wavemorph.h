@@ -7,29 +7,22 @@
 // phase accumulator / 4), band phase computed once per band / slot / sample in Prep; each band reads
 // the current zone's frame tables at its OWN phase phi_k with its magnitude a_k:
 //   W_k = lerp_frames( lerp_phase(table[zone][frame][level_k]) ),  slot = sum_k w_k a_k W_k
-//   MORPH (zones 1..5): F_z frames per zone (4 vector corners in zones 1, 2, 3; 16 frames in zones 4, 5);
+//   MORPH (all zones, m = K3): F_z frames per zone (4 waves in every zone but 4 PWM and 5 vocal, 16 there);
 //   position = (F_z - 1) m, linear crossfade between the two adjacent frames;
-//   STEPPED zones 6, 7: K3 picks one PPG/VS wave (Quantize(k3, 8 / 7)), no blending / morph, a step
-//   crossfades over WM_ZONE_XFADE_MS; there K2 = the K4 filter envelope instead of the morph envelope;
 //   level_k = the largest band-limited version with H <= 4000 / f'_k (static per band and slot).
 // wet8 = WM_OUT_GAIN [ (1 - mix) played + mix (u G_UP up + d G_DOWN down + d2 G_DOWN2 down2) ]
 // wet  = interpolate(wet8) -> DC blocker -> K4 post filter -> soft clipper (ceiling 1.0) -> FS1 mute
 // No pitch tracking; nothing picks or decides per band.
 //
 // CONTROL MAP
-//   K1  base wave     7 STEPPED equal zones (below); a zone change crossfades old -> new over
+//   K1  base wave     10 STEPPED equal zones (below); a zone change crossfades old -> new over
 //                     WM_ZONE_XFADE_MS (the voice is stateless: the entering zone starts clean)
-//   K2  morph env     (zones 1..5) explorer's FM-index envelope (EnvGain) 1:1 on the morph (morph m = K3 g):
-//                     t = 2 k2 - 1 (smoothed, lands exactly); |t| <= 0.08 (k2 0.46..0.54) = off, g = 1;
-//                     CCW: each onset g = 1 -> one-pole decay to 0, holds 0 (morph K3 -> base wave);
-//                     CW: each onset g = 0 -> rises to 1, holds 1 (base wave -> K3); travel 36 s at the
-//                     pad edge -> 450 ms at the knob ends; before the first onset CCW g = 1, CW g = 0
-//   K3  morph amount  zones 1..5: m3 0..1, the envelope's target / where the morph sits (m = K3 g);
-//                     zones 6 / 7: wave select (8 / 7 equal stepped zones)
-//   K2  (zones 6 / 7) filter env: armitage's K5 filter envelope on K4: t2 = 2 k2 - 1, off inside the pad;
-//                     CW: each onset e rises to +1 (tau), then falls to 0 (tau x 3); CCW: e = 0 -> -1, holds;
-//                     tau 4 s (pad edge) -> 0.05 s (ends); t_eff = t_K4 + 0.7 e, not clamped (fc 10 Hz..20 kHz)
-//   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct, Q 1.1 per stage)
+//   K2  filter env    armitage's K5 filter envelope on the K4 position (all zones): t2 = 2 k2 - 1, off
+//                     inside the pad (k2 0.46..0.54); CW: each onset e rises toward +1 (tau), at e >= 0.98
+//                     falls back to 0 (tau x 3); CCW: each onset e = 0 -> -1 and holds; tau 4 s (pad edge)
+//                     -> 0.05 s (ends); t_eff = t_K4 + 0.7 e, not clamped (fc only 10 Hz..20 kHz)
+//   K3  morph         m 0..1 (smoothed): position through the zone's waves / frames
+//   K4  post filter   CCW LP 180 Hz <- 4 kHz | noon bypass | CW HP 40 Hz -> 4 kHz (24 dB/oct, Q 0.707 per stage)
 //   K5  octave mix    CCW = played only (octave slots not computed), CW = selected octave only; linear
 //   K6  dry / wet     (shell)
 //   SW1 unused (not read)
@@ -40,7 +33,7 @@
 // TABLES (built at Init into SDRAM, int16, packed): per zone F_z frames (frame 1 = the exact base wave),
 // u = frame / (F_z - 1). Each frame: defined in the time domain at WM_TD_SIZE (1024) points and analysed by
 // DFT into harmonics 1..127 [time], or defined directly by harmonic amplitudes, sine phase [spectral];
-// mean removed, peak normalised to 1 (an all-silent frame stays silent); zones 3 / 6 / 7 then scaled
+// mean removed, peak normalised to 1 (an all-silent frame stays silent); zones 3 and 6..10 then scaled
 // to the RMS of the plain saw (zone 3 corner 1, full band), then capped to the int16 storage headroom
 // (WM_PEAK_CAP); then rebuilt as 14 band-limited versions {1,2,3,4,6,8,12,16,24,32,48,64,96,127} at 256 points.
 //   1 SINE SYNC  sin(2 pi frac(R phi)), R = 1 | 1.5 | 2.7 | 4.6                                     [time]
@@ -49,14 +42,17 @@
 //                soft square odd 1/n^1.8; equal RMS (the plain saw's)                             [spectral]
 //   4 PWM        16 frames: +1 (phi < w) else -1, w = 0.5 (1 - u)^2.2: 50 % -> 0 % (silence)          [time]
 //   5 VOCAL      16 frames (= dd3d5f9): a -> e -> i -> o -> u, formants interpolated, 110 Hz reference [spectral]
-//   6 PPG/VS SOFT (8 stepped waves): 1 tine e-piano, 2 hollow clarinet, 3 drawbar organ, 4 church mixture,
-//                5 harmonium, 6 ghost fifths, 7 glass bell, 8 stepped lo-res (sine held in 6 steps) [spectral; 8 time]
-//   7 PPG/VS HARD (7 stepped waves): 1 PPG resonant, 2 nasal oboe reed, 3 formant brass, 4 bass bell 14/28,
-//                5 sync saw (3.5x, reset per cycle), 6 fuzz reed, 7 clipper                   [spectral; 5 time]
+//   6 PPG CLASSIC explorer's PPG-style set: 8-step saw (8 levels) | stepped odd-harmonic stack (32 steps,
+//                16 levels) | bit pattern ((s 5) ^ (s >> 2)) & 15, 32 steps | 16-step held sine        [time]
+//   7 SOFT A     tine e-piano | hollow clarinet | drawbar organ | church mixture                   [spectral]
+//   8 SOFT B     harmonium | ghost fifths | glass bell | stepped lo-res (sine held in 6 steps) [spectral; 4 time]
+//   9 HARD A     PPG resonant | nasal oboe reed | formant brass | bass bell 7/14                  [spectral]
+//  10 HARD B     sync saw (3.5x, reset per cycle) | fuzz reed | clipper | PPG feedback (saw 1/n
+//                without harmonics 1, 2)                                                    [1 time; spectral]
 //   (harmonic amplitude lists in wavemorph_constants.h)
 //
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
-// No dynamic allocation. Tables: 59 frames x 14 x 256 int16 = 413 KB in SDRAM.
+// No dynamic allocation. Tables: 64 frames x 14 x 256 int16 = 448 KB in SDRAM.
 
 #include <cmath>
 #include <cstdint>
@@ -156,7 +152,7 @@ class WaveMorph : public Module {
     k2s_ = k2_t_ = 0.5f;                         // K2 noon = envelope off
     k3s_ = k3_t_ = 0.f;
     k5s_ = k5_t_ = 0.f;
-    // Onset detector (48 kHz, pre-decimator, explorer's) + morph envelope (8 kHz).
+    // Onset detector (48 kHz, pre-decimator, explorer's) + K2 filter envelope (8 kHz).
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (WM_ONSET_ENV_MS * sr));
     on_fall_a_ = 1.f - expf(-1000.f / (WM_ONSET_FALL_MS * sr));
@@ -164,10 +160,8 @@ class WaveMorph : public Module {
     on_refr_len_ = (int)((float)WM_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
-    env_.Reset();
     fenv_.Reset();
     ln_ftau_ratio_ = logf(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S);
-    ln_tau_ratio_ = logf(WM_ENV_TAU_FAST_S / WM_ENV_TAU_SLOW_S);
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
     og_[1] = og_t_[1] = 1.f;                     // SW2 MID = -1 slot
     // K4 post filter: bypass, cleared state.
@@ -198,8 +192,7 @@ class WaveMorph : public Module {
     int oct = cs.Switch(1);                   // SW1 is not read
     if (oct < kUp || oct > kDown) oct = kMid;
     const int zone = Quantize(k1, WM_ZONES);  // K1: stepped base wave
-    const int item = WM_ZONE_STEPPED[zone] ? Quantize(k3, WM_ZONE_FRAMES[zone]) : 0;   // zones 6 / 7: K3 wave
-    zone_t_ = VarKey(zone, item);
+    zone_t_ = zone;
     k2_t_ = k2;
     k3_t_ = k3;
     k5_t_ = k5;
@@ -213,7 +206,7 @@ class WaveMorph : public Module {
 
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
-      DiagControls(cs, led1, kv, oct, zone, item, env_.g, env_.dir, fenv_.e);
+      DiagControls(cs, led1, kv, oct, zone, fenv_.e);
     }
   }
 
@@ -221,13 +214,11 @@ class WaveMorph : public Module {
   struct DiagSnap {
     int   n;          // tap number (#n), 0 = automatic line
     float k[5];       // K1..K5 (remapped 0..1)
-    int   zone;       // K1 zone 0..6
-    int   f0;         // morph position: frame below (0-based) ... (zones 6 / 7: the stepped wave)
-    float ff;         // ... and the fraction toward f0 + 1 (zones 6 / 7: 0)
-    float fe;         // zones 6 / 7: filter envelope e (-1..1)
+    int   zone;       // K1 zone 0..9
+    int   f0;         // morph position: frame below (0-based) ...
+    float ff;         // ... and the fraction toward f0 + 1
+    float fe;         // K2 filter envelope e (-1..1)
     int   sw2;        // 0 UP (+1), 1 MID (-1), 2 DOWN (-2)
-    float m3, g, m;   // morph: K3, envelope gain g, effective m = K3 g
-    int   dir;        // envelope side: +1 CW (rise), -1 CCW (decay), 0 off (pad)
     bool  mute;
   };
   void Activate() override {
@@ -240,18 +231,20 @@ class WaveMorph : public Module {
   }
   static const char* ZoneName(int z) {
     static const char* const n[wavemorph_k::WM_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-SOFT", "SQR-PWM",
-                                                          "VOCAL", "PPG-SOFT", "PPG-HARD" };
+                                                          "VOCAL", "PPG-CLASSIC", "SOFT-A", "SOFT-B",
+                                                          "HARD-A", "HARD-B" };
     return (z >= 0 && z < wavemorph_k::WM_ZONES) ? n[z] : "?";
   }
-  // Zones 6 / 7: the selected wave's name, else "".
+  // Name of frame i of zone z (4-wave zones), "" for the 16-frame zones (shown by number).
   static const char* WaveName(int z, int i) {
-    static const char* const soft[wavemorph_k::WM_SOFT_N] = { "tine", "clarinet", "drawbar", "mixture",
-                                                             "harmonium", "ghost5", "bell", "lores" };
-    static const char* const hard[wavemorph_k::WM_HARD_N] = { "ppgres", "oboe", "brass", "bassbell",
-                                                             "syncsaw", "fuzz", "clipper" };
-    if (z == 5 && i >= 0 && i < wavemorph_k::WM_SOFT_N) return soft[i];
-    if (z == 6 && i >= 0 && i < wavemorph_k::WM_HARD_N) return hard[i];
-    return "";
+    static const char* const n[wavemorph_k::WM_ZONES][wavemorph_k::WM_CORNERS] = {
+      { "R1", "R1.5", "R2.7", "R4.6" }, { "G1", "G2", "G4", "G8" }, { "saw", "dark", "hollow", "softsq" },
+      { "", "", "", "" }, { "", "", "", "" }, { "saw8", "odd32", "bits", "sine16" },
+      { "tine", "clarinet", "drawbar", "mixture" }, { "harmonium", "ghost5", "bell", "lores" },
+      { "ppgres", "oboe", "brass", "bassbell" }, { "syncsaw", "fuzz", "clipper", "ppgfb" } };
+    if (z < 0 || z >= wavemorph_k::WM_ZONES || i < 0 || i >= wavemorph_k::WM_CORNERS) return "";
+    if (wavemorph_k::WM_ZONE_FRAMES[z] != wavemorph_k::WM_CORNERS) return "";
+    return n[z][i];
   }
 
   void Process(const float* in, float* wet, size_t size) override {
@@ -260,9 +253,9 @@ class WaveMorph : public Module {
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       for (size_t j = 0; j < kFactor; j++) OnsetDetect(in[i + j]);   // onset detector, 48 kHz |in|, pre-decimator
       const float d = dec_(in + i);
-      k2s_ += (k2_t_ - k2s_) * ca;              // K2: morph envelope knob
+      k2s_ += (k2_t_ - k2s_) * ca;              // K2: filter envelope knob
       if (fabsf(k2_t_ - k2s_) < WM_CTRL_SNAP) k2s_ = k2_t_;   // land exactly
-      EnvUpdate();                               // morph envelope (consumes the 48 kHz onset flag)
+      EnvUpdate();                               // filter envelope (consumes the 48 kHz onset flag)
       k3s_ += (k3_t_ - k3s_) * ca;
       k5s_ += (k5_t_ - k5s_) * ca;
       if (fabsf(k5_t_ - k5s_) < WM_CTRL_SNAP) k5s_ = k5_t_;   // exact 0: octave work skipped
@@ -276,7 +269,7 @@ class WaveMorph : public Module {
       }
       const bool fading = (zfade_n_ > 0);
       zg_ = fading ? 1.f - (float)zfade_n_ / (float)(zfade_len_ + 1) : 1.f;
-      morph_ = k3s_ * env_.g;                    // morph m = K3 g (frame position per zone in Shape)
+      morph_ = k3s_;                             // morph m = K3 (frame position per zone in Shape)
 
       // Pass 1: clock all bands, magnitudes (|z'| = |z| in every slot).
       float* __restrict mg = mag_ + 1;
@@ -329,40 +322,7 @@ class WaveMorph : public Module {
     if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
   }
 
-  // K2 morph envelope gain g (explorer EnvGain, 1:1, plus the noon dead zone WM_ENV_PAD).
-  //   |t| <= PAD: off, g = 1. Outside: s = (|t| - PAD) / (1 - PAD), T = TIME_RATIO TAU_SLOW (FAST / SLOW)^s;
-  //   CCW (decay): onset -> g = 1, one-pole decay reaching 0 in DECAY_RATIO T, then holds 0.
-  //   CW (rise):   onset -> g = 0, one-pole rise reaching 1 in the same time, then holds 1.
-  // "Reaching" = the one-pole's 98 % point (tau = travel / TRAVEL_TAUS), where g snaps to the end value.
-  // Before the first onset: CCW g = 1, CW g = 0.
-  struct EnvGain {
-    volatile float g = 1.f;
-    volatile int   dir = 0;        // side: +1 CW (rise), -1 CCW (decay), 0 off (pad)
-    float at = -1.f, dec_a = 0.f;
-    int   phase = 0;               // 0 idle (holding), 1 decaying (CCW), 2 rising (CW)
-    void Reset() { g = 1.f; dir = 0; at = -1.f; dec_a = 0.f; phase = 0; }
-    inline void Step(bool onset, bool seen, float t2, float sr8, float ln_tau_ratio) {
-      using namespace wavemorph_k;
-      const float am = fabsf(t2);
-      if (am <= WM_ENV_PAD) { g = 1.f; dir = 0; phase = 0; return; }
-      const bool cw = (t2 > 0.f);
-      dir = cw ? 1 : -1;
-      if (onset) { if (cw) { g = 0.f; phase = 2; } else { g = 1.f; phase = 1; } }
-      if (!seen) { g = cw ? 0.f : 1.f; phase = 0; return; }
-      if (am != at) {
-        at = am;
-        const float sx = (am - WM_ENV_PAD) / (1.f - WM_ENV_PAD);
-        const float T = WM_ENV_TIME_RATIO * WM_ENV_TAU_SLOW_S * expf(sx * ln_tau_ratio);
-        dec_a  = 1.f - expf(-WM_ENV_TRAVEL_TAUS / (T * WM_ENV_DECAY_RATIO * sr8));
-      }
-      switch (phase) {
-        case 1: g += dec_a * (0.f - g);  if (g <= 0.02f) { g = 0.f; phase = 0; } break;
-        case 2: g += dec_a * (1.f - g);  if (g >= 0.98f) { g = 1.f; phase = 0; } break;
-        default: break;
-      }
-    }
-  };
-  // K2 in zones 6 / 7: filter envelope e (armitage's Env, 1:1, plus the noon pad WM_ENV_PAD).
+  // K2: filter envelope e (armitage's Env, 1:1, plus the noon pad WM_ENV_PAD).
   struct FEnv {
     volatile float e = 0.f;        // envelope value (-1..1)
     float at = -1.f, a = 0.f;      // |t2| the coefficients were computed for; rise / CCW one-pole coefficient
@@ -398,8 +358,7 @@ class WaveMorph : public Module {
     const bool onset = on_pending_;
     on_pending_ = false;
     if (onset) on_seen_ = true;
-    env_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_tau_ratio_);       // zones 1..5: morph
-    fenv_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_ftau_ratio_);    // zones 6 / 7: K4 filter
+    fenv_.Step(onset, on_seen_, 2.f * k2s_ - 1.f, sr8_, ln_ftau_ratio_);    // K4 filter envelope
   }
 
   // One 8 kHz sample of slot o: derive u_k / phi_k, return sum_k w_k a_k W_k (zone crossfade inside).
@@ -462,11 +421,8 @@ class WaveMorph : public Module {
     ff = pos - (float)f0;
   }
 
-  static inline int VarKey(int zone, int item) { return (zone << 6) | (item & 63); }
-
-  // sum_k w_k a_k W_k for variant v (zone << 6 | item) in slot o: morph zones at position (F_z - 1) m,
-  // stepped zones (6 / 7) at their wave (item), no blending.
-  float Shape(int v, int o) {
+  // sum_k w_k a_k W_k for zone z in slot o at the current morph: position (F_z - 1) m.
+  float Shape(int z, int o) {
     using namespace wavemorph_k;
     const float* __restrict mg  = mag_ + 1;
     const float* __restrict phs = ph_;
@@ -474,11 +430,9 @@ class WaveMorph : public Module {
     const bool played = (o == kSP);
     int f0;
     float ff;
-    const int z = v >> 6;
-    if (WM_ZONE_STEPPED[z]) { f0 = v & 63; ff = 0.f; }   // stepped: the selected wave only
-    else MorphPos(z, morph_, f0, ff);
+    MorphPos(z, morph_, f0, ff);
     const int fb = zoff_[z] + f0;              // packed frame index
-    const int fn = (ff > 0.f) ? fb + 1 : fb;   // neighbour (never read past a stepped zone's last wave)
+    const int fn = fb + 1;                     // neighbour (f0 <= F_z - 2)
     constexpr float kScale = 1.f / WM_I16_SCALE;
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
@@ -527,9 +481,28 @@ class WaveMorph : public Module {
       }
       case 3:                                      // PWM 50 % -> silence (curve: narrow end)
         return (ph < PwmWidth(u)) ? 1.f : -1.f;
-      case 5:                                      // soft 8: stepped lo-res sine (held per step)
+      case 5:                                      // PPG classic (explorer's PPG-style set, s == 1)
+        switch (c) {
+          case 0: {                                // saw: 8 steps, 8 levels
+            const int st = (int)(ph * (float)WM_PPG_SAW_STEPS);
+            return 1.f - 2.f * (float)st / (float)(WM_PPG_SAW_STEPS - 1);
+          }
+          case 1: {                                // odd-harmonic stack, 32 steps, 16 levels
+            const float xs = floorf(ph * (float)WM_PPG_ODD_STEPS) / (float)WM_PPG_ODD_STEPS;
+            const float y = sinf(6.283185307f * xs) + WM_PPG_ODD_A3 * sinf(6.283185307f * 3.f * xs)
+                          + WM_PPG_ODD_A5 * sinf(6.283185307f * 5.f * xs);
+            return roundf(y * WM_PPG_ODD_LEVELS) / WM_PPG_ODD_LEVELS;
+          }
+          case 2: {                                // bit pattern ((s 5) ^ (s >> 2)) & 15 over 32 steps
+            const int st = (int)(ph * (float)WM_PPG_BIT_STEPS);
+            return (float)(((st * 5) ^ (st >> 2)) & 15) / 7.5f - 1.f;
+          }
+          default:                                 // sine held in 16 steps
+            return sinf(6.283185307f * floorf(ph * (float)WM_PPG_SINE_STEPS) / (float)WM_PPG_SINE_STEPS);
+        }
+      case 7:                                      // soft B 4: stepped lo-res sine (held per step)
         return sinf(6.283185307f * floorf((float)WM_LORES_STEPS * ph) / (float)WM_LORES_STEPS);
-      default: {                                   // hard 5: sync saw, reset each cycle
+      default: {                                   // hard B 1: sync saw, reset each cycle
         float ps = WM_SYNCSAW_R * ph;
         ps -= floorf(ps);
         return 2.f * ps - 1.f;
@@ -537,7 +510,7 @@ class WaveMorph : public Module {
     }
   }
   static inline bool IsTimeDomain(int z, int c) {
-    return z == 0 || z == 1 || z == 3 || (z == 5 && c == 7) || (z == 6 && c == 4);
+    return z == 0 || z == 1 || z == 3 || z == 5 || (z == 7 && c == 3) || (z == 9 && c == 0);
   }
 
   // PWM width at u: 0.5 (1 - u)^WM_PWM_CURVE (u = 1: 0, silence).
@@ -579,21 +552,25 @@ class WaveMorph : public Module {
         }
         break;
       }
-      case 5:                                      // PPG/VS soft
+      case 6:                                      // soft A
         switch (c) {
           case 0: WM_LIST(WM_W_TINE); break;
           case 1: WM_LIST(WM_W_CLARINET); break;
           case 2: WM_LIST(WM_W_DRAWBAR); break;
-          case 3: WM_LIST(WM_W_MIXTURE); break;
-          case 4:                                  // harmonium
+          default: WM_LIST(WM_W_MIXTURE); break;
+        }
+        break;
+      case 7:                                      // soft B (4 = lo-res is time domain)
+        switch (c) {
+          case 0:                                  // harmonium
             put(1, WM_HARMONIUM_H1); put(2, WM_HARMONIUM_H2); put(3, WM_HARMONIUM_H3);
             for (int h = 4; h <= WM_HMAX; h++) put(h, WM_HARMONIUM_HN / (float)h);
             break;
-          case 5: WM_LIST(WM_W_GHOST5); break;
-          default: WM_LIST(WM_W_BELL); break;      // 6 glass bell (7 = lo-res is time domain)
+          case 1: WM_LIST(WM_W_GHOST5); break;
+          default: WM_LIST(WM_W_BELL); break;
         }
         break;
-      default:                                     // PPG/VS hard (zone 7)
+      case 8:                                      // hard A
         switch (c) {
           case 0:                                  // PPG resonant
             for (int h = 1; h <= WM_PPGRES_N; h++) put(h, 1.f - WM_PPGRES_SLOPE * (float)(h - 1));
@@ -608,16 +585,23 @@ class WaveMorph : public Module {
               put(h, (1.f / (float)h) * (1.f + WM_BRASS_GAIN * expf(-e * e)));
             }
             break;
-          case 3: WM_LIST(WM_W_BASSBELL); break;   // bass bell 14/28 (4 = sync saw is time domain)
-          case 5:                                  // fuzz reed
+          default: WM_LIST(WM_W_BASSBELL); break;   // bass bell 7/14
+        }
+        break;
+      default:                                     // hard B (zone 10; 1 = sync saw is time domain)
+        switch (c) {
+          case 1:                                  // fuzz reed
             for (int h = 1; h <= WM_HMAX; h++) put(h, powf((float)h, -WM_FUZZ_EXP));
             break;
-          default:                                 // 6 clipper
+          case 2:                                  // clipper
             put(1, WM_CLIP_H1);
             for (int h = 2; h <= WM_HMAX; h++) {
               const float kh = (float)WM_CLIP_KNEE / (float)h;
               put(h, (h <= WM_CLIP_KNEE) ? WM_CLIP_FLAT : WM_CLIP_FLAT * kh * kh);
             }
+            break;
+          default:                                 // PPG feedback: saw 1/n without harmonics 1 .. SKIP
+            for (int h = WM_PPGFB_SKIP + 1; h <= WM_HMAX; h++) put(h, 1.f / (float)h);
             break;
         }
         break;
@@ -695,8 +679,8 @@ class WaveMorph : public Module {
           const float g = (pk > 0.f) ? 1.f / pk : 0.f;
           for (int h = 1; h <= WM_HMAX; h++) { A[h] *= g; B[h] *= g; }
         }
-        if (z == 2 && f == 0) rms_saw = Rms(A, B);   // the plain saw: RMS target of zones 3 / 6 / 7
-        if (WM_ZONE_RMS_MATCH[z]) {                   // zones 3 / 6 / 7: equal RMS, then the storage cap
+        if (z == 2 && f == 0) rms_saw = Rms(A, B);   // the plain saw: RMS target of zones 3, 6..10
+        if (WM_ZONE_RMS_MATCH[z]) {                   // zones 3, 6..10: equal RMS, then the storage cap
           const float r = Rms(A, B);
           float g = (r > 0.f) ? rms_saw / r : 0.f;
           for (int h = 1; h <= WM_HMAX; h++) { A[h] *= g; B[h] *= g; }
@@ -754,7 +738,7 @@ class WaveMorph : public Module {
       f_a_ = 1.f - expf(-(float)size / (WM_FILT_SMOOTH_MS * 0.001f * sr_));
     }
     // Zones 6 / 7: the K2 filter envelope turns the K4 knob, t_eff = t + DEPTH e (not clamped).
-    const float tt = ft_t_ + (WM_ZONE_STEPPED[zone_ >> 6] ? WM_FENV_DEPTH * fenv_.e : 0.f);
+    const float tt = ft_t_ + WM_FENV_DEPTH * fenv_.e;
     float ts = ft_ + (tt - ft_) * f_a_;
     if (tt == 0.f && fabsf(ts) < WM_FILT_SNAP) ts = 0.f;
     ft_ = ts;
@@ -843,16 +827,14 @@ class WaveMorph : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int oct, int zone, int item, float g, int dir, float fe) {
+                    int oct, int zone, float fe) {
     using namespace wavemorph_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
     s.n = 0;
     for (int i = 0; i < 5; i++) s.k[i] = kv[i];
     s.zone = zone; s.sw2 = oct;
-    s.m3 = kv[2]; s.g = g; s.m = kv[2] * g; s.dir = dir;
-    if (WM_ZONE_STEPPED[zone]) { s.f0 = item; s.ff = 0.f; }
-    else MorphPos(zone, s.m, s.f0, s.ff);
+    MorphPos(zone, kv[2], s.f0, s.ff);
     s.fe = fe;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
@@ -912,27 +894,25 @@ class WaveMorph : public Module {
   float dc_a_ = 0.f, dc_x1_ = 0.f, dc_y1_ = 0.f;
   float sr8_ = 8000.f, sr_ = 48000.f;
   float ctrl_a_ = 0.f;
-  int   zone_ = 0, zfrom_ = 0;     // current / fading-out variant (zone << 6 | stepped wave in zones 6 / 7)
-  volatile int zone_t_ = 0;        // target variant (K1 zone, K3 wave in zones 6 / 7; Controls)
+  int   zone_ = 0, zfrom_ = 0;     // current / fading-out zone
+  volatile int zone_t_ = 0;        // target zone (K1, Controls)
   int   zfade_n_ = 0, zfade_len_ = 8;
   float zg_ = 1.f;                 // new-zone gain during a fade
-  float morph_ = 0.f;              // morph m = K3 g (this sample)
+  float morph_ = 0.f;              // morph m = K3 (smoothed, this sample)
   int   zoff_[wavemorph_k::WM_ZONES] = {};   // packed frame offset per zone (Init)
   float k2s_ = 0.5f, k3s_ = 0.f, k5s_ = 0.f;                      // smoothed knobs
   volatile float k2_t_ = 0.5f, k3_t_ = 0.f, k5_t_ = 0.f;          // targets
   float og_[3] = { 0.f, 1.f, 0.f };            // octave slot weights (up, down, down2), slid
   volatile float og_t_[3] = { 0.f, 1.f, 0.f };
   float oct_step_ = 0.f;
-  // K2 morph envelope
+  // K2 filter envelope
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened
-  EnvGain env_;                    // K2 morph envelope (zones 1..5)
-  FEnv  fenv_;                     // K2 filter envelope (zones 6 / 7)
+  FEnv  fenv_;                     // K2 filter envelope (all zones)
   float ln_ftau_ratio_ = 0.f;      // ln(WM_FENV_TAU_FAST_S / WM_FENV_TAU_SLOW_S)
-  float ln_tau_ratio_ = 0.f;       // ln(WM_ENV_TAU_FAST_S / WM_ENV_TAU_SLOW_S)
   // K4 post filter
   WmSVF svf_[2];
   float ft_ = 0.f;                 // smoothed t (per block)
