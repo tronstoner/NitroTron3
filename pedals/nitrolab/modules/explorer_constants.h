@@ -228,8 +228,8 @@ constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new
 // ladder state cleared when it starts from m = 0; not run at all while m = 0 (SW1 UP / DOWN settled).
 constexpr float EXP_LAD_FMIN     = 250.f;     // Hz; ladder cutoff at K3 full CCW (2026-10-28: 80 -> 250, 10:00 was nearly silent)
 constexpr float EXP_LAD_FMAX     = 8000.f;    // Hz; ladder cutoff at K3 full CW
-constexpr float EXP_LAD_RES      = 0.3f;      // MoogLadder resonance (feedback k = 4 res; 1.0 = self-oscillation
-                                              // threshold). 2026-10-28: 0 (Mode A's) -> 0.3, a bit of resonance.
+constexpr float EXP_LAD_RES      = 0.0f;      // MoogLadder resonance (feedback k = 4 res; 1.0 = self-oscillation
+                                              // threshold). 0 = Mode A's (0.3 tried 2026-10-28: muddy, rejected).
 constexpr float EXP_LAD_DRIVE    = 1.8f;      // MoogLadder input gain (= Mode A LADDER_DRIVE, its lightest drive, at
                                               // noon..CW). Small-signal passband gain = drive: +5.1 dB vs the
                                               // unfiltered wet (1.0 = the block's neutral, unity).

@@ -176,7 +176,7 @@
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through
 //                    the zone's frames; DOWN: per model (see MODELS)
 //   K3  UP:          dampener, per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law
-//       MID:         ladder lowpass (Mode A's Moog ladder, 24 dB/oct, resonance 0.3) 250 Hz (CCW) -> 8 kHz (CW),
+//       MID:         ladder lowpass (Mode A's Moog ladder, 24 dB/oct, no resonance) 250 Hz (CCW) -> 8 kHz (CW),
 //                    plain exponential (noon 1.4 kHz)
 //       DOWN:        per model (see MODELS)
 //   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; DOWN inert): CCW = pluck
