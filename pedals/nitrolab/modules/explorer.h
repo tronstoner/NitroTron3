@@ -125,8 +125,8 @@
 //             at once); only onsets do. g = 1 before the first onset.
 //     LEAVE (no near-jump on a side change while the value rests): a side change clears "plucked"; an onset that
 //             resets g sets it. Unplucked, T_eff = max(T, EXP_PS_LEAVE_S 0.5 s) (e.g. decayed to the bottom, K4
-//             past noon: up to K3 over ~0.5 s, not 10 ms); plucked, T_eff = T. Same shapes (decay linear, rise
-//             one-pole); step / coefficient recomputed when T_eff changes.
+//             past noon: up to K3 over ~0.5 s, not 10 ms); plucked, T_eff = T. Same shapes (both one-pole;
+//             EXP_PS_DEC_LINEAR = true: linear decay); step / coefficient recomputed when T_eff changes.
 //   K5 LFO (LfoUpdate, per 8 kHz sample after PsUpdate; one shared LFO, free-running phase, never reset by onsets):
 //     t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|; noon = off (applied 0 exactly -> identical to no LFO).
 //     shape: CCW triangle (bipolar +-1) | CW downward staircase EXP_LFO_STEPS +1 / 0 / -1 (100 / 50 / 0 %),
@@ -781,8 +781,8 @@ class Explorer : public Module {
   //   t4 >= 0 RISE (target 1, T = PS_RISE_FAST (PS_RISE_SLOW / PS_RISE_FAST)^|t4|); side and T recomputed only
   //   when t4 moved. Onset: DECAY g = 1, RISE with t4 > 0 g = 0, exact noon nothing; such an onset sets
   //   ps_plucked_, a side change clears it. T_eff = T plucked, max(T, EXP_PS_LEAVE_S) unplucked (the leave move).
-  //   DECAY: g linear, -1 / (T_eff sr8) per sample, clamps at 0, holds. RISE: g one-pole toward 1,
-  //   tau = T_eff / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
+  //   DECAY: g one-pole toward 0 (EXP_PS_DEC_LINEAR: linear -1 / (T_eff sr8)), snaps to 0 within 0.02. RISE: g one-pole
+  //   toward 1. tau = T_eff / EXP_ENV_TRAVEL_TAUS, snaps exactly to the target within 0.02 (98 %), holds.
   //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T_eff.
   //   ps_gs_ = g one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
   //   o3_ = ps_gs_ (DampUpdate / LadUpdate: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
@@ -814,9 +814,12 @@ class Explorer : public Module {
       if (ps_rise_) {
         g = ps_g_ + ps_c_ * (1.f - ps_g_);
         if (1.f - g <= 0.02f) g = 1.f;
-      } else {
-        g = ps_g_ - ps_dg_;
+      } else if (explorer_k::EXP_PS_DEC_LINEAR) {
+        g = ps_g_ - ps_dg_;                      // linear decay (afc62a9, rejected by ear: not snappy)
         if (g < 0.f) g = 0.f;
+      } else {
+        g = ps_g_ + ps_c_ * (0.f - ps_g_);       // DECAY: one-pole (snappy), snaps to 0 within 0.02
+        if (g <= 0.02f) g = 0.f;
       }
       ps_g_ = g;
     }

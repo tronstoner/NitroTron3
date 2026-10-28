@@ -244,14 +244,15 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_LAD_*, 250 Hz..8 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
 // EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
 //   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
-//                 LINEAR in g (constant speed in octaves): g -= 1 / (T sr8) per sample, 1 -> 0 in T_d, clamps at 0.
+//                 one-pole toward 0 (tau T / EXP_ENV_TRAVEL_TAUS, snaps within 0.02); EXP_PS_DEC_LINEAR = true: linear.
 //   CW / noon     RISE:  target 1, T_r = RISE_FAST (RISE_SLOW / RISE_FAST)^|t4|; each onset with t4 > 0: g = 0
 //                 (noon: an onset does nothing). One-pole toward 1, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly
 //                 to it within 0.02 (98 %), holds.
 // K4 turns never reset g (only the target side and T change, at once); only onsets do. g = 1 before the first onset.
 // LEAVE: a side change clears "plucked", an onset that resets g sets it; unplucked T = max(T_side, EXP_PS_LEAVE_S)
 // (no near-jump when K4 changes side while the value rests), plucked T = T_side.
-constexpr float    EXP_PS_DEC_FAST_S       = 1.0f;     // s (2026-10-28: 0.45 -> 1.0, decay linear); decay time T_d at K4 full CCW (pluck)
+constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s (back to 0.45 with the one-pole decay; 1.0 + linear was not snappy); decay time T_d at K4 full CCW (pluck)
+constexpr bool     EXP_PS_DEC_LINEAR       = false;    // decay shape: false = one-pole (snappy, as before afc62a9), true = linear in octaves (rejected by ear)
 constexpr float    EXP_PS_DEC_SLOW_S       = 8.0f;     // s (2026-10-28: 60 -> 8, bass notes rarely sustain that long); decay time T_d just CCW of noon (exponential over |t4|)
 constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)
 constexpr float    EXP_PS_RISE_SLOW_S      = 4.0f;     // s (2026-10-28: 36 -> 4); rise time T_r at K4 full CW (swell)
