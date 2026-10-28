@@ -1332,6 +1332,9 @@ class Explorer : public Module {
           if (bc < 0.f) bc = 0.f;
           if (b > bc) b = bc;
         }
+        I += lfo_s_ * EXP_LFO_INDEX_SWING;       // K5 LFO on top of the (envelope-capped) index as well
+        if (I < 0.f) I = 0.f;
+        if (I > EXP_FM_INDEX) I = EXP_FM_INDEX;
         b += lfb;                                // K5 LFO on top of the (envelope-capped) feedback, modular-style sum
         if (b < 0.f) b = 0.f;
         if (b > EXP_FBFM_FB_MAX) b = EXP_FBFM_FB_MAX;
