@@ -793,7 +793,7 @@ class Explorer : public Module {
     if (onset) on_seen_ = true;
     const float t4 = 2.f * k4s_ - 1.f;
     const float am = fabsf(t4);
-    if (!loop_) { PsUpdate(onset, t4); LfoUpdate(); return; }
+    if (!loop_) { PsUpdate(onset, t4); LfoUpdate(onset); return; }
     env_.Step(loop_, onset, on_seen_, am, sr8_, ln_tau_ratio_, ln_loop_ratio_);
     float e = env_.g;
     if (EXP_FOLLOW_ENABLE) {                     // parked live follower on top: e + DEPTH min(follower, 1)
@@ -875,7 +875,7 @@ class Explorer : public Module {
   //   (+1 / 0 / -1 = 100 / 50 / 0 %, equal thirds of the cycle, repeating; 2026-10-28, was S&H), t5 == 0 nothing (0).
   //   The steps land through the slide below (1 ms), no click. Applied l = depth shape, one-pole slid
   //   (mv_a_ = tau EXP_ENV_FM_SLIDE_MS), lands exactly (EXP_CTRL_SNAP) -> lfo_s_ (0 exactly at noon once settled).
-  inline void LfoUpdate() {
+  inline void LfoUpdate(bool onset) {
     using namespace explorer_k;
     const float t5 = 2.f * k5s_ - 1.f;
     const float u = fabsf(t5);
@@ -884,6 +884,7 @@ class Explorer : public Module {
       lfo_inc_ = EXP_LFO_HZ_MIN * expf(u * ln_lfo_) / sr8_;
       lfo_depth_ = (u >= EXP_LFO_DEPTH_FRAC) ? 1.f : u * (1.f / EXP_LFO_DEPTH_FRAC);
     }
+    if (onset && t5 > 0.f) lfo_ph_ = 0.f;       // CW stepped pattern: restarts on each attack (2026-10-28); CCW free-running
     lfo_ph_ += lfo_inc_;
     if (lfo_ph_ >= 1.f) lfo_ph_ -= 1.f;
     float w = 0.f;
