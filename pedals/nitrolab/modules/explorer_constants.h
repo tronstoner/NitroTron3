@@ -255,15 +255,14 @@ constexpr float    EXP_PS_RISE_SLOW_S      = 4.0f;     // s (2026-10-28: 36 -> 4
 
 // --- SW3 MID (ONE-SHOT instance only): K5 = LFO (2026-10-28) -------------------------------------------------
 // t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|. Noon (t5 == 0) = off: no modulation (applied value exactly 0).
-// Shape by side: CCW (t5 < 0) = triangle, bipolar -1..+1; CW (t5 > 0) = random steps (sample-and-hold, uniform
-// -1..+1, a new value at each LFO cycle start, LCG seeded with EXP_LFO_SEED at Init -> same sequence every boot).
-// One shared LFO, per 8 kHz sample, free-running phase (never reset by onsets; the S&H draw happens at every cycle
-// start on both sides). Law (armitage ARM_PWM_* / mnemonic MNEM_PRE_* travel):
+// Shape by side: CCW (t5 < 0) = triangle, bipolar -1..+1; CW (t5 > 0) = downward staircase EXP_LFO_STEPS (+1 / 0 / -1,
+// equal thirds of the cycle, repeating; 2026-10-28, was S&H). One shared LFO, per 8 kHz sample, free-running phase
+// (never reset by onsets). Law (armitage ARM_PWM_* / mnemonic MNEM_PRE_* travel):
 //   depth = min(u / EXP_LFO_DEPTH_FRAC, 1)                         (fade-in over the first 30 % of each side)
 //   rate  = EXP_LFO_HZ_MIN (EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)^u      (one exponential over the whole side travel)
 //   u:    0     .2    .4    .6    .8    1
 //   Hz:   0.20  0.50  1.26  3.17  7.96  20
-// Applied l = depth lfo, one-pole slid (tau EXP_ENV_FM_SLIDE_MS, lands exactly): S&H steps don't click; a side
+// Applied l = depth lfo, one-pole slid (tau EXP_ENV_FM_SLIDE_MS, lands exactly): the staircase steps don't click; a side
 // change (noon crossing) passes through depth 0.
 // Target fixed per SW1 family, swinging +- around the knob value in the parameter's own unit, clamped:
 //   UP FM ratio zones   K2 feedback b = b_knob + l EXP_LFO_FB_SWING, [0, EXP_FBFM_FB_MAX]; XBAND: no effect
@@ -275,7 +274,11 @@ constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 
 constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
 constexpr float    EXP_LFO_FB_SWING        = 0.75f;    // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5)
 constexpr float    EXP_LFO_MORPH_SWING     = 0.5f;     // MID tables: morph m swing at full depth (+-, m units 0..1)
-constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // S&H LCG seed (deterministic)
+constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
+// K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
+// knob value), equal parts of the cycle, repeating. A square = { +1, -1 } with N 2.
+constexpr int      EXP_LFO_N_STEPS         = 3;
+constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };
 
 // --- SW3 DOWN (LOOPING instance, Explorer(true)): K4 / K5 = generic envelope modulation (2026-10-28) -----------
 // (The ONE-SHOT e law below is what SW3 MID ran before the glide / pluck-swell; its code stays in ExpEnv, not run.)

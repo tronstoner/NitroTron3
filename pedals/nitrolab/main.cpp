@@ -22,7 +22,7 @@
 //                          CCW pluck (onset at the K3 fc, decays to the bottom 150 / 80 Hz, 0.45 s at the end -> 8 s
 //                          at noon), noon plain K3, CW swell (onset at the bottom, rises to the K3 fc, 10 ms -> 4 s);
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none):
-//                          CCW triangle | noon off | CW random steps; depth fades in over the first 30 %,
+//                          CCW triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
 // SW3 DOWN   = explorer   (the same module, second instance Explorer(true): generic K4 / K5 envelope modulation -
 //                          K4 = LOOPING envelope (triangle 0 -> 1 -> 0 ..., restarted per onset, ramp 4 s -> 30 ms,
@@ -209,7 +209,7 @@ int main() {
         // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
         // offset), K3 fc (knob; SW1 UP `fc` dampener, MID `lad` ladder cutoff + `eff` effective), envelope (DOWN
         // `loop`: e, K4 dir, K5 amount d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in s, applied
-        // fc_eff in Hz (UP dampener, MID ladder), K5 LFO shape tri|sh|off, depth, rate Hz;
+        // fc_eff in Hz (UP dampener, MID ladder), K5 LFO shape tri|stp|off, depth, rate Hz;
         // `ps - lfo -` on SW1 DOWN), mute, cpu
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
@@ -224,7 +224,7 @@ int main() {
         else if (d.sw1 != 2)                                  // SW3 MID: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " fce %d lfo %s d" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T), (int)(d.fce + 0.5f),
-                   d.lfo == 1 ? "tri" : d.lfo == 2 ? "sh" : "off", D2V(d.lfod), D2V(d.lfohz));
+                   d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
         else                                                  // SW3 MID, SW1 DOWN: K4 / K5 inert
           snprintf(env, sizeof(env), " ps - lfo -");
         if (d.model == Explorer::kFM)                         // A = ratio r, B = feedback b

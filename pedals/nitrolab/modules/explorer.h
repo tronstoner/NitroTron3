@@ -123,10 +123,10 @@
 //             g (only target and T change, at once); only onsets do. g = 1 before the first onset.
 //   K5 LFO (LfoUpdate, per 8 kHz sample after PsUpdate; one shared LFO, free-running phase, never reset by onsets):
 //     t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|; noon = off (applied 0 exactly -> identical to no LFO).
-//     shape: CCW triangle (bipolar +-1) | CW random steps (S&H, uniform +-1, new at each cycle start, LCG seed
-//             EXP_LFO_SEED -> same sequence every boot; drawn on both sides)
+//     shape: CCW triangle (bipolar +-1) | CW downward staircase EXP_LFO_STEPS +1 / 0 / -1 (100 / 50 / 0 %),
+//             equal thirds of the cycle, repeating (2026-10-28, was S&H)
 //     depth = min(u / 0.3, 1) (EXP_LFO_DEPTH_FRAC), rate = 0.2 (20 / 0.2)^u Hz (EXP_LFO_HZ_MIN / MAX)
-//     applied l = depth shape, one-pole slid 1 ms (EXP_ENV_FM_SLIDE_MS, lands exactly): S&H steps don't click;
+//     applied l = depth shape, one-pole slid 1 ms (EXP_ENV_FM_SLIDE_MS, lands exactly): the steps don't click;
 //             a side change passes through depth 0
 //     target fixed per family, +- around the knob, clamped (Derive's K2 offset o2, per model via LfoO2):
 //       UP FM ratio zones  feedback b = b_knob + 0.75 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
@@ -178,7 +178,7 @@
 //                    noon = plain K3, CW = swell (onset drops to the bottom, rises to the K3 fc; 10 ms -> 4 s)
 //       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
 //   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none): CCW
-//                    triangle | noon off | CW random steps; depth fades in over the first 30 % of each side,
+//                    triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 % of each side,
 //                    rate 0.2 -> 20 Hz exponential over the side
 //       SW3 DOWN:    env target: CCW on K2's parameter, CW on K3's parameter (MID: the ladder cutoff); amount
 //                    |2 k5 - 1| (noon off)
@@ -403,7 +403,7 @@ class Explorer : public Module {
     ps_c_ = 0.f;
     ln_ps_dec_  = logf(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S);
     ln_ps_rise_ = logf(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S);
-    // ONE-SHOT K5 LFO (LfoUpdate): off at noon, phase 0, deterministic S&H sequence.
+    // ONE-SHOT K5 LFO (LfoUpdate): off at noon, phase 0.
     ln_lfo_ = logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN);
     lfo_u_ = -1.f;                               // forces the rate / depth on the first sample
     lfo_inc_ = 0.f;
@@ -527,7 +527,7 @@ class Explorer : public Module {
     int   tgt;        // K5 target: 2 = K2 parameter (CCW), 3 = K3 parameter (CW), 0 = none (noon) (LOOPING only)
     float T, fce;     // ONE-SHOT (env = g): time T (s, smoothed t4), applied fc (Hz; UP dampener, MID ladder,
                       // 0 on SW1 DOWN); LOOPING: 0
-    int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 S&H (CW); LOOPING: 0
+    int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 staircase (CW); LOOPING: 0
     float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
     bool  mute;
   };
@@ -805,9 +805,10 @@ class Explorer : public Module {
 
   // ONE-SHOT instance (SW3 MID): K5 LFO, per 8 kHz sample (after PsUpdate). t5 = 2 k5s_ - 1, u = |t5|.
   //   depth = min(u / EXP_LFO_DEPTH_FRAC, 1), rate = EXP_LFO_HZ_MIN (EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)^u (recomputed
-  //   only when u moved). Free-running phase lfo_ph_ in [0, 1) (never reset); at each wrap (cycle start) a new S&H
-  //   value is drawn (LCG, uniform -1..+1), on both sides. Shape: t5 < 0 triangle tri = 1 - 4 |frac(ph + 0.25) - 0.5|
-  //   (0 at ph = 0, rising, +-1), t5 > 0 the held value, t5 == 0 nothing (0). Applied l = depth shape, one-pole slid
+  //   only when u moved). Free-running phase lfo_ph_ in [0, 1) (never reset). Shape: t5 < 0 triangle
+  //   tri = 1 - 4 |frac(ph + 0.25) - 0.5| (0 at ph = 0, rising, +-1), t5 > 0 the downward staircase EXP_LFO_STEPS
+  //   (+1 / 0 / -1 = 100 / 50 / 0 %, equal thirds of the cycle, repeating; 2026-10-28, was S&H), t5 == 0 nothing (0).
+  //   The steps land through the slide below (1 ms), no click. Applied l = depth shape, one-pole slid
   //   (mv_a_ = tau EXP_ENV_FM_SLIDE_MS), lands exactly (EXP_CTRL_SNAP) -> lfo_s_ (0 exactly at noon once settled).
   inline void LfoUpdate() {
     using namespace explorer_k;
@@ -819,18 +820,16 @@ class Explorer : public Module {
       lfo_depth_ = (u >= EXP_LFO_DEPTH_FRAC) ? 1.f : u * (1.f / EXP_LFO_DEPTH_FRAC);
     }
     lfo_ph_ += lfo_inc_;
-    if (lfo_ph_ >= 1.f) {                        // cycle start: new random step
-      lfo_ph_ -= 1.f;
-      lfo_rng_ = lfo_rng_ * 1664525u + 1013904223u;
-      lfo_sh_ = (float)(lfo_rng_ >> 8) * (2.f / 16777216.f) - 1.f;
-    }
+    if (lfo_ph_ >= 1.f) lfo_ph_ -= 1.f;
     float w = 0.f;
     if (t5 < 0.f) {
       float x = lfo_ph_ + 0.25f;
       if (x >= 1.f) x -= 1.f;
       w = 1.f - 4.f * fabsf(x - 0.5f);
-    } else if (t5 > 0.f) {
-      w = lfo_sh_;
+    } else if (t5 > 0.f) {                       // CW: downward staircase, EXP_LFO_STEPS equal steps per cycle
+      int st = (int)(lfo_ph_ * (float)EXP_LFO_N_STEPS);
+      if (st > EXP_LFO_N_STEPS - 1) st = EXP_LFO_N_STEPS - 1;
+      w = EXP_LFO_STEPS[st];
     }
     const float lt = lfo_depth_ * w;
     lfo_s_ += mv_a_ * (lt - lfo_s_);
