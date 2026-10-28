@@ -1,12 +1,12 @@
 #pragma once
 //
 // explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 pluck <-> swell on
-// the K3 dampener fc, K5 LFO on K2 feedback / morph) and SW3 DOWN (LOOPING: generic K4 / K5 envelope modulation) on NitroLab: two instances of this class
+// the K3 fc (UP dampener / MID ladder), K5 LFO on K2 feedback / morph) and SW3 DOWN (LOOPING: generic K4 / K5 envelope modulation) on NitroLab: two instances of this class
 // (constructor flag), sharing the read-only tables.
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
 // split into 84 complex bands (armitage_bands.h, included read-only), each band reshaped by one
-// of the models, summed, interpolated back to 48 kHz, DC-blocked, soft-clipped, FS1-muted. LFO: SW3 MID K5 only.
+// of the models, summed, interpolated back to 48 kHz, DC-blocked, (SW1 MID: Moog ladder lowpass,) soft-clipped, FS1-muted. LFO: SW3 MID K5 only.
 // No pitch tracking: every band runs the selected model on its OWN phase phi_k and magnitude
 // a_k = |z'_k|; nothing picks or decides per band. The model output is always full (no unshaped crossfade).
 //
@@ -21,9 +21,21 @@
 //       (UP / MID / DOWN), slid linearly over EXP_OCT_XFADE_MS on an SW2 change (old -> new slot
 //       crossfade). A slot with weight exactly 0 is NOT computed; a slot that starts again after being
 //       idle starts from cleared model state.
-//   wet = interpolate(wet8) -> DC blocker -> soft clipper -> FS1 mute
+//   wet = interpolate(wet8) -> DC blocker -> K3 LADDER (mix m; SW1 MID) -> soft clipper -> FS1 mute
 //
-// K3 DAMPENER (SW1 UP / MID; not on DOWN): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
+// K3 LADDER (SW1 MID = tables, both instances; 2026-10-28, replaces the dampener there): NitroTron3 Mode A's Moog
+//   ladder (MoogLadder, src/core/blocks/moog_ladder.h, as is): Huovilainen 4-pole 24 dB/oct lowpass, tanh (Pade)
+//   on the input and per stage, single rate 48 kHz (no oversampling), on the 48 kHz wet after the DC blocker, before
+//   the soft clipper. Resonance EXP_LAD_RES = 0 (Mode A's: no feedback, no peak), drive EXP_LAD_DRIVE = 1.8 (Mode
+//   A's LADDER_DRIVE; small-signal passband gain 1.8 = +5.1 dB), no makeup gain.
+//   fc_lad = 80 (8000 / 80)^k3 Hz (EXP_LAD_FMIN / FMAX, plain exponential on the smoothed K3; noon 800 Hz), per
+//   8 kHz sample (LadUpdate; + the K4 / K5 envelope, see K4 / K5), set on the ladder once per 8 kHz sample (only when
+//   it changed): k3 is 10 ms-smoothed, the envelope values 1 ms-slid -> no zipper.
+//   Mix: wet = x + m (ladder(x) - x), m slid linearly 0 <-> 1 over EXP_LAD_XFADE_MS (10 ms) when the current
+//   model enters / leaves the MID family (independent of the 1 ms model crossfade); the ladder state is cleared when
+//   it starts from m = 0; m = 0: not run (SW1 UP / DOWN cost nothing).
+//
+// K3 DAMPENER (SW1 UP only since 2026-10-28; MID: OFF, table / bit-table picks static at the open pick; DOWN: none): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
 //   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz), evaluated per audio block in
 //   DampUpdate (only when the smoothed K3 or its envelope value moved; SW3 MID: scaled by the K4 pluck <-> swell g,
 //   SW3 DOWN: + the K5-CW envelope octave offset, see K4 / K5).
@@ -41,6 +53,8 @@
 //                EXP_TB_BLEND = false: version = largest H <= hf (floor H = 1); a moved pick crossfades
 //                old -> new over EXP_DAMP_SLIDE_MS (1 ms = one 48-frame block; one fade counter).
 //     BITTAB     S with (S/2) f' <= L (floor S = 2); a moved S crossfades old -> new over EXP_DAMP_SLIDE_MS.
+//     (TABLES / BITTAB: as of 2026-10-28 NOT run - the picks stay at fc = 4000 (hf = 4000 / f'_k, S at the fold
+//     limit), set once at Init; Repick and the pick slide are kept in the source, unused.)
 //
 // DISCRETE VALUES are stepped on the knob (snap to the item): items that change the waveform
 // (table zone: EXP_TB_ZONE_XFADE_MS; FM ratio <-> XBAND, bit-table waveform: EXP_MODEL_XFADE_MS) crossfade
@@ -61,13 +75,14 @@
 //   WAVETABLE    W = lerp_frames(lerp_phase(table[zone][f0][level_k]), table[zone][f0 + 1][level_k]) / scale_z:
 //                morph m = K2 (smoothed), position (F_z - 1) m, f0 = frame below (<= F_z - 2), linear crossfade
 //                between the two adjacent frames; linear interpolation in phase (256 points); scale_z =
-//                EXP_TB_ZONE_I16_SCALE[zone]; level_k (or the lo / hi blend) see K3 DAMPENER. A K1 zone change
+//                EXP_TB_ZONE_I16_SCALE[zone]; level_k (or the lo / hi blend) = the static open pick (hf =
+//                4000 / f'_k; K3 = the ladder, see K3 LADDER). A K1 zone change
 //                crossfades old -> new zone over EXP_TB_ZONE_XFADE_MS (both read the same morph m and the same
 //                per-band versions / blend); stateless.
 //   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> an 11th K1 zone on MID after the 10 table zones)
 //                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
 //                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
-//                pulse = v0; K3 = shape (and the dampener): 0 -> 0.5 crossfades tri -> saw, 0.5 -> 1 saw -> pulse.
+//                pulse = v0; K3 = shape (and the ladder cutoff): 0 -> 0.5 crossfades tri -> saw, 0.5 -> 1 saw -> pulse.
 //                K2 steps through 32 waveforms (equal zones, 1 ms crossfade): 1..16 = LFSR patterns (+-1,
 //                16-bit Fibonacci LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits),
 //                17..32 = SQR v[j] = sq(j) cos(2 pi n j / 16), n = 1..16. Anti-fold: S_k steps (16 / 8 / 4 / 2,
@@ -92,11 +107,12 @@
 // K4 / K5 (two variants of this class, constructor flag: Explorer(false) = ONE-SHOT on SW3 MID, Explorer(true) =
 //   LOOPING on SW3 DOWN; everything else identical). Onset detector per 48 kHz input sample (EXP_ONSET_*,
 //   armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1 (both smoothed, land exactly).
-//  ONE-SHOT (SW3 MID) — K4 PLUCK <-> SWELL, target fixed = the K3 dampener fc (SW1 UP / MID); SW1 DOWN: K4 inert
-//   (fc = the knob, no model offsets); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
-//     applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz (g = 1: the K3 value,
-//             g = 0: the bottom); g_s = g one-pole slid (1 ms, lands exactly). Per audio block (DampUpdate) from
-//             the block's first g_s; re-pick when fc moved, active slots only (as the K3 knob).
+//  ONE-SHOT (SW3 MID) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the ladder
+//   cutoff; SW1 DOWN: K4 inert (no model offsets); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
+//     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per audio block
+//          (DampUpdate) from the block's first g_s (as the K3 knob).
+//     MID: ladder log2 fc = log2 80 + g_s (log2 fc_lad_knob - log2 80), [80, 8000] Hz, per 8 kHz sample (LadUpdate).
+//     g = 1: the K3 value, g = 0: the bottom; g_s = g one-pole slid (1 ms, lands exactly).
 //     CCW (t4 < 0)  DECAY: target 0, T = 0.45 s (60 / 0.45)^(1 - |t4|) (EXP_PS_DEC_FAST_S / SLOW_S): 0.45 s at
 //             the end -> 8 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom)
 //     CW / noon (t4 >= 0)  RISE: target 1, T = 0.01 s (36 / 0.01)^|t4| (EXP_PS_RISE_FAST_S / SLOW_S): 10 ms at
@@ -116,7 +132,7 @@
 //       UP FM ratio zones  feedback b = b_knob + 0.75 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
 //       MID tables         morph m = m_knob + 0.5 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
-//     K4 acts on fc (DampUpdate, o3_), K5 on feedback / morph (Derive, per sample): independent.
+//     K4 acts on fc (DampUpdate / LadUpdate, o3_), K5 on feedback / morph (Derive, per sample): independent.
 //  LOOPING (SW3 DOWN) — generic K4 / K5 envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
 //     LOOPING   each onset e = 0 rising; linear triangle 0 -> 1 -> 0 ..., reflecting at 0 / 1; one ramp
@@ -128,9 +144,10 @@
 //   K5: d2 = max(-t5, 0) (CCW) on the K2 parameter, d3 = max(t5, 0) (CW) on the K3 parameter, noon off.
 //   MODULATION, in the parameter's own unit, knob = the start: p = clamp(p_knob + d v span, natural range):
 //     UP FM          K2 feedback b: span EXP_FBFM_FB_MAX (1.5), [0, FB_MAX]; XBAND: K2 target does nothing
-//     UP / MID       K3 dampener fc: log2 fc + d3 v log2(4000 / 150) octaves, [150, 4000] Hz (the sqrt curve on the
-//                    knob side only); per audio block from the block's first v; re-pick (DampUpdate) when fc moved,
-//                    only for the SW2 slots running (or starting) this block, the others when they start
+//     UP             K3 dampener fc: log2 fc + d3 v log2(4000 / 150) octaves, [150, 4000] Hz (the sqrt curve on the
+//                    knob side only); per audio block from the block's first v (DampUpdate)
+//     MID            K3 ladder cutoff: log2 fc_lad + d3 v log2(8000 / 80) octaves, [80, 8000] Hz; per 8 kHz sample
+//                    (LadUpdate)
 //     MID tables     K2 morph m: span 1, [0, 1]                 (parked BITTAB: K2 / K3 shape not modulated)
 //     DOWN harm.     K2 n: span 5, [1, 6]; K3 blend: span 1, [0, 1]
 //     DOWN f-shift   K2: |t| (= g / log2(801), g = log2(|s| + 1)) + d2 v, [0, 1], sign of the knob t (t = 0: +);
@@ -152,16 +169,19 @@
 //                    1 ms crossfade); DOWN: model (harmonics / freq shift / interval)
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through
 //                    the zone's frames; DOWN: per model (see MODELS)
-//   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law;
-//                    DOWN: per model (see MODELS)
-//   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (SW1 UP / MID; DOWN inert): CCW = pluck (onset
-//                    opens to the K3 fc, decays to 150 Hz; 0.45 s at the end -> 8 s at noon), noon = plain K3,
-//                    CW = swell (onset drops to 150 Hz, rises to the K3 fc; 10 ms -> 4 s at the end)
+//   K3  UP:          dampener, per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law
+//       MID:         ladder lowpass (Mode A's Moog ladder, 24 dB/oct, no resonance) 80 Hz (CCW) -> 8 kHz (CW),
+//                    plain exponential (noon 800 Hz)
+//       DOWN:        per model (see MODELS)
+//   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; DOWN inert): CCW = pluck
+//                    (onset opens to the K3 fc, decays to the bottom 150 / 80 Hz; 0.45 s at the end -> 8 s at noon),
+//                    noon = plain K3, CW = swell (onset drops to the bottom, rises to the K3 fc; 10 ms -> 4 s)
 //       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
 //   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none): CCW
 //                    triangle | noon off | CW random steps; depth fades in over the first 30 % of each side,
 //                    rate 0.2 -> 20 Hz exponential over the side
-//       SW3 DOWN:    env target: CCW on K2's parameter, CW on K3's parameter; amount |2 k5 - 1| (noon off)
+//       SW3 DOWN:    env target: CCW on K2's parameter, CW on K3's parameter (MID: the ladder cutoff); amount
+//                    |2 k5 - 1| (noon off)
 //   K6  dry / wet    (shell)
 //   SW1 family       UP = FM, MID = tables, DOWN = harmonics & shift
 //   SW2 octave       UP = +1 oct, MID = as played, DOWN = -1 oct (one slot, crossfade EXP_OCT_XFADE_MS)
@@ -172,7 +192,8 @@
 // 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: the K5 LFO offset, its g acts on fc only);
 // stepped items from the raw knob.
 // DIAG second half: SW3 DOWN `loop e.. up|down|off d.. K2|K3|-`; SW3 MID `ps g.. dec|rise T.. (s) fce .. (Hz,
-// applied fc) lfo tri|sh|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on SW1 DOWN.
+// applied fc: UP dampener, MID ladder) lfo tri|sh|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on
+// SW1 DOWN. MID WT lines: `lad .. eff ..` = ladder cutoff at the knob / effective (Hz) instead of `fc`.
 //
 // TABLES (SW1 MID; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*; built at Init into SDRAM,
 // int16, packed [frame][version][sample]): per zone F_z frames (frame 1 = the exact base wave), u = frame / (F_z - 1).
@@ -208,6 +229,7 @@
 #include "armitage_bands.h"    // band engine (read-only use)
 #include "explorer_constants.h"
 #include "env_follower.h"      // EnvFollower (live follower on top of the FM envelope)
+#include "moog_ladder.h"       // MoogLadder (NitroTron3 Mode A's Huovilainen ladder, used as is): SW1 MID K3 lowpass
 
 #ifndef DTCM_MEM_SECTION
 #define DTCM_MEM_SECTION       // host builds
@@ -323,6 +345,17 @@ class Explorer : public Module {
     pk_fade_len_ = (int)(EXP_DAMP_SLIDE_MS * 0.001f * sr8_ + 0.5f);
     if (pk_fade_len_ < 1) pk_fade_len_ = 1;
     pk_g_ = 1.f;
+    // SW1 MID K3 ladder lowpass (Mode A's MoogLadder): fixed resonance / drive, mix m = 0 (not run), cleared state.
+    lad_.Init(sr);
+    lad_.SetResonance(EXP_LAD_RES);
+    lad_.SetDrive(EXP_LAD_DRIVE);
+    lad_.SetCutoff(EXP_LAD_FMAX);
+    lad_set_fc_ = EXP_LAD_FMAX;
+    lad_fc_ = EXP_LAD_FMAX;
+    lad_lnr_ = logf(EXP_LAD_FMAX / EXP_LAD_FMIN);
+    lad_m_ = 0.f;
+    lad_step_ = 1.f / (EXP_LAD_XFADE_MS * 0.001f * sr);
+    for (int j = 0; j < kLadSub; j++) { lad_fcb_[j] = EXP_LAD_FMAX; lad_tgb_[j] = false; }
     BuildBitPatterns();
     {                                            // packed frame offset per zone (BuildTables sets the same values)
       int off = 0;
@@ -459,16 +492,19 @@ class Explorer : public Module {
       if (loop_) dir = (fabsf(t4) <= EXP_LOOP_PAD) ? 0 : (t4 > 0.f) ? 1 : -1;
       else       dir = (t4 < 0.f) ? -1 : 1;
       const int tgt = (t5 < 0.f) ? 2 : (t5 > 0.f) ? 3 : 0;
+      // K3 fc at the knob value: UP dampener, MID ladder cutoff, DOWN 0; lfe = effective ladder cutoff (MID, else 0).
+      const float fck = (fam == kUp) ? DampFc(k3) : (fam == kMid) ? LadFc(k3) : 0.f;
+      const float lfe = (fam == kMid) ? lad_fc_ : 0.f;
       if (loop_)
-        DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
+        DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, fck, lfe,
                      env_.g, dir, fabsf(t5), tgt, 0.f, 0.f, 0, 0.f, 0.f);
       else {                                     // ONE-SHOT pluck <-> swell: g, side, T (s), fc_eff (applied, Hz)
         const float u5 = fabsf(t5);              // + K5 LFO at the knob value: shape, depth, rate (Hz)
         const int lsh = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
         const float ldp = (u5 >= EXP_LFO_DEPTH_FRAC) ? 1.f : u5 * (1.f / EXP_LFO_DEPTH_FRAC);
         const float lhz = EXP_LFO_HZ_MIN * expf(u5 * logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN));
-        DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
-                     ps_g_, dir, 0.f, 0, ps_T_, (fam != kDown) ? damp_fc_ : 0.f, lsh, ldp, lhz);
+        DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, fck, lfe,
+                     ps_g_, dir, 0.f, 0, ps_T_, (fam == kUp) ? damp_fc_ : lfe, lsh, ldp, lhz);
       }
     }
   }
@@ -482,13 +518,15 @@ class Explorer : public Module {
     int   zone;       // table zone (0..9), bit-table waveform - 1, else 0
     float a, b;       // derived values per model (FM: ratio r / feedback b; XBAND: partner n / index;
                       // WTABLE: frame position (F_z - 1) m / morph m)
-    float fc;         // K3 dampener fc (Hz) on SW1 UP / MID, 0 on DOWN
+    float fc;         // K3 fc at the knob value (Hz): SW1 UP dampener, MID ladder cutoff, 0 on DOWN
+    float lfe;        // SW1 MID: effective ladder cutoff (Hz, incl. K4 / K5 envelope), else 0
     bool  loop;       // variant: false ONE-SHOT (SW3 MID), true LOOPING (SW3 DOWN)
     float env;        // LOOPING: envelope e (0..1) at the snapshot (before gate / sign / slide); ONE-SHOT: g
     int   dir;        // LOOPING K4: +1 CW up, -1 CCW down, 0 off (pad); ONE-SHOT: +1 rise (CW / noon), -1 decay
     float d;          // K5 amount |2 k5 - 1|
     int   tgt;        // K5 target: 2 = K2 parameter (CCW), 3 = K3 parameter (CW), 0 = none (noon) (LOOPING only)
-    float T, fce;     // ONE-SHOT (env = g): time T (s, smoothed t4), applied fc (Hz; 0 on SW1 DOWN); LOOPING: 0
+    float T, fce;     // ONE-SHOT (env = g): time T (s, smoothed t4), applied fc (Hz; UP dampener, MID ladder,
+                      // 0 on SW1 DOWN); LOOPING: 0
     int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 S&H (CW); LOOPING: 0
     float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
     bool  mute;
@@ -582,6 +620,7 @@ class Explorer : public Module {
       if (fading) pf_ = Derive(mold, vfrom_ & 63, k2s_, k3s_, DiscOf(mold), loop_ ? o2_ : LfoO2(mold), d3);
       mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_cur_ + 1) : 1.f;
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
+      LadUpdate((int)(i / kFactor));             // SW1 MID ladder: mix target + cutoff for this 8 kHz sample
 
       // Pass 1: clock all bands, magnitudes (|z'| = |z| in every slot).
       float* __restrict mg = mag_ + 1;
@@ -615,6 +654,7 @@ class Explorer : public Module {
       int_(acc * EXP_OUT_GAIN, wet + i);
     }
     DcBlock(wet, size);
+    Ladder(wet, size);                           // SW1 MID K3 ladder lowpass (mix m; not run while m = 0)
     if (EXP_POSTFILT_ENABLE) PostFilter(wet, size);   // parked K4: LP | bypass | HP
     Saturate(wet, size);
     ApplyMute(wet, size);
@@ -728,14 +768,14 @@ class Explorer : public Module {
     o3_ = (t5 > 0.f) ?  t5 * mv_ : 0.f;
   }
 
-  // ONE-SHOT instance (SW3 MID): K4 "pluck <-> swell" on the K3 dampener fc, per 8 kHz sample.
+  // ONE-SHOT instance (SW3 MID): K4 "pluck <-> swell" on the K3 fc (UP dampener, MID ladder), per 8 kHz sample.
   //   Side from the smoothed t4: t4 < 0 DECAY (target 0, T = PS_DEC_FAST (PS_DEC_SLOW / PS_DEC_FAST)^(1 - |t4|)),
   //   t4 >= 0 RISE (target 1, T = PS_RISE_FAST (PS_RISE_SLOW / PS_RISE_FAST)^|t4|); side, T and the coefficient
   //   recomputed only when t4 moved. Onset: DECAY g = 1, RISE with t4 > 0 g = 0, exact noon nothing.
   //   g one-pole toward the target, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
   //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T.
   //   ps_gs_ = g one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
-  //   o3_ = ps_gs_ (DampUpdate: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
+  //   o3_ = ps_gs_ (DampUpdate / LadUpdate: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
   //   (K4 inert there). o2_ = 0 (the K5 LFO offset goes to Derive via LfoO2).
   inline void PsUpdate(bool onset, float t4) {
     using namespace explorer_k;
@@ -810,9 +850,9 @@ class Explorer : public Module {
   //   LOOPING:  ln(fc / DAMP_FMIN) = k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) + o3_ ln(DAMP_FMAX / DAMP_FMIN) (octave
   //             offset); ONE-SHOT: ln(fc / DAMP_FMIN) = o3_ k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) (o3_ = g_s);
   //   clamped to [0, ln(FMAX / FMIN)] (exactly DAMP_FMAX / DAMP_FMIN at the ends); hc_fold_ = min(FOLD_LIMIT_HZ, fc)
-  //   is the L the UP models' caps read (ShapeK); the table blend / picks and bit-table picks follow (Repick), only
-  //   for the SW2 slots running or about to run (og_ / og_t_ != 0); a slot re-picks when it starts (pick_fc_).
-  //   Runs on every family (the picks are read only on MID; DOWN models do not read fc).
+  //   is the L the UP models' caps read (ShapeK). Only the UP (FM) caps read it since 2026-10-28: the MID table /
+  //   bit-table picks stay at the static open picks from Init (no re-pick; K3 on MID = the ladder, LadUpdate).
+  //   Repick / pick_fc_ / the pick slide are kept, not run.
   void DampUpdate() {
     using namespace explorer_k;
     const float k = k3s_, om = o3_;
@@ -825,21 +865,63 @@ class Explorer : public Module {
       damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
       hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
     }
-    bool any = false, run[kSlots];
-    for (int o = 0; o < kSlots; o++) {           // og index = slot index (kSU, kSP, kSD)
-      run[o] = (og_[o] != 0.f || og_t_[o] != 0.f) && pick_fc_[o] != damp_fc_;
-      any = any || run[o];
-    }
-    if (!any) return;                            // unchanged: ceilings / picks hold
-    bool moved = false;
-    for (int o = 0; o < kSlots; o++) {
-      if (run[o]) { moved = Repick(o) || moved; pick_fc_[o] = damp_fc_; }
-      else {                                     // idle slot: old = new (no stale crossfade in the new slide)
-        for (int b = 0; b < kBands; b++) { wtlvf_[o][b] = wtlv_[o][b]; btsf_[o][b] = btsc_[o][b]; }
+  }
+
+  // SW1 MID family (tables; parked bit table): the K3 ladder runs there.
+  static inline bool IsTab(int m) { return m == kWT || m == kBIT; }
+  // Ladder cutoff (Hz) at k3 (0..1), knob value: LAD_FMIN (LAD_FMAX / LAD_FMIN)^k3, exact ends. DIAG only.
+  static float LadFc(float k3) {
+    using namespace explorer_k;
+    return (k3 >= 1.f) ? EXP_LAD_FMAX : (k3 <= 0.f) ? EXP_LAD_FMIN
+                                       : EXP_LAD_FMIN * expf(k3 * logf(EXP_LAD_FMAX / EXP_LAD_FMIN));
+  }
+  // Per 8 kHz sample (sub = its index in the block): ladder mix target (1 while the current model is a MID table
+  // model, else 0) and cutoff, in octaves of log2(LAD_FMAX / LAD_FMIN) above LAD_FMIN (lf, clamped [0, 1]):
+  //   ONE-SHOT: lf = g_s k3 (o3_ = g_s: pluck <-> swell between LAD_FMIN and the knob value; 1 = the knob)
+  //   LOOPING:  lf = k3 + o3_ (o3_ = the K5-CW envelope offset, knob units = the full span)
+  // k3 = smoothed K3. Computed only while the ladder targets on or still fades (lad_m_ > 0); else the last fc holds.
+  inline void LadUpdate(int sub) {
+    using namespace explorer_k;
+    if (sub >= kLadSub) sub = kLadSub - 1;
+    const bool tab = IsTab(var_ >> 6);
+    lad_tgb_[sub] = tab;
+    if (!tab && lad_m_ <= 0.f) { lad_fcb_[sub] = lad_set_fc_; return; }
+    const float lf = loop_ ? (k3s_ + o3_) : o3_ * k3s_;
+    const float fc = (lf >= 1.f) ? EXP_LAD_FMAX : (lf <= 0.f) ? EXP_LAD_FMIN : EXP_LAD_FMIN * expf(lf * lad_lnr_);
+    lad_fcb_[sub] = fc;
+    lad_fc_ = fc;
+  }
+  // The ladder on the 48 kHz wet (after the DC blocker, before the soft clipper): wet = x + m (ladder(x) - x).
+  // m slides linearly toward the 8 kHz sample's target (lad_tgb_) by lad_step_ per 48 kHz sample (EXP_LAD_XFADE_MS
+  // for 0 <-> 1); starting from m = 0 clears the ladder state; m = 0: not run. Cutoff set once per 8 kHz sample
+  // (kFactor 48 kHz samples) from lad_fcb_, only when it changed.
+  void Ladder(float* wet, size_t size) {
+    float m = lad_m_;
+    const int nsub = (int)(size / kFactor);
+    bool any = (m > 0.f);
+    for (int j = 0; j < nsub && j < kLadSub; j++) any = any || lad_tgb_[j];
+    if (!any) return;                            // SW1 UP / DOWN settled: ladder not run
+    const float st = lad_step_;
+    size_t n = 0;
+    for (int j = 0; j < nsub; j++) {
+      const int jj = (j < kLadSub) ? j : kLadSub - 1;
+      const bool tg = lad_tgb_[jj];
+      const float fc = lad_fcb_[jj];
+      if (fc != lad_set_fc_) { lad_.SetCutoff(fc); lad_set_fc_ = fc; }
+      for (int q = 0; q < kFactor; q++, n++) {
+        if (tg) {
+          if (m <= 0.f) lad_.Init(sr_);          // starts from m = 0: cleared state (cutoff / drive / res kept)
+          m += st; if (m > 1.f) m = 1.f;
+        } else if (m > 0.f) {
+          m -= st; if (m < 0.f) m = 0.f;
+        }
+        if (m > 0.f) {
+          const float x = wet[n];
+          wet[n] = x + m * (lad_.Process(x) - x);
+        }
       }
     }
-    if (moved) pk_fade_n_ = pk_fade_len_;
-    else       pk_fade_n_ = 0;
+    lad_m_ = m;
   }
 
   // Dampener: per band of slot o, hf = min(TB_FMAX, fc) / f'_k -> the table blend lo / x (BlendPick, read with
@@ -1622,7 +1704,7 @@ class Explorer : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int oct, int model, int zone, float a, float b, float fc, float env,
+                    int sw1, int oct, int model, int zone, float a, float b, float fc, float lfe, float env,
                     int dir, float d, int tgt, float gT, float fce, int lfo, float lfod, float lfohz) {
     using namespace explorer_k;
     const uint32_t now = daisy::System::GetNow();
@@ -1633,6 +1715,7 @@ class Explorer : public Module {
     s.model = model; s.zone = zone;
     s.a = a; s.b = b;
     s.fc = fc;
+    s.lfe = lfe;
     s.loop = loop_;
     s.env = env;
     s.dir = dir;
@@ -1798,6 +1881,16 @@ class Explorer : public Module {
   float hc_fold_ = 4000.f;         // min(EXP_FOLD_LIMIT_HZ, fc): L of the UP caps
   int   pk_fade_n_ = 0, pk_fade_len_ = 8; // discrete pick slide: samples left / length (EXP_DAMP_SLIDE_MS)
   float pk_g_ = 1.f;               // new-pick weight this sample
+  // SW1 MID K3 ladder lowpass (LadUpdate per 8 kHz sample, Ladder per block)
+  static constexpr int kLadSub = 64;   // 8 kHz samples per audio block held (blocks up to 384 frames)
+  MoogLadder lad_;                 // Mode A's ladder (src/core/blocks/moog_ladder.h, as is)
+  float lad_m_ = 0.f;              // mix m (0 = dry path only, ladder not run; 1 = ladder only)
+  float lad_step_ = 0.f;           // m slide per 48 kHz sample (1 / EXP_LAD_XFADE_MS)
+  float lad_lnr_ = 0.f;            // ln(EXP_LAD_FMAX / EXP_LAD_FMIN)
+  float lad_set_fc_ = 8000.f;      // cutoff last passed to SetCutoff
+  volatile float lad_fc_ = 8000.f; // effective cutoff (Hz), latest computed (DIAG)
+  float lad_fcb_[kLadSub];         // cutoff per 8 kHz sample of the current block
+  bool  lad_tgb_[kLadSub];         // mix target per 8 kHz sample (true = MID table model)
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)

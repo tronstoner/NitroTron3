@@ -15,11 +15,12 @@
 //                          engine — see modules/explorer.h; SW1 = family, K1 = selection
 //                          (UP: FM ratio zones + XBAND, MID: table zone (WaveMorph's 10, copied),
 //                          DOWN: model), K2 = tone (MID: morph),
-//                          K3 = dampener (UP / MID: per-band harmonic ceiling 150 Hz -> 4 kHz; DOWN: sweep),
+//                          K3 = UP: dampener (per-band harmonic ceiling 150 Hz -> 4 kHz); MID: Moog ladder lowpass
+//                          (Mode A's, 80 Hz -> 8 kHz); DOWN: sweep,
 //                          SW2 = octave up / played / down;
-//                          K4 = pluck <-> swell on the K3 dampener fc per onset (SW1 UP / MID; inert on DOWN):
-//                          CCW pluck (onset at the K3 fc, decays to 150 Hz, 0.45 s at the end -> 8 s at noon),
-//                          noon plain K3, CW swell (onset at 150 Hz, rises to the K3 fc, 10 ms -> 4 s at the end);
+//                          K4 = pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; inert on DOWN):
+//                          CCW pluck (onset at the K3 fc, decays to the bottom 150 / 80 Hz, 0.45 s at the end -> 8 s
+//                          at noon), noon plain K3, CW swell (onset at the bottom, rises to the K3 fc, 10 ms -> 4 s);
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none):
 //                          CCW triangle | noon off | CW random steps; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
@@ -68,7 +69,7 @@ Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 static constexpr int NL_MODE_EXPLORER_LOOP = NL_MODE_WAVEMORPH;
 
 Armitage armitage;
-Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 pluck <-> swell on the K3 dampener fc
+Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 pluck <-> swell on the K3 fc (dampener / MID ladder)
 Explorer explorer_loop(true);      // SW3 DOWN:   generic K4 / K5, looping envelope (tables shared, built by the first Init)
 Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_loop };
 
@@ -206,8 +207,9 @@ int main() {
         diag_stage = 0;
       } else if (diag_stage == 2) {
         // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
-        // offset), K3 dampener fc (knob), envelope (DOWN `loop`: e, K4 dir, K5 amount d + target; MID `ps`: pluck
-        // <-> swell g, side dec|rise, time T in s, applied fc_eff in Hz, K5 LFO shape tri|sh|off, depth, rate Hz;
+        // offset), K3 fc (knob; SW1 UP `fc` dampener, MID `lad` ladder cutoff + `eff` effective), envelope (DOWN
+        // `loop`: e, K4 dir, K5 amount d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in s, applied
+        // fc_eff in Hz (UP dampener, MID ladder), K5 LFO shape tri|sh|off, depth, rate Hz;
         // `ps - lfo -` on SW1 DOWN), mute, cpu
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
@@ -231,11 +233,12 @@ int main() {
         else if (d.model == Explorer::kXFM)                   // A = partner n, B = index I
           hw.seed.PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
                             (int)(d.a + 0.5f), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.model == Explorer::kWT)                    // MID tables: zone, morph m (B), frame position (A)
-          hw.seed.PrintLine("WT/%s m" D2F " pos" D2F " fc %d%s mute %d cpu %u%%",
-                            zn, D2V(d.b), D2V(d.a), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.sw1 == 1)                                  // parked bit table: A = waveform, B = K3
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " fc %d%s mute %d cpu %u%%",
+        else if (d.model == Explorer::kWT)                    // MID tables: zone, morph m (B), frame position (A),
+          hw.seed.PrintLine("WT/%s m" D2F " pos" D2F " lad %d eff %d%s mute %d cpu %u%%",   // ladder fc knob / effective
+                            zn, D2V(d.b), D2V(d.a), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env,
+                            d.mute ? 1 : 0, cpu);
+        else if (d.sw1 == 1)                                  // parked bit table: A = waveform, B = K3, ladder fc knob
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " lad %d%s mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
                             D2SV(d.a), D2SV(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else                                                  // DOWN: no dampener
