@@ -228,14 +228,15 @@ constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new
 // ladder state cleared when it starts from m = 0; not run at all while m = 0 (SW1 UP / DOWN settled).
 constexpr float EXP_LAD_FMIN     = 250.f;     // Hz; ladder cutoff at K3 full CCW (2026-10-28: 80 -> 250, 10:00 was nearly silent)
 constexpr float EXP_LAD_FMAX     = 8000.f;    // Hz; ladder cutoff at K3 full CW
-constexpr float EXP_LAD_RES      = 0.0f;      // MoogLadder resonance (feedback k = 4 res; 1.0 = self-oscillation
-                                              // threshold): 0 = no feedback, no peak. = Mode A's own setting (Mode A
-                                              // never sets resonance; MODE_A_DRONE.md "no resonance needed").
+constexpr float EXP_LAD_RES      = 0.3f;      // MoogLadder resonance (feedback k = 4 res; 1.0 = self-oscillation
+                                              // threshold). 2026-10-28: 0 (Mode A's) -> 0.3, a bit of resonance.
 constexpr float EXP_LAD_DRIVE    = 1.8f;      // MoogLadder input gain (= Mode A LADDER_DRIVE, its lightest drive, at
                                               // noon..CW). Small-signal passband gain = drive: +5.1 dB vs the
                                               // unfiltered wet (1.0 = the block's neutral, unity).
-constexpr float EXP_LAD_TRIM     = 0.556f;    // FIXED post trim after the ladder (1 / 1.8 = -5.1 dB): passband level = the
-                                              // unfiltered wet / FM; the drive's saturation stays (fixed, not tied to a knob)
+// FIXED post trim after the ladder (0.765 at res 0.3): 1 / drive, times the resonance's passband loss undone
+// (the half-sample feedback gives DC gain (1 + 2 res) / (1 + 4 res)); passband level = the unfiltered wet / FM;
+// the drive's saturation stays (fixed, not tied to a knob).
+constexpr float EXP_LAD_TRIM     = (1.f / EXP_LAD_DRIVE) * (1.f + 4.f * EXP_LAD_RES) / (1.f + 2.f * EXP_LAD_RES);
 constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder mix m on an SW1 family change
 
 // --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
@@ -244,7 +245,8 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_LAD_*, 250 Hz..8 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
 // EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
 //   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
-//                 one-pole toward 0 (tau T / EXP_ENV_TRAVEL_TAUS, snaps within 0.02); EXP_PS_DEC_LINEAR = true: linear.
+//                 EXP_PS_DEC_2POLE: 2-pole toward 0 (two equal one-poles, tau T / EXP_PS_DEC_2P_TAUS each: g = (1 + t/tau)
+//                 e^(-t/tau), rounded start, 98 % at T, snaps within 0.02); else one-pole; EXP_PS_DEC_LINEAR: linear.
 //   CW / noon     RISE:  target 1, T_r = RISE_FAST (RISE_SLOW / RISE_FAST)^|t4|; each onset with t4 > 0: g = 0
 //                 (noon: an onset does nothing). One-pole toward 1, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly
 //                 to it within 0.02 (98 %), holds.
@@ -252,6 +254,8 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // LEAVE: a side change clears "plucked", an onset that resets g sets it; unplucked T = max(T_side, EXP_PS_LEAVE_S)
 // (no near-jump when K4 changes side while the value rests), plucked T = T_side.
 constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s (back to 0.45 with the one-pole decay; 1.0 + linear was not snappy); decay time T_d at K4 full CCW (pluck)
+constexpr bool     EXP_PS_DEC_2POLE        = true;     // decay shape D (2026-10-28): 2-pole, rounded start, still snappy (false: one-pole)
+constexpr float    EXP_PS_DEC_2P_TAUS      = 5.834f;   // per-stage taus per travel: (1 + x) e^-x = 0.02 at x = 5.834 (98 % at T)
 constexpr bool     EXP_PS_DEC_LINEAR       = false;    // decay shape: false = one-pole (snappy, as before afc62a9), true = linear in octaves (rejected by ear)
 constexpr float    EXP_PS_DEC_SLOW_S       = 8.0f;     // s (2026-10-28: 60 -> 8, bass notes rarely sustain that long); decay time T_d just CCW of noon (exponential over |t4|)
 constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)

@@ -125,8 +125,8 @@
 //             at once); only onsets do. g = 1 before the first onset.
 //     LEAVE (no near-jump on a side change while the value rests): a side change clears "plucked"; an onset that
 //             resets g sets it. Unplucked, T_eff = max(T, EXP_PS_LEAVE_S 0.5 s) (e.g. decayed to the bottom, K4
-//             past noon: up to K3 over ~0.5 s, not 10 ms); plucked, T_eff = T. Same shapes (both one-pole;
-//             EXP_PS_DEC_LINEAR = true: linear decay); step / coefficient recomputed when T_eff changes.
+//             past noon: up to K3 over ~0.5 s, not 10 ms); plucked, T_eff = T. Same shapes (decay 2-pole
+//             EXP_PS_DEC_2POLE, rise one-pole); step / coefficient recomputed when T_eff changes.
 //   K5 LFO (LfoUpdate, per 8 kHz sample after PsUpdate; one shared LFO, free-running phase, never reset by onsets):
 //     t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|; noon = off (applied 0 exactly -> identical to no LFO).
 //     shape: CCW triangle (bipolar +-1) | CW downward staircase EXP_LFO_STEPS +1 / 0 / -1 (100 / 50 / 0 %),
@@ -176,7 +176,7 @@
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through
 //                    the zone's frames; DOWN: per model (see MODELS)
 //   K3  UP:          dampener, per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law
-//       MID:         ladder lowpass (Mode A's Moog ladder, 24 dB/oct, no resonance) 250 Hz (CCW) -> 8 kHz (CW),
+//       MID:         ladder lowpass (Mode A's Moog ladder, 24 dB/oct, resonance 0.3) 250 Hz (CCW) -> 8 kHz (CW),
 //                    plain exponential (noon 1.4 kHz)
 //       DOWN:        per model (see MODELS)
 //   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; DOWN inert): CCW = pluck
@@ -407,7 +407,8 @@ class Explorer : public Module {
     ps_rise_ = true;
     ps_T_ = ps_Ts_ = EXP_PS_RISE_FAST_S;
     ps_plucked_ = false;
-    ps_c_ = 0.f;
+    ps_c_ = ps_c2_ = 0.f;
+    ps_x1_ = 1.f;
     ps_dg_ = 0.f;
     ln_ps_dec_  = logf(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S);
     ln_ps_rise_ = logf(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S);
@@ -781,7 +782,7 @@ class Explorer : public Module {
   //   t4 >= 0 RISE (target 1, T = PS_RISE_FAST (PS_RISE_SLOW / PS_RISE_FAST)^|t4|); side and T recomputed only
   //   when t4 moved. Onset: DECAY g = 1, RISE with t4 > 0 g = 0, exact noon nothing; such an onset sets
   //   ps_plucked_, a side change clears it. T_eff = T plucked, max(T, EXP_PS_LEAVE_S) unplucked (the leave move).
-  //   DECAY: g one-pole toward 0 (EXP_PS_DEC_LINEAR: linear -1 / (T_eff sr8)), snaps to 0 within 0.02. RISE: g one-pole
+  //   DECAY: g 2-pole toward 0 (EXP_PS_DEC_2POLE; else one-pole / EXP_PS_DEC_LINEAR linear), snaps to 0 within 0.02. RISE: g one-pole
   //   toward 1. tau = T_eff / EXP_ENV_TRAVEL_TAUS, snaps exactly to the target within 0.02 (98 %), holds.
   //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T_eff.
   //   ps_gs_ = g one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
@@ -801,12 +802,13 @@ class Explorer : public Module {
     }
     const float tg = ps_rise_ ? 1.f : 0.f;
     if (onset) {
-      if (!ps_rise_)      { ps_g_ = 1.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // DECAY: pluck
+      if (!ps_rise_)      { ps_g_ = ps_x1_ = 1.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // DECAY: pluck
       else if (t4 > 0.f)  { ps_g_ = 0.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // RISE: swell
     }                                                                   // (exact noon: nothing)
     if (redo) {                                  // T_eff = T_side once plucked, else max(T_side, EXP_PS_LEAVE_S)
       ps_T_ = (ps_plucked_ || ps_Ts_ >= EXP_PS_LEAVE_S) ? ps_Ts_ : EXP_PS_LEAVE_S;
-      ps_c_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (ps_T_ * sr8_));     // RISE: one-pole
+      ps_c_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (ps_T_ * sr8_));     // RISE (and the one-pole decay): one-pole
+      ps_c2_ = 1.f - expf(-EXP_PS_DEC_2P_TAUS / (ps_T_ * sr8_));     // DECAY 2-pole: per stage
       ps_dg_ = 1.f / (ps_T_ * sr8_);                                  // DECAY: linear step per 8 kHz sample
     }
     if (ps_g_ != tg) {
@@ -817,12 +819,17 @@ class Explorer : public Module {
       } else if (explorer_k::EXP_PS_DEC_LINEAR) {
         g = ps_g_ - ps_dg_;                      // linear decay (afc62a9, rejected by ear: not snappy)
         if (g < 0.f) g = 0.f;
+      } else if (explorer_k::EXP_PS_DEC_2POLE) {
+        ps_x1_ += ps_c2_ * (0.f - ps_x1_);       // DECAY: 2-pole (two equal one-poles in series, critically damped):
+        g = ps_g_ + ps_c2_ * (ps_x1_ - ps_g_);   // g = (1 + t / tau) e^(-t / tau) from a pluck - rounded start, steep
+        if (g <= 0.02f) { g = 0.f; ps_x1_ = 0.f; }   // fall, the exponential tail; 98 % at T_eff, snaps to 0
       } else {
         g = ps_g_ + ps_c_ * (0.f - ps_g_);       // DECAY: one-pole (snappy), snaps to 0 within 0.02
         if (g <= 0.02f) g = 0.f;
       }
       ps_g_ = g;
     }
+    if (ps_rise_ || ps_g_ == 0.f) ps_x1_ = ps_g_;   // 2-pole decay entered from rest starts at the current value
     ps_gs_ += mv_a_ * (ps_g_ - ps_gs_);
     if (fabsf(ps_g_ - ps_gs_) < EXP_CTRL_SNAP) ps_gs_ = ps_g_;
     o2_ = 0.f;
@@ -1936,6 +1943,7 @@ class Explorer : public Module {
   float ps_Ts_ = 0.01f;            // travel time T_side (s) of the current side from |t4|
   volatile float ps_T_ = 0.01f;    // travel time in use T_eff (s): T_side, or max(T_side, EXP_PS_LEAVE_S) unplucked
   bool  ps_plucked_ = false;       // an onset reset g on this side (false after a side change, until the next onset)
+  float ps_c2_ = 0.f, ps_x1_ = 1.f; // DECAY 2-pole: per-stage coefficient, first stage
   float ps_c_ = 0.f;               // RISE one-pole coefficient (tau = T_eff / EXP_ENV_TRAVEL_TAUS)
   float ps_dg_ = 0.f;              // DECAY linear step per 8 kHz sample (1 / (T_eff sr8))
   float ln_ps_dec_ = 0.f;          // ln(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S)

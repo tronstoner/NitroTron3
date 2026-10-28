@@ -19,7 +19,7 @@
 //                          (Mode A's, 250 Hz -> 8 kHz); DOWN: sweep,
 //                          SW2 = octave up / played / down;
 //                          K4 = pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; inert on DOWN):
-//                          CCW pluck (onset at the K3 fc, decays (one-pole) to the bottom 150 / 250 Hz,
+//                          CCW pluck (onset at the K3 fc, decays (2-pole: rounded start, snappy) to the bottom 150 / 250 Hz,
 //                          0.45 s at the end -> 8 s at noon), noon plain K3, CW swell (onset at the bottom, rises to the
 //                          K3 fc, 10 ms -> 4 s); after a K4 side change, until the next onset, travel >= 0.5 s;
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.15; XBAND / DOWN none):
