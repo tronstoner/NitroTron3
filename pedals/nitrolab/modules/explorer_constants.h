@@ -221,9 +221,9 @@ constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new
 // One-pole toward the target, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
 // K4 turns never reset g (only the target side and T change, at once); only onsets do. g = 1 before the first onset.
 constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s; decay time T_d at K4 full CCW (pluck)
-constexpr float    EXP_PS_DEC_SLOW_S       = 60.0f;    // s; decay time T_d just CCW of noon (exponential over |t4|)
+constexpr float    EXP_PS_DEC_SLOW_S       = 8.0f;     // s (2026-10-28: 60 -> 8, bass notes rarely sustain that long); decay time T_d just CCW of noon (exponential over |t4|)
 constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)
-constexpr float    EXP_PS_RISE_SLOW_S      = 36.0f;    // s; rise time T_r at K4 full CW (swell)
+constexpr float    EXP_PS_RISE_SLOW_S      = 4.0f;     // s (2026-10-28: 36 -> 4); rise time T_r at K4 full CW (swell)
 
 // --- SW3 MID (ONE-SHOT instance only): K5 = LFO (2026-10-28) -------------------------------------------------
 // t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|. Noon (t5 == 0) = off: no modulation (applied value exactly 0).

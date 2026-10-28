@@ -98,9 +98,9 @@
 //             g = 0: the bottom); g_s = g one-pole slid (1 ms, lands exactly). Per audio block (DampUpdate) from
 //             the block's first g_s; re-pick when fc moved, active slots only (as the K3 knob).
 //     CCW (t4 < 0)  DECAY: target 0, T = 0.45 s (60 / 0.45)^(1 - |t4|) (EXP_PS_DEC_FAST_S / SLOW_S): 0.45 s at
-//             the end -> 60 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom)
+//             the end -> 8 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom)
 //     CW / noon (t4 >= 0)  RISE: target 1, T = 0.01 s (36 / 0.01)^|t4| (EXP_PS_RISE_FAST_S / SLOW_S): 10 ms at
-//             noon -> 36 s at the end; each onset with t4 > 0 g = 0 (swell from the bottom); exact noon: onsets
+//             noon -> 4 s at the end; each onset with t4 > 0 g = 0 (swell from the bottom); exact noon: onsets
 //             do nothing (g goes / stays at 1 = plain K3)
 //     g one-pole toward the target, tau = T / 3.9 (EXP_ENV_TRAVEL_TAUS), snaps exactly to it within 0.02 (98 %),
 //             holds. Side / T / coefficient from the smoothed t4, recomputed when it moved. K4 turns never reset
@@ -155,8 +155,8 @@
 //   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law;
 //                    DOWN: per model (see MODELS)
 //   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (SW1 UP / MID; DOWN inert): CCW = pluck (onset
-//                    opens to the K3 fc, decays to 150 Hz; 0.45 s at the end -> 60 s at noon), noon = plain K3,
-//                    CW = swell (onset drops to 150 Hz, rises to the K3 fc; 10 ms -> 36 s at the end)
+//                    opens to the K3 fc, decays to 150 Hz; 0.45 s at the end -> 8 s at noon), noon = plain K3,
+//                    CW = swell (onset drops to 150 Hz, rises to the K3 fc; 10 ms -> 4 s at the end)
 //       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
 //   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none): CCW
 //                    triangle | noon off | CW random steps; depth fades in over the first 30 % of each side,

@@ -18,8 +18,8 @@
 //                          K3 = dampener (UP / MID: per-band harmonic ceiling 150 Hz -> 4 kHz; DOWN: sweep),
 //                          SW2 = octave up / played / down;
 //                          K4 = pluck <-> swell on the K3 dampener fc per onset (SW1 UP / MID; inert on DOWN):
-//                          CCW pluck (onset at the K3 fc, decays to 150 Hz, 0.45 s at the end -> 60 s at noon),
-//                          noon plain K3, CW swell (onset at 150 Hz, rises to the K3 fc, 10 ms -> 36 s at the end);
+//                          CCW pluck (onset at the K3 fc, decays to 150 Hz, 0.45 s at the end -> 8 s at noon),
+//                          noon plain K3, CW swell (onset at 150 Hz, rises to the K3 fc, 10 ms -> 4 s at the end);
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none):
 //                          CCW triangle | noon off | CW random steps; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
