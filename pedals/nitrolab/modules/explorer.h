@@ -1,12 +1,12 @@
 #pragma once
 //
 // explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 pluck <-> swell on
-// the K3 dampener fc) and SW3 DOWN (LOOPING: generic K4 / K5 envelope modulation) on NitroLab: two instances of this class
+// the K3 dampener fc, K5 LFO on K2 feedback / morph) and SW3 DOWN (LOOPING: generic K4 / K5 envelope modulation) on NitroLab: two instances of this class
 // (constructor flag), sharing the read-only tables.
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
 // split into 84 complex bands (armitage_bands.h, included read-only), each band reshaped by one
-// of the models, summed, interpolated back to 48 kHz, DC-blocked, soft-clipped, FS1-muted. No LFO.
+// of the models, summed, interpolated back to 48 kHz, DC-blocked, soft-clipped, FS1-muted. LFO: SW3 MID K5 only.
 // No pitch tracking: every band runs the selected model on its OWN phase phi_k and magnitude
 // a_k = |z'_k|; nothing picks or decides per band. The model output is always full (no unshaped crossfade).
 //
@@ -93,7 +93,7 @@
 //   LOOPING on SW3 DOWN; everything else identical). Onset detector per 48 kHz input sample (EXP_ONSET_*,
 //   armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1 (both smoothed, land exactly).
 //  ONE-SHOT (SW3 MID) — K4 PLUCK <-> SWELL, target fixed = the K3 dampener fc (SW1 UP / MID); SW1 DOWN: K4 inert
-//   (fc = the knob, no model offsets); K5 unused. Per 8 kHz sample (PsUpdate), g in [0, 1]:
+//   (fc = the knob, no model offsets); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
 //     applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz (g = 1: the K3 value,
 //             g = 0: the bottom); g_s = g one-pole slid (1 ms, lands exactly). Per audio block (DampUpdate) from
 //             the block's first g_s; re-pick when fc moved, active slots only (as the K3 knob).
@@ -105,6 +105,18 @@
 //     g one-pole toward the target, tau = T / 3.9 (EXP_ENV_TRAVEL_TAUS), snaps exactly to it within 0.02 (98 %),
 //             holds. Side / T / coefficient from the smoothed t4, recomputed when it moved. K4 turns never reset
 //             g (only target and T change, at once); only onsets do. g = 1 before the first onset.
+//   K5 LFO (LfoUpdate, per 8 kHz sample after PsUpdate; one shared LFO, free-running phase, never reset by onsets):
+//     t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|; noon = off (applied 0 exactly -> identical to no LFO).
+//     shape: CCW triangle (bipolar +-1) | CW random steps (S&H, uniform +-1, new at each cycle start, LCG seed
+//             EXP_LFO_SEED -> same sequence every boot; drawn on both sides)
+//     depth = min(u / 0.3, 1) (EXP_LFO_DEPTH_FRAC), rate = 0.2 (20 / 0.2)^u Hz (EXP_LFO_HZ_MIN / MAX)
+//     applied l = depth shape, one-pole slid 1 ms (EXP_ENV_FM_SLIDE_MS, lands exactly): S&H steps don't click;
+//             a side change passes through depth 0
+//     target fixed per family, +- around the knob, clamped (Derive's K2 offset o2, per model via LfoO2):
+//       UP FM ratio zones  feedback b = b_knob + 0.75 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
+//       MID tables         morph m = m_knob + 0.5 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
+//       DOWN               none
+//     K4 acts on fc (DampUpdate, o3_), K5 on feedback / morph (Derive, per sample): independent.
 //  LOOPING (SW3 DOWN) — generic K4 / K5 envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
 //     LOOPING   each onset e = 0 rising; linear triangle 0 -> 1 -> 0 ..., reflecting at 0 / 1; one ramp
@@ -146,7 +158,9 @@
 //                    opens to the K3 fc, decays to 150 Hz; 0.45 s at the end -> 60 s at noon), noon = plain K3,
 //                    CW = swell (onset drops to 150 Hz, rises to the K3 fc; 10 ms -> 36 s at the end)
 //       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
-//   K5  SW3 MID:     unused
+//   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none): CCW
+//                    triangle | noon off | CW random steps; depth fades in over the first 30 % of each side,
+//                    rate 0.2 -> 20 Hz exponential over the side
 //       SW3 DOWN:    env target: CCW on K2's parameter, CW on K3's parameter; amount |2 k5 - 1| (noon off)
 //   K6  dry / wet    (shell)
 //   SW1 family       UP = FM, MID = tables, DOWN = harmonics & shift
@@ -155,10 +169,10 @@
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 //
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
-// 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: none, its g acts on fc only);
+// 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: the K5 LFO offset, its g acts on fc only);
 // stepped items from the raw knob.
 // DIAG second half: SW3 DOWN `loop e.. up|down|off d.. K2|K3|-`; SW3 MID `ps g.. dec|rise T.. (s) fce .. (Hz,
-// applied fc)`, `ps -` on SW1 DOWN.
+// applied fc) lfo tri|sh|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on SW1 DOWN.
 //
 // TABLES (SW1 MID; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*; built at Init into SDRAM,
 // int16, packed [frame][version][sample]): per zone F_z frames (frame 1 = the exact base wave), u = frame / (F_z - 1).
@@ -356,6 +370,15 @@ class Explorer : public Module {
     ps_c_ = 0.f;
     ln_ps_dec_  = logf(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S);
     ln_ps_rise_ = logf(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S);
+    // ONE-SHOT K5 LFO (LfoUpdate): off at noon, phase 0, deterministic S&H sequence.
+    ln_lfo_ = logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN);
+    lfo_u_ = -1.f;                               // forces the rate / depth on the first sample
+    lfo_inc_ = 0.f;
+    lfo_depth_ = 0.f;
+    lfo_ph_ = 0.f;
+    lfo_rng_ = EXP_LFO_SEED;
+    lfo_sh_ = 0.f;
+    lfo_s_ = 0.f;
     // Live follower (parked, EXP_FOLLOW_ENABLE; 48 kHz, raw input).
     fol_.Init(sr);
     fol_.SetCutoff(EXP_FOLLOW_HZ);
@@ -438,10 +461,15 @@ class Explorer : public Module {
       const int tgt = (t5 < 0.f) ? 2 : (t5 > 0.f) ? 3 : 0;
       if (loop_)
         DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
-                     env_.g, dir, fabsf(t5), tgt, 0.f, 0.f);
-      else                                       // ONE-SHOT pluck <-> swell: g, side, T (s), fc_eff (applied, Hz)
+                     env_.g, dir, fabsf(t5), tgt, 0.f, 0.f, 0, 0.f, 0.f);
+      else {                                     // ONE-SHOT pluck <-> swell: g, side, T (s), fc_eff (applied, Hz)
+        const float u5 = fabsf(t5);              // + K5 LFO at the knob value: shape, depth, rate (Hz)
+        const int lsh = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
+        const float ldp = (u5 >= EXP_LFO_DEPTH_FRAC) ? 1.f : u5 * (1.f / EXP_LFO_DEPTH_FRAC);
+        const float lhz = EXP_LFO_HZ_MIN * expf(u5 * logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN));
         DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
-                     ps_g_, dir, 0.f, 0, ps_T_, (fam != kDown) ? damp_fc_ : 0.f);
+                     ps_g_, dir, 0.f, 0, ps_T_, (fam != kDown) ? damp_fc_ : 0.f, lsh, ldp, lhz);
+      }
     }
   }
 
@@ -461,6 +489,8 @@ class Explorer : public Module {
     float d;          // K5 amount |2 k5 - 1|
     int   tgt;        // K5 target: 2 = K2 parameter (CCW), 3 = K3 parameter (CW), 0 = none (noon) (LOOPING only)
     float T, fce;     // ONE-SHOT (env = g): time T (s, smoothed t4), applied fc (Hz; 0 on SW1 DOWN); LOOPING: 0
+    int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 S&H (CW); LOOPING: 0
+    float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
     bool  mute;
   };
   void Activate() override {
@@ -543,10 +573,13 @@ class Explorer : public Module {
       }
       const bool fading = (mfade_n_ > 0);
       // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
-      // ONE-SHOT: o3_ = g_s (dampener fc only, DampUpdate) -> no model offsets (K4 inert on SW1 DOWN).
+      // ONE-SHOT: o3_ = g_s (dampener fc only, DampUpdate) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
+      // offset is the K5 LFO's, per model (LfoO2: FM feedback / table morph, 0 elsewhere), so a model crossfade
+      // gives each side its own unit. LFO off (noon): exactly 0 -> Derive identical to the knob value.
       const float d3 = loop_ ? o3_ : 0.f;
-      pn_ = Derive(var_ >> 6, var_ & 63, k2s_, k3s_, DiscOf(var_ >> 6), o2_, d3);
-      if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, k3s_, DiscOf(vfrom_ >> 6), o2_, d3);
+      const int mnew = var_ >> 6, mold = vfrom_ >> 6;
+      pn_ = Derive(mnew, var_ & 63, k2s_, k3s_, DiscOf(mnew), loop_ ? o2_ : LfoO2(mnew), d3);
+      if (fading) pf_ = Derive(mold, vfrom_ & 63, k2s_, k3s_, DiscOf(mold), loop_ ? o2_ : LfoO2(mold), d3);
       mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_cur_ + 1) : 1.f;
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
 
@@ -671,7 +704,7 @@ class Explorer : public Module {
   //   v_target = dir e (dir = sign(t4)); 0 at t4 == 0 (ONE-SHOT) / |t4| <= EXP_LOOP_PAD (LOOPING).
   //   mv_ = one-pole (tau EXP_ENV_FM_SLIDE_MS) toward v_target, lands exactly (EXP_CTRL_SNAP).
   //   o2_ = max(-t5, 0) mv_ (K2 parameter), o3_ = max(t5, 0) mv_ (K3 parameter); knob units (1 = full span).
-  // ONE-SHOT instance (loop_ = false): PsUpdate instead (K4 pluck <-> swell on the K3 dampener fc, K5 unused).
+  // ONE-SHOT instance (loop_ = false): PsUpdate instead (K4 pluck <-> swell on the K3 dampener fc), then LfoUpdate (K5).
   inline void EnvUpdate() {
     using namespace explorer_k;
     const bool onset = on_pending_;
@@ -679,7 +712,7 @@ class Explorer : public Module {
     if (onset) on_seen_ = true;
     const float t4 = 2.f * k4s_ - 1.f;
     const float am = fabsf(t4);
-    if (!loop_) { PsUpdate(onset, t4); return; }
+    if (!loop_) { PsUpdate(onset, t4); LfoUpdate(); return; }
     env_.Step(loop_, onset, on_seen_, am, sr8_, ln_tau_ratio_, ln_loop_ratio_);
     float e = env_.g;
     if (EXP_FOLLOW_ENABLE) {                     // parked live follower on top: e + DEPTH min(follower, 1)
@@ -703,7 +736,7 @@ class Explorer : public Module {
   //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T.
   //   ps_gs_ = g one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
   //   o3_ = ps_gs_ (DampUpdate: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
-  //   (K4 inert there). o2_ = 0 (K5 unused).
+  //   (K4 inert there). o2_ = 0 (the K5 LFO offset goes to Derive via LfoO2).
   inline void PsUpdate(bool onset, float t4) {
     using namespace explorer_k;
     if (t4 != ps_t4_) {
@@ -728,6 +761,48 @@ class Explorer : public Module {
     if (fabsf(ps_g_ - ps_gs_) < EXP_CTRL_SNAP) ps_gs_ = ps_g_;
     o2_ = 0.f;
     o3_ = ((var_ >> 6) >= kHARM) ? 1.f : ps_gs_;
+  }
+
+  // ONE-SHOT instance (SW3 MID): K5 LFO, per 8 kHz sample (after PsUpdate). t5 = 2 k5s_ - 1, u = |t5|.
+  //   depth = min(u / EXP_LFO_DEPTH_FRAC, 1), rate = EXP_LFO_HZ_MIN (EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)^u (recomputed
+  //   only when u moved). Free-running phase lfo_ph_ in [0, 1) (never reset); at each wrap (cycle start) a new S&H
+  //   value is drawn (LCG, uniform -1..+1), on both sides. Shape: t5 < 0 triangle tri = 1 - 4 |frac(ph + 0.25) - 0.5|
+  //   (0 at ph = 0, rising, +-1), t5 > 0 the held value, t5 == 0 nothing (0). Applied l = depth shape, one-pole slid
+  //   (mv_a_ = tau EXP_ENV_FM_SLIDE_MS), lands exactly (EXP_CTRL_SNAP) -> lfo_s_ (0 exactly at noon once settled).
+  inline void LfoUpdate() {
+    using namespace explorer_k;
+    const float t5 = 2.f * k5s_ - 1.f;
+    const float u = fabsf(t5);
+    if (u != lfo_u_) {
+      lfo_u_ = u;
+      lfo_inc_ = EXP_LFO_HZ_MIN * expf(u * ln_lfo_) / sr8_;
+      lfo_depth_ = (u >= EXP_LFO_DEPTH_FRAC) ? 1.f : u * (1.f / EXP_LFO_DEPTH_FRAC);
+    }
+    lfo_ph_ += lfo_inc_;
+    if (lfo_ph_ >= 1.f) {                        // cycle start: new random step
+      lfo_ph_ -= 1.f;
+      lfo_rng_ = lfo_rng_ * 1664525u + 1013904223u;
+      lfo_sh_ = (float)(lfo_rng_ >> 8) * (2.f / 16777216.f) - 1.f;
+    }
+    float w = 0.f;
+    if (t5 < 0.f) {
+      float x = lfo_ph_ + 0.25f;
+      if (x >= 1.f) x -= 1.f;
+      w = 1.f - 4.f * fabsf(x - 0.5f);
+    } else if (t5 > 0.f) {
+      w = lfo_sh_;
+    }
+    const float lt = lfo_depth_ * w;
+    lfo_s_ += mv_a_ * (lt - lfo_s_);
+    if (fabsf(lt - lfo_s_) < EXP_CTRL_SNAP) lfo_s_ = lt;
+  }
+  // K2 offset of the K5 LFO in knob units for model m (Derive: p = clamp(p_knob + o2 span)): FM b swing
+  // EXP_LFO_FB_SWING / span EXP_FBFM_FB_MAX, table morph swing EXP_LFO_MORPH_SWING / span 1; XBAND, BITTAB, DOWN: 0.
+  inline float LfoO2(int m) const {
+    using namespace explorer_k;
+    if (m == kFM) return lfo_s_ * (EXP_LFO_FB_SWING / EXP_FBFM_FB_MAX);
+    if (m == kWT) return lfo_s_ * EXP_LFO_MORPH_SWING;
+    return 0.f;
   }
 
   // K3 dampener, once per audio block from the smoothed K3 and the K3 envelope value o3_ (its value at the block
@@ -1548,7 +1623,7 @@ class Explorer : public Module {
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
                     int sw1, int oct, int model, int zone, float a, float b, float fc, float env,
-                    int dir, float d, int tgt, float gT, float fce) {
+                    int dir, float d, int tgt, float gT, float fce, int lfo, float lfod, float lfohz) {
     using namespace explorer_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -1564,6 +1639,7 @@ class Explorer : public Module {
     s.d = d;
     s.tgt = tgt;
     s.T = gT; s.fce = fce;
+    s.lfo = lfo; s.lfod = lfod; s.lfohz = lfohz;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1743,6 +1819,15 @@ class Explorer : public Module {
   float ps_c_ = 0.f;               // one-pole coefficient (tau = T / EXP_ENV_TRAVEL_TAUS)
   float ln_ps_dec_ = 0.f;          // ln(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S)
   float ln_ps_rise_ = 0.f;         // ln(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S)
+  // ONE-SHOT K5 LFO (LfoUpdate, loop_ = false)
+  float ln_lfo_ = 0.f;             // ln(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)
+  float lfo_u_ = -1.f;             // u = |t5| the rate / depth were computed for
+  float lfo_inc_ = 0.f;            // phase increment per 8 kHz sample
+  float lfo_depth_ = 0.f;          // min(u / EXP_LFO_DEPTH_FRAC, 1)
+  float lfo_ph_ = 0.f;             // free-running phase [0, 1)
+  uint32_t lfo_rng_ = 0u;          // S&H LCG state
+  float lfo_sh_ = 0.f;             // held random value (-1..+1), new at each cycle start
+  float lfo_s_ = 0.f;              // applied l = depth shape, slid (1 ms, lands exactly)
   // Live follower (parked, EXP_FOLLOW_ENABLE)
   EnvFollower fol_;                // rectifier + 4-pole LP, 48 kHz raw input
   float fol_y_ = 0.f;              // follower output, latest 48 kHz sample

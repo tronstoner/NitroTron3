@@ -211,7 +211,7 @@ constexpr float EXP_DAMP_CURVE    = 0.5f;     // exponent on k3 (2026-10-28; 1 =
 constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new discrete pick per band (see above)
 
 // --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
-// Target fixed = the K3 dampener fc (SW1 UP FM / MID tables); SW1 DOWN: K4 inert. K5 unused (an LFO comes later).
+// Target fixed = the K3 dampener fc (SW1 UP FM / MID tables); SW1 DOWN: K4 inert. K5 = LFO (below).
 // g in [0, 1] per 8 kHz sample: log2 fc = log2 EXP_DAMP_FMIN + g_s (log2 fc_knob - log2 EXP_DAMP_FMIN), clamped
 // [EXP_DAMP_FMIN, EXP_DAMP_FMAX] (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
 // EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
@@ -224,6 +224,30 @@ constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s; decay time T_d at K
 constexpr float    EXP_PS_DEC_SLOW_S       = 60.0f;    // s; decay time T_d just CCW of noon (exponential over |t4|)
 constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)
 constexpr float    EXP_PS_RISE_SLOW_S      = 36.0f;    // s; rise time T_r at K4 full CW (swell)
+
+// --- SW3 MID (ONE-SHOT instance only): K5 = LFO (2026-10-28) -------------------------------------------------
+// t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|. Noon (t5 == 0) = off: no modulation (applied value exactly 0).
+// Shape by side: CCW (t5 < 0) = triangle, bipolar -1..+1; CW (t5 > 0) = random steps (sample-and-hold, uniform
+// -1..+1, a new value at each LFO cycle start, LCG seeded with EXP_LFO_SEED at Init -> same sequence every boot).
+// One shared LFO, per 8 kHz sample, free-running phase (never reset by onsets; the S&H draw happens at every cycle
+// start on both sides). Law (armitage ARM_PWM_* / mnemonic MNEM_PRE_* travel):
+//   depth = min(u / EXP_LFO_DEPTH_FRAC, 1)                         (fade-in over the first 30 % of each side)
+//   rate  = EXP_LFO_HZ_MIN (EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)^u      (one exponential over the whole side travel)
+//   u:    0     .2    .4    .6    .8    1
+//   Hz:   0.20  0.50  1.26  3.17  7.96  20
+// Applied l = depth lfo, one-pole slid (tau EXP_ENV_FM_SLIDE_MS, lands exactly): S&H steps don't click; a side
+// change (noon crossing) passes through depth 0.
+// Target fixed per SW1 family, swinging +- around the knob value in the parameter's own unit, clamped:
+//   UP FM ratio zones   K2 feedback b = b_knob + l EXP_LFO_FB_SWING, [0, EXP_FBFM_FB_MAX]; XBAND: no effect
+//   MID tables          K2 morph m = m_knob + l EXP_LFO_MORPH_SWING, [0, 1]   (parked BITTAB: no effect)
+//   DOWN                no effect
+// Coexists with K4 (pluck <-> swell on the K3 fc): K4 moves fc, K5 moves feedback / morph.
+constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side over which the depth fades in
+constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
+constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
+constexpr float    EXP_LFO_FB_SWING        = 0.75f;    // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5)
+constexpr float    EXP_LFO_MORPH_SWING     = 0.5f;     // MID tables: morph m swing at full depth (+-, m units 0..1)
+constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // S&H LCG seed (deterministic)
 
 // --- SW3 DOWN (LOOPING instance, Explorer(true)): K4 / K5 = generic envelope modulation (2026-10-28) -----------
 // (The ONE-SHOT e law below is what SW3 MID ran before the glide / pluck-swell; its code stays in ExpEnv, not run.)
