@@ -295,7 +295,7 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 
 // --- SW3 MID (ONE-SHOT instance only): K5 = LFO (2026-10-28) -------------------------------------------------
 // t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|. Noon (t5 == 0) = off: no modulation (applied value exactly 0).
-// Shape by side: CCW (t5 < 0) = stepped triangle EXP_LFO_CCW_STEPS (5 levels, up then down); CW (t5 > 0) = downward staircase EXP_LFO_STEPS (+1 / 0 / -1,
+// Shape by side: CCW (t5 < 0) = triangle, bipolar -1..+1; CW (t5 > 0) = downward staircase EXP_LFO_STEPS (+1 / 0 / -1,
 // equal thirds of the cycle, repeating; 2026-10-28, was S&H). One shared LFO, per 8 kHz sample, free-running phase
 // (never reset by onsets). Law (armitage ARM_PWM_* / mnemonic MNEM_PRE_* travel):
 //   depth = min(u / EXP_LFO_DEPTH_FRAC, 1)                         (fade-in over the first 30 % of each side)
@@ -317,10 +317,6 @@ constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables: morph m sw
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
 // knob value), equal parts of the cycle, repeating. A square = { +1, -1 } with N 2.
-// K5 CCW shape (2026-10-28, replaces the triangle): 5 levels -1 / -0.5 / 0 / +0.5 / +1, stepping up then down
-// (alternating direction, a stepped triangle): 8 equal steps per cycle.
-constexpr int      EXP_LFO_CCW_N           = 8;
-constexpr float    EXP_LFO_CCW_STEPS[EXP_LFO_CCW_N] = { -1.f, -0.5f, 0.f, 0.5f, 1.f, 0.5f, 0.f, -0.5f };
 constexpr int      EXP_LFO_N_STEPS         = 3;
 constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };
 

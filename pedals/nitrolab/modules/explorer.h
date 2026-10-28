@@ -142,7 +142,7 @@
 //             EXP_PS_DEC_2POLE, rise one-pole); step / coefficient recomputed when T_eff changes.
 //   K5 LFO (LfoUpdate, per 8 kHz sample after PsUpdate; one shared LFO, free-running phase, never reset by onsets):
 //     t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|; noon = off (applied 0 exactly -> identical to no LFO).
-//     shape: CCW stepped triangle (5 levels -1..+1, up then down, EXP_LFO_CCW_STEPS) | CW downward staircase EXP_LFO_STEPS +1 / 0 / -1 (100 / 50 / 0 %),
+//     shape: CCW triangle (bipolar +-1) | CW downward staircase EXP_LFO_STEPS +1 / 0 / -1 (100 / 50 / 0 %),
 //             equal thirds of the cycle, repeating (2026-10-28, was S&H)
 //     depth = min(u / 0.3, 1) (EXP_LFO_DEPTH_FRAC), rate = 0.2 (20 / 0.2)^u Hz (EXP_LFO_HZ_MIN / MAX)
 //     applied l = depth shape, one-pole slid 1 ms (EXP_ENV_FM_SLIDE_MS, lands exactly): the steps don't click;
@@ -566,7 +566,7 @@ class Explorer : public Module {
     int   tgt;        // K5 target: 2 = K2 parameter (CCW), 3 = K3 parameter (CW), 0 = none (noon) (LOOPING only)
     float T, fce;     // ONE-SHOT (env = g): time T (s, smoothed t4), applied fc (Hz; UP dampener, MID lowpass,
                       // 0 on SW1 DOWN); LOOPING: 0
-    int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 stepped triangle (CCW), 2 staircase (CW); LOOPING: 0
+    int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 staircase (CW); LOOPING: 0
     float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
     bool  mute;
   };
@@ -870,7 +870,7 @@ class Explorer : public Module {
 
   // ONE-SHOT instance (SW3 MID): K5 LFO, per 8 kHz sample (after PsUpdate). t5 = 2 k5s_ - 1, u = |t5|.
   //   depth = min(u / EXP_LFO_DEPTH_FRAC, 1), rate = EXP_LFO_HZ_MIN (EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)^u (recomputed
-  //   only when u moved). Free-running phase lfo_ph_ in [0, 1) (never reset). Shape: t5 < 0 stepped triangle (EXP_LFO_CCW_STEPS; was a triangle)
+  //   only when u moved). Free-running phase lfo_ph_ in [0, 1) (never reset). Shape: t5 < 0 triangle
   //   tri = 1 - 4 |frac(ph + 0.25) - 0.5| (0 at ph = 0, rising, +-1), t5 > 0 the downward staircase EXP_LFO_STEPS
   //   (+1 / 0 / -1 = 100 / 50 / 0 %, equal thirds of the cycle, repeating; 2026-10-28, was S&H), t5 == 0 nothing (0).
   //   The steps land through the slide below (1 ms), no click. Applied l = depth shape, one-pole slid
@@ -887,10 +887,10 @@ class Explorer : public Module {
     lfo_ph_ += lfo_inc_;
     if (lfo_ph_ >= 1.f) lfo_ph_ -= 1.f;
     float w = 0.f;
-    if (t5 < 0.f) {                              // CCW: stepped triangle, 5 levels up and down (EXP_LFO_CCW_STEPS)
-      int st = (int)(lfo_ph_ * (float)EXP_LFO_CCW_N);
-      if (st > EXP_LFO_CCW_N - 1) st = EXP_LFO_CCW_N - 1;
-      w = EXP_LFO_CCW_STEPS[st];
+    if (t5 < 0.f) {
+      float x = lfo_ph_ + 0.25f;
+      if (x >= 1.f) x -= 1.f;
+      w = 1.f - 4.f * fabsf(x - 0.5f);
     } else if (t5 > 0.f) {                       // CW: downward staircase, EXP_LFO_STEPS equal steps per cycle
       int st = (int)(lfo_ph_ * (float)EXP_LFO_N_STEPS);
       if (st > EXP_LFO_N_STEPS - 1) st = EXP_LFO_N_STEPS - 1;
