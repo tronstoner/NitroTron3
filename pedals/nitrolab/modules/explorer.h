@@ -905,7 +905,7 @@ class Explorer : public Module {
   inline float LfoO2(int m) const {
     using namespace explorer_k;
     if (m == kFM) return lfo_s_ * (EXP_LFO_FB_SWING / EXP_FBFM_FB_MAX);
-    if (m == kWT) return lfo_s_ * EXP_LFO_MORPH_SWING;
+    if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
     return 0.f;
   }
 
@@ -1057,7 +1057,10 @@ class Explorer : public Module {
       const int jj = (j < kLadSub) ? j : kLadSub - 1;
       const bool tg = tf_tgb_[jj];
       const float fc = tf_fcb_[jj];
-      if (fc != tf_set_fc_) { tf_svf_.Set(fc, EXP_TF_Q, sr_); tf_set_fc_ = fc; }
+      // Q: SW3 MID with EXP_TF_Q_ON_K5 = K5 (smoothed): EXP_TF_Q_MIN (EXP_TF_Q_MAX / EXP_TF_Q_MIN)^k5, else EXP_TF_Q.
+      const float qv = (!loop_ && EXP_TF_Q_ON_K5) ? EXP_TF_Q_MIN * expf(k5s_ * logf(EXP_TF_Q_MAX / EXP_TF_Q_MIN))
+                                                  : EXP_TF_Q;
+      if (fc != tf_set_fc_ || qv != tf_set_q_) { tf_svf_.Set(fc, qv, sr_); tf_set_fc_ = fc; tf_set_q_ = qv; }
       for (int q = 0; q < kFactor; q++, n++) {
         if (tg) {
           if (m <= 0.f) tf_svf_.Reset();         // starts from m = 0: cleared state (coefficients kept)
@@ -2048,6 +2051,7 @@ class Explorer : public Module {
   float lad_fcb_[kLadSub];         // cutoff per 8 kHz sample of the current block
   bool  lad_tgb_[kLadSub];         // mix target per 8 kHz sample (true = MID table model)
   // SW1 MID K3 2-pole lowpass (TfUpdate per 8 kHz sample, TabFilter per block; m slide = lad_step_)
+  float tf_set_q_ = 0.f;           // Q the SVF coefficients were last set for
   ExpSVF tf_svf_;                  // one TPT SVF stage, LP output (Q EXP_TF_Q)
   float tf_m_ = 0.f;               // mix m (0 = not run; 1 = LP only)
   float tf_lnr_ = 0.f;             // ln(EXP_TF_FMAX / EXP_TF_FMIN)

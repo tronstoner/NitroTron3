@@ -264,6 +264,9 @@ constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full C
 constexpr float EXP_TF_ENV_BOTTOM = 40.f;     // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: was EXP_TF_FMIN 250,
                                               // the decay did not close enough); the K3 knob range stays 250 Hz..16 kHz
 constexpr float EXP_TF_Q         = 0.5f;      // tables LP Q (2026-10-28: 0.707 flat -> 0.9 slightly wet -> 0.5 softer; 1.1 coloured too much in wavemorph)
+constexpr bool  EXP_TF_Q_ON_K5   = true;      // TEMP (2026-10-28): SW3 MID tables K5 = LP Q instead of the LFO (FM keeps the LFO)
+constexpr float EXP_TF_Q_MIN     = 0.3f;      // Q at K5 full CCW (soft, veiled)
+constexpr float EXP_TF_Q_MAX     = 3.0f;      // Q at K5 full CW (clear peak); exponential, noon ~0.95
 constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28: off again by ear; static open picks)
 
 // --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
