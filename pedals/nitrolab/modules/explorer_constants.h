@@ -234,6 +234,8 @@ constexpr float EXP_LAD_RES      = 0.0f;      // MoogLadder resonance (feedback 
 constexpr float EXP_LAD_DRIVE    = 1.8f;      // MoogLadder input gain (= Mode A LADDER_DRIVE, its lightest drive, at
                                               // noon..CW). Small-signal passband gain = drive: +5.1 dB vs the
                                               // unfiltered wet (1.0 = the block's neutral, unity).
+constexpr float EXP_LAD_TRIM     = 0.556f;    // FIXED post trim after the ladder (1 / 1.8 = -5.1 dB): passband level = the
+                                              // unfiltered wet / FM; the drive's saturation stays (fixed, not tied to a knob)
 constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder mix m on an SW1 family change
 
 // --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
