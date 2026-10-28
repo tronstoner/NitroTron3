@@ -263,7 +263,7 @@ constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full C
 constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full CW (practically open)
 constexpr float EXP_TF_ENV_BOTTOM = 60.f;     // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: 250 -> 40 -> 150;
                                               // the decay did not close enough); the K3 knob range stays 250 Hz..16 kHz
-constexpr float EXP_TF_ENV_BOTTOM_OCT = 2.32f; // the envelope bottom rises with K3: bottom = ENV_BOTTOM 2^(k3 this) (60 Hz CCW, ~134 noon, 300 CW)
+constexpr float EXP_TF_ENV_BOTTOM_OCT = 2.f; // the envelope bottom rises with K3: bottom = ENV_BOTTOM 2^(k3 this) (60 Hz CCW, ~134 noon, 300 CW)
 constexpr float EXP_TF_Q         = 1.5f;      // tables LP Q (2026-10-28: wet 2-pole, = K5 at ~2:00 in the Q test; 0.707 / 0.9 / 0.5 tried)
 constexpr float EXP_TB_SAT_DRIVE = 3.0f;      // tables: drive into tanh after the LP (2026-10-28, level cheat / compression)
 constexpr float EXP_TB_SAT_TRIM  = 0.6f;      // tables: FIXED post trim after the tanh (not 1/drive: the saturation stays)
@@ -315,7 +315,7 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side over which the depth fades in
 constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
 constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
-constexpr float    EXP_LFO_FB_SWING        = 0.75f;    // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5)
+constexpr float    EXP_LFO_FB_SWING        = 0.3f;     // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
 constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables: morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
