@@ -17,9 +17,9 @@
 //                          DOWN: model), K2 = tone (MID: morph),
 //                          K3 = dampener (UP / MID: per-band harmonic ceiling 150 Hz -> 4 kHz; DOWN: sweep),
 //                          SW2 = octave up / played / down;
-//                          K4 = glide to the K3 dampener fc per onset (SW1 UP / MID; inert on DOWN): CW starts
-//                          up to 3 oct above and closes down to the knob fc, CCW starts below and opens up,
-//                          noon off; offset full at 40 % of each side, glide 80 ms -> 2 s over the side;
+//                          K4 = pluck <-> swell on the K3 dampener fc per onset (SW1 UP / MID; inert on DOWN):
+//                          CCW pluck (onset at the K3 fc, decays to 150 Hz, 0.45 s at the end -> 60 s at noon),
+//                          noon plain K3, CW swell (onset at 150 Hz, rises to the K3 fc, 10 ms -> 36 s at the end);
 //                          K5 unused)
 // SW3 DOWN   = explorer   (the same module, second instance Explorer(true): generic K4 / K5 envelope modulation -
 //                          K4 = LOOPING envelope (triangle 0 -> 1 -> 0 ..., restarted per onset, ramp 4 s -> 30 ms,
@@ -66,7 +66,7 @@ Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 static constexpr int NL_MODE_EXPLORER_LOOP = NL_MODE_WAVEMORPH;
 
 Armitage armitage;
-Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 glide on the K3 dampener fc
+Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 pluck <-> swell on the K3 dampener fc
 Explorer explorer_loop(true);      // SW3 DOWN:   generic K4 / K5, looping envelope (tables shared, built by the first Init)
 Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_loop };
 
@@ -204,8 +204,8 @@ int main() {
         diag_stage = 0;
       } else if (diag_stage == 2) {
         // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
-        // offset), K3 dampener fc (knob), envelope (DOWN `loop`: e, K4 dir, K5 amount d + target; MID `gl`: glide
-        // r, offset A in octaves, time T in s, applied fc_eff in Hz; `gl -` on SW1 DOWN), mute, cpu
+        // offset), K3 dampener fc (knob), envelope (DOWN `loop`: e, K4 dir, K5 amount d + target; MID `ps`: pluck
+        // <-> swell g, side dec|rise, time T in s, applied fc_eff in Hz; `ps -` on SW1 DOWN), mute, cpu
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
@@ -216,11 +216,11 @@ int main() {
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
-        else if (d.sw1 != 2)                                  // SW3 MID: K4 glide on fc (r, A oct, T s, fc_eff Hz)
-          snprintf(env, sizeof(env), " gl r" D2F " A" D2F " T" D2F " fce %d", D2V(d.env), D2SV(d.A), D2V(d.T),
-                   (int)(d.fce + 0.5f));
+        else if (d.sw1 != 2)                                  // SW3 MID: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
+          snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " fce %d", D2V(d.env), d.dir < 0 ? "dec" : "rise",
+                   D2V(d.T), (int)(d.fce + 0.5f));
         else                                                  // SW3 MID, SW1 DOWN: K4 inert
-          snprintf(env, sizeof(env), " gl -");
+          snprintf(env, sizeof(env), " ps -");
         if (d.model == Explorer::kFM)                         // A = ratio r, B = feedback b
           hw.seed.PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
                             D2V(d.a), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);

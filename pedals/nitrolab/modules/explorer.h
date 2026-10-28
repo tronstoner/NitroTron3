@@ -1,7 +1,7 @@
 #pragma once
 //
-// explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 glide on the K3
-// dampener fc) and SW3 DOWN (LOOPING: generic K4 / K5 envelope modulation) on NitroLab: two instances of this class
+// explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 pluck <-> swell on
+// the K3 dampener fc) and SW3 DOWN (LOOPING: generic K4 / K5 envelope modulation) on NitroLab: two instances of this class
 // (constructor flag), sharing the read-only tables.
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
@@ -25,8 +25,8 @@
 //
 // K3 DAMPENER (SW1 UP / MID; not on DOWN): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
 //   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz), evaluated per audio block in
-//   DampUpdate (only when the smoothed K3 or its envelope offset moved; + the octave offset: SW3 MID the K4 glide,
-//   SW3 DOWN the K5-CW envelope, see K4 / K5).
+//   DampUpdate (only when the smoothed K3 or its envelope value moved; SW3 MID: scaled by the K4 pluck <-> swell g,
+//   SW3 DOWN: + the K5-CW envelope octave offset, see K4 / K5).
 //   Every per-band harmonic ceiling on f'_k (after SW2) becomes
 //   min(ceiling, fc); each band keeps its level and fundamental, loses only harmonics above fc:
 //     FM caps    L = min(4000, fc) in the FM index / feedback caps and the XBAND index cap (down to 0 = plain
@@ -92,23 +92,25 @@
 // K4 / K5 (two variants of this class, constructor flag: Explorer(false) = ONE-SHOT on SW3 MID, Explorer(true) =
 //   LOOPING on SW3 DOWN; everything else identical). Onset detector per 48 kHz input sample (EXP_ONSET_*,
 //   armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1 (both smoothed, land exactly).
-//  ONE-SHOT (SW3 MID) — K4 GLIDE TO THE KNOB VALUE, target fixed = the K3 dampener fc (SW1 UP / MID); SW1 DOWN: K4
-//   inert (offset 0, no model offsets); K5 unused. Per 8 kHz sample (GlideUpdate):
-//     r       each onset r = 1, one-pole toward 0, tau = T / 3.9 (EXP_ENV_TRAVEL_TAUS), snaps to exactly 0 at 0.02
-//             (98 %), holds 0; 0 before the first onset; runs regardless of K4 noon
-//     T       = 0.08 s (2 / 0.08)^|t4| (EXP_GENV_T_MIN_S / T_MAX_S): 80 ms just off noon -> 2 s at the ends
-//     A       = sign(t4) 3 min(|t4| / 0.4, 1) octaves (EXP_GENV_OCT_MAX / AMT_FRAC; noon 0), from the smoothed t4:
-//             turning K4 through noon mid-glide passes continuously through the knob fc
-//     applied log2 fc = log2 fc_knob + A r_s, clamped [150, 4000] Hz; r_s = r one-pole slid (1 ms, lands exactly):
-//             a pluck's jump to the offset is a 1 ms slide. CW = starts above, closes down to the knob fc; CCW =
-//             starts below, opens up to it. Per audio block (DampUpdate) from the block's first r_s; re-pick when
-//             fc moved, active slots only (as the K3 knob).
+//  ONE-SHOT (SW3 MID) — K4 PLUCK <-> SWELL, target fixed = the K3 dampener fc (SW1 UP / MID); SW1 DOWN: K4 inert
+//   (fc = the knob, no model offsets); K5 unused. Per 8 kHz sample (PsUpdate), g in [0, 1]:
+//     applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz (g = 1: the K3 value,
+//             g = 0: the bottom); g_s = g one-pole slid (1 ms, lands exactly). Per audio block (DampUpdate) from
+//             the block's first g_s; re-pick when fc moved, active slots only (as the K3 knob).
+//     CCW (t4 < 0)  DECAY: target 0, T = 0.45 s (60 / 0.45)^(1 - |t4|) (EXP_PS_DEC_FAST_S / SLOW_S): 0.45 s at
+//             the end -> 60 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom)
+//     CW / noon (t4 >= 0)  RISE: target 1, T = 0.01 s (36 / 0.01)^|t4| (EXP_PS_RISE_FAST_S / SLOW_S): 10 ms at
+//             noon -> 36 s at the end; each onset with t4 > 0 g = 0 (swell from the bottom); exact noon: onsets
+//             do nothing (g goes / stays at 1 = plain K3)
+//     g one-pole toward the target, tau = T / 3.9 (EXP_ENV_TRAVEL_TAUS), snaps exactly to it within 0.02 (98 %),
+//             holds. Side / T / coefficient from the smoothed t4, recomputed when it moved. K4 turns never reset
+//             g (only target and T change, at once); only onsets do. g = 1 before the first onset.
 //  LOOPING (SW3 DOWN) — generic K4 / K5 envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
 //     LOOPING   each onset e = 0 rising; linear triangle 0 -> 1 -> 0 ..., reflecting at 0 / 1; one ramp
 //               T = 4 s (0.03 / 4)^s, s = max(0, (|t4| - 0.08) / 0.92).
 //     (ExpEnv also holds the former ONE-SHOT e law - each onset e = 0, one-pole rise to 1 over 36 s -> 450 ms -
-//     which SW3 MID ran before the glide; kept, not run.)
+//     which SW3 MID ran before the glide / pluck-swell; kept, not run.)
 //   applied v = dir e, dir = sign(t4) (CW up, CCW down); v = 0 at |t4| <= EXP_LOOP_PAD 0.08;
 //   v one-pole slid (1 ms, lands exactly): onset restarts and pad crossings glide.
 //   K5: d2 = max(-t5, 0) (CCW) on the K2 parameter, d3 = max(t5, 0) (CW) on the K3 parameter, noon off.
@@ -140,9 +142,9 @@
 //                    the zone's frames; DOWN: per model (see MODELS)
 //   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law;
 //                    DOWN: per model (see MODELS)
-//   K4  SW3 MID:     glide to the K3 fc per onset (SW1 UP / MID; DOWN inert): CW starts above (closes down),
-//                    CCW starts below (opens up), noon off; offset 0 -> 3 oct over 40 % of each side, glide
-//                    80 ms -> 2 s over the whole side
+//   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (SW1 UP / MID; DOWN inert): CCW = pluck (onset
+//                    opens to the K3 fc, decays to 150 Hz; 0.45 s at the end -> 60 s at noon), noon = plain K3,
+//                    CW = swell (onset drops to 150 Hz, rises to the K3 fc; 10 ms -> 36 s at the end)
 //       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
 //   K5  SW3 MID:     unused
 //       SW3 DOWN:    env target: CCW on K2's parameter, CW on K3's parameter; amount |2 k5 - 1| (noon off)
@@ -153,10 +155,10 @@
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 //
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
-// 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: none, its glide acts on fc only);
+// 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: none, its g acts on fc only);
 // stepped items from the raw knob.
-// DIAG second half: SW3 DOWN `loop e.. up|down|off d.. K2|K3|-`; SW3 MID `gl r.. A.. (oct) T.. (s) fce .. (Hz,
-// applied fc)`, `gl -` on SW1 DOWN.
+// DIAG second half: SW3 DOWN `loop e.. up|down|off d.. K2|K3|-`; SW3 MID `ps g.. dec|rise T.. (s) fce .. (Hz,
+// applied fc)`, `ps -` on SW1 DOWN.
 //
 // TABLES (SW1 MID; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*; built at Init into SDRAM,
 // int16, packed [frame][version][sample]): per zone F_z frames (frame 1 = the exact base wave), u = frame / (F_z - 1).
@@ -342,17 +344,18 @@ class Explorer : public Module {
     env_.Reset();
     mv_ = 0.f;
     mv_a_ = 1.f - expf(-1000.f / (EXP_ENV_FM_SLIDE_MS * sr8_));
-    o2_ = o3_ = 0.f;
+    o2_ = 0.f;
+    o3_ = loop_ ? 0.f : 1.f;                     // ONE-SHOT: o3_ = g_s (1 = the K3 value)
     ln_tau_ratio_  = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
     ln_loop_ratio_ = logf(EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S);
-    // ONE-SHOT K4 glide (GlideUpdate).
-    gr_ = gr_s_ = gl_A_ = 0.f;
-    gl_run_ = false;
-    gl_at_ = -1.f;
-    gl_T_ = EXP_GENV_T_MIN_S;
-    gl_c_ = 0.f;
-    ln_genv_ratio_ = logf(EXP_GENV_T_MAX_S / EXP_GENV_T_MIN_S);
-    inv_damp_oct_ = 1.f / log2f(EXP_DAMP_FMAX / EXP_DAMP_FMIN);
+    // ONE-SHOT K4 pluck <-> swell (PsUpdate): g = 1 before the first onset.
+    ps_g_ = ps_gs_ = 1.f;
+    ps_t4_ = 2.f;                                // forces the coefficient on the first sample
+    ps_rise_ = true;
+    ps_T_ = EXP_PS_RISE_FAST_S;
+    ps_c_ = 0.f;
+    ln_ps_dec_  = logf(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S);
+    ln_ps_rise_ = logf(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S);
     // Live follower (parked, EXP_FOLLOW_ENABLE; 48 kHz, raw input).
     fol_.Init(sr);
     fol_.SetCutoff(EXP_FOLLOW_HZ);
@@ -429,15 +432,16 @@ class Explorer : public Module {
       const float disc = (model == kFM) ? EXP_FM_RATIOS[rfmc_i_t_] : (float)ish_t_;
       const Params p = Derive(model, zone, k2, k3, disc, 0.f, 0.f);   // knob values (no envelope offset)
       const float t4 = 2.f * k4 - 1.f, t5 = 2.f * k5 - 1.f;
-      const bool gated = loop_ ? (fabsf(t4) <= EXP_LOOP_PAD) : (t4 == 0.f);
-      const int dir = gated ? 0 : (t4 > 0.f) ? 1 : -1;
+      int dir;                                   // LOOPING: K4 direction; ONE-SHOT: side (-1 decay, +1 rise)
+      if (loop_) dir = (fabsf(t4) <= EXP_LOOP_PAD) ? 0 : (t4 > 0.f) ? 1 : -1;
+      else       dir = (t4 < 0.f) ? -1 : 1;
       const int tgt = (t5 < 0.f) ? 2 : (t5 > 0.f) ? 3 : 0;
       if (loop_)
         DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
-                     env_.g, dir, fabsf(t5), tgt, 0.f, 0.f, 0.f);
-      else                                       // ONE-SHOT glide: r, A (oct), T (s), fc_eff (applied, Hz)
+                     env_.g, dir, fabsf(t5), tgt, 0.f, 0.f);
+      else                                       // ONE-SHOT pluck <-> swell: g, side, T (s), fc_eff (applied, Hz)
         DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
-                     gr_, dir, 0.f, 0, gl_A_, gl_T_, (fam != kDown) ? damp_fc_ : 0.f);
+                     ps_g_, dir, 0.f, 0, ps_T_, (fam != kDown) ? damp_fc_ : 0.f);
     }
   }
 
@@ -452,12 +456,11 @@ class Explorer : public Module {
                       // WTABLE: frame position (F_z - 1) m / morph m)
     float fc;         // K3 dampener fc (Hz) on SW1 UP / MID, 0 on DOWN
     bool  loop;       // variant: false ONE-SHOT (SW3 MID), true LOOPING (SW3 DOWN)
-    float env;        // LOOPING: envelope e (0..1) at the snapshot (before gate / sign / slide); ONE-SHOT: glide r
-    int   dir;        // K4: +1 CW up, -1 CCW down, 0 off (noon / pad)
+    float env;        // LOOPING: envelope e (0..1) at the snapshot (before gate / sign / slide); ONE-SHOT: g
+    int   dir;        // LOOPING K4: +1 CW up, -1 CCW down, 0 off (pad); ONE-SHOT: +1 rise (CW / noon), -1 decay
     float d;          // K5 amount |2 k5 - 1|
     int   tgt;        // K5 target: 2 = K2 parameter (CCW), 3 = K3 parameter (CW), 0 = none (noon) (LOOPING only)
-    float A, T, fce;  // ONE-SHOT glide (env = r): offset A (octaves, smoothed t4), time T (s), applied fc (Hz;
-                      // 0 on SW1 DOWN); LOOPING: 0
+    float T, fce;     // ONE-SHOT (env = g): time T (s, smoothed t4), applied fc (Hz; 0 on SW1 DOWN); LOOPING: 0
     bool  mute;
   };
   void Activate() override {
@@ -540,7 +543,7 @@ class Explorer : public Module {
       }
       const bool fading = (mfade_n_ > 0);
       // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
-      // ONE-SHOT: o3_ = the glide (dampener fc only, DampUpdate) -> no model offsets (K4 inert on SW1 DOWN).
+      // ONE-SHOT: o3_ = g_s (dampener fc only, DampUpdate) -> no model offsets (K4 inert on SW1 DOWN).
       const float d3 = loop_ ? o3_ : 0.f;
       pn_ = Derive(var_ >> 6, var_ & 63, k2s_, k3s_, DiscOf(var_ >> 6), o2_, d3);
       if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, k3s_, DiscOf(vfrom_ >> 6), o2_, d3);
@@ -668,7 +671,7 @@ class Explorer : public Module {
   //   v_target = dir e (dir = sign(t4)); 0 at t4 == 0 (ONE-SHOT) / |t4| <= EXP_LOOP_PAD (LOOPING).
   //   mv_ = one-pole (tau EXP_ENV_FM_SLIDE_MS) toward v_target, lands exactly (EXP_CTRL_SNAP).
   //   o2_ = max(-t5, 0) mv_ (K2 parameter), o3_ = max(t5, 0) mv_ (K3 parameter); knob units (1 = full span).
-  // ONE-SHOT instance (loop_ = false): GlideUpdate instead (K4 glide on the K3 dampener fc, K5 unused).
+  // ONE-SHOT instance (loop_ = false): PsUpdate instead (K4 pluck <-> swell on the K3 dampener fc, K5 unused).
   inline void EnvUpdate() {
     using namespace explorer_k;
     const bool onset = on_pending_;
@@ -676,7 +679,7 @@ class Explorer : public Module {
     if (onset) on_seen_ = true;
     const float t4 = 2.f * k4s_ - 1.f;
     const float am = fabsf(t4);
-    if (!loop_) { GlideUpdate(onset, t4, am); return; }
+    if (!loop_) { PsUpdate(onset, t4); return; }
     env_.Step(loop_, onset, on_seen_, am, sr8_, ln_tau_ratio_, ln_loop_ratio_);
     float e = env_.g;
     if (EXP_FOLLOW_ENABLE) {                     // parked live follower on top: e + DEPTH min(follower, 1)
@@ -692,40 +695,45 @@ class Explorer : public Module {
     o3_ = (t5 > 0.f) ?  t5 * mv_ : 0.f;
   }
 
-  // ONE-SHOT instance (SW3 MID): K4 "glide to the knob value" on the K3 dampener fc, per 8 kHz sample.
-  //   r (1 -> 0): onset -> r = 1, then one-pole toward 0, tau = T / EXP_ENV_TRAVEL_TAUS, snaps to exactly 0 at
-  //     r <= 0.02 (98 % of the travel), holds 0 until the next onset; 0 before the first onset.
-  //     T = GENV_T_MIN (GENV_T_MAX / GENV_T_MIN)^am, am = |t4| (coefficient recomputed when am moves).
-  //   gr_s_ = r one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
-  //   A = sign(t4) GENV_OCT_MAX min(am / GENV_AMT_FRAC, 1) octaves, from the smoothed t4 (continuous through noon).
-  //   o3_ = A gr_s_ / log2(DAMP_FMAX / DAMP_FMIN) (DampUpdate: log2 fc = log2 fc_knob + A gr_s_, clamped);
-  //   0 while SW1 DOWN runs (K4 inert there). o2_ = 0 (K5 unused).
-  inline void GlideUpdate(bool onset, float t4, float am) {
+  // ONE-SHOT instance (SW3 MID): K4 "pluck <-> swell" on the K3 dampener fc, per 8 kHz sample.
+  //   Side from the smoothed t4: t4 < 0 DECAY (target 0, T = PS_DEC_FAST (PS_DEC_SLOW / PS_DEC_FAST)^(1 - |t4|)),
+  //   t4 >= 0 RISE (target 1, T = PS_RISE_FAST (PS_RISE_SLOW / PS_RISE_FAST)^|t4|); side, T and the coefficient
+  //   recomputed only when t4 moved. Onset: DECAY g = 1, RISE with t4 > 0 g = 0, exact noon nothing.
+  //   g one-pole toward the target, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
+  //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T.
+  //   ps_gs_ = g one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
+  //   o3_ = ps_gs_ (DampUpdate: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
+  //   (K4 inert there). o2_ = 0 (K5 unused).
+  inline void PsUpdate(bool onset, float t4) {
     using namespace explorer_k;
-    if (am != gl_at_) {
-      gl_at_ = am;
-      gl_T_ = EXP_GENV_T_MIN_S * expf(am * ln_genv_ratio_);
-      gl_c_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (gl_T_ * sr8_));
+    if (t4 != ps_t4_) {
+      ps_t4_ = t4;
+      const float am = fabsf(t4);
+      ps_rise_ = (t4 >= 0.f);
+      ps_T_ = ps_rise_ ? EXP_PS_RISE_FAST_S * expf(am * ln_ps_rise_)
+                       : EXP_PS_DEC_FAST_S * expf((1.f - am) * ln_ps_dec_);
+      ps_c_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (ps_T_ * sr8_));
     }
-    if (onset) { gr_ = 1.f; gl_run_ = true; }
-    if (gl_run_) {
-      float r = gr_ - gl_c_ * gr_;
-      if (r <= 0.02f) { r = 0.f; gl_run_ = false; }
-      gr_ = r;
+    const float tg = ps_rise_ ? 1.f : 0.f;
+    if (onset) {
+      if (!ps_rise_)      ps_g_ = 1.f;           // DECAY: pluck from the K3 value
+      else if (t4 > 0.f)  ps_g_ = 0.f;           // RISE: swell from the bottom (exact noon: nothing)
     }
-    gr_s_ += mv_a_ * (gr_ - gr_s_);
-    if (fabsf(gr_ - gr_s_) < EXP_CTRL_SNAP) gr_s_ = gr_;
-    float amt = am * (1.f / EXP_GENV_AMT_FRAC);
-    if (amt > 1.f) amt = 1.f;
-    const float A = (t4 < 0.f) ? -EXP_GENV_OCT_MAX * amt : EXP_GENV_OCT_MAX * amt;   // t4 = 0 -> 0
-    gl_A_ = A;
+    if (ps_g_ != tg) {
+      float g = ps_g_ + ps_c_ * (tg - ps_g_);
+      if (fabsf(tg - g) <= 0.02f) g = tg;
+      ps_g_ = g;
+    }
+    ps_gs_ += mv_a_ * (ps_g_ - ps_gs_);
+    if (fabsf(ps_g_ - ps_gs_) < EXP_CTRL_SNAP) ps_gs_ = ps_g_;
     o2_ = 0.f;
-    o3_ = ((var_ >> 6) >= kHARM) ? 0.f : A * gr_s_ * inv_damp_oct_;
+    o3_ = ((var_ >> 6) >= kHARM) ? 1.f : ps_gs_;
   }
 
-  // K3 dampener, once per audio block from the smoothed K3 and the K3 envelope offset o3_ (its value at the block
+  // K3 dampener, once per audio block from the smoothed K3 and the K3 envelope value o3_ (its value at the block
   // start; nothing when neither moved):
-  //   ln(fc / DAMP_FMIN) = k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) + o3_ ln(DAMP_FMAX / DAMP_FMIN) (octave offset),
+  //   LOOPING:  ln(fc / DAMP_FMIN) = k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) + o3_ ln(DAMP_FMAX / DAMP_FMIN) (octave
+  //             offset); ONE-SHOT: ln(fc / DAMP_FMIN) = o3_ k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) (o3_ = g_s);
   //   clamped to [0, ln(FMAX / FMIN)] (exactly DAMP_FMAX / DAMP_FMIN at the ends); hc_fold_ = min(FOLD_LIMIT_HZ, fc)
   //   is the L the UP models' caps read (ShapeK); the table blend / picks and bit-table picks follow (Repick), only
   //   for the SW2 slots running or about to run (og_ / og_t_ != 0); a slot re-picks when it starts (pick_fc_).
@@ -737,7 +745,8 @@ class Explorer : public Module {
       damp_k_ = k;
       damp_o_ = om;
       float lf = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
-      lf += om * damp_lnr_;
+      if (loop_) lf += om * damp_lnr_;
+      else       lf *= om;
       damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
       hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
     }
@@ -1539,7 +1548,7 @@ class Explorer : public Module {
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
                     int sw1, int oct, int model, int zone, float a, float b, float fc, float env,
-                    int dir, float d, int tgt, float gA, float gT, float fce) {
+                    int dir, float d, int tgt, float gT, float fce) {
     using namespace explorer_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -1554,7 +1563,7 @@ class Explorer : public Module {
     s.dir = dir;
     s.d = d;
     s.tgt = tgt;
-    s.A = gA; s.T = gT; s.fce = fce;
+    s.T = gT; s.fce = fce;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1706,7 +1715,7 @@ class Explorer : public Module {
   volatile float k4_t_ = 0.5f, k5_t_ = 0.5f;
   // K3 dampener (per block, DampUpdate)
   float damp_k_ = -1.f;            // smoothed K3 the ceilings / picks were computed for
-  float damp_o_ = 0.f;             // ... and the K3 envelope offset o3_
+  float damp_o_ = 0.f;             // ... and the K3 envelope value o3_
   float pick_fc_[kSlots] = { -1.f, -1.f, -1.f };   // fc each slot's picks were made for (-1 = none)
   float damp_fc_ = 4000.f;         // fc (Hz)
   float damp_lnr_ = 0.f;           // ln(DAMP_FMAX / DAMP_FMIN)
@@ -1721,19 +1730,19 @@ class Explorer : public Module {
   ExpEnv env_;                     // envelope e (ONE-SHOT / LOOPING by loop_)
   float mv_ = 0.f;                 // applied v = dir e (gated), slid (1 ms one-pole, 8 kHz)
   float mv_a_ = 0.f;               // its coefficient (tau EXP_ENV_FM_SLIDE_MS)
-  float o2_ = 0.f, o3_ = 0.f;      // envelope offsets on the K2 / K3 parameter (knob units, 1 = full span)
+  float o2_ = 0.f, o3_ = 0.f;      // LOOPING: envelope offsets on the K2 / K3 parameter (knob units, 1 = full
+                                   // span); ONE-SHOT: o2_ = 0, o3_ = g_s (fc scale, 1 = the K3 value)
   float ln_tau_ratio_ = 0.f;       // ln(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)
   float ln_loop_ratio_ = 0.f;      // ln(EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S)
-  // ONE-SHOT K4 glide (GlideUpdate, loop_ = false)
-  volatile float gr_ = 0.f;        // r (1 -> 0 after an onset, 0 at rest)
-  float gr_s_ = 0.f;               // r slid (1 ms one-pole, coefficient mv_a_)
-  bool  gl_run_ = false;           // r decaying
-  float gl_at_ = -1.f;             // |t4| the coefficient was computed for
-  volatile float gl_T_ = 0.08f;    // glide time T (s)
-  float gl_c_ = 0.f;               // one-pole coefficient (tau = T / EXP_ENV_TRAVEL_TAUS)
-  volatile float gl_A_ = 0.f;      // offset A (octaves of fc), from the smoothed t4
-  float ln_genv_ratio_ = 0.f;      // ln(EXP_GENV_T_MAX_S / EXP_GENV_T_MIN_S)
-  float inv_damp_oct_ = 0.2f;      // 1 / log2(DAMP_FMAX / DAMP_FMIN): octaves -> o3_ (full-span units)
+  // ONE-SHOT K4 pluck <-> swell (PsUpdate, loop_ = false)
+  volatile float ps_g_ = 1.f;      // g (0 = bottom fc, 1 = the K3 value)
+  float ps_gs_ = 1.f;              // g slid (1 ms one-pole, coefficient mv_a_)
+  float ps_t4_ = 2.f;              // t4 the side / T / coefficient were computed for
+  bool  ps_rise_ = true;           // side: true RISE (t4 >= 0, target 1), false DECAY (t4 < 0, target 0)
+  volatile float ps_T_ = 0.01f;    // travel time T (s) of the current side
+  float ps_c_ = 0.f;               // one-pole coefficient (tau = T / EXP_ENV_TRAVEL_TAUS)
+  float ln_ps_dec_ = 0.f;          // ln(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S)
+  float ln_ps_rise_ = 0.f;         // ln(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S)
   // Live follower (parked, EXP_FOLLOW_ENABLE)
   EnvFollower fol_;                // rectifier + 4-pole LP, 48 kHz raw input
   float fol_y_ = 0.f;              // follower output, latest 48 kHz sample

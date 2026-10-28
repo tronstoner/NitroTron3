@@ -210,22 +210,24 @@ constexpr float EXP_DAMP_CURVE    = 0.5f;     // exponent on k3 (2026-10-28; 1 =
                                               // < 1 spends more of the knob at the top (noon: fc ~ 1.5 kHz, was 775 Hz)
 constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new discrete pick per band (see above)
 
-// --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = glide to the knob value (2026-10-28) --------------------
+// --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
 // Target fixed = the K3 dampener fc (SW1 UP FM / MID tables); SW1 DOWN: K4 inert. K5 unused (an LFO comes later).
-// t4 = 2 k4 - 1 (smoothed, lands exactly), noon = off. Per onset r = 1, then one-pole toward 0 with
-// tau = T / EXP_ENV_TRAVEL_TAUS, snaps to exactly 0 at r <= 0.02 (98 %), holds 0; r = 0 before the first onset.
-// A = sign(t4) GENV_OCT_MAX min(|t4| / GENV_AMT_FRAC, 1) octaves (CW starts above and closes to the knob fc, CCW
-// starts below and opens to it), T = GENV_T_MIN_S (GENV_T_MAX_S / GENV_T_MIN_S)^|t4|.
-// log2 fc = log2 fc_knob + A r_slid, clamped [EXP_DAMP_FMIN, EXP_DAMP_FMAX]; r_slid = r one-pole slid over
-// EXP_ENV_FM_SLIDE_MS (lands exactly), so the jump to the offset on a pluck is a 1 ms slide. Re-pick per block.
-constexpr float    EXP_GENV_OCT_MAX        = 3.0f;     // octaves; glide start offset from the knob fc at full amount
-constexpr float    EXP_GENV_AMT_FRAC       = 0.4f;     // |t4| at which the offset is full (40 % of each side's travel)
-constexpr float    EXP_GENV_T_MIN_S        = 0.08f;    // s; glide time T just off noon
-constexpr float    EXP_GENV_T_MAX_S        = 2.0f;     // s; glide time T at the knob ends (exponential over |t4|)
+// g in [0, 1] per 8 kHz sample: log2 fc = log2 EXP_DAMP_FMIN + g_s (log2 fc_knob - log2 EXP_DAMP_FMIN), clamped
+// [EXP_DAMP_FMIN, EXP_DAMP_FMAX] (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
+// EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
+//   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
+//   CW / noon     RISE:  target 1, T_r = RISE_FAST (RISE_SLOW / RISE_FAST)^|t4|; each onset with t4 > 0: g = 0
+//                 (noon: an onset does nothing).
+// One-pole toward the target, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
+// K4 turns never reset g (only the target side and T change, at once); only onsets do. g = 1 before the first onset.
+constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s; decay time T_d at K4 full CCW (pluck)
+constexpr float    EXP_PS_DEC_SLOW_S       = 60.0f;    // s; decay time T_d just CCW of noon (exponential over |t4|)
+constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)
+constexpr float    EXP_PS_RISE_SLOW_S      = 36.0f;    // s; rise time T_r at K4 full CW (swell)
 
 // --- SW3 DOWN (LOOPING instance, Explorer(true)): K4 / K5 = generic envelope modulation (2026-10-28) -----------
-// (The ONE-SHOT e law below is what SW3 MID ran before the glide; its code stays in ExpEnv, not run.)
-// Envelope e (0..1), driven by the onset detector (below, always run; also the SW3 MID glide's trigger). t4 = 2 k4 - 1 (smoothed, lands exactly),
+// (The ONE-SHOT e law below is what SW3 MID ran before the glide / pluck-swell; its code stays in ExpEnv, not run.)
+// Envelope e (0..1), driven by the onset detector (below, always run; also the SW3 MID pluck-swell's trigger). t4 = 2 k4 - 1 (smoothed, lands exactly),
 // dir = sign(t4) (CW = up, CCW = down). Before the first onset e = 0. The envelope runs independently of noon;
 // K4 at noon (ONE-SHOT: t4 == 0; LOOPING: |t4| <= EXP_LOOP_PAD) only gates the APPLIED value to 0.
 //   ONE-SHOT: each onset e = 0, one-pole rise toward 1, tau = travel / EXP_ENV_TRAVEL_TAUS, snaps to 1 at 0.98,
