@@ -277,7 +277,7 @@ constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28
 // EXP_LAD_*), NOT the tables' dampener; SW1 DOWN: K4 inert.
 // K5 = LFO (below). g in [0, 1] per 8 kHz sample: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN), clamped
 // [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_TF_*, 250 Hz..16 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
-// EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
+// EXP_PS_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
 //   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
 //                 EXP_PS_DEC_2POLE: 2-pole toward 0 (two equal one-poles, tau T / EXP_PS_DEC_2P_TAUS each: g = (1 + t/tau)
 //                 e^(-t/tau), rounded start, 98 % at T, snaps within 0.02); else one-pole; EXP_PS_DEC_LINEAR: linear.
@@ -287,6 +287,7 @@ constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28
 // K4 turns never reset g (only the target side and T change, at once); only onsets do. g = 1 before the first onset.
 // LEAVE: a side change clears "plucked", an onset that resets g sets it; unplucked T = max(T_side, EXP_PS_LEAVE_S)
 // (no near-jump when K4 changes side while the value rests), plucked T = T_side.
+constexpr float    EXP_PS_SLIDE_MS         = 5.0f;     // ms (2026-10-28: was EXP_ENV_FM_SLIDE_MS 1 ms; clicks between short notes); one-pole tau (8 kHz) on the applied g_s, lands exactly
 constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s (back to 0.45 with the one-pole decay; 1.0 + linear was not snappy); decay time T_d at K4 full CCW (pluck)
 constexpr bool     EXP_PS_DEC_2POLE        = true;     // decay shape D (2026-10-28): 2-pole, rounded start, still snappy (false: one-pole)
 constexpr float    EXP_PS_DEC_2P_TAUS      = 5.834f;   // per-stage taus per travel: (1 + x) e^-x = 0.02 at x = 5.834 (98 % at T)

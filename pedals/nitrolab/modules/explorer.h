@@ -49,8 +49,8 @@
 //   it starts from m = 0; m = 0: not run (SW1 UP / DOWN cost nothing).
 //
 // K3 DAMPENER (SW1 UP and MID; DOWN: none): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
-//   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz), evaluated per audio block in
-//   DampUpdate. UP (FM caps): when the smoothed K3 or its envelope value moved; SW3 MID: scaled by the K4 pluck <->
+//   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz). UP (FM caps): per 8 kHz sample
+//   in DampFmUpdate, when the smoothed K3 or its envelope value moved; SW3 MID: scaled by the K4 pluck <->
 //   swell g (both instances; retired LOOPING: + the K5-CW envelope octave offset), see K4 / K5. MID (tables; back 2026-10-28 late, as before
 //   the ladder): from the smoothed K3 ONLY - NOT modulated (the envelope moves the 2-pole LP instead).
 //   Every per-band harmonic ceiling on f'_k (after SW2) becomes
@@ -157,10 +157,10 @@
 //   (both smoothed, land exactly).
 //  ONE-SHOT (SW3 MID and FM LAB) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the index fc, SW1 MID the 2-pole
 //   LP cutoff (not the tables' dampener); SW1 DOWN: K4 inert (no model offsets); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
-//     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per audio block
-//          (DampUpdate) from the block's first g_s (as the K3 knob).
+//     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per 8 kHz sample
+//          (DampFmUpdate).
 //     MID: LP log2 fc = log2 250 + g_s (log2 fc_f_knob - log2 250), [250, 16000] Hz, per 8 kHz sample (TfUpdate).
-//     g = 1: the K3 value, g = 0: the bottom; g_s = g one-pole slid (1 ms, lands exactly).
+//     g = 1: the K3 value, g = 0: the bottom; g_s = g one-pole slid (EXP_PS_SLIDE_MS 5 ms, lands exactly).
 //     CCW (t4 < 0)  DECAY: target 0, T = 1 s (8 / 1)^(1 - |t4|) (EXP_PS_DEC_FAST_S / SLOW_S): 1 s at the end
 //             -> 8 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom). LINEAR in g
 //             (constant speed in octaves): g -= 1 / (T sr8) per sample from wherever it is (1 -> 0 in T), clamps
@@ -187,7 +187,7 @@
 //       UP FM LAB          the zone's K2 parameter, after the caps (see FM LAB)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
-//     K4 acts on fc (DampUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
+//     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
 //  LOOPING (RETIRED 2026-10-28: only with EXP_LOOP_ENABLE, then on SW3 DOWN instead of FM LAB) — generic K4 / K5
 //   envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
@@ -201,7 +201,7 @@
 //   MODULATION, in the parameter's own unit, knob = the start: p = clamp(p_knob + d v span, natural range):
 //     UP FM          K2 feedback b: span EXP_FBFM_FB_MAX (1.5), [0, FB_MAX]; XBAND: K2 target does nothing
 //     UP             K3 dampener fc: log2 fc + d3 v log2(4000 / 150) octaves, [150, 4000] Hz (the sqrt curve on the
-//                    knob side only); per audio block from the block's first v (DampUpdate)
+//                    knob side only); per 8 kHz sample (DampFmUpdate)
 //     MID            K3 2-pole LP cutoff: log2 fc_f + d3 v log2(16000 / 250) octaves, [250, 16000] Hz; per 8 kHz
 //                    sample (TfUpdate). The tables' dampener: not modulated.
 //     MID tables     K2 morph m: span 1, [0, 1]                 (parked BITTAB: K2 / K3 shape not modulated)
@@ -412,7 +412,7 @@ class Explorer : public Module {
     }
     for (int o = 0; o < kSlots; o++)                     // open table blend (fc = EXP_DAMP_FMAX); DampUpdate recomputes
       for (int k = 0; k < kBands; k++) BlendPick(EXP_TB_FMAX * ifp_[o][k], tblo_[o][k], tbx_[o][k]);
-    damp_k_ = -1.f;                              // forces DampUpdate on the first block
+    damp_k_ = -1.f;                              // forces DampFmUpdate on the first sample
     damp_o_ = 0.f;
     tpk_k_ = -1.f;                               // forces the tables' (unmodulated) dampener fc on the first block
     tpk_fc_ = EXP_DAMP_FMAX;
@@ -497,6 +497,7 @@ class Explorer : public Module {
     env_.Reset();
     mv_ = 0.f;
     mv_a_ = 1.f - expf(-1000.f / (EXP_ENV_FM_SLIDE_MS * sr8_));
+    ps_a_ = 1.f - expf(-1000.f / (EXP_PS_SLIDE_MS * sr8_));
     o2_ = 0.f;
     o3_ = loop_ ? 0.f : 1.f;                     // ONE-SHOT: o3_ = g_s (1 = the K3 value)
     ln_tau_ratio_  = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
@@ -663,7 +664,7 @@ class Explorer : public Module {
     using namespace explorer_k;
     return (k3 >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(DampCurve(k3) * logf(EXP_DAMP_FMAX / EXP_DAMP_FMIN));
   }
-  // k3^EXP_DAMP_CURVE (0 at k3 <= 0; sqrtf for the 0.5 default). Per block only (DampUpdate), and DIAG.
+  // k3^EXP_DAMP_CURVE (0 at k3 <= 0; sqrtf for the 0.5 default). Per 8 kHz sample while the FM cap inputs move (DampFmUpdate), and DIAG.
   static inline float DampCurve(float k3) {
     using namespace explorer_k;
     if (k3 <= 0.f) return 0.f;
@@ -707,7 +708,7 @@ class Explorer : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     using namespace explorer_k;
     const float ca = ctrl_a_;
-    DampUpdate();                                // K3 dampener: UP caps (smoothed K3 + o3), table picks (smoothed K3)
+    DampUpdate();                                // K3 dampener: table picks (smoothed K3), per block
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       for (size_t j = 0; j < kFactor; j++) {     // onset detector (+ parked live follower), 48 kHz, pre-decimator
         OnsetDetect(in[i + j]);
@@ -722,6 +723,7 @@ class Explorer : public Module {
       k5s_ += (k5_t_ - k5s_) * ca;
       if (fabsf(k5_t_ - k5s_) < EXP_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: no target)
       EnvUpdate();                               // envelope e -> slid v -> offsets o2_ / o3_ (consumes the onset flag)
+      DampFmUpdate();                            // K3 dampener UP caps (smoothed K3 + o3 + LFO), per 8 kHz sample
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
       rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
       rfmc_.Tick();
@@ -756,7 +758,7 @@ class Explorer : public Module {
         lab_trk_ = IsLabAcc(var_ >> 6) || (fading && IsLabAcc(vfrom_ >> 6));
       }
       // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
-      // ONE-SHOT: o3_ = g_s (UP dampener fc / MID 2-pole LP fc only: DampUpdate / TfUpdate) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
+      // ONE-SHOT: o3_ = g_s (UP dampener fc / MID 2-pole LP fc only: DampFmUpdate / TfUpdate) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
       // offset is the K5 LFO's, per model (LfoO2: FM feedback / table morph, 0 elsewhere), so a model crossfade
       // gives each side its own unit. LFO off (noon): exactly 0 -> Derive identical to the knob value.
       const float d3 = loop_ ? o3_ : 0.f;
@@ -923,8 +925,8 @@ class Explorer : public Module {
   //   DECAY: g 2-pole toward 0 (EXP_PS_DEC_2POLE; else one-pole / EXP_PS_DEC_LINEAR linear), snaps to 0 within 0.02. RISE: g one-pole
   //   toward 1. tau = T_eff / EXP_ENV_TRAVEL_TAUS, snaps exactly to the target within 0.02 (98 %), holds.
   //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T_eff.
-  //   ps_gs_ = g one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
-  //   o3_ = ps_gs_ (DampUpdate UP / TfUpdate MID: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
+  //   ps_gs_ = g one-pole slid (tau EXP_PS_SLIDE_MS, coefficient ps_a_), lands exactly.
+  //   o3_ = ps_gs_ (DampFmUpdate UP / TfUpdate MID: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
   //   (K4 inert there). o2_ = 0 (the K5 LFO offset goes to Derive via LfoO2).
   inline void PsUpdate(bool onset, float t4) {
     using namespace explorer_k;
@@ -968,7 +970,7 @@ class Explorer : public Module {
       ps_g_ = g;
     }
     if (ps_rise_ || ps_g_ == 0.f) ps_x1_ = ps_g_;   // 2-pole decay entered from rest starts at the current value
-    ps_gs_ += mv_a_ * (ps_g_ - ps_gs_);
+    ps_gs_ += ps_a_ * (ps_g_ - ps_gs_);
     if (fabsf(ps_g_ - ps_gs_) < EXP_CTRL_SNAP) ps_gs_ = ps_g_;
     o2_ = 0.f;
     o3_ = IsDownModel(var_ >> 6) ? 1.f : ps_gs_;
@@ -1101,34 +1103,43 @@ class Explorer : public Module {
     return pm - floorf(pm);
   }
 
-  // K3 dampener, once per audio block (nothing when its inputs did not move):
-  //   UP (FM caps), from the smoothed K3 and the K3 envelope value o3_ (its value at the block start):
+  // K3 dampener UP (FM caps), per 8 kHz sample after EnvUpdate (nothing when its inputs did not move; 2026-10-28:
+  //   was per audio block from the block's first o3_ -> the index stepped at 1 ms block edges), from the smoothed K3,
+  //   the K3 envelope value o3_ and (ONE-SHOT) the K5 LFO lfo_s_:
   //     LOOPING:  ln(fc / DAMP_FMIN) = k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) + o3_ ln(DAMP_FMAX / DAMP_FMIN) (octave
   //               offset); ONE-SHOT: ln(fc / DAMP_FMIN) = o3_ k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) (o3_ = g_s);
   //     clamped to [0, ln(FMAX / FMIN)] (exactly DAMP_FMAX / DAMP_FMIN at the ends); hc_fold_ = min(FOLD_LIMIT_HZ, fc)
-  //     is the L the UP models' caps read (ShapeK).
-  //   MID (table / bit-table picks), from the smoothed K3 ONLY (not modulated; 2026-10-28 late, back as before the
-  //     ladder): tpk_fc_ = DampFc(k3) (sqrt law); the picks follow (Repick) only for the SW2 slots running or about
-  //     to run (og_ / og_t_ != 0); a slot re-picks when it starts (pick_fc_). Runs on every family (the picks are
-  //     read only on MID).
-  void DampUpdate() {
+  //     is the L the UP models' caps read (ShapeK). hc_fold_k_ (K3 knob alone) is recomputed only when k3 moved.
+  void DampFmUpdate() {
     using namespace explorer_k;
     const float k = k3s_, om = o3_;
     const float lo = loop_ ? 0.f : lfo_s_;       // SW3 MID: the K5 LFO also swings the FM cutoff (2026-10-28)
     if (k != damp_k_ || om != damp_o_ || lo != damp_l_) {
+      const bool kmoved = (k != damp_k_);
       damp_k_ = k;
       damp_o_ = om;
       damp_l_ = lo;
-      float lf = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
+      const float lk = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
+      float lf = lk;
       if (loop_) lf += om * damp_lnr_;
       else       lf = lf * om + lo * (EXP_LFO_FM_FC_OCT * 0.6931472f);   // +- octaves on top of the envelope
       damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
       hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
       // K3 knob value alone (no envelope): the envelope's index floor uses it (MID)
-      const float lk = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
-      const float fk = (lk >= damp_lnr_) ? EXP_DAMP_FMAX : (lk <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lk);
-      hc_fold_k_ = loop_ ? hc_fold_ : ((fk < EXP_FOLD_LIMIT_HZ) ? fk : EXP_FOLD_LIMIT_HZ);
+      if (loop_) hc_fold_k_ = hc_fold_;
+      else if (kmoved) {
+        const float fk = (lk >= damp_lnr_) ? EXP_DAMP_FMAX : (lk <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lk);
+        hc_fold_k_ = (fk < EXP_FOLD_LIMIT_HZ) ? fk : EXP_FOLD_LIMIT_HZ;
+      }
     }
+  }
+  // K3 dampener, table part, once per audio block:
+  //   MID (table / bit-table picks), from the smoothed K3 ONLY (not modulated; 2026-10-28 late, back as before the
+  //     ladder): tpk_fc_ = DampFc(k3) (sqrt law); the picks follow (Repick) only for the SW2 slots running or about
+  //     to run (og_ / og_t_ != 0); a slot re-picks when it starts (pick_fc_). Runs on every family (the picks are
+  //     read only on MID).
+  void DampUpdate() {
+    const float k = k3s_;
     if (k != tpk_k_) {                           // tables: the knob value only
       tpk_k_ = k;
       tpk_fc_ = explorer_k::EXP_TB_DAMP_ENABLE ? DampFc(k) : explorer_k::EXP_DAMP_FMAX;   // off: static open picks
@@ -1333,7 +1344,7 @@ class Explorer : public Module {
   // the parameter's full natural range, so p = clamp(p_knob + o span, range) = the parameter at clamp(k + o, 0, 1)
   // on the knob's own law; the frequency shift keeps the sign of the knob t and modulates |t| (= g / log2(801),
   // g = log2(|s| / F0 + 1)); the interval semitones are modulated in Process (ish_ target), the K3 dampener in
-  // DampUpdate (fc, per block). XBAND: K2 inert, o2 unused.
+  // DampFmUpdate (fc, per 8 kHz sample). XBAND: K2 inert, o2 unused.
   static inline float Clamp01(float x) { return (x < 0.f) ? 0.f : (x > 1.f) ? 1.f : x; }
   Params Derive(int m, int zone, float k2, float k3, float disc, float o2, float o3) const {
     using namespace explorer_k;
@@ -2432,7 +2443,7 @@ class Explorer : public Module {
   int   diag_lab_z_ = -1;          // DIAG: lab zone of the last Controls (-1 = not the lab)
   float k4s_ = 0.5f, k5s_ = 0.5f;  // smoothed K4 (t4 = 2 k4s_ - 1), K5 (t5 = 2 k5s_ - 1)
   volatile float k4_t_ = 0.5f, k5_t_ = 0.5f;
-  // K3 dampener (per block, DampUpdate)
+  // K3 dampener (UP caps per 8 kHz sample, DampFmUpdate; table picks per block, DampUpdate)
   float damp_k_ = -1.f;            // smoothed K3 the ceilings / picks were computed for
   float damp_l_ = 0.f;             // K5 LFO value the FM cutoff was last computed for
   float damp_o_ = 0.f;             // ... and the K3 envelope value o3_
@@ -2480,7 +2491,8 @@ class Explorer : public Module {
   float ln_loop_ratio_ = 0.f;      // ln(EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S)
   // ONE-SHOT K4 pluck <-> swell (PsUpdate, loop_ = false)
   volatile float ps_g_ = 1.f;      // g (0 = bottom fc, 1 = the K3 value)
-  float ps_gs_ = 1.f;              // g slid (1 ms one-pole, coefficient mv_a_)
+  float ps_gs_ = 1.f;              // g slid (EXP_PS_SLIDE_MS one-pole, coefficient ps_a_)
+  float ps_a_ = 0.f;               // its coefficient (tau EXP_PS_SLIDE_MS)
   float ps_t4_ = 2.f;              // t4 the side / T / coefficient were computed for
   bool  ps_rise_ = true;           // side: true RISE (t4 >= 0, target 1), false DECAY (t4 < 0, target 0)
   float ps_Ts_ = 0.01f;            // travel time T_side (s) of the current side from |t4|
