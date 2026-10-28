@@ -136,7 +136,7 @@
 //             a side change passes through depth 0
 //     target fixed per family, +- around the knob, clamped (Derive's K2 offset o2, per model via LfoO2):
 //       UP FM ratio zones  feedback b = b_knob + 0.75 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
-//       MID tables         morph m = m_knob + 0.5 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
+//       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampUpdate / LadUpdate, o3_), K5 on feedback / morph (Derive, per sample): independent.
 //  LOOPING (SW3 DOWN) — generic K4 / K5 envelope modulation (discovery comparison):
@@ -183,7 +183,7 @@
 //                    (onset opens to the K3 fc, decays to the bottom 150 / 250 Hz; 0.45 s at the end -> 8 s at noon),
 //                    noon = plain K3, CW = swell (onset drops to the bottom, rises to the K3 fc; 10 ms -> 4 s)
 //       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
-//   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none): CCW
+//   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.15; XBAND / DOWN none): CCW
 //                    triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 % of each side,
 //                    rate 0.2 -> 20 Hz exponential over the side
 //       SW3 DOWN:    env target: CCW on K2's parameter, CW on K3's parameter (MID: the ladder cutoff); amount

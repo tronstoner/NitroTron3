@@ -22,7 +22,7 @@
 //                          CCW pluck (onset at the K3 fc, decays linearly in octaves to the bottom 150 / 250 Hz,
 //                          1 s at the end -> 8 s at noon), noon plain K3, CW swell (onset at the bottom, rises to the
 //                          K3 fc, 10 ms -> 4 s); after a K4 side change, until the next onset, travel >= 0.5 s;
-//                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none):
+//                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.15; XBAND / DOWN none):
 //                          CCW triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
 // SW3 DOWN   = explorer   (the same module, second instance Explorer(true): generic K4 / K5 envelope modulation -

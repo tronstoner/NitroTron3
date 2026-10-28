@@ -277,7 +277,7 @@ constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side 
 constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
 constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
 constexpr float    EXP_LFO_FB_SWING        = 0.75f;    // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5)
-constexpr float    EXP_LFO_MORPH_SWING     = 0.5f;     // MID tables: morph m swing at full depth (+-, m units 0..1)
+constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables: morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
 // knob value), equal parts of the cycle, repeating. A square = { +1, -1 } with N 2.
