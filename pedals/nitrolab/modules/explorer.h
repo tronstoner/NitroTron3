@@ -923,12 +923,14 @@ class Explorer : public Module {
   void DampUpdate() {
     using namespace explorer_k;
     const float k = k3s_, om = o3_;
-    if (k != damp_k_ || om != damp_o_) {
+    const float lo = loop_ ? 0.f : lfo_s_;       // SW3 MID: the K5 LFO also swings the FM cutoff (2026-10-28)
+    if (k != damp_k_ || om != damp_o_ || lo != damp_l_) {
       damp_k_ = k;
       damp_o_ = om;
+      damp_l_ = lo;
       float lf = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
       if (loop_) lf += om * damp_lnr_;
-      else       lf *= om;
+      else       lf = lf * om + lo * (EXP_LFO_FM_FC_OCT * 0.6931472f);   // +- octaves on top of the envelope
       damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
       hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
     }
@@ -2035,6 +2037,7 @@ class Explorer : public Module {
   volatile float k4_t_ = 0.5f, k5_t_ = 0.5f;
   // K3 dampener (per block, DampUpdate)
   float damp_k_ = -1.f;            // smoothed K3 the ceilings / picks were computed for
+  float damp_l_ = 0.f;             // K5 LFO value the FM cutoff was last computed for
   float damp_o_ = 0.f;             // ... and the K3 envelope value o3_
   float pick_fc_[kSlots] = { -1.f, -1.f, -1.f };   // tables' fc each slot's picks were made for (-1 = none)
   float tpk_k_ = -1.f;             // smoothed K3 the tables' fc was computed for
