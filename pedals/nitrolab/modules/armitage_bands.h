@@ -292,12 +292,16 @@ class ArmBand {
   // POG Down1, complex: complex square root (half phase) via half-angle
   // identities, |z| kept, sign continuation via down1_sign_. POG's Down1()
   // returns only the real part; the imaginary part is POG's own dn1i_.
+  // xh is normalised EXACTLY (2026-10-28): with the fast inv, xh overshot +-0.5 at every phase
+  // crossing of 0 / pi, c or d collapsed to 0 and the half phase ticked for 1-2 samples (the
+  // SW2 DOWN crackle on low notes). inv is no longer used here (kept for the call signature).
   inline void ArmDown1(float inv, float& r, float& i) const {
+    (void)inv;
     const float a = yr_, b = yi_;
     const float b_sign = (b < 0.f) ? -1.f : 1.f;
-    const float xh     = 0.5f * a * inv;
-    const float c      = ArmFastSqrt(0.5f + xh);
-    const float d      = b_sign * ArmFastSqrt(0.5f - xh);
+    const float xh     = 0.5f * a / sqrtf(a * a + b * b);
+    const float c      = ArmFastSqrt(fmaxf(0.5f + xh, 1e-30f));
+    const float d      = b_sign * ArmFastSqrt(fmaxf(0.5f - xh, 1e-30f));
     r = down1_sign_ * (a * c + b * d);
     i = down1_sign_ * (b * c - a * d);
   }
