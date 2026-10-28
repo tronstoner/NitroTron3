@@ -261,9 +261,9 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // SVF state cleared when it starts from m = 0; not run while m = 0 (SW1 UP / DOWN settled).
 constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full CCW (envelope bottom: EXP_TF_ENV_BOTTOM)
 constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full CW (practically open)
-constexpr float EXP_TF_ENV_BOTTOM = 150.f;    // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: 250 -> 40 -> 150;
+constexpr float EXP_TF_ENV_BOTTOM = 60.f;     // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: 250 -> 40 -> 150;
                                               // the decay did not close enough); the K3 knob range stays 250 Hz..16 kHz
-constexpr float EXP_TF_ENV_BOTTOM_OCT = 1.0f; // the envelope bottom rises with K3: bottom = ENV_BOTTOM 2^(k3 this) (150 Hz CCW, ~212 noon, 300 CW; 2 was too much)
+constexpr float EXP_TF_ENV_BOTTOM_OCT = 2.32f; // the envelope bottom rises with K3: bottom = ENV_BOTTOM 2^(k3 this) (60 Hz CCW, ~134 noon, 300 CW)
 constexpr float EXP_TF_Q         = 1.5f;      // tables LP Q (2026-10-28: wet 2-pole, = K5 at ~2:00 in the Q test; 0.707 / 0.9 / 0.5 tried)
 constexpr float EXP_TB_SAT_DRIVE = 3.0f;      // tables: drive into tanh after the LP (2026-10-28, level cheat / compression)
 constexpr float EXP_TB_SAT_TRIM  = 0.6f;      // tables: FIXED post trim after the tanh (not 1/drive: the saturation stays)
