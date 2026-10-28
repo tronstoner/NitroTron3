@@ -315,8 +315,8 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side over which the depth fades in
 constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
 constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
-constexpr float    EXP_LFO_INDEX_SWING     = 0.25f;    // UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
-constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 2.0f;     // UP FM: the envelope closes the index only down to this (2026-10-28)
+constexpr float    EXP_LFO_INDEX_SWING     = 0.1f;     // UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
+constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 0.0f;     // UP FM: the envelope closes the index only down to this (2026-10-28: 2 -> 0, fully closes again)
 constexpr float    EXP_LFO_FM_FC_OCT       = 0.0f;     // UP FM: the LFO also swings the dampener cutoff +- this many octaves on top of the
                                                      // envelope (2026-10-28: audible even when the decay has closed the index)
 constexpr float    EXP_LFO_FB_SWING        = 0.3f;     // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
