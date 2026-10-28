@@ -1073,7 +1073,10 @@ class Explorer : public Module {
           const float x = wet[n];
           float lp, hp;
           tf_svf_.Process(x, lp, hp);
-          wet[n] = x + m * (lp - x);
+          // tables saturation after the LP (2026-10-28): drive into tanh, FIXED trim (not 1/drive) -> evens out the
+          // filtered level (quiet / closed up ~+5 dB, loud squashed); part of the tables path (faded with m)
+          const float ls = explorer_k::EXP_TB_SAT_TRIM * tanhf(explorer_k::EXP_TB_SAT_DRIVE * lp);
+          wet[n] = x + m * (ls - x);
         }
       }
     }
