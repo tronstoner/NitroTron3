@@ -24,7 +24,7 @@
 //   wet = interpolate(wet8) -> DC blocker -> K3 2-POLE LP (mix m; SW1 MID) -> soft clipper -> FS1 mute
 //
 // K3 2-POLE LOWPASS (SW1 MID = tables, both instances; 2026-10-28 late, ON TOP of the K3 dampener, replaces the
-//   ladder): the parked K4 post filter's SVF (ExpSVF, TPT, ONE stage = 12 dB/oct, Q EXP_FILT_Q 0.707, no
+//   ladder): the parked K4 post filter's SVF (ExpSVF, TPT, ONE stage = 12 dB/oct, Q EXP_TF_Q 0.9, no
 //   resonance), LOWPASS output only, at 48 kHz on the wet after the DC blocker, before the soft clipper (the
 //   ladder's position). No drive, no trim (unity passband).
 //   fc_f = 250 (16000 / 250)^k3 Hz (EXP_TF_FMIN / FMAX, plain exponential on the smoothed K3; noon 2 kHz, CW =
@@ -380,7 +380,7 @@ class Explorer : public Module {
     lad_step_ = 1.f / (EXP_LAD_XFADE_MS * 0.001f * sr);
     for (int j = 0; j < kLadSub; j++) { lad_fcb_[j] = EXP_LAD_FMAX; lad_tgb_[j] = false; }
     // SW1 MID K3 2-pole lowpass (ExpSVF, LP output): mix m = 0 (not run), cleared state, coefficients at TF_FMAX.
-    tf_svf_.Set(EXP_TF_FMAX, EXP_FILT_Q, sr);
+    tf_svf_.Set(EXP_TF_FMAX, EXP_TF_Q, sr);
     tf_svf_.Reset();
     tf_set_fc_ = EXP_TF_FMAX;
     tf_fc_ = EXP_TF_FMAX;
@@ -1040,7 +1040,7 @@ class Explorer : public Module {
     tf_fc_ = fc;
   }
   // The 2-pole lowpass on the 48 kHz wet (after the DC blocker, before the soft clipper; the ladder's position):
-  // one TPT SVF stage (ExpSVF, Q EXP_FILT_Q, LP output), no drive / trim: wet = x + m (lp(x) - x). m slides linearly
+  // one TPT SVF stage (ExpSVF, Q EXP_TF_Q, LP output), no drive / trim: wet = x + m (lp(x) - x). m slides linearly
   // toward the 8 kHz sample's target (tf_tgb_) by lad_step_ per 48 kHz sample (EXP_LAD_XFADE_MS for 0 <-> 1);
   // starting from m = 0 clears the SVF state; m = 0: not run. Coefficients set once per 8 kHz sample (kFactor
   // 48 kHz samples) from tf_fcb_, only when the cutoff changed.
@@ -1057,7 +1057,7 @@ class Explorer : public Module {
       const int jj = (j < kLadSub) ? j : kLadSub - 1;
       const bool tg = tf_tgb_[jj];
       const float fc = tf_fcb_[jj];
-      if (fc != tf_set_fc_) { tf_svf_.Set(fc, EXP_FILT_Q, sr_); tf_set_fc_ = fc; }
+      if (fc != tf_set_fc_) { tf_svf_.Set(fc, EXP_TF_Q, sr_); tf_set_fc_ = fc; }
       for (int q = 0; q < kFactor; q++, n++) {
         if (tg) {
           if (m <= 0.f) tf_svf_.Reset();         // starts from m = 0: cleared state (coefficients kept)
@@ -2048,7 +2048,7 @@ class Explorer : public Module {
   float lad_fcb_[kLadSub];         // cutoff per 8 kHz sample of the current block
   bool  lad_tgb_[kLadSub];         // mix target per 8 kHz sample (true = MID table model)
   // SW1 MID K3 2-pole lowpass (TfUpdate per 8 kHz sample, TabFilter per block; m slide = lad_step_)
-  ExpSVF tf_svf_;                  // one TPT SVF stage, LP output (Q EXP_FILT_Q)
+  ExpSVF tf_svf_;                  // one TPT SVF stage, LP output (Q EXP_TF_Q)
   float tf_m_ = 0.f;               // mix m (0 = not run; 1 = LP only)
   float tf_lnr_ = 0.f;             // ln(EXP_TF_FMAX / EXP_TF_FMIN)
   float tf_lnb_ = 0.f;             // ln(EXP_TF_ENV_BOTTOM / EXP_TF_FMIN): the one-shot envelope's bottom
