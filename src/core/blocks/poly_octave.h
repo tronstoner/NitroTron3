@@ -298,10 +298,14 @@ class BandShifter {
 
     // Down 1 octave: complex square root (half phase), half-angle identities;
     // sign continuation via down1_sign_.
+    // xh is normalised EXACTLY (2026-10-28, = NitroLab 51cd507): with the fast inv, xh
+    // overshot +-0.5 at every phase crossing of 0 / pi, c or d collapsed to 0 and the
+    // half phase ticked for 1-2 samples (crackle on low notes). n == 0 (silence, start):
+    // xh = 0, so c = d and the output is 0 (no division by zero).
     const float b_sign = (b < 0.f) ? -1.f : 1.f;
-    const float xh     = 0.5f * a * inv;
-    const float c      = FastSqrt(0.5f + xh);
-    const float d      = b_sign * FastSqrt(0.5f - xh);
+    const float xh     = (n > 0.f) ? 0.5f * a / sqrtf(n) : 0.f;
+    const float c      = FastSqrt(fmaxf(0.5f + xh, 1e-30f));
+    const float d      = b_sign * FastSqrt(fmaxf(0.5f - xh, 1e-30f));
     dn1r_ = down1_sign_ * (a * c + b * d);
     dn1i_ = down1_sign_ * (b * c - a * d);
   }
