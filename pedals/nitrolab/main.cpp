@@ -16,11 +16,13 @@
 //                          (UP: FM ratio zones + XBAND, MID: table zone (WaveMorph's 10, copied),
 //                          DOWN: model), K2 = tone (MID: morph),
 //                          K3 = dampener (UP / MID: per-band harmonic ceiling 150 Hz -> 4 kHz; DOWN: sweep),
-//                          SW2 = octave up / played / down; K4 / K5 unused (K4 envelope / post filter parked))
-// SW3 DOWN   = wavemorph  (morphing wavetable voice on a copy of the band engine — see
-//                          modules/wavemorph.h; K1 = base wave (10 stepped zones), K2 = K4 filter
-//                          envelope, K3 = morph, K4 = post filter, SW2 = octave up / played / down;
-//                          K5 = CCW harmonic lowpass per band 4 kHz -> 150 Hz | noon off | CW band tilt, lows thinner)
+//                          SW2 = octave up / played / down;
+//                          K4 = ONE-SHOT onset envelope: CCW down | noon off | CW up, rise 36 s -> 450 ms,
+//                          K5 = its target + amount: CCW on the K2 parameter | noon off | CW on the K3 parameter)
+// SW3 DOWN   = explorer   (the same module, second instance Explorer(true): identical except K4 = LOOPING
+//                          envelope (triangle 0 -> 1 -> 0 ..., restarted per onset, ramp 4 s -> 30 ms, pad
+//                          +-0.08 around noon off); shares the SW1 MID tables with SW3 MIDDLE.
+//                          WaveMorph (modules/wavemorph.h) is unwired, source kept)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -33,7 +35,6 @@
 
 #include "modules/armitage.h"
 #include "modules/explorer.h"
-#include "modules/wavemorph.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -58,10 +59,13 @@ Hothouse       hw;
 ControlSurface cs;
 Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 
+// SW3 DOWN = slot 2 (constants.h still names it NL_MODE_WAVEMORPH): the looping explorer.
+static constexpr int NL_MODE_EXPLORER_LOOP = NL_MODE_WAVEMORPH;
+
 Armitage armitage;
-Explorer explorer;
-WaveMorph wavemorph;
-Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &wavemorph };
+Explorer explorer;                 // SW3 MIDDLE: one-shot envelope
+Explorer explorer_loop(true);      // SW3 DOWN:   looping envelope (tables shared, built by the first Init)
+Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_loop };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
 volatile int g_active = NL_MODE_ARMITAGE;
@@ -142,7 +146,7 @@ int main() {
 
   for (int i = 0; i < NL_MODE_COUNT; i++) modules[i]->Init(sr);
 
-  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=explorer, 2=DOWN=wavemorph.
+  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=explorer (one-shot), 2=DOWN=explorer (looping).
   int sel = cs.Switch(2);
   if (sel < 0 || sel >= NL_MODE_COUNT) sel = 0;
   g_active = sel;
@@ -152,11 +156,10 @@ int main() {
   hw.StartAudio(AudioCallback);
 
   uint32_t diag_hb = 0;
-  int      diag_stage = 0;          // 1 / 2 / 3 = second half of an armitage / explorer / wavemorph setting line due
+  int      diag_stage = 0;          // 1 / 2 = second half of an armitage / explorer (either instance) setting line due
   float    diag_cpu_last = 0.f;     // CPU peak of the last full 2 s window
   Armitage::DiagSnap diag_snap{};
   Explorer::DiagSnap diag_xsnap{};
-  WaveMorph::DiagSnap diag_wsnap{};
 
   while (true) {
     hw.DelayMs(10);
@@ -197,15 +200,17 @@ int main() {
                           (unsigned)(cpu_pk * 100.f + 0.5f));
         diag_stage = 0;
       } else if (diag_stage == 2) {
-        // explorer, second half: model (+ set), derived values, K3 dampener fc, (parked envelope), mute, cpu
+        // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
+        // offset), K3 dampener fc (knob), envelope (variant, e, K4 dir, K5 amount d + target), mute, cpu
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const unsigned cpu = (unsigned)(cpu_pk * 100.f + 0.5f);
         const char* zn = Explorer::ZoneName(d.model, d.zone);
-        char env[32] = "";                                    // parked K4 FM envelope (UP, EXP_ENV_ENABLE)
-        if (explorer_k::EXP_ENV_ENABLE && d.sw1 == 0)
-          snprintf(env, sizeof(env), " env g" D2F " fol" D2F, D2V(d.envg), D2V(d.fol));
+        char env[64];
+        snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", d.loop ? "loop" : "1shot", D2V(d.env),
+                 d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
+                 d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
         if (d.model == Explorer::kFM)                         // A = ratio r, B = feedback b
           hw.seed.PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
                             D2V(d.a), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
@@ -213,43 +218,18 @@ int main() {
           hw.seed.PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
                             (int)(d.a + 0.5f), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kWT)                    // MID tables: zone, morph m (B), frame position (A)
-          hw.seed.PrintLine("WT/%s m" D2F " pos" D2F " fc %d mute %d cpu %u%%",
-                            zn, D2V(d.b), D2V(d.a), (int)(d.fc + 0.5f), d.mute ? 1 : 0, cpu);
+          hw.seed.PrintLine("WT/%s m" D2F " pos" D2F " fc %d%s mute %d cpu %u%%",
+                            zn, D2V(d.b), D2V(d.a), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.sw1 == 1)                                  // parked bit table: A = waveform, B = K3
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " fc %d mute %d cpu %u%%",
+          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn,
-                            D2SV(d.a), D2SV(d.b), (int)(d.fc + 0.5f), d.mute ? 1 : 0, cpu);
+                            D2SV(d.a), D2SV(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else                                                  // DOWN: no dampener
-          hw.seed.PrintLine("%s A" D2F " B" D2F " mute %d cpu %u%%",
-                            Explorer::ModelName(d.model), D2SV(d.a), D2SV(d.b), d.mute ? 1 : 0, cpu);
+          hw.seed.PrintLine("%s A" D2F " B" D2F "%s mute %d cpu %u%%",
+                            Explorer::ModelName(d.model), D2SV(d.a), D2SV(d.b), env, d.mute ? 1 : 0, cpu);
         diag_stage = 0;
-      } else if (diag_stage == 3) {
-        // wavemorph, second half: K2 filter envelope e, follower, K5 t / CW tilt slope / CCW lowpass fc, octave, mute, cpu
-        static const char* const oct_name[3] = { "up", "played", "down" };
-        const WaveMorph::DiagSnap& d = diag_wsnap;
-        float cpu_pk = g_cpu.GetMaxCpuLoad();
-        if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("fenv e" D2F " fol" D2F " tilt t" D2F " s" D2F " fc %d oct %s mute %d cpu %u%%",
-                          D2SV(d.fe), D2V(d.fol), D2SV(d.btt), D2V(d.bts), (int)(d.hfc + 0.5f),
-                          oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1],
-                          d.mute ? 1 : 0, (unsigned)(cpu_pk * 100.f + 0.5f));
-        diag_stage = 0;
-      } else if (g_active == NL_MODE_WAVEMORPH && wavemorph.DiagTake(diag_wsnap)) {
-        // wavemorph, first half: number / auto, zone + the two waves being blended + fraction, knobs
-        const WaveMorph::DiagSnap& d = diag_wsnap;
-        char tag[12];
-        if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
-        else         snprintf(tag, sizeof(tag), "auto");
-        char wv[40];
-        const char* wa = WaveMorph::WaveName(d.zone, d.f0);
-        const char* wb = WaveMorph::WaveName(d.zone, d.f0 + 1);
-        if (wa[0]) snprintf(wv, sizeof(wv), " %s>%s+%d%%", wa, wb, (int)(d.ff * 100.f + 0.5f));
-        else       snprintf(wv, sizeof(wv), " f%d>f%d+%d%%", d.f0 + 1, d.f0 + 2, (int)(d.ff * 100.f + 0.5f));
-        hw.seed.Print("WM %s %s%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " | ",
-                      tag, WaveMorph::ZoneName(d.zone), wv,
-                      D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]));
-        diag_stage = 3;
-      } else if (g_active == NL_MODE_EXPLORER && explorer.DiagTake(diag_xsnap)) {
+      } else if ((g_active == NL_MODE_EXPLORER && explorer.DiagTake(diag_xsnap)) ||
+                 (g_active == NL_MODE_EXPLORER_LOOP && explorer_loop.DiagTake(diag_xsnap))) {
         // explorer, first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
         const Explorer::DiagSnap& d = diag_xsnap;

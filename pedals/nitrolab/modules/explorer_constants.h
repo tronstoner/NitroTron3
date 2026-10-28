@@ -176,7 +176,8 @@ constexpr int      EXP_BT_STEPS_MIN = 2;        // fewest steps a band can drop 
 constexpr float EXP_OCT_XFADE_MS  = 10.f;    // ms; linear slide between octave slots on an SW2 change (= ARM_XFADE_MS)
 
 // --- K4 post filter: PARKED (2026-10-26). false = not run, K4 not read: the wet goes straight from the DC blocker
-// to the soft clipper. true = as before: K4 on SW1 MID / DOWN = this filter (not on SW1 UP). ---
+// to the soft clipper. true = as before: K4 on SW1 MID / DOWN = this filter (not on SW1 UP) - K4 then ALSO drives the
+// envelope (K4 / K5 modulation, below): both read the same knob. ---
 constexpr bool  EXP_POSTFILT_ENABLE = false;
 // K4 post filter on the final 48 kHz wet (armitage's K4 law, no envelopes, no resonance):
 // t = 2 k4 - 1, tmag = |t|^EXP_FILT_CURVE; noon = true bypass; t < 0 LP fc = FMAX (LP_MIN / FMAX)^tmag,
@@ -209,45 +210,59 @@ constexpr float EXP_DAMP_CURVE    = 0.5f;     // exponent on k3 (2026-10-28; 1 =
                                               // < 1 spends more of the knob at the top (noon: fc ~ 1.5 kHz, was 775 Hz)
 constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new discrete pick per band (see above)
 
-// --- K4 on SW1 UP = triggered envelope on the FM index: PARKED (2026-10-26) ---------------------------
-// false = onset detector, live follower and envelope not run, K4 not read: I = EXP_FM_INDEX.
-// true = as before (copied 1:1 from armitage's K2 FM envelope), now scaling the fixed index:
-//   I = EXP_FM_INDEX e^2, e = g + EXP_FOLLOW_FM_DEPTH on f (ratio zones and XBAND; feedback unaffected).
-constexpr bool     EXP_ENV_ENABLE          = false;
+// --- K4 / K5 = envelope modulation (2026-10-28; replaces the parked K4 FM-index envelope) -----------------
+// Two variants of the same module (Explorer(loop), main.cpp): SW3 MID = ONE-SHOT, SW3 DOWN = LOOPING.
+// Envelope e (0..1), driven by the onset detector (below, always run). t4 = 2 k4 - 1 (smoothed, lands exactly),
+// dir = sign(t4) (CW = up, CCW = down). Before the first onset e = 0. The envelope runs independently of noon;
+// K4 at noon (ONE-SHOT: t4 == 0; LOOPING: |t4| <= EXP_LOOP_PAD) only gates the APPLIED value to 0.
+//   ONE-SHOT: each onset e = 0, one-pole rise toward 1, tau = travel / EXP_ENV_TRAVEL_TAUS, snaps to 1 at 0.98,
+//             then holds 1. travel = EXP_ENV_FM_DECAY_RATIO EXP_ENV_FM_TIME_RATIO EXP_ENV_TAU_SLOW_S
+//             (EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)^|t4| (36 s just off noon -> 450 ms at the ends).
+//   LOOPING:  linear triangle 0 -> 1 -> 0 -> ..., reflecting at 0 / 1 (wavemorph fdc9927's LoopEnv); each onset
+//             e = 0 rising. One ramp T = EXP_LOOP_T_SLOW_S (EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S)^s,
+//             s = max(0, (|t4| - EXP_LOOP_PAD) / (1 - EXP_LOOP_PAD)) (inside the pad it runs at the slow T).
+// Applied: v = dir e (0 when gated), one-pole slid (tau EXP_ENV_FM_SLIDE_MS at 8 kHz, lands exactly): an onset
+// restart, a K4 noon / pad crossing (incl. the sign flip) glides instead of stepping.
+// K5: t5 = 2 k5 - 1 (smoothed, lands exactly); CCW d2 = -t5 -> the K2 parameter, CW d3 = t5 -> the K3 parameter
+// (the other one 0; noon = off). Offset in the parameter's own unit: p = clamp(p_knob + d v span_p, range_p),
+// span = the full natural range (per model in explorer.h, MODULATION).
 // Onset detector per 48 kHz input sample, before the decimator (armitage OnsetDetect / ARM_ONSET_*):
 //   fast meter (ENV_MS) -> gate meter (up at once, falls with FALL_MS) -> slow baseline (SLOW_COEF);
 //   onset = gate > RISE x baseline && gate > FLOOR, then REFRACTORY_MS without onsets.
-// Envelope (armitage EnvGain, 8 kHz): a gain g (0..1), e = g (+ follower), I = EXP_FM_INDEX e^2.
-//   t = 2 k4 - 1 (smoothed, lands exactly on its target): t = 0 -> off, g = 1.
-//   T = EXP_ENV_FM_TIME_RATIO EXP_ENV_TAU_SLOW_S (EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)^|t|, travel time
-//   = EXP_ENV_FM_DECAY_RATIO T (36 s just off noon -> 450 ms at the ends); one-pole tau = travel / EXP_ENV_TRAVEL_TAUS,
-//   g snaps at the 98 % point. CCW: each onset g = 1, decays to 0, holds 0. CW: each onset g = 0, rises to 1,
-//   holds 1. Before the first onset: CCW g = 1, CW g = 0.
 constexpr float    EXP_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (= ARM_ONSET_ENV_MS)
 constexpr float    EXP_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (= ARM_ONSET_FALL_MS)
 constexpr float    EXP_ONSET_SLOW_COEF     = 0.0006f;  // baseline one-pole at 48 kHz (= ARM_ONSET_SLOW_COEF)
 constexpr float    EXP_ONSET_RISE          = 1.5f;     // gate > baseline x this = an attack (= ARM_ONSET_RISE)
 constexpr float    EXP_ONSET_FLOOR         = 0.0021f;  // gate-meter floor, input units (= ARM_ONSET_FLOOR)
 constexpr uint32_t EXP_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (= ARM_ONSET_REFRACTORY_MS)
+// ONE-SHOT time law (the former FM envelope's, = ARM_ENV_*):
 constexpr float    EXP_ENV_TAU_SLOW_S      = 4.0f;     // s; time law just off noon (= ARM_ENV_TAU_SLOW_S)
 constexpr float    EXP_ENV_TAU_FAST_S      = 0.05f;    // s; at the knob ends (= ARM_ENV_TAU_FAST_S)
 constexpr float    EXP_ENV_TRAVEL_TAUS     = 3.9f;     // one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
 constexpr float    EXP_ENV_FM_TIME_RATIO   = 3.0f;     // T = this x the time law (= ARM_ENV_FM_TIME_RATIO)
-constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // decay (CCW) / rise (CW) time / T (= ARM_ENV_FM_DECAY_RATIO)
-constexpr float    EXP_ENV_FM_SLIDE_MS     = 1.0f;     // ms; one-pole tau (8 kHz) on g before it scales the index, lands exactly (= ARM_ENV_FM_SLIDE_MS)
-// Live follower (2026-10-26, armitage's ARM_FOLLOW_*): a subtle term ON TOP of the triggered FM envelope (unchanged).
-// EnvFollower (env_follower.h: |x EXP_FOLLOW_GAIN| -> 4 cascaded one-poles at EXP_FOLLOW_HZ) on the raw 48 kHz input,
-// once per 48 kHz sample next to the onset detector; no normalisation. f = min(follower, 1), read per 8 kHz step.
-//   UP: e = g + EXP_FOLLOW_FM_DEPTH on f, on -> 1 with K4 off noon, 0 at noon (g = 1 there)
-//   (CCW right after a pluck g = 1, so e can exceed 1 by up to EXP_FOLLOW_FM_DEPTH).
-//   on: one-pole at 8 kHz, tau EXP_FOLLOW_GATE_MS, lands exactly (EXP_CTRL_SNAP). EXP_FOLLOW_FM_DEPTH 0 = bit-identical.
+constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // rise travel time / T (= ARM_ENV_FM_DECAY_RATIO)
+constexpr float    EXP_ENV_FM_SLIDE_MS     = 1.0f;     // ms; one-pole tau (8 kHz) on the applied v = dir e, lands exactly (= ARM_ENV_FM_SLIDE_MS)
+// LOOPING (wavemorph fdc9927's WM_ENV_PAD / WM_LOOP_T_*):
+constexpr float    EXP_LOOP_PAD            = 0.08f;    // t4 units: k4 in [0.46, 0.54] = off (applied 0)
+constexpr float    EXP_LOOP_T_SLOW_S       = 4.0f;     // s; one ramp just outside the pad
+constexpr float    EXP_LOOP_T_FAST_S       = 0.03f;    // s; one ramp at the knob ends
+// Live follower: PARKED (EXP_FOLLOW_ENABLE = false: not run). true = EnvFollower (env_follower.h: |x EXP_FOLLOW_GAIN|
+// -> 4 cascaded one-poles at EXP_FOLLOW_HZ) on the raw 48 kHz input, next to the onset detector; f = min(follower, 1)
+// per 8 kHz step, added on top of the envelope before the gate / sign: e + EXP_FOLLOW_DEPTH f (can exceed 1;
+// the parameter clamps hold).
+constexpr bool     EXP_FOLLOW_ENABLE       = false;
 constexpr float    EXP_FOLLOW_HZ           = 20.f;     // Hz; follower 4-pole LP cutoff (= ARM_FOLLOW_HZ)
 constexpr float    EXP_FOLLOW_GAIN         = 10.f;     // follower pre-gain, x10 scale (= ARM_FOLLOW_GAIN)
-constexpr float    EXP_FOLLOW_FM_DEPTH     = 0.15f;    // added to the FM gain g at f = 1 (= ARM_FOLLOW_FM_DEPTH)
-constexpr float    EXP_FOLLOW_GATE_MS      = 1.0f;     // ms; one-pole tau of the on gate at a K4 noon crossing (= ARM_FOLLOW_GATE_MS)
+constexpr float    EXP_FOLLOW_DEPTH        = 0.15f;    // added to e at f = 1 (= ARM_FOLLOW_FM_DEPTH)
+// Modulation spans (full natural range of each parameter, its own unit):
+//   UP FM feedback b: EXP_FBFM_FB_MAX, [0, FB_MAX]; UP / MID dampener fc: log2(EXP_DAMP_FMAX / EXP_DAMP_FMIN) octaves,
+//   [FMIN, FMAX]; MID morph m: 1, [0, 1]; DOWN harmonics n: EXP_HARM_MAX - 1, [1, MAX], blend 1, [0, 1];
+//   freq shift g = log2(|s| / EXP_FS_CURVE_HZ + 1): log2(EXP_FS_MAX_HZ / EXP_FS_CURVE_HZ + 1), [0, that], sign from
+//   the knob, scale blend 1, [0, 1]; interval: 2 EXP_IS_SEMI_MAX semitones, [-MAX, +MAX] (rounded, slid
+//   EXP_DISC_SLIDE_MS), cents 2 EXP_IS_DETUNE_CENTS, [-DETUNE, +DETUNE].
 
 // --- Control smoothing / snapping ----------------------------------------------------
-constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3 (sweep / dampener), K4 (parked UP envelope t) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
+constexpr float EXP_CTRL_SMOOTH_MS = 10.f;   // ms; one-pole on K2, K3, K4 (envelope t4), K5 (t5) at the 8 kHz rate (= ARM_CTRL_SMOOTH_MS)
 constexpr float EXP_CTRL_SNAP      = 1e-6f;  // smoothed knob lands exactly on its target within this
 
 // --- Band sum: phase alignment + gain staging (copied values from armitage_constants.h, ARM_ALIGN = true) ---

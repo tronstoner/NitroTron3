@@ -1,6 +1,7 @@
 #pragma once
 //
-// explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE on NitroLab.
+// explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (one-shot envelope) and SW3 DOWN
+// (looping envelope) on NitroLab: two instances of this class (constructor flag), sharing the read-only tables.
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
 // split into 84 complex bands (armitage_bands.h, included read-only), each band reshaped by one
@@ -23,7 +24,8 @@
 //
 // K3 DAMPENER (SW1 UP / MID; not on DOWN): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
 //   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz), evaluated per audio block in
-//   DampUpdate (only when the smoothed K3 moved). Every per-band harmonic ceiling on f'_k (after SW2) becomes
+//   DampUpdate (only when the smoothed K3 or its envelope offset moved; + the K5-CW octave offset, see K4 / K5).
+//   Every per-band harmonic ceiling on f'_k (after SW2) becomes
 //   min(ceiling, fc); each band keeps its level and fundamental, loses only harmonics above fc:
 //     FM caps    L = min(4000, fc) in the FM index / feedback caps and the XBAND index cap (down to 0 = plain
 //                fundamental); EXP_FBFM_PUSHED = true or EXP_ANTIFOLD = false: no FM caps -> dampener inert on FM
@@ -85,15 +87,37 @@
 // for EXP_MODEL_XFADE_MS and crossfaded linearly; the entering model starts from cleared state. A change
 // during a fade is picked up when that fade ends.
 //
-// PARKED (compile flags, code kept, not run, K4 not read):
-//   EXP_ENV_ENABLE = false       K4 FM index envelope + live follower + onset detector. true = as before on SW1 UP:
-//                                onset detector per 48 kHz input sample (EXP_ONSET_*), envelope gain g (EnvGain,
-//                                8 kHz, slid 1 ms): t = 2 k4 - 1, noon off (g = 1), CCW each onset g = 1 -> decay
-//                                to 0, CW each onset g = 0 -> rise to 1 (36 s just off noon -> 450 ms at the ends);
-//                                live follower f on top: e = g + EXP_FOLLOW_FM_DEPTH on f; I = EXP_FM_INDEX e^2.
+// K4 / K5 ENVELOPE MODULATION (two variants of this class, constructor flag: Explorer(false) = ONE-SHOT on SW3 MID,
+//   Explorer(true) = LOOPING on SW3 DOWN; everything else identical). Onset detector per 48 kHz input sample
+//   (EXP_ONSET_*, armitage's OnsetDetect). t4 = 2 k4 - 1, t5 = 2 k5 - 1 (both smoothed, land exactly).
+//   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
+//     ONE-SHOT  each onset e = 0, one-pole rise to 1 (tau = travel / 3.9, snap at 0.98), then holds 1;
+//               travel = 3 x 3 x 4 s (0.05 / 4)^|t4| = 36 s just off noon -> 450 ms at the ends.
+//     LOOPING   each onset e = 0 rising; linear triangle 0 -> 1 -> 0 ..., reflecting at 0 / 1; one ramp
+//               T = 4 s (0.03 / 4)^s, s = max(0, (|t4| - 0.08) / 0.92).
+//   applied v = dir e, dir = sign(t4) (CW up, CCW down); v = 0 at t4 == 0 (ONE-SHOT) / |t4| <= EXP_LOOP_PAD 0.08
+//   (LOOPING); v one-pole slid (1 ms, lands exactly): onset restarts and noon crossings glide.
+//   K5: d2 = max(-t5, 0) (CCW) on the K2 parameter, d3 = max(t5, 0) (CW) on the K3 parameter, noon off.
+//   MODULATION, in the parameter's own unit, knob = the start: p = clamp(p_knob + d v span, natural range):
+//     UP FM          K2 feedback b: span EXP_FBFM_FB_MAX (1.5), [0, FB_MAX]; XBAND: K2 target does nothing
+//     UP / MID       K3 dampener fc: log2 fc + d3 v log2(4000 / 150) octaves, [150, 4000] Hz (the sqrt curve on the
+//                    knob side only); per audio block from the block's first v; re-pick (DampUpdate) when fc moved,
+//                    only for the SW2 slots running (or starting) this block, the others when they start
+//     MID tables     K2 morph m: span 1, [0, 1]                 (parked BITTAB: K2 / K3 shape not modulated)
+//     DOWN harm.     K2 n: span 5, [1, 6]; K3 blend: span 1, [0, 1]
+//     DOWN f-shift   K2: |t| (= g / log2(801), g = log2(|s| + 1)) + d2 v, [0, 1], sign of the knob t (t = 0: +);
+//                    K3 scale blend: span 1, [0, 1]
+//     DOWN interval  K2 semitones: round(clamp(st_knob + 24 d2 v, -12, 12)), slid 1 ms (EXP_DISC_SLIDE_MS);
+//                    K3 cents: span 100, [-50, 50]
+//   Continuous params per 8 kHz sample in Derive (as their knobs); K1 not modulated.
+//
+// PARKED (compile flags, code kept, not run):
+//   EXP_FOLLOW_ENABLE = false    live follower (EnvFollower, 48 kHz raw input, 20 Hz 4-pole, x10); true: e + 0.15 f
+//                                (f = min(follower, 1)) before the gate / sign.
 //   EXP_POSTFILT_ENABLE = false  K4 post filter. true = as before on SW1 MID / DOWN (not run on UP: mix slides
 //                                to 0): EXP_FILT_STAGES TPT SVF (12 dB/oct each, Q 0.707), t = 2 k4 - 1, noon
-//                                bypass (fade over |t| < EXP_FILT_FADE), CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz.
+//                                bypass (fade over |t| < EXP_FILT_FADE), CCW LP 4 kHz -> 180 Hz, CW HP 40 Hz -> 4 kHz
+//                                (K4 would then drive both the filter and the envelope).
 //
 // CONTROL MAP
 //   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: table zone (10, stepped,
@@ -102,16 +126,17 @@
 //                    the zone's frames; DOWN: per model (see MODELS)
 //   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law;
 //                    DOWN: per model (see MODELS)
-//   K4  unused       (parked envelope / post filter, see PARKED)
-//   K5  unused
+//   K4  envelope     time + direction: CCW down | noon off | CW up; ends fastest (SW3 MID: one-shot rise
+//                    36 s -> 450 ms; SW3 DOWN: loop ramp 4 s -> 30 ms, pad +-0.08 around noon off)
+//   K5  env target   CCW: on K2's parameter, CW: on K3's parameter; amount |2 k5 - 1| (noon off)
 //   K6  dry / wet    (shell)
 //   SW1 family       UP = FM, MID = tables, DOWN = harmonics & shift
 //   SW2 octave       UP = +1 oct, MID = as played, DOWN = -1 oct (one slot, crossfade EXP_OCT_XFADE_MS)
 //   FS1 wet mute     toggle, LED2 on while muted; LED1 on. FS2 unused.
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 //
-// K2, K3 (and K4 with EXP_ENV_ENABLE) are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous
-// derived values are computed per 8 kHz sample from the smoothed knobs; stepped items from the raw knob.
+// K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
+// 8 kHz sample from the smoothed knobs (+ the envelope offset); stepped items from the raw knob.
 //
 // TABLES (SW1 MID; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*; built at Init into SDRAM,
 // int16, packed [frame][version][sample]): per zone F_z frames (frame 1 = the exact base wave), u = frame / (F_z - 1).
@@ -137,7 +162,8 @@
 //   (harmonic amplitude lists in explorer_constants.h, EXP_TB_*)
 //
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
-// No dynamic allocation. Tables: 66 frames x 14 x 256 int16 = 462 KB in SDRAM (explorer_tb, own array).
+// No dynamic allocation. Tables: 66 frames x 14 x 256 int16 = 462 KB in SDRAM (explorer_tb, own array, built once,
+// shared read-only by both instances; the second Init skips the build).
 
 #include <cmath>
 #include <cstdint>
@@ -168,6 +194,8 @@ struct ExplorerTbScratch {
   float A[explorer_k::EXP_TB_HMAX + 1], B[explorer_k::EXP_TB_HMAX + 1];   // sin / cos coefficients
 };
 static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
+// explorer_sin_tab + explorer_tb are filled by the first Init; further instances (SW3 DOWN) skip the build.
+static bool explorer_tables_built = false;
 
 // K4 post filter stage: TPT state-variable filter (a local copy of armitage's ArmSVF).
 struct ExpSVF {
@@ -204,12 +232,18 @@ class Explorer : public Module {
          kNumModels };
   enum { kRotFSH = 0, kRotISH = 1, kRotN = 2 };                  // rotation-phase users
 
+  // loop = false: ONE-SHOT envelope (SW3 MID); true: LOOPING envelope (SW3 DOWN). See K4 / K5 above.
+  explicit Explorer(bool loop = false) : loop_(loop) {}
+  bool Looping() const { return loop_; }
+
   void Init(float sr) override {
     using namespace explorer_k;
     sr8_ = sr / (float)kFactor;
     sr_ = sr;
-    for (int i = 0; i < EXP_SIN_SIZE; i++)
-      explorer_sin_tab[i] = sinf(6.283185307f * (float)i / (float)EXP_SIN_SIZE);
+    const bool build = !explorer_tables_built;  // shared read-only tables: built by the first instance only
+    if (build)
+      for (int i = 0; i < EXP_SIN_SIZE; i++)
+        explorer_sin_tab[i] = sinf(6.283185307f * (float)i / (float)EXP_SIN_SIZE);
     for (int k = 0; k < kBands + 2; k++) mag_[k] = 0.f;
     static const float r[kSlots] = { 2.f, 1.f, 0.5f };          // up / played / down
     for (int k = 0; k < kBands; k++) {
@@ -244,6 +278,8 @@ class Explorer : public Module {
     for (int o = 0; o < kSlots; o++)                     // open table blend (fc = EXP_DAMP_FMAX); DampUpdate recomputes
       for (int k = 0; k < kBands; k++) BlendPick(EXP_TB_FMAX * ifp_[o][k], tblo_[o][k], tbx_[o][k]);
     damp_k_ = -1.f;                              // forces DampUpdate on the first block
+    damp_o_ = 0.f;
+    for (int o = 0; o < kSlots; o++) pick_fc_[o] = -1.f;   // every slot re-picks before it first runs
     damp_fc_ = EXP_DAMP_FMAX;
     hc_fold_ = EXP_FOLD_LIMIT_HZ;
     damp_lnr_ = logf(EXP_DAMP_FMAX / EXP_DAMP_FMIN);
@@ -252,7 +288,11 @@ class Explorer : public Module {
     if (pk_fade_len_ < 1) pk_fade_len_ = 1;
     pk_g_ = 1.f;
     BuildBitPatterns();
-    BuildTables();
+    {                                            // packed frame offset per zone (BuildTables sets the same values)
+      int off = 0;
+      for (int z = 0; z < EXP_TB_ZONES; z++) { tb_off_[z] = off; off += EXP_TB_ZONE_FRAMES[z]; }
+    }
+    if (build) { BuildTables(); explorer_tables_built = true; }
     for (int o = 0; o < kSlots; o++) { ResetSlotState(o); slot_on_[o] = false; }
     dc_a_ = expf(-6.283185307f * EXP_DC_HZ / sr);
     dc_x1_ = dc_y1_ = 0.f;
@@ -269,8 +309,9 @@ class Explorer : public Module {
     var_ = var_t_ = vfrom_ = VarKey(kFM, 0);
     k2s_ = k2_t_ = 0.f;
     k3s_ = k3_t_ = 0.f;
-    k4s_ = k4_t_ = 0.5f;                         // K4 noon = envelope off (EXP_ENV_ENABLE)
-    // UP (parked, EXP_ENV_ENABLE): onset detector (48 kHz, pre-decimator) + FM index envelope (8 kHz), armitage's.
+    k4s_ = k4_t_ = 0.5f;                         // K4 noon = envelope not applied
+    k5s_ = k5_t_ = 0.5f;                         // K5 noon = no target
+    // Onset detector (48 kHz, pre-decimator, armitage's) + envelope e (8 kHz): ONE-SHOT or LOOPING (loop_).
     on_env_ = on_gate_ = on_base_ = 0.f;
     on_env_a_  = 1.f - expf(-1000.f / (EXP_ONSET_ENV_MS * sr));
     on_fall_a_ = 1.f - expf(-1000.f / (EXP_ONSET_FALL_MS * sr));
@@ -278,16 +319,17 @@ class Explorer : public Module {
     on_refr_len_ = (int)((float)EXP_ONSET_REFRACTORY_MS * 0.001f * sr + 0.5f);
     on_pending_ = false;
     on_seen_ = false;
-    env_fm_.Reset();
-    fm_gs_ = env_fm_.g;              // slid g starts on g (1)
-    fm_gs_a_ = 1.f - expf(-1000.f / (EXP_ENV_FM_SLIDE_MS * sr8_));
-    ln_tau_ratio_ = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
-    // Live follower (48 kHz, raw input) + its noon gate (8 kHz).
+    env_.Reset();
+    mv_ = 0.f;
+    mv_a_ = 1.f - expf(-1000.f / (EXP_ENV_FM_SLIDE_MS * sr8_));
+    o2_ = o3_ = 0.f;
+    ln_tau_ratio_  = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
+    ln_loop_ratio_ = logf(EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S);
+    // Live follower (parked, EXP_FOLLOW_ENABLE; 48 kHz, raw input).
     fol_.Init(sr);
     fol_.SetCutoff(EXP_FOLLOW_HZ);
     fol_.SetPreGain(EXP_FOLLOW_GAIN);
-    fol_y_ = fol_f_ = fol_on_ = 0.f;
-    fol_gate_a_ = 1.f - expf(-1000.f / (EXP_FOLLOW_GATE_MS * sr8_));
+    fol_y_ = fol_f_ = 0.f;
     filt_off_ = false;
     for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
     og_[1] = og_t_[1] = 1.f;                     // SW2 MID = played slot
@@ -318,8 +360,8 @@ class Explorer : public Module {
     const float k1 = RemapKnob(cs.Knob(0));
     const float k2 = RemapKnob(cs.Knob(1));
     const float k3 = RemapKnob(cs.Knob(2));
-    const float k4 = RemapKnob(cs.Knob(3));      // read for DIAG; drives only the parked K4 parts
-    const float k5 = RemapKnob(cs.Knob(4));      // unused (DIAG only)
+    const float k4 = RemapKnob(cs.Knob(3));      // envelope time + direction (t4)
+    const float k5 = RemapKnob(cs.Knob(4));      // envelope target + amount (t5)
     int fam = cs.Switch(0);
     if (fam < kUp || fam > kDown) fam = kMid;
     int oct = cs.Switch(1);
@@ -341,7 +383,8 @@ class Explorer : public Module {
     ish_t_ = Quantize(k2, 2 * EXP_IS_SEMI_MAX + 1) - EXP_IS_SEMI_MAX; // interval, semitones
     k2_t_ = k2;
     k3_t_ = k3;
-    if (EXP_ENV_ENABLE) k4_t_ = k4;                                   // parked: UP FM index envelope knob
+    k4_t_ = k4;
+    k5_t_ = k5;
     if (EXP_POSTFILT_ENABLE) {                                        // parked: MID / DOWN K4 post filter
       ft_t_ = 2.f * k4 - 1.f;
       filt_off_ = (fam == kUp);                                       // UP: no post filter
@@ -356,9 +399,13 @@ class Explorer : public Module {
     if (NL_DIAG) {
       const float kv[5] = { k1, k2, k3, k4, k5 };
       const float disc = (model == kFM) ? EXP_FM_RATIOS[rfmc_i_t_] : (float)ish_t_;
-      const Params p = Derive(model, zone, k2, k3, disc, 1.f);
+      const Params p = Derive(model, zone, k2, k3, disc, 0.f, 0.f);   // knob values (no envelope offset)
+      const float t4 = 2.f * k4 - 1.f, t5 = 2.f * k5 - 1.f;
+      const bool gated = loop_ ? (fabsf(t4) <= EXP_LOOP_PAD) : (t4 == 0.f);
+      const int dir = gated ? 0 : (t4 > 0.f) ? 1 : -1;
+      const int tgt = (t5 < 0.f) ? 2 : (t5 > 0.f) ? 3 : 0;
       DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, (fam != kDown) ? DampFc(k3) : 0.f,
-                   env_fm_.g, fol_f_);
+                   env_.g, dir, fabsf(t5), tgt);
     }
   }
 
@@ -372,8 +419,11 @@ class Explorer : public Module {
     float a, b;       // derived values per model (FM: ratio r / feedback b; XBAND: partner n / index;
                       // WTABLE: frame position (F_z - 1) m / morph m)
     float fc;         // K3 dampener fc (Hz) on SW1 UP / MID, 0 on DOWN
-    float envg;       // parked UP envelope (EXP_ENV_ENABLE): gain g (0..1) at the snapshot
-    float fol;        // parked live follower f = min(follower, 1) at the snapshot (0..1)
+    bool  loop;       // variant: false ONE-SHOT (SW3 MID), true LOOPING (SW3 DOWN)
+    float env;        // envelope e (0..1) at the snapshot (before gate / sign / slide)
+    int   dir;        // K4: +1 CW up, -1 CCW down, 0 off (noon / pad)
+    float d;          // K5 amount |2 k5 - 1|
+    int   tgt;        // K5 target: 2 = K2 parameter (CCW), 3 = K3 parameter (CW), 0 = none (noon)
     bool  mute;
   };
   void Activate() override {
@@ -413,26 +463,34 @@ class Explorer : public Module {
   void Process(const float* in, float* wet, size_t size) override {
     using namespace explorer_k;
     const float ca = ctrl_a_;
-    DampUpdate();                                // K3 dampener: ceilings + table / bit-table picks (smoothed K3)
+    DampUpdate();                                // K3 dampener: ceilings + table / bit-table picks (smoothed K3 + o3)
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
-      if (EXP_ENV_ENABLE)                        // parked: onset detector + live follower (48 kHz, pre-decimator)
-        for (size_t j = 0; j < kFactor; j++) {
-          OnsetDetect(in[i + j]);
-          fol_y_ = fol_.Process(in[i + j]);
-        }
+      for (size_t j = 0; j < kFactor; j++) {     // onset detector (+ parked live follower), 48 kHz, pre-decimator
+        OnsetDetect(in[i + j]);
+        if (EXP_FOLLOW_ENABLE) fol_y_ = fol_.Process(in[i + j]);
+      }
       const float d = dec_(in + i);
       k2s_ += (k2_t_ - k2s_) * ca;
       k3s_ += (k3_t_ - k3s_) * ca;
       if (fabsf(k3_t_ - k3s_) < EXP_CTRL_SNAP) k3s_ = k3_t_;   // land exactly (dampener re-picks stop)
-      if (EXP_ENV_ENABLE) {                      // parked: UP FM index envelope
-        k4s_ += (k4_t_ - k4s_) * ca;
-        if (fabsf(k4_t_ - k4s_) < EXP_CTRL_SNAP) k4s_ = k4_t_;   // land exactly (noon: envelope fully off)
-        EnvUpdate();                             // consumes the 48 kHz onset flag
-      }
+      k4s_ += (k4_t_ - k4s_) * ca;
+      if (fabsf(k4_t_ - k4s_) < EXP_CTRL_SNAP) k4s_ = k4_t_;   // land exactly (noon: t4 == 0)
+      k5s_ += (k5_t_ - k5s_) * ca;
+      if (fabsf(k5_t_ - k5s_) < EXP_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: no target)
+      EnvUpdate();                               // envelope e -> slid v -> offsets o2_ / o3_ (consumes the onset flag)
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
       rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
       rfmc_.Tick();
-      ish_.Set((float)ish_t_, disc_len_);
+      {                                          // interval: knob semitones + 24 d2 v, clamped, rounded, then slid
+        float st = (float)ish_t_;
+        if (o2_ != 0.f) {
+          st += (float)(2 * EXP_IS_SEMI_MAX) * o2_;
+          st = (st < -(float)EXP_IS_SEMI_MAX) ? -(float)EXP_IS_SEMI_MAX
+             : (st > (float)EXP_IS_SEMI_MAX) ? (float)EXP_IS_SEMI_MAX : st;
+          st = floorf(st + 0.5f);
+        }
+        ish_.Set(st, disc_len_);
+      }
       ish_.Tick();
 
       // Model / item change: start a crossfade (picked up when no fade is running).
@@ -447,11 +505,9 @@ class Explorer : public Module {
         mfade_n_ = mfade_cur_;
       }
       const bool fading = (mfade_n_ > 0);
-      // Parked UP envelope: e = g_slid + EXP_FOLLOW_FM_DEPTH on f scales the FM index (I = EXP_FM_INDEX e^2);
-      // off: e = 1.
-      const float eg = EXP_ENV_ENABLE ? fm_gs_ + EXP_FOLLOW_FM_DEPTH * (fol_on_ * fol_f_) : 1.f;
-      pn_ = Derive(var_ >> 6, var_ & 63, k2s_, k3s_, DiscOf(var_ >> 6), eg);
-      if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, k3s_, DiscOf(vfrom_ >> 6), eg);
+      // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
+      pn_ = Derive(var_ >> 6, var_ & 63, k2s_, k3s_, DiscOf(var_ >> 6), o2_, o3_);
+      if (fading) pf_ = Derive(vfrom_ >> 6, vfrom_ & 63, k2s_, k3s_, DiscOf(vfrom_ >> 6), o2_, o3_);
       mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_cur_ + 1) : 1.f;
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
 
@@ -517,7 +573,7 @@ class Explorer : public Module {
 
   static inline int VarKey(int model, int zone) { return (model << 6) | (zone & 63); }
 
-  // UP: onset detector (armitage OnsetDetect, 1:1), once per 48 kHz sample on |in| before the decimator.
+  // Onset detector (armitage OnsetDetect, 1:1), once per 48 kHz sample on |in| before the decimator.
   // Fast meter -> gate meter (up at once, slow fall) -> slow baseline; onset = gate > RISE x baseline
   // and > FLOOR, then a refractory. Latches on_pending_ for EnvUpdate() (8 kHz); the refractory is far
   // longer than one 8 kHz step, so an onset is never lost or double-counted.
@@ -534,97 +590,134 @@ class Explorer : public Module {
     if (onset) { on_refr_ = on_refr_len_; on_pending_ = true; }
   }
 
-  // UP: FM index envelope gain g (armitage EnvGain, 1:1). T = TIME_RATIO TAU_SLOW (FAST / SLOW)^|t|;
-  //   CCW (decay): onset -> g = 1, one-pole decay reaching 0 in DECAY_RATIO T, then holds 0.
-  //   CW (rise):   onset -> g = 0, one-pole rise reaching 1 in the same time, then holds 1.
-  // "Reaching" = the one-pole's 98 % point (tau = travel / TRAVEL_TAUS), where g snaps to the end value.
-  // Noon: off, g = 1. Before the first onset: CCW g = 1, CW g = 0.
-  struct EnvGain {
-    volatile float g = 1.f;
-    float at = -1.f, dec_a = 0.f;
-    int   phase = 0;               // 0 idle (holding), 1 decaying (CCW), 2 rising (CW)
-    void Reset() { g = 1.f; at = -1.f; dec_a = 0.f; phase = 0; }
-    inline void Step(bool onset, bool seen, float t2, float sr8, float ln_tau_ratio) {
+  // Envelope e (0..1), one step per 8 kHz sample. Before the first onset (seen = false): e = 0. Runs regardless of
+  // K4 noon (the gate is applied in EnvUpdate). am = |t4|.
+  //   ONE-SHOT (loop = false): onset -> e = 0, one-pole rise to 1, travel = DECAY_RATIO TIME_RATIO TAU_SLOW
+  //     (FAST / SLOW)^am (armitage EnvGain's rise law), tau = travel / TRAVEL_TAUS, snaps to 1 at 0.98, holds 1.
+  //   LOOPING (loop = true): onset -> e = 0 rising; linear ramps of T = LOOP_T_SLOW (FAST / SLOW)^s,
+  //     s = max(0, (am - PAD) / (1 - PAD)), reflecting at 0 / 1 (wavemorph fdc9927's LoopEnv).
+  struct ExpEnv {
+    volatile float g = 0.f;        // e
+    int   dir = 0;                 // ONE-SHOT: 1 rising, 0 holding; LOOPING: +1 rising, -1 falling
+    float at = -1.f, c = 0.f;      // am the coefficient was computed for; one-pole coefficient / ramp increment
+    void Reset() { g = 0.f; dir = 0; at = -1.f; c = 0.f; }
+    inline void Step(bool loop, bool onset, bool seen, float am, float sr8, float ln_tau, float ln_loop) {
       using namespace explorer_k;
-      if (t2 == 0.f) { g = 1.f; phase = 0; return; }
-      const bool cw = (t2 > 0.f);
-      if (onset) { if (cw) { g = 0.f; phase = 2; } else { g = 1.f; phase = 1; } }
-      if (!seen) { g = cw ? 0.f : 1.f; phase = 0; return; }
-      const float am = fabsf(t2);
+      if (onset) { g = 0.f; dir = 1; }
+      if (!seen) { g = 0.f; dir = 0; return; }
       if (am != at) {
         at = am;
-        const float T = EXP_ENV_FM_TIME_RATIO * EXP_ENV_TAU_SLOW_S * expf(am * ln_tau_ratio);
-        dec_a  = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (T * EXP_ENV_FM_DECAY_RATIO * sr8));
+        if (loop) {
+          float s = (am - EXP_LOOP_PAD) * (1.f / (1.f - EXP_LOOP_PAD));
+          if (s < 0.f) s = 0.f;
+          c = 1.f / (EXP_LOOP_T_SLOW_S * expf(s * ln_loop) * sr8);
+        } else {
+          const float travel = EXP_ENV_FM_DECAY_RATIO * EXP_ENV_FM_TIME_RATIO * EXP_ENV_TAU_SLOW_S * expf(am * ln_tau);
+          c = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (travel * sr8));
+        }
       }
-      switch (phase) {
-        case 1: g += dec_a * (0.f - g);  if (g <= 0.02f) { g = 0.f; phase = 0; } break;
-        case 2: g += dec_a * (1.f - g);  if (g >= 0.98f) { g = 1.f; phase = 0; } break;
-        default: break;
+      if (loop) {
+        float v = g + (float)dir * c;
+        if (v >= 1.f)      { v = 2.f - v; dir = -1; }   // reflect at the top
+        else if (v <= 0.f) { v = -v;      dir = 1;  }   // reflect at the bottom
+        g = v;
+      } else if (dir == 1) {
+        float v = g + c * (1.f - g);
+        if (v >= 0.98f) { v = 1.f; dir = 0; }
+        g = v;
       }
     }
   };
+  // Per 8 kHz sample: envelope step, gate + sign, 1 ms slide, K5 split into the K2 / K3 offsets.
+  //   v_target = dir e (dir = sign(t4)); 0 at t4 == 0 (ONE-SHOT) / |t4| <= EXP_LOOP_PAD (LOOPING).
+  //   mv_ = one-pole (tau EXP_ENV_FM_SLIDE_MS) toward v_target, lands exactly (EXP_CTRL_SNAP).
+  //   o2_ = max(-t5, 0) mv_ (K2 parameter), o3_ = max(t5, 0) mv_ (K3 parameter); knob units (1 = full span).
   inline void EnvUpdate() {
+    using namespace explorer_k;
     const bool onset = on_pending_;
     on_pending_ = false;
     if (onset) on_seen_ = true;
-    env_fm_.Step(onset, on_seen_, 2.f * k4s_ - 1.f, sr8_, ln_tau_ratio_);
-    using namespace explorer_k;
-    // g jumps on an onset (CW -> 0, CCW -> 1): slide it (1 ms one-pole) before it scales the index, land exactly.
-    fm_gs_ += fm_gs_a_ * (env_fm_.g - fm_gs_);
-    if (fabsf(env_fm_.g - fm_gs_) < EXP_CTRL_SNAP) fm_gs_ = env_fm_.g;
-    // Live follower on top: f = min(follower, 1); on slides toward 1 (K4 off noon) / 0 (noon), lands exactly.
-    fol_f_ = (fol_y_ < 1.f) ? fol_y_ : 1.f;
-    const float on_t = (2.f * k4s_ - 1.f != 0.f) ? 1.f : 0.f;
-    fol_on_ += fol_gate_a_ * (on_t - fol_on_);
-    if (fabsf(on_t - fol_on_) < EXP_CTRL_SNAP) fol_on_ = on_t;
+    const float t4 = 2.f * k4s_ - 1.f;
+    const float am = fabsf(t4);
+    env_.Step(loop_, onset, on_seen_, am, sr8_, ln_tau_ratio_, ln_loop_ratio_);
+    float e = env_.g;
+    if (EXP_FOLLOW_ENABLE) {                     // parked live follower on top: e + DEPTH min(follower, 1)
+      fol_f_ = (fol_y_ < 1.f) ? fol_y_ : 1.f;
+      e += EXP_FOLLOW_DEPTH * fol_f_;
+    }
+    const bool gated = loop_ ? (am <= EXP_LOOP_PAD) : (t4 == 0.f);
+    const float vt = gated ? 0.f : (t4 > 0.f) ? e : -e;
+    mv_ += mv_a_ * (vt - mv_);
+    if (fabsf(vt - mv_) < EXP_CTRL_SNAP) mv_ = vt;
+    const float t5 = 2.f * k5s_ - 1.f;
+    o2_ = (t5 < 0.f) ? -t5 * mv_ : 0.f;
+    o3_ = (t5 > 0.f) ?  t5 * mv_ : 0.f;
   }
 
-  // K3 dampener, once per audio block from the smoothed K3 (nothing when it did not move):
-  //   fc = DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^(k3^DAMP_CURVE) (exactly DAMP_FMAX at k3 = 1); hc_fold_ =
-  //   min(FOLD_LIMIT_HZ, fc) is the L the UP models' caps read (ShapeK); the table blend / picks and bit-table
-  //   picks follow (Repick). Runs on every
-  //   family (the picks are read only on MID; DOWN models do not read fc).
+  // K3 dampener, once per audio block from the smoothed K3 and the K3 envelope offset o3_ (its value at the block
+  // start; nothing when neither moved):
+  //   ln(fc / DAMP_FMIN) = k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) + o3_ ln(DAMP_FMAX / DAMP_FMIN) (octave offset),
+  //   clamped to [0, ln(FMAX / FMIN)] (exactly DAMP_FMAX / DAMP_FMIN at the ends); hc_fold_ = min(FOLD_LIMIT_HZ, fc)
+  //   is the L the UP models' caps read (ShapeK); the table blend / picks and bit-table picks follow (Repick), only
+  //   for the SW2 slots running or about to run (og_ / og_t_ != 0); a slot re-picks when it starts (pick_fc_).
+  //   Runs on every family (the picks are read only on MID; DOWN models do not read fc).
   void DampUpdate() {
     using namespace explorer_k;
-    const float k = k3s_;
-    if (k == damp_k_) return;                    // unchanged: ceilings / picks hold
-    damp_k_ = k;
-    damp_fc_ = (k >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(DampCurve(k) * damp_lnr_);
-    hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
-    Repick();
-  }
-
-  // Dampener: per band and slot, hf = min(TB_FMAX, fc) / f'_k -> the table blend lo / x (BlendPick, read with
-  // EXP_TB_BLEND) and the discrete table version (largest H <= hf, floor H = 1; read with EXP_TB_BLEND = false),
-  // and the bit-table step count (largest S of 16 / 8 / 4 / 2 with (S/2) f'_k <= min(FOLD_LIMIT_HZ, fc), floor 2;
-  // EXP_ANTIFOLD only). A band whose discrete pick moves keeps its old pick in wtlvf_ / btsf_ and crossfades
-  // old -> new linearly over pk_fade_len_ samples (EXP_DAMP_SLIDE_MS); all other bands' old = new. One shared
-  // fade counter: with 48-frame (1 ms) blocks a fade ends inside its block; a re-pick during a running fade
-  // restarts it from the band's last target. With EXP_TB_BLEND a moved table version does not start the slide.
-  void Repick() {
-    using namespace explorer_k;
-    const float cw = (damp_fc_ < EXP_TB_FMAX) ? damp_fc_ : EXP_TB_FMAX;
+    const float k = k3s_, om = o3_;
+    if (k != damp_k_ || om != damp_o_) {
+      damp_k_ = k;
+      damp_o_ = om;
+      float lf = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
+      lf += om * damp_lnr_;
+      damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
+      hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
+    }
+    bool any = false, run[kSlots];
+    for (int o = 0; o < kSlots; o++) {           // og index = slot index (kSU, kSP, kSD)
+      run[o] = (og_[o] != 0.f || og_t_[o] != 0.f) && pick_fc_[o] != damp_fc_;
+      any = any || run[o];
+    }
+    if (!any) return;                            // unchanged: ceilings / picks hold
     bool moved = false;
     for (int o = 0; o < kSlots; o++) {
-      for (int k = 0; k < kBands; k++) {
-        const float hf = cw * ifp_[o][k];
-        if (EXP_TB_BLEND) BlendPick(hf, tblo_[o][k], tbx_[o][k]);
-        int hk = (int)hf;
-        if (hk > EXP_TB_HMAX) hk = EXP_TB_HMAX;
-        const int lv = wt_lv_of_h_[hk];
-        int st = EXP_BT_STEPS;
-        if (EXP_ANTIFOLD) {
-          const float fp = fp_[o][k];
-          while (st > EXP_BT_STEPS_MIN && 0.5f * (float)st * fp > hc_fold_) st >>= 1;
-        }
-        wtlvf_[o][k] = wtlv_[o][k];
-        btsf_[o][k] = btsc_[o][k];
-        if (lv != wtlv_[o][k]) { wtlv_[o][k] = (uint8_t)lv; if (!EXP_TB_BLEND) moved = true; }
-        if (st != btsc_[o][k]) { btsc_[o][k] = (uint8_t)st; moved = true; }
+      if (run[o]) { moved = Repick(o) || moved; pick_fc_[o] = damp_fc_; }
+      else {                                     // idle slot: old = new (no stale crossfade in the new slide)
+        for (int b = 0; b < kBands; b++) { wtlvf_[o][b] = wtlv_[o][b]; btsf_[o][b] = btsc_[o][b]; }
       }
     }
     if (moved) pk_fade_n_ = pk_fade_len_;
     else       pk_fade_n_ = 0;
+  }
+
+  // Dampener: per band of slot o, hf = min(TB_FMAX, fc) / f'_k -> the table blend lo / x (BlendPick, read with
+  // EXP_TB_BLEND) and the discrete table version (largest H <= hf, floor H = 1; read with EXP_TB_BLEND = false),
+  // and the bit-table step count (largest S of 16 / 8 / 4 / 2 with (S/2) f'_k <= min(FOLD_LIMIT_HZ, fc), floor 2;
+  // EXP_ANTIFOLD only). A band whose discrete pick moves keeps its old pick in wtlvf_ / btsf_ and crossfades
+  // old -> new linearly over pk_fade_len_ samples (EXP_DAMP_SLIDE_MS); all other bands' old = new. One shared
+  // fade counter (DampUpdate): with 48-frame (1 ms) blocks a fade ends inside its block; a re-pick during a running
+  // fade restarts it from the band's last target. With EXP_TB_BLEND a moved table version does not start the slide.
+  // Returns true when a pick that slides moved.
+  bool Repick(int o) {
+    using namespace explorer_k;
+    const float cw = (damp_fc_ < EXP_TB_FMAX) ? damp_fc_ : EXP_TB_FMAX;
+    bool moved = false;
+    for (int k = 0; k < kBands; k++) {
+      const float hf = cw * ifp_[o][k];
+      if (EXP_TB_BLEND) BlendPick(hf, tblo_[o][k], tbx_[o][k]);
+      int hk = (int)hf;
+      if (hk > EXP_TB_HMAX) hk = EXP_TB_HMAX;
+      const int lv = wt_lv_of_h_[hk];
+      int st = EXP_BT_STEPS;
+      if (EXP_ANTIFOLD) {
+        const float fp = fp_[o][k];
+        while (st > EXP_BT_STEPS_MIN && 0.5f * (float)st * fp > hc_fold_) st >>= 1;
+      }
+      wtlvf_[o][k] = wtlv_[o][k];
+      btsf_[o][k] = btsc_[o][k];
+      if (lv != wtlv_[o][k]) { wtlv_[o][k] = (uint8_t)lv; if (!EXP_TB_BLEND) moved = true; }
+      if (st != btsc_[o][k]) { btsc_[o][k] = (uint8_t)st; moved = true; }
+    }
+    return moved;
   }
 
   // Table version blend at fractional harmonic count hf: lo = largest version with LEVEL_H[lo] <= hf, x =
@@ -643,57 +736,65 @@ class Explorer : public Module {
 
   float DiscOf(int m) const { return (m == kFM) ? rfmc_.v : (m == kISH) ? ish_.v : 0.f; }
 
-  // Derived values per model from K2 / K3 (0..1), the slid discrete value (FM ratio / interval semitones)
-  // and the parked UP envelope factor eg (1 when EXP_ENV_ENABLE = false).
-  Params Derive(int m, int zone, float k2, float k3, float disc, float eg) const {
+  // Derived values per model from K2 / K3 (0..1), the slid discrete value (FM ratio / interval semitones) and
+  // the envelope offsets o2 / o3 (knob units: 1 = the parameter's full span; 0 = knob value only). Every span is
+  // the parameter's full natural range, so p = clamp(p_knob + o span, range) = the parameter at clamp(k + o, 0, 1)
+  // on the knob's own law; the frequency shift keeps the sign of the knob t and modulates |t| (= g / log2(801),
+  // g = log2(|s| / F0 + 1)); the interval semitones are modulated in Process (ish_ target), the K3 dampener in
+  // DampUpdate (fc, per block). XBAND: K2 inert, o2 unused.
+  static inline float Clamp01(float x) { return (x < 0.f) ? 0.f : (x > 1.f) ? 1.f : x; }
+  Params Derive(int m, int zone, float k2, float k3, float disc, float o2, float o3) const {
     using namespace explorer_k;
     Params p;
     p.zone = zone;
     switch (m) {
       case kFM: {                          // p0 = r, p1 = 1/r, p2 = I, p3 = feedback b
         const float r = disc;
-        p.p0 = r; p.p1 = 1.f / r; p.p2 = EXP_FM_INDEX * eg * eg; p.p3 = EXP_FBFM_FB_MAX * k2;
+        p.p0 = r; p.p1 = 1.f / r; p.p2 = EXP_FM_INDEX; p.p3 = EXP_FBFM_FB_MAX * Clamp01(k2 + o2);   // b in [0, FB_MAX]
         p.a = r; p.b = p.p3; break;
       }
       case kXFM:                           // n0 = partner offset, p1 = I
         p.n0 = EXP_XB_PARTNER;
-        p.p1 = EXP_FM_INDEX * eg * eg;
+        p.p1 = EXP_FM_INDEX;
         p.a = (float)p.n0; p.b = p.p1; break;
       case kFSH: {                         // p0 = fixed increment / sample, p1 = proportional increment per Hz of f'
         const float t = 2.f * k2 - 1.f;
-        const float at = fabsf(t);
+        const float at = Clamp01(fabsf(t) + o2);           // |t| + d2 v: g = at log2(MAX / F0 + 1), [0, that]
         float s = EXP_FS_CURVE_HZ * (expf(at * logf(EXP_FS_MAX_HZ / EXP_FS_CURVE_HZ + 1.f)) - 1.f);
-        if (t < 0.f) s = -s;
-        if (t == 0.f) s = 0.f;
-        p.p0 = s * (1.f - k3) / sr8_;
-        p.p1 = s * k3 / (EXP_FS_REF_HZ * sr8_);
-        p.a = s; p.b = k3; break;
+        if (t < 0.f) s = -s;                               // sign of the knob (t = 0: +)
+        if (at == 0.f) s = 0.f;
+        const float kb = Clamp01(k3 + o3);                 // scale blend
+        p.p0 = s * (1.f - kb) / sr8_;
+        p.p1 = s * kb / (EXP_FS_REF_HZ * sr8_);
+        p.a = s; p.b = kb; break;
       }
       case kISH: {                         // p0 = 0, p1 = proportional increment per Hz of f'
-        const float cents = EXP_IS_DETUNE_CENTS * (2.f * k3 - 1.f);
+        const float cents = EXP_IS_DETUNE_CENTS * (2.f * Clamp01(k3 + o3) - 1.f);   // [-50, 50]
         const float ratio = exp2f((disc + cents * 0.01f) * (1.f / 12.f));
         p.p0 = 0.f;
         p.p1 = (ratio - 1.f) / sr8_;
         p.a = disc; p.b = cents; break;
       }
       case kHARM: {                        // n0 + p0 = harmonic n, p1 = fundamental share
-        const float n = 1.f + (EXP_HARM_MAX - 1.f) * k2;
+        const float n = 1.f + (EXP_HARM_MAX - 1.f) * Clamp01(k2 + o2);   // [1, MAX]
+        const float kb = Clamp01(k3 + o3);                                // fundamental share
         p.n0 = (int)n;
         if (p.n0 > (int)EXP_HARM_MAX) p.n0 = (int)EXP_HARM_MAX;
-        p.p0 = n - (float)p.n0; p.p1 = k3;
-        p.a = n; p.b = k3; break;
+        p.p0 = n - (float)p.n0; p.p1 = kb;
+        p.a = n; p.b = kb; break;
       }
       case kWT: {                          // morph m = K2: n0 = packed frame below, p0 = fraction toward n0 + 1,
                                            // p1 = 1 / zone storage scale (WaveMorph MorphPos / Shape)
         const int nf = EXP_TB_ZONE_FRAMES[zone];
-        const float pos = (float)(nf - 1) * k2;
+        const float mm = Clamp01(k2 + o2);                // morph m in [0, 1]
+        const float pos = (float)(nf - 1) * mm;
         int f0 = (int)pos;
         if (f0 > nf - 2) f0 = nf - 2;
         if (f0 < 0) f0 = 0;
         p.n0 = tb_off_[zone] + f0;
         p.p0 = pos - (float)f0;
         p.p1 = 1.f / EXP_TB_ZONE_I16_SCALE[zone];
-        p.a = pos; p.b = k2; break;
+        p.a = pos; p.b = mm; break;
       }
       default: {                           // kBIT: bt = waveform zone (0..31); a = 1..32;
                                            // p0 / p1 / p2 = triangle / saw / pulse weights from K3
@@ -1368,8 +1469,8 @@ class Explorer : public Module {
   }
 
   void DiagControls(const ControlSurface& cs, daisy::Led& led1, const float* kv,
-                    int sw1, int oct, int model, int zone, float a, float b, float fc, float envg,
-                    float fol) {
+                    int sw1, int oct, int model, int zone, float a, float b, float fc, float env,
+                    int dir, float d, int tgt) {
     using namespace explorer_k;
     const uint32_t now = daisy::System::GetNow();
     DiagSnap s;
@@ -1379,8 +1480,11 @@ class Explorer : public Module {
     s.model = model; s.zone = zone;
     s.a = a; s.b = b;
     s.fc = fc;
-    s.envg = envg;
-    s.fol = fol;
+    s.loop = loop_;
+    s.env = env;
+    s.dir = dir;
+    s.d = d;
+    s.tgt = tgt;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1412,7 +1516,7 @@ class Explorer : public Module {
   static inline void SinCos(float theta, float& s, float& c) {
     using namespace explorer_k;
     static_assert((EXP_SIN_SIZE & (EXP_SIN_SIZE - 1)) == 0, "power of two");
-    static_assert(EXP_FM_INDEX * (1.f + EXP_FOLLOW_FM_DEPTH) * (1.f + EXP_FOLLOW_FM_DEPTH) + EXP_FBFM_FB_MAX < 90.f,
+    static_assert(EXP_FM_INDEX + EXP_FBFM_FB_MAX < 90.f,
                   "SinCos offset covers |theta| < ~100 rad");
     constexpr int   kMask = EXP_SIN_SIZE - 1;
     constexpr float kScale = (float)EXP_SIN_SIZE / 6.283185307f;
@@ -1526,11 +1630,14 @@ class Explorer : public Module {
   float ft_ = 0.f;                 // smoothed t (per block)
   volatile float ft_t_ = 0.f;      // target t = 2 k4 - 1
   volatile bool filt_off_ = false; // SW1 UP: post filter faded out / not run
-  // UP: K4 FM index envelope (armitage's K2 FM envelope)
-  float k4s_ = 0.5f;               // smoothed K4 (envelope t = 2 k4s_ - 1)
-  volatile float k4_t_ = 0.5f;
+  // K4 / K5 envelope modulation
+  const bool loop_;                // variant: false ONE-SHOT (SW3 MID), true LOOPING (SW3 DOWN)
+  float k4s_ = 0.5f, k5s_ = 0.5f;  // smoothed K4 (t4 = 2 k4s_ - 1), K5 (t5 = 2 k5s_ - 1)
+  volatile float k4_t_ = 0.5f, k5_t_ = 0.5f;
   // K3 dampener (per block, DampUpdate)
   float damp_k_ = -1.f;            // smoothed K3 the ceilings / picks were computed for
+  float damp_o_ = 0.f;             // ... and the K3 envelope offset o3_
+  float pick_fc_[kSlots] = { -1.f, -1.f, -1.f };   // fc each slot's picks were made for (-1 = none)
   float damp_fc_ = 4000.f;         // fc (Hz)
   float damp_lnr_ = 0.f;           // ln(DAMP_FMAX / DAMP_FMIN)
   float hc_fold_ = 4000.f;         // min(EXP_FOLD_LIMIT_HZ, fc): L of the UP caps
@@ -1541,16 +1648,16 @@ class Explorer : public Module {
   int   on_refr_ = 0, on_refr_len_ = 4800;               // refractory samples left / length (48 kHz)
   bool  on_pending_ = false;                             // an onset fired, not yet consumed by EnvUpdate()
   bool  on_seen_ = false;                                // an onset has happened
-  EnvGain env_fm_;
-  float fm_gs_ = 1.f;              // env_fm_.g slid (1 ms one-pole, 8 kHz); this scales K3 on UP
-  float fm_gs_a_ = 0.f;            // its coefficient (tau EXP_ENV_FM_SLIDE_MS)
+  ExpEnv env_;                     // envelope e (ONE-SHOT / LOOPING by loop_)
+  float mv_ = 0.f;                 // applied v = dir e (gated), slid (1 ms one-pole, 8 kHz)
+  float mv_a_ = 0.f;               // its coefficient (tau EXP_ENV_FM_SLIDE_MS)
+  float o2_ = 0.f, o3_ = 0.f;      // envelope offsets on the K2 / K3 parameter (knob units, 1 = full span)
   float ln_tau_ratio_ = 0.f;       // ln(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)
-  // UP: live follower (on top of the FM envelope)
+  float ln_loop_ratio_ = 0.f;      // ln(EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S)
+  // Live follower (parked, EXP_FOLLOW_ENABLE)
   EnvFollower fol_;                // rectifier + 4-pole LP, 48 kHz raw input
   float fol_y_ = 0.f;              // follower output, latest 48 kHz sample
-  volatile float fol_f_ = 0.f;     // f = min(fol_y_, 1), per 8 kHz step (DIAG reads it)
-  float fol_on_ = 0.f;             // gate: slid 1 with K4 off noon, 0 at noon
-  float fol_gate_a_ = 0.f;         // gate one-pole coefficient (8 kHz, tau EXP_FOLLOW_GATE_MS)
+  float fol_f_ = 0.f;              // f = min(fol_y_, 1), per 8 kHz step
   float f_m_ = 0.f, f_step_ = 0.f; // dry -> filtered mix and its per-sample slide
   float f_lnhp_ = 0.f, f_lnlp_ = 0.f;
   float f_a_ = 0.f;
