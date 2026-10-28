@@ -83,10 +83,13 @@ constexpr int   EXP_TB_SIZE           = 256;     // samples per single-cycle tab
 constexpr int   EXP_TB_HMAX           = EXP_TB_SIZE / 2 - 1;   // highest harmonic a table holds (= WM_HMAX)
 constexpr int   EXP_TB_TD_SIZE        = 1024;    // time-domain definition resolution, 4x oversampled (= WM_TD_SIZE)
 constexpr int   EXP_TB_LEVELS         = 14;      // band-limited versions per frame (= WM_LEVELS)
-// Harmonic count of each band-limited version (= WM_LEVEL_H); a band uses the largest H <= min(EXP_TB_FMAX, fc) / f'_k
-// (fc = K3 dampener, re-picked per block when K3 moved; floor H = 1).
+// Harmonic count of each band-limited version (= WM_LEVEL_H). hf = min(EXP_TB_FMAX, fc) / f'_k (fc = K3 dampener,
+// recomputed per block when K3 moved). EXP_TB_BLEND = true: linear blend of the two neighbouring versions
+// (LEVEL_H[lo] <= hf < LEVEL_H[lo + 1], x = (hf - H_lo) / (H_hi - H_lo); hf < 1 -> version 0, hf >= 127 -> last).
+// false: the largest H <= hf (floor H = 1), a moved pick slides over EXP_DAMP_SLIDE_MS.
 constexpr int   EXP_TB_LEVEL_H[EXP_TB_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
 constexpr float EXP_TB_FMAX           = 4000.f;  // Hz; band-engine ceiling for the table band limit (= WM_TAB_FMAX)
+constexpr bool  EXP_TB_BLEND          = true;    // true = continuous version blend (2026-10-28); false = discrete pick + slide
 constexpr float EXP_TB_I16_SCALE      = 16384.f; // int16 storage scale, default: |table| <= 2.0 (= WM_I16_SCALE)
 constexpr float EXP_TB_I16_SCALE_WIDE = 6554.f;  // zones 3 / 10: |table| <= 5.0 (= WM_I16_SCALE_WIDE)
 // Storage scale per zone; the RMS-matched waves are capped to that zone's headroom 32767 / scale (= WM_ZONE_I16_SCALE).
@@ -195,14 +198,16 @@ constexpr float EXP_FILT_SNAP      = 1e-4f;    // |t smoothed| below this with t
 constexpr float EXP_FILT_SLIDE_MS  = 1.f;      // ms; bypass <-> filter mix slide (= ARM_MUTE_SLIDE_MS as armitage uses it)
 
 // --- K3 DAMPENER on SW1 UP / MID (2026-10-26; was the K5 CCW harmonic lowpass) -----------------
-// fc = DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^k3 (k3 = smoothed K3 0..1, exponential; k3 = 1 -> exactly DAMP_FMAX),
+// fc = DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^(k3^DAMP_CURVE) (k3 = smoothed K3 0..1; k3 = 1 -> exactly DAMP_FMAX),
 // evaluated once per audio block (only when the smoothed K3 moved). Every per-band harmonic ceiling C (on f'_k,
-// after SW2) becomes min(C, fc): FM caps (L), table / bit-table picks (WT_FMAX, S). Each band keeps its level and
-// fundamental. A discrete pick that moves slides over DAMP_SLIDE_MS (linear crossfade old -> new per band).
-// Full CW = today's open ceilings. SW1 DOWN: not applied.
+// after SW2) becomes min(C, fc): FM caps (L), table versions (EXP_TB_FMAX; blended, EXP_TB_BLEND), bit-table
+// steps S. Each band keeps its level and fundamental. A discrete pick that moves (bit table; tables with
+// EXP_TB_BLEND = false) slides over DAMP_SLIDE_MS (linear crossfade old -> new per band). SW1 DOWN: not applied.
 constexpr float EXP_DAMP_FMAX     = 4000.f;   // Hz; fc at K3 full CW (open)
 constexpr float EXP_DAMP_FMIN     = 150.f;    // Hz; fc at K3 full CCW (dark: every band above it plain fundamental)
-constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new table version / step count per band
+constexpr float EXP_DAMP_CURVE    = 0.5f;     // exponent on k3 (2026-10-28; 1 = the former plain exponential law):
+                                              // < 1 spends more of the knob at the top (noon: fc ~ 1.5 kHz, was 775 Hz)
+constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new discrete pick per band (see above)
 
 // --- K4 on SW1 UP = triggered envelope on the FM index: PARKED (2026-10-26) ---------------------------
 // false = onset detector, live follower and envelope not run, K4 not read: I = EXP_FM_INDEX.

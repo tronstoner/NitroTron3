@@ -21,16 +21,22 @@
 //       idle starts from cleared model state.
 //   wet = interpolate(wet8) -> DC blocker -> soft clipper -> FS1 mute
 //
-// K3 DAMPENER (SW1 UP / MID; not on DOWN): fc = 150 (4000 / 150)^k3 Hz (EXP_DAMP_FMIN / FMAX, k3 = smoothed
-//   K3 0..1, exponential, k3 = 1 -> exactly 4000), evaluated per audio block in DampUpdate (only when the
-//   smoothed K3 moved). Every per-band harmonic ceiling on f'_k (after SW2) becomes min(ceiling, fc); each band
-//   keeps its level and fundamental, loses only harmonics above fc. Full CW = the open ceilings (as before):
+// K3 DAMPENER (SW1 UP / MID; not on DOWN): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
+//   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz), evaluated per audio block in
+//   DampUpdate (only when the smoothed K3 moved). Every per-band harmonic ceiling on f'_k (after SW2) becomes
+//   min(ceiling, fc); each band keeps its level and fundamental, loses only harmonics above fc:
 //     FM caps    L = min(4000, fc) in the FM index / feedback caps and the XBAND index cap (down to 0 = plain
 //                fundamental); EXP_FBFM_PUSHED = true or EXP_ANTIFOLD = false: no FM caps -> dampener inert on FM
-//     TABLES     version = largest H <= min(4000, fc) / f'_k (floor H = 1, EXP_TB_LEVEL_H); BITTAB S with
-//                (S/2) f' <= L (floor S = 2); a band whose pick moves crossfades old -> new linearly over
-//                EXP_DAMP_SLIDE_MS (1 ms = one 48-frame block; one fade counter, per-band old pick). The pick is
-//                per band and slot, not per zone: it applies to both sides of a table zone crossfade.
+//     TABLES     hf = min(4000, fc) / f'_k (fractional harmonic count). EXP_TB_BLEND = true: lo / hi = the two
+//                neighbouring versions, LEVEL_H[lo] <= hf < LEVEL_H[hi = lo + 1], W = (1 - x) read(lo) + x read(hi),
+//                x = (hf - H_lo) / (H_hi - H_lo) linear (hf < 1: version 0 only; hf >= 127: last only); x = 0 ->
+//                one read. lo / x per band and slot, recomputed per block when fc moved, read by both sides of a
+//                zone crossfade. Continuous in hf (x -> 1 at H_hi = x = 0 of the next pair), no slide.
+//                NOTE: x > 0 admits harmonics of version hi above hf f'_k, i.e. above min(4000, fc) (at K3 CW
+//                above the 4 kHz engine Nyquist: they fold, weight x); full CW is no longer the old open pick.
+//                EXP_TB_BLEND = false: version = largest H <= hf (floor H = 1); a moved pick crossfades
+//                old -> new over EXP_DAMP_SLIDE_MS (1 ms = one 48-frame block; one fade counter).
+//     BITTAB     S with (S/2) f' <= L (floor S = 2); a moved S crossfades old -> new over EXP_DAMP_SLIDE_MS.
 //
 // DISCRETE VALUES are stepped on the knob (snap to the item): items that change the waveform
 // (table zone: EXP_TB_ZONE_XFADE_MS; FM ratio <-> XBAND, bit-table waveform: EXP_MODEL_XFADE_MS) crossfade
@@ -51,8 +57,9 @@
 //   WAVETABLE    W = lerp_frames(lerp_phase(table[zone][f0][level_k]), table[zone][f0 + 1][level_k]) / scale_z:
 //                morph m = K2 (smoothed), position (F_z - 1) m, f0 = frame below (<= F_z - 2), linear crossfade
 //                between the two adjacent frames; linear interpolation in phase (256 points); scale_z =
-//                EXP_TB_ZONE_I16_SCALE[zone]; level_k see K3 DAMPENER. A K1 zone change crossfades old -> new zone
-//                over EXP_TB_ZONE_XFADE_MS (both read the same morph m and the same per-band picks); stateless.
+//                EXP_TB_ZONE_I16_SCALE[zone]; level_k (or the lo / hi blend) see K3 DAMPENER. A K1 zone change
+//                crossfades old -> new zone over EXP_TB_ZONE_XFADE_MS (both read the same morph m and the same
+//                per-band versions / blend); stateless.
 //   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> an 11th K1 zone on MID after the 10 table zones)
 //                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
 //                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
@@ -93,7 +100,7 @@
 //                    1 ms crossfade); DOWN: model (harmonics / freq shift / interval)
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through
 //                    the zone's frames; DOWN: per model (see MODELS)
-//   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open);
+//   K3  dampener     UP / MID: per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law;
 //                    DOWN: per model (see MODELS)
 //   K4  unused       (parked envelope / post filter, see PARKED)
 //   K5  unused
@@ -234,6 +241,8 @@ class Explorer : public Module {
       for (int l = 0; l < EXP_TB_LEVELS; l++) if (EXP_TB_LEVEL_H[l] <= h) lv = l;
       wt_lv_of_h_[h] = (uint8_t)lv;
     }
+    for (int o = 0; o < kSlots; o++)                     // open table blend (fc = EXP_DAMP_FMAX); DampUpdate recomputes
+      for (int k = 0; k < kBands; k++) BlendPick(EXP_TB_FMAX * ifp_[o][k], tblo_[o][k], tbx_[o][k]);
     damp_k_ = -1.f;                              // forces DampUpdate on the first block
     damp_fc_ = EXP_DAMP_FMAX;
     hc_fold_ = EXP_FOLD_LIMIT_HZ;
@@ -370,10 +379,17 @@ class Explorer : public Module {
   void Activate() override {
     if (NL_DIAG) { diag_changed_ = true; diag_t_ = daisy::System::GetNow(); }
   }
-  // K3 dampener fc (Hz) at k3 (0..1): DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^k3, exactly DAMP_FMAX at k3 >= 1.
+  // K3 dampener fc (Hz) at k3 (0..1): DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^(k3^DAMP_CURVE), exactly DAMP_FMAX
+  // at k3 >= 1, DAMP_FMIN at k3 <= 0.
   static float DampFc(float k3) {
     using namespace explorer_k;
-    return (k3 >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(k3 * logf(EXP_DAMP_FMAX / EXP_DAMP_FMIN));
+    return (k3 >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(DampCurve(k3) * logf(EXP_DAMP_FMAX / EXP_DAMP_FMIN));
+  }
+  // k3^EXP_DAMP_CURVE (0 at k3 <= 0; sqrtf for the 0.5 default). Per block only (DampUpdate), and DIAG.
+  static inline float DampCurve(float k3) {
+    using namespace explorer_k;
+    if (k3 <= 0.f) return 0.f;
+    return (EXP_DAMP_CURVE == 0.5f) ? sqrtf(k3) : (EXP_DAMP_CURVE == 1.f) ? k3 : powf(k3, EXP_DAMP_CURVE);
   }
   bool DiagTake(DiagSnap& out) {
     if (diag_tap_pend_)  { out = diag_tap_;  diag_tap_pend_ = false;  return true; }
@@ -564,32 +580,36 @@ class Explorer : public Module {
   }
 
   // K3 dampener, once per audio block from the smoothed K3 (nothing when it did not move):
-  //   fc = DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^k3 (exactly DAMP_FMAX at k3 = 1); hc_fold_ = min(FOLD_LIMIT_HZ, fc)
-  //   is the L the UP models' caps read (ShapeK); the table / bit-table picks follow (Repick). Runs on every
+  //   fc = DAMP_FMIN (DAMP_FMAX / DAMP_FMIN)^(k3^DAMP_CURVE) (exactly DAMP_FMAX at k3 = 1); hc_fold_ =
+  //   min(FOLD_LIMIT_HZ, fc) is the L the UP models' caps read (ShapeK); the table blend / picks and bit-table
+  //   picks follow (Repick). Runs on every
   //   family (the picks are read only on MID; DOWN models do not read fc).
   void DampUpdate() {
     using namespace explorer_k;
     const float k = k3s_;
     if (k == damp_k_) return;                    // unchanged: ceilings / picks hold
     damp_k_ = k;
-    damp_fc_ = (k >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(k * damp_lnr_);
+    damp_fc_ = (k >= 1.f) ? EXP_DAMP_FMAX : EXP_DAMP_FMIN * expf(DampCurve(k) * damp_lnr_);
     hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
     Repick();
   }
 
-  // Dampener: re-pick each band's table version (largest H <= min(TB_FMAX, fc) / f'_k, floor H = 1) and
-  // bit-table step count (largest S of 16 / 8 / 4 / 2 with (S/2) f'_k <= min(FOLD_LIMIT_HZ, fc), floor 2;
-  // EXP_ANTIFOLD only). A band whose pick moves keeps its old pick in wtlvf_ / btsf_ and crossfades old -> new
-  // linearly over pk_fade_len_ samples (EXP_DAMP_SLIDE_MS); all other bands' old = new. One shared fade counter:
-  // with 48-frame (1 ms) blocks a fade ends inside its block; a re-pick during a running fade restarts it from
-  // the band's last target.
+  // Dampener: per band and slot, hf = min(TB_FMAX, fc) / f'_k -> the table blend lo / x (BlendPick, read with
+  // EXP_TB_BLEND) and the discrete table version (largest H <= hf, floor H = 1; read with EXP_TB_BLEND = false),
+  // and the bit-table step count (largest S of 16 / 8 / 4 / 2 with (S/2) f'_k <= min(FOLD_LIMIT_HZ, fc), floor 2;
+  // EXP_ANTIFOLD only). A band whose discrete pick moves keeps its old pick in wtlvf_ / btsf_ and crossfades
+  // old -> new linearly over pk_fade_len_ samples (EXP_DAMP_SLIDE_MS); all other bands' old = new. One shared
+  // fade counter: with 48-frame (1 ms) blocks a fade ends inside its block; a re-pick during a running fade
+  // restarts it from the band's last target. With EXP_TB_BLEND a moved table version does not start the slide.
   void Repick() {
     using namespace explorer_k;
     const float cw = (damp_fc_ < EXP_TB_FMAX) ? damp_fc_ : EXP_TB_FMAX;
     bool moved = false;
     for (int o = 0; o < kSlots; o++) {
       for (int k = 0; k < kBands; k++) {
-        int hk = (int)(cw * ifp_[o][k]);
+        const float hf = cw * ifp_[o][k];
+        if (EXP_TB_BLEND) BlendPick(hf, tblo_[o][k], tbx_[o][k]);
+        int hk = (int)hf;
         if (hk > EXP_TB_HMAX) hk = EXP_TB_HMAX;
         const int lv = wt_lv_of_h_[hk];
         int st = EXP_BT_STEPS;
@@ -599,12 +619,26 @@ class Explorer : public Module {
         }
         wtlvf_[o][k] = wtlv_[o][k];
         btsf_[o][k] = btsc_[o][k];
-        if (lv != wtlv_[o][k]) { wtlv_[o][k] = (uint8_t)lv; moved = true; }
+        if (lv != wtlv_[o][k]) { wtlv_[o][k] = (uint8_t)lv; if (!EXP_TB_BLEND) moved = true; }
         if (st != btsc_[o][k]) { btsc_[o][k] = (uint8_t)st; moved = true; }
       }
     }
     if (moved) pk_fade_n_ = pk_fade_len_;
     else       pk_fade_n_ = 0;
+  }
+
+  // Table version blend at fractional harmonic count hf: lo = largest version with LEVEL_H[lo] <= hf, x =
+  // (hf - H_lo) / (H_lo+1 - H_lo) toward hi = lo + 1; hf < 1 -> lo = 0, x = 0 (fundamental floor); hf >= the
+  // last H -> lo = last, x = 0. LEVEL_H is integer, so lo = the version of floor(hf) (wt_lv_of_h_).
+  void BlendPick(float hf, uint8_t& lo, float& x) const {
+    using namespace explorer_k;
+    if (!(hf >= 1.f)) { lo = 0; x = 0.f; return; }
+    const int hk = (hf >= (float)EXP_TB_HMAX) ? EXP_TB_HMAX : (int)hf;
+    const int l = wt_lv_of_h_[hk];
+    lo = (uint8_t)l;
+    if (l >= EXP_TB_LEVELS - 1) { x = 0.f; return; }
+    const float h0 = (float)EXP_TB_LEVEL_H[l], h1 = (float)EXP_TB_LEVEL_H[l + 1];
+    x = (hf - h0) / (h1 - h0);
   }
 
   float DiscOf(int m) const { return (m == kFM) ? rfmc_.v : (m == kISH) ? ish_.v : 0.f; }
@@ -761,6 +795,8 @@ class Explorer : public Module {
     const uint8_t* __restrict wlvf = wtlvf_[o];
     const uint8_t* __restrict bsc  = btsc_[o];
     const uint8_t* __restrict bsf  = btsf_[o];
+    const uint8_t* __restrict tlo  = tblo_[o];                // EXP_TB_BLEND: lower version, weight 1 - x
+    const float*   __restrict tx   = tbx_[o];                 //               blend weight x toward lo + 1
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
@@ -829,6 +865,27 @@ class Explorer : public Module {
         }
         const float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
         W = H + p.p1 * (cr - H);
+      } else if (M == kWT && EXP_TB_BLEND) {     // WaveMorph's Shape, versions lo / lo + 1 blended (x)
+        const float ph = phs[k];
+        const float xi = ph * (float)EXP_TB_SIZE;
+        const int   i0 = (int)xi;
+        const float fr = xi - (float)i0;
+        const int   j0 = i0 & (EXP_TB_SIZE - 1), j1 = (i0 + 1) & (EXP_TB_SIZE - 1);
+        const int   lo = tlo[k];
+        const float x  = tx[k];
+        const int16_t* t0 = explorer_tb[p.n0][lo];
+        const int16_t* t1 = explorer_tb[p.n0 + 1][lo];
+        const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
+        const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
+        float Wv = v0 + p.p0 * (v1 - v0);                // read(lo), unscaled
+        if (x != 0.f) {                                  // read(hi = lo + 1), linear blend
+          const int16_t* u0 = explorer_tb[p.n0][lo + 1];
+          const int16_t* u1 = explorer_tb[p.n0 + 1][lo + 1];
+          const float w0 = (float)u0[j0] + fr * (float)(u0[j1] - u0[j0]);
+          const float w1 = (float)u1[j0] + fr * (float)(u1[j1] - u1[j0]);
+          Wv += x * ((w0 + p.p0 * (w1 - w0)) - Wv);
+        }
+        W = Wv * p.p1;
       } else if (M == kWT) {                     // WaveMorph's Shape: frames n0 / n0 + 1 of the packed tables
         const float ph = phs[k];
         const int lv = wlv[k];
@@ -1435,6 +1492,8 @@ class Explorer : public Module {
   uint8_t wtlv_[kSlots][kBands], wtlvf_[kSlots][kBands];   // dampener: wavetable level in use / before the last re-pick
   uint8_t btsc_[kSlots][kBands], btsf_[kSlots][kBands];    // dampener: BITTAB steps in use / before the last re-pick
   uint8_t wt_lv_of_h_[explorer_k::EXP_TB_HMAX + 1];        // largest version index with LEVEL_H <= h
+  uint8_t tblo_[kSlots][kBands];   // EXP_TB_BLEND: lower table version lo per slot / band (hi = lo + 1)
+  float   tbx_[kSlots][kBands];    // EXP_TB_BLEND: blend weight x toward hi (0 = lo only), per block (Repick)
   int     tb_off_[explorer_k::EXP_TB_ZONES] = {};          // MID tables: packed frame offset per zone (BuildTables)
   float bt_all_[explorer_k::EXP_BT_WAVES][explorer_k::EXP_BT_STEPS] = {};   // BITTAB waveforms
 
