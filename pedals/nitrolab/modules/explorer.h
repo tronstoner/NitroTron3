@@ -917,7 +917,7 @@ class Explorer : public Module {
         }
         if (m > 0.f) {
           const float x = wet[n];
-          wet[n] = x + m * (EXP_LAD_TRIM * lad_.Process(x) - x);   // fixed post trim: level-matched to the unfiltered wet
+          wet[n] = x + m * (explorer_k::EXP_LAD_TRIM * lad_.Process(x) - x);   // fixed post trim: level-matched to the unfiltered wet
         }
       }
     }
