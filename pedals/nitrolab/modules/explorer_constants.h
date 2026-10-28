@@ -83,8 +83,9 @@ constexpr int   EXP_TB_SIZE           = 256;     // samples per single-cycle tab
 constexpr int   EXP_TB_HMAX           = EXP_TB_SIZE / 2 - 1;   // highest harmonic a table holds (= WM_HMAX)
 constexpr int   EXP_TB_TD_SIZE        = 1024;    // time-domain definition resolution, 4x oversampled (= WM_TD_SIZE)
 constexpr int   EXP_TB_LEVELS         = 14;      // band-limited versions per frame (= WM_LEVELS)
-// Harmonic count of each band-limited version (= WM_LEVEL_H). hf = EXP_TB_FMAX / f'_k (static open pick since
-// 2026-10-28: no K3 dampener on MID - K3 = the ladder; was min(EXP_TB_FMAX, fc), re-picked per block). EXP_TB_BLEND = true: linear blend of the two neighbouring versions
+// Harmonic count of each band-limited version (= WM_LEVEL_H). hf = min(EXP_TB_FMAX, fc_damp) / f'_k (the K3
+// dampener, re-picked per block when the smoothed K3 moved; back on tables 2026-10-28 after the ladder episode,
+// unmodulated there). EXP_TB_BLEND = true: linear blend of the two neighbouring versions
 // (LEVEL_H[lo] <= hf < LEVEL_H[lo + 1], x = (hf - H_lo) / (H_hi - H_lo); hf < 1 -> version 0, hf >= 127 -> last).
 // false: the largest H <= hf (floor H = 1), a moved pick slides over EXP_DAMP_SLIDE_MS.
 constexpr int   EXP_TB_LEVEL_H[EXP_TB_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
@@ -168,8 +169,8 @@ constexpr int      EXP_BT_SQR_N_MAX = 16;       // SQR waveforms: square x harmo
 constexpr int      EXP_BT_WAVES     = EXP_BT_PATTERNS + EXP_BT_SQR_N_MAX;   // 32 stepped waveforms on K2
 // Anti-fold (EXP_ANTIFOLD): steps per band S = largest of 16 / 8 / 4 / 2 with (S / 2) f'_k <= EXP_FOLD_LIMIT_HZ
 // (the pattern's step Nyquist fits under the ceiling = at most one step per 8 kHz engine sample);
-// the pattern is subsampled (every 16 / S-th step). Static at EXP_FOLD_LIMIT_HZ since 2026-10-28 (no K3 dampener
-// on MID; was min(EXP_FOLD_LIMIT_HZ, fc), re-picked per block).
+// the pattern is subsampled (every 16 / S-th step). Limit = min(EXP_FOLD_LIMIT_HZ, fc_damp) (the unmodulated K3
+// dampener on MID, re-picked per block).
 constexpr int      EXP_BT_STEPS_MIN = 2;        // fewest steps a band can drop to
 
 // --- Octave (SW2 select: UP +1, MID played, DOWN -1; one slot) ----------------------------
@@ -209,11 +210,16 @@ constexpr float EXP_DAMP_FMIN     = 150.f;    // Hz; fc at K3 full CCW (dark: ev
 constexpr float EXP_DAMP_CURVE    = 0.5f;     // exponent on k3 (2026-10-28; 1 = the former plain exponential law):
                                               // < 1 spends more of the knob at the top (noon: fc ~ 1.5 kHz, was 775 Hz)
 constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new discrete pick per band (see above)
-// 2026-10-28: the dampener now acts on SW1 UP (FM) only. On SW1 MID (tables) it is OFF: the table versions stay at
-// the static open anti-alias pick (hf = EXP_TB_FMAX / f'_k, = K3 fully open), no re-pick from K3; K3 drives the
-// ladder below instead.
+// 2026-10-28 (late): the dampener is BACK on SW1 MID (tables), exactly as before the ladder (stepped version pick
+// hf = min(4000, fc) / f'_k, re-pick when the smoothed K3 moves, 1 ms per-band pick slide, EXP_TB_BLEND off) but
+// NOT modulated there: on tables it follows only the smoothed K3 (no envelope / LFO / loop offset). SW1 UP (FM caps):
+// the modulated fc as before. The 2-pole lowpass below (EXP_TF_*) sits on top of it on tables.
 
-// --- K3 LADDER LOWPASS on SW1 MID (tables), both instances (2026-10-28) ------------------------------------------
+// --- K3 LADDER LOWPASS on SW1 MID (tables): PARKED (2026-10-28 late). EXP_LAD_ENABLE = false: the ladder is not
+// run, the 2-pole SVF lowpass (EXP_TF_*, below) takes its place; true: the ladder path below instead of the SVF
+// (same position, same mix m / modulation laws with EXP_LAD_* ranges). The K3 dampener stays on tables either way.
+constexpr bool  EXP_LAD_ENABLE   = false;
+// (as it ran 2026-10-28, both instances:)
 // MoogLadder (src/core/blocks/moog_ladder.h, used as is) = NitroTron3 Mode A's ladder: Huovilainen 4-pole
 // (24 dB/oct) lowpass, tanh (Pade) on the input and every stage, single rate (no oversampling), at 48 kHz on the
 // wet AFTER interpolation + DC blocker, BEFORE the soft clipper. LOWPASS only, no makeup gain.
@@ -237,12 +243,30 @@ constexpr float EXP_LAD_DRIVE    = 1.8f;      // MoogLadder input gain (= Mode A
 // (the half-sample feedback gives DC gain (1 + 2 res) / (1 + 4 res)); passband level = the unfiltered wet / FM;
 // the drive's saturation stays (fixed, not tied to a knob).
 constexpr float EXP_LAD_TRIM     = (1.f / EXP_LAD_DRIVE) * (1.f + 4.f * EXP_LAD_RES) / (1.f + 2.f * EXP_LAD_RES);
-constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder mix m on an SW1 family change
+constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder mix m on an SW1 family change (also the SVF's)
+
+// --- K3 2-POLE LOWPASS on SW1 MID (tables), both instances (2026-10-28 late; on top of the K3 dampener) ----------
+// The parked K4 post filter's SVF (ExpSVF: TPT, ONE stage = 2-pole 12 dB/oct, Q EXP_FILT_Q 0.707, no resonance),
+// LOWPASS output only, at 48 kHz on the wet AFTER interpolation + DC blocker, BEFORE the soft clipper (the ladder's
+// position). No drive, no trim (unity passband).
+// Cutoff (plain exponential on the smoothed K3):
+//   fc_f = TF_FMIN (TF_FMAX / TF_FMIN)^k3   (k3 = 0 -> 250 Hz, noon -> 2 kHz, k3 = 1 -> 16 kHz = practically open)
+// computed per 8 kHz sample (from the 10 ms-smoothed K3 and the 1 ms-slid envelope values), coefficients set once
+// per 8 kHz sample (6 x 48 kHz samples; only when fc changed) -> no zipper.
+// Modulation moves ONLY this cutoff on tables (the dampener stays on the knob):
+//   SW3 MID (ONE-SHOT) K4 pluck <-> swell: log2 fc = log2 TF_FMIN + g_s (log2 fc_f_knob - log2 TF_FMIN).
+//   SW3 DOWN (LOOPING) K5-CW target: log2 fc = log2 fc_f_knob + d3 v log2(TF_FMAX / TF_FMIN), clamped
+//   [TF_FMIN, TF_FMAX].   (K5 LFO on SW3 MID stays on the morph.)
+// Family change (SW1 to / from MID): wet = x + m (lp(x) - x), m slid linearly 0 <-> 1 over EXP_LAD_XFADE_MS (10 ms);
+// SVF state cleared when it starts from m = 0; not run while m = 0 (SW1 UP / DOWN settled).
+constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full CCW (and the pluck <-> swell bottom)
+constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full CW (practically open)
 
 // --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
-// Target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the ladder cutoff (EXP_LAD_*); SW1 DOWN: K4 inert.
+// Target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the 2-pole lowpass cutoff (EXP_TF_*; parked ladder:
+// EXP_LAD_*), NOT the tables' dampener; SW1 DOWN: K4 inert.
 // K5 = LFO (below). g in [0, 1] per 8 kHz sample: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN), clamped
-// [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_LAD_*, 250 Hz..8 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
+// [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_TF_*, 250 Hz..16 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
 // EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
 //   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
 //                 EXP_PS_DEC_2POLE: 2-pole toward 0 (two equal one-poles, tau T / EXP_PS_DEC_2P_TAUS each: g = (1 + t/tau)
@@ -335,7 +359,7 @@ constexpr float    EXP_FOLLOW_GAIN         = 10.f;     // follower pre-gain, x10
 constexpr float    EXP_FOLLOW_DEPTH        = 0.15f;    // added to e at f = 1 (= ARM_FOLLOW_FM_DEPTH)
 // Modulation spans (full natural range of each parameter, its own unit):
 //   UP FM feedback b: EXP_FBFM_FB_MAX, [0, FB_MAX]; UP dampener fc: log2(EXP_DAMP_FMAX / EXP_DAMP_FMIN) octaves,
-//   [FMIN, FMAX]; MID ladder fc: log2(EXP_LAD_FMAX / EXP_LAD_FMIN) octaves, [LAD_FMIN, LAD_FMAX]; MID morph m: 1, [0, 1]; DOWN harmonics n: EXP_HARM_MAX - 1, [1, MAX], blend 1, [0, 1];
+//   [FMIN, FMAX]; MID 2-pole LP fc: log2(EXP_TF_FMAX / EXP_TF_FMIN) octaves, [TF_FMIN, TF_FMAX] (tables' dampener: not modulated); MID morph m: 1, [0, 1]; DOWN harmonics n: EXP_HARM_MAX - 1, [1, MAX], blend 1, [0, 1];
 //   freq shift g = log2(|s| / EXP_FS_CURVE_HZ + 1): log2(EXP_FS_MAX_HZ / EXP_FS_CURVE_HZ + 1), [0, that], sign from
 //   the knob, scale blend 1, [0, 1]; interval: 2 EXP_IS_SEMI_MAX semitones, [-MAX, +MAX] (rounded, slid
 //   EXP_DISC_SLIDE_MS), cents 2 EXP_IS_DETUNE_CENTS, [-DETUNE, +DETUNE].
