@@ -89,7 +89,7 @@ constexpr int   EXP_TB_LEVELS         = 14;      // band-limited versions per fr
 // false: the largest H <= hf (floor H = 1), a moved pick slides over EXP_DAMP_SLIDE_MS.
 constexpr int   EXP_TB_LEVEL_H[EXP_TB_LEVELS] = { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 127 };
 constexpr float EXP_TB_FMAX           = 4000.f;  // Hz; band-engine ceiling for the table band limit (= WM_TAB_FMAX)
-constexpr bool  EXP_TB_BLEND          = true;    // true = continuous version blend (2026-10-28); false = discrete pick + slide
+constexpr bool  EXP_TB_BLEND          = false;   // true = continuous version blend (2026-10-28, rejected by ear: the stepped pick has more character); false = discrete pick + slide
 constexpr float EXP_TB_I16_SCALE      = 16384.f; // int16 storage scale, default: |table| <= 2.0 (= WM_I16_SCALE)
 constexpr float EXP_TB_I16_SCALE_WIDE = 6554.f;  // zones 3 / 10: |table| <= 5.0 (= WM_I16_SCALE_WIDE)
 // Storage scale per zone; the RMS-matched waves are capped to that zone's headroom 32767 / scale (= WM_ZONE_I16_SCALE).
