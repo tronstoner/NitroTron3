@@ -29,7 +29,7 @@
 // SW3 DOWN   = FM LAB     (the same module, second instance Explorer(true): exactly SW3 MIDDLE (K4 pluck <-> swell,
 //                          K5 LFO, SW1 MID tables / DOWN models identical) EXCEPT SW1 UP: K1 = 13 curated FM zones
 //                          (2OP r 0.5 / 1 / 2 / 3, STACK 1:1:1 / 1:2:1 / 1:1:3.5, BELL 1+3.5 / 1.41+2.76 / 2+7.1,
-//                          PAIRS tine 14 / 7, TABLE FM; 1 ms crossfade), K2 = the zone's main parameter (2OP feedback b,
+//                          PAIRS tine 3.5 / 5, TABLE FM; 1 ms crossfade), K2 = the zone's main parameter (2OP feedback b,
 //                          STACK / BELL M2 index I2, PAIRS tine level, TABLE FM frame), K3 = index (cap law, closes
 //                          every operator), K4 pluck <-> swell on the index, K5 LFO on K2's parameter; no XBAND.
 //                          Shares the SW1 MID tables with SW3 MIDDLE. The former LOOPING variant is retired

@@ -340,7 +340,7 @@ constexpr bool EXP_LOOP_ENABLE = false;
 //   STACK  M2 -> M1 -> C: M1 = sin(2 pi pm1 + I2 sin(2 pi pm2)), C = cos(2 pi phi + I M1); K2 = I2
 //   BELL   parallel: C = cos(2 pi phi + I sin(2 pi pm1) + I2 sin(2 pi pm2)); K2 = I2
 //   PAIRS  body (C1 at 1, M1 at 1, index I, no feedback) + Lt x tine (C2 at Rt = r2, its modulator at 1 x C2,
-//          index EXP_LAB_TINE_I); K2 = Lt
+//          index <= EXP_LAB_TINE_I under K3 + envelope, fades only near EXP_FOLD_LIMIT_HZ); K2 = Lt
 //   TABLE  M1 = the SOFT A frames (table zone EXP_LAB_TB_ZONE) at 1 x phi, peak-normalised, C = cos(2 pi phi + I M1);
 //          K2 = frame position
 enum ExpLabAlg { EXP_LAB_2OP = 0, EXP_LAB_STACK, EXP_LAB_BELL, EXP_LAB_PAIRS, EXP_LAB_TABLE };
@@ -357,13 +357,14 @@ constexpr ExpLabZone EXP_LAB_ZONES[EXP_LAB_N_ZONES] = {
   { EXP_LAB_BELL,  1.f,   3.5f, "BELL-1+3.5"    },   //  8  M1 1 + M2 3.5
   { EXP_LAB_BELL,  1.41f, 2.76f,"BELL-1.41+2.76"},   //  9  M1 1.41 + M2 2.76
   { EXP_LAB_BELL,  2.f,   7.1f, "BELL-2+7.1"    },   // 10  M1 2 + M2 7.1
-  { EXP_LAB_PAIRS, 1.f,   14.f, "PAIRS-14"      },   // 11  body 1:1 + tine at 14
-  { EXP_LAB_PAIRS, 1.f,   7.f,  "PAIRS-7"       },   // 12  body 1:1 + tine at 7
+  { EXP_LAB_PAIRS, 1.f,   3.5f, "PAIRS-t3.5"    },   // 11  body 1:1 + tine at 3.5
+  { EXP_LAB_PAIRS, 1.f,   5.f,  "PAIRS-t5"      },   // 12  body 1:1 + tine at 5
   { EXP_LAB_TABLE, 1.f,   0.f,  "TABLE-FM"      },   // 13  SOFT A table modulator at 1
 };
 constexpr float EXP_LAB_I2_MAX          = 4.f;    // STACK / BELL: M2 index I2 at K2 CW (linear from 0)
-constexpr float EXP_LAB_TINE_I          = 1.0f;   // PAIRS: tine index (fixed), capped by the main-cap formula at Rt
-constexpr float EXP_LAB_TINE_FADE       = 0.25f;  // PAIRS: tine fade width, share of L: clamp((L - Rt f') / (this L), 0, 1)
+constexpr float EXP_LAB_TINE_I          = 1.0f;   // PAIRS: tine index max, capped by the main-cap formula at Rt (K3 + env)
+constexpr float EXP_LAB_TINE_FADE       = 0.25f;  // PAIRS: tine fade width, share of EXP_FOLD_LIMIT_HZ:
+                                                  //   clamp((EXP_FOLD_LIMIT_HZ - Rt f') / (this x EXP_FOLD_LIMIT_HZ), 0, 1)
 constexpr int   EXP_LAB_TB_ZONE         = 6;      // TABLE FM: table zone (0-based) = SOFT A (tine | clarinet | drawbar | mixture)
 constexpr float EXP_LAB_LFO_I2_SWING    = 0.5f;   // K5 LFO on I2 (STACK / BELL), +- at full depth, after the caps, [0, I2_MAX]
 constexpr float EXP_LAB_LFO_TINE_SWING  = 0.15f;  // K5 LFO on the tine level Lt (PAIRS), +-, [0, 1]

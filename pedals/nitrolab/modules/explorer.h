@@ -111,8 +111,8 @@
 //                  W = cos(2 pi phi + I M1); K2 = I2 0..EXP_LAB_I2_MAX (4)
 //     8-10  BELL   M1 1 + M2 3.5 / 1.41 + 2.76 / 2 + 7.1; parallel: W = cos(2 pi phi + I sin(2 pi pm1) + I2 sin(2 pi pm2));
 //                  K2 = I2 0..4
-//     11-12 PAIRS  body 1:1 + tine Rt = 14 / 7: W = cos(2 pi phi + I sin(2 pi phi)) + Lt g cos(2 pi pc + It sin(2 pi pc)),
-//                  pc at Rt x phi, It = EXP_LAB_TINE_I (1); K2 = tine level Lt 0..1
+//     11-12 PAIRS  body 1:1 + tine Rt = 3.5 / 5: W = cos(2 pi phi + I sin(2 pi phi)) + Lt g cos(2 pi pc + It sin(2 pi pc)),
+//                  pc at Rt x phi, It <= EXP_LAB_TINE_I (1) under K3 + envelope; K2 = tine level Lt 0..1
 //     13    TABLE  M1 = the SOFT A frames (table zone 7, tine e-piano | hollow clarinet | drawbar organ | church
 //                  mixture) at phi (modulator at 1), linear frame crossfade, each frame / its peak (full version, int16);
 //                  W = cos(2 pi phi + I M1); K2 = frame position 0..1
@@ -124,12 +124,14 @@
 //   close every operator together with the main index). MAIN CAP (Carson, f' + r f' (I + 1) <= L):
 //   I <= (L / f' - 1) / r - 1.
 //     2OP    as the FM model (main cap at r, feedback cap b <= (L / (r f') - 1) / 4)
-//     STACK  M2 CAP: r2 f' (I2 + 1) <= L -> I2 <= L / (r2 f') - 1; then + LFO. CARRIER CAP: M1's effective top
-//            T1 = r1 f' + r2 f' (I2 + 1) (Carson on M1, applied I2), f' + T1 (I + 1) <= L -> main cap at r = T1 / f'
+//     STACK  M2 CAP: r2 f' (I2 + 1) <= L -> I2 <= L / (r2 f') - 1; then + LFO. I: MAIN CAP at r1, independent of I2
+//            (2026-10-28: the combined bandwidth may exceed L - folding allowed there)
 //     BELL   M2 CAP: I2 <= (L / f' - 1) / r2 - 1 (main cap at r2); then + LFO. I: main cap at r1 (each operator
 //            capped on its own)
-//     PAIRS  body: main cap at r = 1. TINE FADE: g = clamp((L - Rt f') / (EXP_LAB_TINE_FADE 0.25 L), 0, 1) (gone once
-//            Rt f' >= L); TINE CAP: main cap at its own carrier Rt f' with the modulator at 1 x C2: It <= L / (Rt f') - 2
+//     PAIRS  body: main cap at r = 1. TINE FADE (engine limit, not L): g = clamp((EXP_FOLD_LIMIT_HZ - Rt f') /
+//            (EXP_LAB_TINE_FADE 0.25 x EXP_FOLD_LIMIT_HZ), 0, 1) (gone once Rt f' >= 4 kHz); TINE CAP: main cap at its
+//            own carrier Rt f' with the modulator at 1 x C2: It <= (L / (Rt f') - 1) - 1, floor 0 (K3 / envelope
+//            closed -> plain sine at Rt f')
 //     TABLE  main cap at r = 1. MODULATOR VERSION: hf = L / f'; lo = largest version with H_lo <= hf, M1 = (1 - x)
 //            read(lo - 1) + x read(lo), x = (hf - H_lo) / (H_lo+1 - H_lo) (lo = 0: read(0)) - continuous in hf, every
 //            modulator harmonic <= L: never folds
@@ -1552,7 +1554,7 @@ class Explorer : public Module {
     constexpr bool kCaps = EXP_ANTIFOLD && !EXP_FBFM_PUSHED;  // FM LAB anti-fold caps (as kFM: PUSHED / off = none)
     const float* __restrict ldph = explorer_lab_st.dph;       // FM LAB: this sample's phi steps (PrepLab)
     const float li2 = lfo_s_ * EXP_LAB_LFO_I2_SWING;          // FM LAB STACK / BELL: K5 LFO on I2, after the caps
-    const float itf = (M == kLPAIR) ? 1.f / (EXP_LAB_TINE_FADE * L) : 0.f;   // PAIRS tine fade: 1 / (0.25 L)
+    constexpr float itf = 1.f / (EXP_LAB_TINE_FADE * EXP_FOLD_LIMIT_HZ);   // PAIRS tine fade: 1 / (0.25 x 4 kHz)
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
@@ -1617,9 +1619,8 @@ class Explorer : public Module {
         }
         I2 += li2;                               // K5 LFO on I2, after the cap
         I2 = (I2 < 0.f) ? 0.f : (I2 > EXP_LAB_I2_MAX) ? EXP_LAB_I2_MAX : I2;
-        // STACK carrier cap: M1's effective top T1 = r1 f' + r2 f' (I2 + 1) (Carson on M1, applied I2);
-        // f' + T1 (I + 1) <= L -> main-cap formula at r = T1 / f'
-        I = MainIndex(kCaps ? IndexCap(L, Lk, ifp[k], 1.f / (p.p0 + p.p1 * (I2 + 1.f))) : EXP_FM_INDEX);
+        // STACK main cap at r1 (as 2OP), independent of I2 (combined bandwidth may exceed L: folding allowed)
+        I = MainIndex(kCaps ? IndexCap(L, Lk, ifp[k], p.p4) : EXP_FM_INDEX);
         float c1, s1, c2, s2, s, c;
         CosSin01(p1, c1, s1);
         const float m2 = Sin01(p2);
@@ -1657,9 +1658,9 @@ class Explorer : public Module {
         SinCos(I * ci, s, c);
         W = cr * c - ci * s;
         float g = 1.f, It = EXP_LAB_TINE_I;
-        if (kCaps) {                             // PAIRS tine: fade clamp((L - Rt f') / (0.25 L), 0, 1); index cap
-          const float ft = p.p0 * fp[k];         // at its own carrier Rt f' (modulator at 1 x C2): It <= L / (Rt f') - 2
-          g = (L - ft) * itf;
+        if (kCaps) {                             // PAIRS tine: fade clamp((4 kHz - Rt f') / (0.25 x 4 kHz), 0, 1) at the
+          const float ft = p.p0 * fp[k];         // engine limit; index cap at its own carrier Rt f' (modulator at 1 x C2,
+          g = (EXP_FOLD_LIMIT_HZ - ft) * itf;    // K3 + envelope via L): It <= (L / (Rt f') - 1) - 1, floor 0
           g = (g < 0.f) ? 0.f : (g > 1.f) ? 1.f : g;
           float ct = L * ifp[k] * p.p1 - 2.f;
           if (ct < 0.f) ct = 0.f;
