@@ -441,7 +441,7 @@ class Explorer : public Module {
     // ONE-SHOT K5 LFO (LfoUpdate): off at noon, phase 0.
     ln_lfo_ = logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN);
     ln_lfo_ccw_ = logf(EXP_LFO_HZ_MAX_CCW / EXP_LFO_HZ_MIN);
-    lfo_u_ = -1.f;                               // forces the rate / depth on the first sample
+    lfo_u_ = 2.f;                                // forces the rate / depth on the first sample
     lfo_inc_ = 0.f;
     lfo_depth_ = 0.f;
     lfo_ph_ = 0.f;
