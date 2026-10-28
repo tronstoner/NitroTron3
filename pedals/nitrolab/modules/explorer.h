@@ -24,7 +24,7 @@
 //   wet = interpolate(wet8) -> DC blocker -> K3 2-POLE LP (mix m; SW1 MID) -> soft clipper -> FS1 mute
 //
 // K3 2-POLE LOWPASS (SW1 MID = tables, both instances; 2026-10-28 late, ON TOP of the K3 dampener, replaces the
-//   ladder): the parked K4 post filter's SVF (ExpSVF, TPT, ONE stage = 12 dB/oct, Q EXP_TF_Q 0.5, no
+//   ladder): the parked K4 post filter's SVF (ExpSVF, TPT, ONE stage = 12 dB/oct, Q EXP_TF_Q 1.5, no
 //   resonance), LOWPASS output only, at 48 kHz on the wet after the DC blocker, before the soft clipper (the
 //   ladder's position). No drive, no trim (unity passband).
 //   fc_f = 250 (16000 / 250)^k3 Hz (EXP_TF_FMIN / FMAX, plain exponential on the smoothed K3; noon 2 kHz, CW =

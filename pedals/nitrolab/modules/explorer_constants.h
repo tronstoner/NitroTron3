@@ -263,8 +263,8 @@ constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full C
 constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full CW (practically open)
 constexpr float EXP_TF_ENV_BOTTOM = 150.f;    // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: 250 -> 40 -> 150;
                                               // the decay did not close enough); the K3 knob range stays 250 Hz..16 kHz
-constexpr float EXP_TF_Q         = 0.5f;      // tables LP Q (2026-10-28: 0.707 flat -> 0.9 slightly wet -> 0.5 softer; 1.1 coloured too much in wavemorph)
-constexpr bool  EXP_TF_Q_ON_K5   = true;      // TEMP (2026-10-28): SW3 MID tables K5 = LP Q instead of the LFO (FM keeps the LFO)
+constexpr float EXP_TF_Q         = 1.5f;      // tables LP Q (2026-10-28: wet 2-pole, = K5 at ~2:00 in the Q test; 0.707 / 0.9 / 0.5 tried)
+constexpr bool  EXP_TF_Q_ON_K5   = false;     // TEMP, off: the LFO is back on K5 (2026-10-28): SW3 MID tables K5 = LP Q instead of the LFO (FM keeps the LFO)
 constexpr float EXP_TF_Q_MIN     = 0.3f;      // Q at K5 full CCW (soft, veiled)
 constexpr float EXP_TF_Q_MAX     = 3.0f;      // Q at K5 full CW (clear peak); exponential, noon ~0.95
 constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28: off again by ear; static open picks)
@@ -342,8 +342,8 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };
 constexpr float    EXP_ONSET_ENV_MS        = 2.6f;     // ms; input |in| one-pole (= ARM_ONSET_ENV_MS)
 constexpr float    EXP_ONSET_FALL_MS       = 40.f;     // ms; gate-meter fall (= ARM_ONSET_FALL_MS)
 constexpr float    EXP_ONSET_SLOW_COEF     = 0.0006f;  // baseline one-pole at 48 kHz (= ARM_ONSET_SLOW_COEF)
-constexpr float    EXP_ONSET_RISE          = 1.5f;     // gate > baseline x this = an attack (= ARM_ONSET_RISE)
-constexpr float    EXP_ONSET_FLOOR         = 0.0021f;  // gate-meter floor, input units (= ARM_ONSET_FLOOR)
+constexpr float    EXP_ONSET_RISE          = 1.3f;     // gate > baseline x this = an attack (2026-10-28: 1.5 -> 1.3, more sensitive; ARM 1.5)
+constexpr float    EXP_ONSET_FLOOR         = 0.0007f;  // gate-meter floor, input units (2026-10-28: 0.0021 -> 0.0007, more sensitive; ARM 0.0021)
 constexpr uint32_t EXP_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset (= ARM_ONSET_REFRACTORY_MS)
 // ONE-SHOT time law (the former FM envelope's, = ARM_ENV_*):
 constexpr float    EXP_ENV_TAU_SLOW_S      = 4.0f;     // s; time law just off noon (= ARM_ENV_TAU_SLOW_S)
