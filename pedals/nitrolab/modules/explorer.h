@@ -385,6 +385,7 @@ class Explorer : public Module {
     tf_set_fc_ = EXP_TF_FMAX;
     tf_fc_ = EXP_TF_FMAX;
     tf_lnr_ = logf(EXP_TF_FMAX / EXP_TF_FMIN);
+    tf_lnb_ = logf(EXP_TF_ENV_BOTTOM / EXP_TF_FMIN);
     tf_m_ = 0.f;
     for (int j = 0; j < kLadSub; j++) { tf_fcb_[j] = EXP_TF_FMAX; tf_tgb_[j] = false; }
     BuildBitPatterns();
@@ -932,7 +933,7 @@ class Explorer : public Module {
     }
     if (k != tpk_k_) {                           // tables: the knob value only
       tpk_k_ = k;
-      tpk_fc_ = DampFc(k);
+      tpk_fc_ = explorer_k::EXP_TB_DAMP_ENABLE ? DampFc(k) : explorer_k::EXP_DAMP_FMAX;   // off: static open picks
     }
     bool any = false, run[kSlots];
     for (int o = 0; o < kSlots; o++) {           // og index = slot index (kSU, kSP, kSD)
@@ -1016,7 +1017,8 @@ class Explorer : public Module {
   }
   // Per 8 kHz sample (sub = its index in the block): 2-pole LP mix target (1 while the current model is a MID table
   // model, else 0) and cutoff, in fractions of log2(TF_FMAX / TF_FMIN) above TF_FMIN (lf, clamped [0, 1]):
-  //   ONE-SHOT: lf = g_s k3 (o3_ = g_s: pluck <-> swell between TF_FMIN and the knob value; 1 = the knob)
+  //   ONE-SHOT: ln fc = ln ENV_BOTTOM + g_s (ln fc_knob - ln ENV_BOTTOM) (pluck <-> swell between EXP_TF_ENV_BOTTOM
+  //             40 Hz and the knob value; below the knob's own range, so a decay closes further)
   //   LOOPING:  lf = k3 + o3_ (o3_ = the K5-CW envelope offset, knob units = the full span)
   // k3 = smoothed K3. Computed only while the LP targets on or still fades (tf_m_ > 0); else the last fc holds.
   inline void TfUpdate(int sub) {
@@ -1025,8 +1027,15 @@ class Explorer : public Module {
     const bool tab = IsTab(var_ >> 6);
     tf_tgb_[sub] = tab;
     if (!tab && tf_m_ <= 0.f) { tf_fcb_[sub] = tf_set_fc_; return; }
-    const float lf = loop_ ? (k3s_ + o3_) : o3_ * k3s_;
-    const float fc = (lf >= 1.f) ? EXP_TF_FMAX : (lf <= 0.f) ? EXP_TF_FMIN : EXP_TF_FMIN * expf(lf * tf_lnr_);
+    float fc;
+    if (loop_) {
+      const float lf = k3s_ + o3_;
+      fc = (lf >= 1.f) ? EXP_TF_FMAX : (lf <= 0.f) ? EXP_TF_FMIN : EXP_TF_FMIN * expf(lf * tf_lnr_);
+    } else {                                     // ONE-SHOT: g_s between EXP_TF_ENV_BOTTOM and the knob value (octaves)
+      const float lk = (k3s_ >= 1.f) ? tf_lnr_ : (k3s_ <= 0.f) ? 0.f : k3s_ * tf_lnr_;   // ln(fc_knob / TF_FMIN)
+      const float lb = tf_lnb_;                                                          // ln(ENV_BOTTOM / TF_FMIN) < 0
+      fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb));
+    }
     tf_fcb_[sub] = fc;
     tf_fc_ = fc;
   }
@@ -2042,6 +2051,7 @@ class Explorer : public Module {
   ExpSVF tf_svf_;                  // one TPT SVF stage, LP output (Q EXP_FILT_Q)
   float tf_m_ = 0.f;               // mix m (0 = not run; 1 = LP only)
   float tf_lnr_ = 0.f;             // ln(EXP_TF_FMAX / EXP_TF_FMIN)
+  float tf_lnb_ = 0.f;             // ln(EXP_TF_ENV_BOTTOM / EXP_TF_FMIN): the one-shot envelope's bottom
   float tf_set_fc_ = 16000.f;      // cutoff the coefficients were last set for
   volatile float tf_fc_ = 16000.f; // effective cutoff (Hz), latest computed (DIAG)
   float tf_fcb_[kLadSub];          // cutoff per 8 kHz sample of the current block

@@ -259,8 +259,11 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 //   [TF_FMIN, TF_FMAX].   (K5 LFO on SW3 MID stays on the morph.)
 // Family change (SW1 to / from MID): wet = x + m (lp(x) - x), m slid linearly 0 <-> 1 over EXP_LAD_XFADE_MS (10 ms);
 // SVF state cleared when it starts from m = 0; not run while m = 0 (SW1 UP / DOWN settled).
-constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full CCW (and the pluck <-> swell bottom)
+constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full CCW (envelope bottom: EXP_TF_ENV_BOTTOM)
 constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full CW (practically open)
+constexpr float EXP_TF_ENV_BOTTOM = 40.f;     // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: was EXP_TF_FMIN 250,
+                                              // the decay did not close enough); the K3 knob range stays 250 Hz..16 kHz
+constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28: off again by ear; static open picks)
 
 // --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
 // Target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the 2-pole lowpass cutoff (EXP_TF_*; parked ladder:
