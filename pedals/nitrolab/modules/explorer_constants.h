@@ -315,13 +315,11 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side over which the depth fades in
 constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
 constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
-constexpr float    EXP_LFO_RATIO_STEPS     = 2.0f;     // UP FM, K5 CW patterns: list positions per unit of LFO (+1 -> two ratios up the list)
-constexpr float    EXP_LFO_RATIO_DETUNE_ST = 0.5f;     // UP FM, K5 CCW triangle: modulator detune at full depth (+- semitones)
-constexpr float    EXP_LFO_INDEX_SWING     = 0.0f;     // UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
+constexpr float    EXP_LFO_INDEX_SWING     = 0.1f;     // UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
 constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 0.0f;     // UP FM: the envelope closes the index only down to this (2026-10-28: 2 -> 0, fully closes again)
 constexpr float    EXP_LFO_FM_FC_OCT       = 0.0f;     // UP FM: the LFO also swings the dampener cutoff +- this many octaves on top of the
                                                      // envelope (2026-10-28: audible even when the decay has closed the index)
-constexpr float    EXP_LFO_FB_SWING        = 0.0f;     // UP FM: feedback b swing at full depth (+-, b units; 2026-10-28: 0.75 -> 0.3 -> 0, the LFO moves the ratio now)
+constexpr float    EXP_LFO_FB_SWING        = 0.3f;     // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
 constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables: morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the

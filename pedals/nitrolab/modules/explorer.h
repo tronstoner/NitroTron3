@@ -623,19 +623,7 @@ class Explorer : public Module {
       if (fabsf(k5_t_ - k5s_) < EXP_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: no target)
       EnvUpdate();                               // envelope e -> slid v -> offsets o2_ / o3_ (consumes the onset flag)
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
-      {                                          // FM ratio (snapped item, slides over EXP_DISC_SLIDE_MS)
-        float rt = EXP_FM_RATIOS[rfmc_i_t_];
-        if (!loop_ && lfo_s_ != 0.f) {           // SW3 MID K5 LFO on the ratio (2026-10-28)
-          if (k5s_ > 0.5f) {                     // CW stepped patterns: jump between neighbouring list ratios
-            int ri = rfmc_i_t_ + (int)lroundf(lfo_s_ * EXP_LFO_RATIO_STEPS);
-            ri = (ri < 0) ? 0 : (ri > EXP_FM_N_RATIOS - 1) ? EXP_FM_N_RATIOS - 1 : ri;
-            rt = EXP_FM_RATIOS[ri];
-          } else {                               // CCW triangle: slight detune of the modulator
-            rt *= exp2f(lfo_s_ * (EXP_LFO_RATIO_DETUNE_ST * (1.f / 12.f)));
-          }
-        }
-        rfmc_.Set(rt, disc_len_);
-      }
+      rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
       rfmc_.Tick();
       {                                          // interval: knob semitones + 24 d2 v, clamped, rounded, then slid
         float st = (float)ish_t_;
