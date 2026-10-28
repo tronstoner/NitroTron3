@@ -17,11 +17,14 @@
 //                          DOWN: model), K2 = tone (MID: morph),
 //                          K3 = dampener (UP / MID: per-band harmonic ceiling 150 Hz -> 4 kHz; DOWN: sweep),
 //                          SW2 = octave up / played / down;
-//                          K4 = ONE-SHOT onset envelope: CCW down | noon off | CW up, rise 36 s -> 450 ms,
-//                          K5 = its target + amount: CCW on the K2 parameter | noon off | CW on the K3 parameter)
-// SW3 DOWN   = explorer   (the same module, second instance Explorer(true): identical except K4 = LOOPING
-//                          envelope (triangle 0 -> 1 -> 0 ..., restarted per onset, ramp 4 s -> 30 ms, pad
-//                          +-0.08 around noon off); shares the SW1 MID tables with SW3 MIDDLE.
+//                          K4 = glide to the K3 dampener fc per onset (SW1 UP / MID; inert on DOWN): CW starts
+//                          up to 3 oct above and closes down to the knob fc, CCW starts below and opens up,
+//                          noon off; offset full at 40 % of each side, glide 80 ms -> 2 s over the side;
+//                          K5 unused)
+// SW3 DOWN   = explorer   (the same module, second instance Explorer(true): generic K4 / K5 envelope modulation -
+//                          K4 = LOOPING envelope (triangle 0 -> 1 -> 0 ..., restarted per onset, ramp 4 s -> 30 ms,
+//                          CCW down | pad +-0.08 around noon off | CW up), K5 = its target + amount (CCW on the
+//                          K2 parameter | noon off | CW on the K3 parameter); shares the SW1 MID tables with SW3 MIDDLE.
 //                          WaveMorph (modules/wavemorph.h) is unwired, source kept)
 
 #include "daisy.h"
@@ -63,8 +66,8 @@ Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 static constexpr int NL_MODE_EXPLORER_LOOP = NL_MODE_WAVEMORPH;
 
 Armitage armitage;
-Explorer explorer;                 // SW3 MIDDLE: one-shot envelope
-Explorer explorer_loop(true);      // SW3 DOWN:   looping envelope (tables shared, built by the first Init)
+Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 glide on the K3 dampener fc
+Explorer explorer_loop(true);      // SW3 DOWN:   generic K4 / K5, looping envelope (tables shared, built by the first Init)
 Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_loop };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
@@ -201,16 +204,23 @@ int main() {
         diag_stage = 0;
       } else if (diag_stage == 2) {
         // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
-        // offset), K3 dampener fc (knob), envelope (variant, e, K4 dir, K5 amount d + target), mute, cpu
+        // offset), K3 dampener fc (knob), envelope (DOWN `loop`: e, K4 dir, K5 amount d + target; MID `gl`: glide
+        // r, offset A in octaves, time T in s, applied fc_eff in Hz; `gl -` on SW1 DOWN), mute, cpu
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const unsigned cpu = (unsigned)(cpu_pk * 100.f + 0.5f);
         const char* zn = Explorer::ZoneName(d.model, d.zone);
         char env[64];
-        snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", d.loop ? "loop" : "1shot", D2V(d.env),
-                 d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
-                 d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
+        if (d.loop)                                           // SW3 DOWN: generic K4 / K5 envelope
+          snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
+                   d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
+                   d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
+        else if (d.sw1 != 2)                                  // SW3 MID: K4 glide on fc (r, A oct, T s, fc_eff Hz)
+          snprintf(env, sizeof(env), " gl r" D2F " A" D2F " T" D2F " fce %d", D2V(d.env), D2SV(d.A), D2V(d.T),
+                   (int)(d.fce + 0.5f));
+        else                                                  // SW3 MID, SW1 DOWN: K4 inert
+          snprintf(env, sizeof(env), " gl -");
         if (d.model == Explorer::kFM)                         // A = ratio r, B = feedback b
           hw.seed.PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
                             D2V(d.a), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
