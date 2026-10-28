@@ -244,14 +244,18 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_LAD_*, 250 Hz..8 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
 // EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
 //   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
+//                 LINEAR in g (constant speed in octaves): g -= 1 / (T sr8) per sample, 1 -> 0 in T_d, clamps at 0.
 //   CW / noon     RISE:  target 1, T_r = RISE_FAST (RISE_SLOW / RISE_FAST)^|t4|; each onset with t4 > 0: g = 0
-//                 (noon: an onset does nothing).
-// One-pole toward the target, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
+//                 (noon: an onset does nothing). One-pole toward 1, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly
+//                 to it within 0.02 (98 %), holds.
 // K4 turns never reset g (only the target side and T change, at once); only onsets do. g = 1 before the first onset.
-constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s; decay time T_d at K4 full CCW (pluck)
+// LEAVE: a side change clears "plucked", an onset that resets g sets it; unplucked T = max(T_side, EXP_PS_LEAVE_S)
+// (no near-jump when K4 changes side while the value rests), plucked T = T_side.
+constexpr float    EXP_PS_DEC_FAST_S       = 1.0f;     // s (2026-10-28: 0.45 -> 1.0, decay linear); decay time T_d at K4 full CCW (pluck)
 constexpr float    EXP_PS_DEC_SLOW_S       = 8.0f;     // s (2026-10-28: 60 -> 8, bass notes rarely sustain that long); decay time T_d just CCW of noon (exponential over |t4|)
 constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)
 constexpr float    EXP_PS_RISE_SLOW_S      = 4.0f;     // s (2026-10-28: 36 -> 4); rise time T_r at K4 full CW (swell)
+constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimum travel time after a K4 side change until the next onset
 
 // --- SW3 MID (ONE-SHOT instance only): K5 = LFO (2026-10-28) -------------------------------------------------
 // t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|. Noon (t5 == 0) = off: no modulation (applied value exactly 0).

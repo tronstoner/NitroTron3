@@ -19,8 +19,9 @@
 //                          (Mode A's, 250 Hz -> 8 kHz); DOWN: sweep,
 //                          SW2 = octave up / played / down;
 //                          K4 = pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; inert on DOWN):
-//                          CCW pluck (onset at the K3 fc, decays to the bottom 150 / 250 Hz, 0.45 s at the end -> 8 s
-//                          at noon), noon plain K3, CW swell (onset at the bottom, rises to the K3 fc, 10 ms -> 4 s);
+//                          CCW pluck (onset at the K3 fc, decays linearly in octaves to the bottom 150 / 250 Hz,
+//                          1 s at the end -> 8 s at noon), noon plain K3, CW swell (onset at the bottom, rises to the
+//                          K3 fc, 10 ms -> 4 s); after a K4 side change, until the next onset, travel >= 0.5 s;
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none):
 //                          CCW triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
@@ -208,7 +209,7 @@ int main() {
       } else if (diag_stage == 2) {
         // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
         // offset), K3 fc (knob; SW1 UP `fc` dampener, MID `lad` ladder cutoff + `eff` effective), envelope (DOWN
-        // `loop`: e, K4 dir, K5 amount d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in s, applied
+        // `loop`: e, K4 dir, K5 amount d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in use (s), applied
         // fc_eff in Hz (UP dampener, MID ladder), K5 LFO shape tri|stp|off, depth, rate Hz;
         // `ps - lfo -` on SW1 DOWN), mute, cpu
         const Explorer::DiagSnap& d = diag_xsnap;

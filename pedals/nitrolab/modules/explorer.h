@@ -111,16 +111,22 @@
 //   cutoff; SW1 DOWN: K4 inert (no model offsets); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
 //     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per audio block
 //          (DampUpdate) from the block's first g_s (as the K3 knob).
-//     MID: ladder log2 fc = log2 80 + g_s (log2 fc_lad_knob - log2 80), [80, 8000] Hz, per 8 kHz sample (LadUpdate).
+//     MID: ladder log2 fc = log2 250 + g_s (log2 fc_lad_knob - log2 250), [250, 8000] Hz, per 8 kHz sample (LadUpdate).
 //     g = 1: the K3 value, g = 0: the bottom; g_s = g one-pole slid (1 ms, lands exactly).
-//     CCW (t4 < 0)  DECAY: target 0, T = 0.45 s (60 / 0.45)^(1 - |t4|) (EXP_PS_DEC_FAST_S / SLOW_S): 0.45 s at
-//             the end -> 8 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom)
-//     CW / noon (t4 >= 0)  RISE: target 1, T = 0.01 s (36 / 0.01)^|t4| (EXP_PS_RISE_FAST_S / SLOW_S): 10 ms at
+//     CCW (t4 < 0)  DECAY: target 0, T = 1 s (8 / 1)^(1 - |t4|) (EXP_PS_DEC_FAST_S / SLOW_S): 1 s at the end
+//             -> 8 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom). LINEAR in g
+//             (constant speed in octaves): g -= 1 / (T sr8) per sample from wherever it is (1 -> 0 in T), clamps
+//             at 0, holds.
+//     CW / noon (t4 >= 0)  RISE: target 1, T = 0.01 s (4 / 0.01)^|t4| (EXP_PS_RISE_FAST_S / SLOW_S): 10 ms at
 //             noon -> 4 s at the end; each onset with t4 > 0 g = 0 (swell from the bottom); exact noon: onsets
-//             do nothing (g goes / stays at 1 = plain K3)
-//     g one-pole toward the target, tau = T / 3.9 (EXP_ENV_TRAVEL_TAUS), snaps exactly to it within 0.02 (98 %),
-//             holds. Side / T / coefficient from the smoothed t4, recomputed when it moved. K4 turns never reset
-//             g (only target and T change, at once); only onsets do. g = 1 before the first onset.
+//             do nothing (g goes / stays at 1 = plain K3). g one-pole toward 1, tau = T / 3.9
+//             (EXP_ENV_TRAVEL_TAUS), snaps exactly to it within 0.02 (98 %), holds.
+//     Side / T from the smoothed t4, recomputed when it moved. K4 turns never reset g (only target and T change,
+//             at once); only onsets do. g = 1 before the first onset.
+//     LEAVE (no near-jump on a side change while the value rests): a side change clears "plucked"; an onset that
+//             resets g sets it. Unplucked, T_eff = max(T, EXP_PS_LEAVE_S 0.5 s) (e.g. decayed to the bottom, K4
+//             past noon: up to K3 over ~0.5 s, not 10 ms); plucked, T_eff = T. Same shapes (decay linear, rise
+//             one-pole); step / coefficient recomputed when T_eff changes.
 //   K5 LFO (LfoUpdate, per 8 kHz sample after PsUpdate; one shared LFO, free-running phase, never reset by onsets):
 //     t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|; noon = off (applied 0 exactly -> identical to no LFO).
 //     shape: CCW triangle (bipolar +-1) | CW downward staircase EXP_LFO_STEPS +1 / 0 / -1 (100 / 50 / 0 %),
@@ -399,8 +405,10 @@ class Explorer : public Module {
     ps_g_ = ps_gs_ = 1.f;
     ps_t4_ = 2.f;                                // forces the coefficient on the first sample
     ps_rise_ = true;
-    ps_T_ = EXP_PS_RISE_FAST_S;
+    ps_T_ = ps_Ts_ = EXP_PS_RISE_FAST_S;
+    ps_plucked_ = false;
     ps_c_ = 0.f;
+    ps_dg_ = 0.f;
     ln_ps_dec_  = logf(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S);
     ln_ps_rise_ = logf(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S);
     // ONE-SHOT K5 LFO (LfoUpdate): off at noon, phase 0.
@@ -770,31 +778,46 @@ class Explorer : public Module {
 
   // ONE-SHOT instance (SW3 MID): K4 "pluck <-> swell" on the K3 fc (UP dampener, MID ladder), per 8 kHz sample.
   //   Side from the smoothed t4: t4 < 0 DECAY (target 0, T = PS_DEC_FAST (PS_DEC_SLOW / PS_DEC_FAST)^(1 - |t4|)),
-  //   t4 >= 0 RISE (target 1, T = PS_RISE_FAST (PS_RISE_SLOW / PS_RISE_FAST)^|t4|); side, T and the coefficient
-  //   recomputed only when t4 moved. Onset: DECAY g = 1, RISE with t4 > 0 g = 0, exact noon nothing.
-  //   g one-pole toward the target, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
-  //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T.
+  //   t4 >= 0 RISE (target 1, T = PS_RISE_FAST (PS_RISE_SLOW / PS_RISE_FAST)^|t4|); side and T recomputed only
+  //   when t4 moved. Onset: DECAY g = 1, RISE with t4 > 0 g = 0, exact noon nothing; such an onset sets
+  //   ps_plucked_, a side change clears it. T_eff = T plucked, max(T, EXP_PS_LEAVE_S) unplucked (the leave move).
+  //   DECAY: g linear, -1 / (T_eff sr8) per sample, clamps at 0, holds. RISE: g one-pole toward 1,
+  //   tau = T_eff / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02 (98 %), holds.
+  //   A K4 turn never resets g: it continues from its value toward the (new) target at the (new) T_eff.
   //   ps_gs_ = g one-pole slid (tau EXP_ENV_FM_SLIDE_MS), lands exactly.
   //   o3_ = ps_gs_ (DampUpdate / LadUpdate: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
   //   (K4 inert there). o2_ = 0 (the K5 LFO offset goes to Derive via LfoO2).
   inline void PsUpdate(bool onset, float t4) {
     using namespace explorer_k;
+    bool redo = false;
     if (t4 != ps_t4_) {
       ps_t4_ = t4;
       const float am = fabsf(t4);
-      ps_rise_ = (t4 >= 0.f);
-      ps_T_ = ps_rise_ ? EXP_PS_RISE_FAST_S * expf(am * ln_ps_rise_)
-                       : EXP_PS_DEC_FAST_S * expf((1.f - am) * ln_ps_dec_);
-      ps_c_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (ps_T_ * sr8_));
+      const bool rise = (t4 >= 0.f);
+      if (rise != ps_rise_) { ps_rise_ = rise; ps_plucked_ = false; }   // side changed: leave move until an onset
+      ps_Ts_ = ps_rise_ ? EXP_PS_RISE_FAST_S * expf(am * ln_ps_rise_)
+                        : EXP_PS_DEC_FAST_S * expf((1.f - am) * ln_ps_dec_);
+      redo = true;
     }
     const float tg = ps_rise_ ? 1.f : 0.f;
     if (onset) {
-      if (!ps_rise_)      ps_g_ = 1.f;           // DECAY: pluck from the K3 value
-      else if (t4 > 0.f)  ps_g_ = 0.f;           // RISE: swell from the bottom (exact noon: nothing)
+      if (!ps_rise_)      { ps_g_ = 1.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // DECAY: pluck
+      else if (t4 > 0.f)  { ps_g_ = 0.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // RISE: swell
+    }                                                                   // (exact noon: nothing)
+    if (redo) {                                  // T_eff = T_side once plucked, else max(T_side, EXP_PS_LEAVE_S)
+      ps_T_ = (ps_plucked_ || ps_Ts_ >= EXP_PS_LEAVE_S) ? ps_Ts_ : EXP_PS_LEAVE_S;
+      ps_c_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (ps_T_ * sr8_));     // RISE: one-pole
+      ps_dg_ = 1.f / (ps_T_ * sr8_);                                  // DECAY: linear step per 8 kHz sample
     }
     if (ps_g_ != tg) {
-      float g = ps_g_ + ps_c_ * (tg - ps_g_);
-      if (fabsf(tg - g) <= 0.02f) g = tg;
+      float g;
+      if (ps_rise_) {
+        g = ps_g_ + ps_c_ * (1.f - ps_g_);
+        if (1.f - g <= 0.02f) g = 1.f;
+      } else {
+        g = ps_g_ - ps_dg_;
+        if (g < 0.f) g = 0.f;
+      }
       ps_g_ = g;
     }
     ps_gs_ += mv_a_ * (ps_g_ - ps_gs_);
@@ -1907,8 +1930,11 @@ class Explorer : public Module {
   float ps_gs_ = 1.f;              // g slid (1 ms one-pole, coefficient mv_a_)
   float ps_t4_ = 2.f;              // t4 the side / T / coefficient were computed for
   bool  ps_rise_ = true;           // side: true RISE (t4 >= 0, target 1), false DECAY (t4 < 0, target 0)
-  volatile float ps_T_ = 0.01f;    // travel time T (s) of the current side
-  float ps_c_ = 0.f;               // one-pole coefficient (tau = T / EXP_ENV_TRAVEL_TAUS)
+  float ps_Ts_ = 0.01f;            // travel time T_side (s) of the current side from |t4|
+  volatile float ps_T_ = 0.01f;    // travel time in use T_eff (s): T_side, or max(T_side, EXP_PS_LEAVE_S) unplucked
+  bool  ps_plucked_ = false;       // an onset reset g on this side (false after a side change, until the next onset)
+  float ps_c_ = 0.f;               // RISE one-pole coefficient (tau = T_eff / EXP_ENV_TRAVEL_TAUS)
+  float ps_dg_ = 0.f;              // DECAY linear step per 8 kHz sample (1 / (T_eff sr8))
   float ln_ps_dec_ = 0.f;          // ln(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S)
   float ln_ps_rise_ = 0.f;         // ln(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S)
   // ONE-SHOT K5 LFO (LfoUpdate, loop_ = false)
