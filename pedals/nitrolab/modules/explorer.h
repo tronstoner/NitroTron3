@@ -885,7 +885,15 @@ class Explorer : public Module {
       lfo_inc_ = EXP_LFO_HZ_MIN * expf(u * ((t5 < 0.f) ? ln_lfo_ccw_ : ln_lfo_)) / sr8_;
       lfo_depth_ = (u >= EXP_LFO_DEPTH_FRAC) ? 1.f : u * (1.f / EXP_LFO_DEPTH_FRAC);
     }
-    if (onset && t5 > 0.f) lfo_ph_ = 0.f;       // CW stepped pattern: restarts on each attack (2026-10-28); CCW free-running
+    if (onset) {                                 // phase sync on each attack (2026-10-28)
+      if (t5 > 0.f) lfo_ph_ = 0.f;               // CW stepped pattern: step 1
+      else if (t5 < 0.f) {                       // CCW triangle: aligned with the K4 envelope's direction
+        const float t4 = 2.f * k4s_ - 1.f;       // tri(ph) = 1 - 4 |frac(ph + 0.25) - 0.5|
+        lfo_ph_ = (t4 < 0.f) ? 0.25f             // decay: start at the peak (+1), falling
+                : (t4 > 0.f) ? 0.75f             // rise: start at the bottom (-1), rising
+                : 0.f;                           // noon: 0, rising
+      }
+    }
     lfo_ph_ += lfo_inc_;
     if (lfo_ph_ >= 1.f) lfo_ph_ -= 1.f;
     float w = 0.f;
