@@ -1018,7 +1018,7 @@ class Explorer : public Module {
   // Per 8 kHz sample (sub = its index in the block): 2-pole LP mix target (1 while the current model is a MID table
   // model, else 0) and cutoff, in fractions of log2(TF_FMAX / TF_FMIN) above TF_FMIN (lf, clamped [0, 1]):
   //   ONE-SHOT: ln fc = ln ENV_BOTTOM + g_s (ln fc_knob - ln ENV_BOTTOM) (pluck <-> swell between EXP_TF_ENV_BOTTOM
-  //             40 Hz and the knob value; below the knob's own range, so a decay closes further)
+  //             150 Hz and the knob value; below the knob's own range, so a decay closes further)
   //   LOOPING:  lf = k3 + o3_ (o3_ = the K5-CW envelope offset, knob units = the full span)
   // k3 = smoothed K3. Computed only while the LP targets on or still fades (tf_m_ > 0); else the last fc holds.
   inline void TfUpdate(int sub) {

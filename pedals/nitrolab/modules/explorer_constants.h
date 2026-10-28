@@ -261,7 +261,7 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // SVF state cleared when it starts from m = 0; not run while m = 0 (SW1 UP / DOWN settled).
 constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full CCW (envelope bottom: EXP_TF_ENV_BOTTOM)
 constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full CW (practically open)
-constexpr float EXP_TF_ENV_BOTTOM = 40.f;     // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: was EXP_TF_FMIN 250,
+constexpr float EXP_TF_ENV_BOTTOM = 150.f;    // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: 250 -> 40 -> 150;
                                               // the decay did not close enough); the K3 knob range stays 250 Hz..16 kHz
 constexpr float EXP_TF_Q         = 0.5f;      // tables LP Q (2026-10-28: 0.707 flat -> 0.9 slightly wet -> 0.5 softer; 1.1 coloured too much in wavemorph)
 constexpr bool  EXP_TF_Q_ON_K5   = true;      // TEMP (2026-10-28): SW3 MID tables K5 = LP Q instead of the LFO (FM keeps the LFO)
