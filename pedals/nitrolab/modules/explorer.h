@@ -1,12 +1,13 @@
 #pragma once
 //
 // explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 pluck <-> swell on
-// the K3 fc (UP dampener / MID 2-pole lowpass), K5 LFO on K2 feedback / morph) and SW3 DOWN (LOOPING: generic K4 / K5 envelope modulation) on NitroLab: two instances of this class
-// (constructor flag), sharing the read-only tables.
+// the K3 fc (UP index / MID 2-pole lowpass), K5 LFO on K2 feedback / morph) and SW3 DOWN (FM LAB: the same, except SW1
+// UP = 13 curated FM algorithm zones, see FM LAB) on NitroLab: two instances of this class (constructor flag),
+// sharing the read-only tables. (The former SW3 DOWN LOOPING variant is retired: EXP_LOOP_ENABLE, code kept.)
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
 // split into 84 complex bands (armitage_bands.h, included read-only), each band reshaped by one
-// of the models, summed, interpolated back to 48 kHz, DC-blocked, (SW1 MID: 2-pole lowpass,) soft-clipped, FS1-muted. LFO: SW3 MID K5 only.
+// of the models, summed, interpolated back to 48 kHz, DC-blocked, (SW1 MID: 2-pole lowpass,) soft-clipped, FS1-muted. LFO: K5, both instances.
 // No pitch tracking: every band runs the selected model on its OWN phase phi_k and magnitude
 // a_k = |z'_k|; nothing picks or decides per band. The model output is always full (no unshaped crossfade).
 //
@@ -50,7 +51,7 @@
 // K3 DAMPENER (SW1 UP and MID; DOWN: none): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
 //   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz), evaluated per audio block in
 //   DampUpdate. UP (FM caps): when the smoothed K3 or its envelope value moved; SW3 MID: scaled by the K4 pluck <->
-//   swell g, SW3 DOWN: + the K5-CW envelope octave offset, see K4 / K5. MID (tables; back 2026-10-28 late, as before
+//   swell g (both instances; retired LOOPING: + the K5-CW envelope octave offset), see K4 / K5. MID (tables; back 2026-10-28 late, as before
 //   the ladder): from the smoothed K3 ONLY - NOT modulated (the envelope moves the 2-pole LP instead).
 //   Every per-band harmonic ceiling on f'_k (after SW2) becomes
 //   min(ceiling, fc); each band keeps its level and fundamental, loses only harmonics above fc:
@@ -100,6 +101,39 @@
 //                16-bit Fibonacci LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits),
 //                17..32 = SQR v[j] = sq(j) cos(2 pi n j / 16), n = 1..16. Anti-fold: S_k steps (16 / 8 / 4 / 2,
 //                (S/2) f' <= L), pattern subsampled every 16 / S_k-th step.
+//  SW1 UP on SW3 DOWN — FM LAB (instead of the 15 FM zones above; 2026-10-28). K1 = 13 equal stepped zones
+//   (EXP_LAB_ZONES: algorithm + fixed ratios, relative to the band phase phi; C = carrier at phi). A zone change =
+//   the 1 ms model crossfade (the entering algorithm from cleared state); zones of the SAME algorithm share the model:
+//   its ratios slide linearly over EXP_DISC_SLIDE_MS (1 ms) instead. Operator phases pm at r x phi (accumulated per
+//   band from the wrapped phi step, PrepLab; fresh / after silence: r phi). No XBAND.
+//     1-4   2OP    r 0.5 / 1 / 2 / 3: = the FM model above (kFM, its own ratio slide), K2 = feedback b
+//     5-7   STACK  C : M1 : M2 = 1:1:1 / 1:2:1 / 1:1:3.5; M2 -> M1 -> C: M1 = sin(2 pi pm1 + I2 sin(2 pi pm2)),
+//                  W = cos(2 pi phi + I M1); K2 = I2 0..EXP_LAB_I2_MAX (4)
+//     8-10  BELL   M1 1 + M2 3.5 / 1.41 + 2.76 / 2 + 7.1; parallel: W = cos(2 pi phi + I sin(2 pi pm1) + I2 sin(2 pi pm2));
+//                  K2 = I2 0..4
+//     11-12 PAIRS  body 1:1 + tine Rt = 14 / 7: W = cos(2 pi phi + I sin(2 pi phi)) + Lt g cos(2 pi pc + It sin(2 pi pc)),
+//                  pc at Rt x phi, It = EXP_LAB_TINE_I (1); K2 = tine level Lt 0..1
+//     13    TABLE  M1 = the SOFT A frames (table zone 7, tine e-piano | hollow clarinet | drawbar organ | church
+//                  mixture) at phi (modulator at 1), linear frame crossfade, each frame / its peak (full version, int16);
+//                  W = cos(2 pi phi + I M1); K2 = frame position 0..1
+//   K3 = INDEX: I = EXP_FM_INDEX (12) under the K3 index law (the dampener fc law, L = min(4000, fc), the caps below;
+//   K4 pluck <-> swell and the env floor as SW3 MID). K5 LFO on K2's parameter, ADDED AFTER the caps, clamped to its
+//   range: b +- EXP_LFO_FB_SWING 0.3 [0, 1.5]; I2 +- EXP_LAB_LFO_I2_SWING 0.5 [0, 4]; Lt +- EXP_LAB_LFO_TINE_SWING 0.15
+//   [0, 1]; frame +- EXP_LAB_LFO_POS_SWING 0.15 [0, 1] (Lt / frame have no cap: knob + LFO, clamped).
+//   ANTI-FOLD CAPS (EXP_ANTIFOLD && !EXP_FBFM_PUSHED, floor 0, per band; all from the same L, so K3 / the envelope
+//   close every operator together with the main index). MAIN CAP (Carson, f' + r f' (I + 1) <= L):
+//   I <= (L / f' - 1) / r - 1.
+//     2OP    as the FM model (main cap at r, feedback cap b <= (L / (r f') - 1) / 4)
+//     STACK  M2 CAP: r2 f' (I2 + 1) <= L -> I2 <= L / (r2 f') - 1; then + LFO. CARRIER CAP: M1's effective top
+//            T1 = r1 f' + r2 f' (I2 + 1) (Carson on M1, applied I2), f' + T1 (I + 1) <= L -> main cap at r = T1 / f'
+//     BELL   M2 CAP: I2 <= (L / f' - 1) / r2 - 1 (main cap at r2); then + LFO. I: main cap at r1 (each operator
+//            capped on its own)
+//     PAIRS  body: main cap at r = 1. TINE FADE: g = clamp((L - Rt f') / (EXP_LAB_TINE_FADE 0.25 L), 0, 1) (gone once
+//            Rt f' >= L); TINE CAP: main cap at its own carrier Rt f' with the modulator at 1 x C2: It <= L / (Rt f') - 2
+//     TABLE  main cap at r = 1. MODULATOR VERSION: hf = L / f'; lo = largest version with H_lo <= hf, M1 = (1 - x)
+//            read(lo - 1) + x read(lo), x = (hf - H_lo) / (H_lo+1 - H_lo) (lo = 0: read(0)) - continuous in hf, every
+//            modulator harmonic <= L: never folds
+//
 //  SW1 DOWN — harmonics & shift (K1 = model, 3 equal zones; no dampener)
 //   1 HARMONICS  H = (1 - fr) h_n0 cos(2 pi n0 phi) + fr h_n1 cos(2 pi n1 phi), n = 1 + 5 K2 = n0 + fr,
 //                n1 = n0 + 1, h_n = clamp((3800 - n f') / 400, 0, 1) (armitage ADD drop);
@@ -117,10 +151,11 @@
 // for EXP_MODEL_XFADE_MS and crossfaded linearly; the entering model starts from cleared state. A change
 // during a fade is picked up when that fade ends.
 //
-// K4 / K5 (two variants of this class, constructor flag: Explorer(false) = ONE-SHOT on SW3 MID, Explorer(true) =
-//   LOOPING on SW3 DOWN; everything else identical). Onset detector per 48 kHz input sample (EXP_ONSET_*,
-//   armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1 (both smoothed, land exactly).
-//  ONE-SHOT (SW3 MID) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the 2-pole
+// K4 / K5 (constructor flag: Explorer(false) = SW3 MID, Explorer(true) = SW3 DOWN = FM LAB: both ONE-SHOT, identical
+//   except the FM LAB zones on SW1 UP; EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
+//   Onset detector per 48 kHz input sample (EXP_ONSET_*, armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1
+//   (both smoothed, land exactly).
+//  ONE-SHOT (SW3 MID and FM LAB) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the index fc, SW1 MID the 2-pole
 //   LP cutoff (not the tables' dampener); SW1 DOWN: K4 inert (no model offsets); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
 //     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per audio block
 //          (DampUpdate) from the block's first g_s (as the K3 knob).
@@ -148,11 +183,13 @@
 //     applied l = depth shape, one-pole slid 1 ms (EXP_ENV_FM_SLIDE_MS, lands exactly): the steps don't click;
 //             a side change passes through depth 0
 //     target fixed per family, +- around the knob, clamped (Derive's K2 offset o2, per model via LfoO2):
-//       UP FM ratio zones  feedback b = b_knob + 0.75 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
+//       UP FM ratio zones  feedback b = capped b + 0.3 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
+//       UP FM LAB          the zone's K2 parameter, after the caps (see FM LAB)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
-//  LOOPING (SW3 DOWN) — generic K4 / K5 envelope modulation (discovery comparison):
+//  LOOPING (RETIRED 2026-10-28: only with EXP_LOOP_ENABLE, then on SW3 DOWN instead of FM LAB) — generic K4 / K5
+//   envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
 //     LOOPING   each onset e = 0 rising; linear triangle 0 -> 1 -> 0 ..., reflecting at 0 / 1; one ramp
 //               T = 4 s (0.03 / 4)^s, s = max(0, (|t4| - 0.08) / 0.92).
@@ -184,24 +221,27 @@
 //                                (K4 would then drive both the filter and the envelope).
 //
 // CONTROL MAP
-//   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: table zone (10, stepped,
+//   K1  selection    SW1 UP: SW3 MID FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; SW3 DOWN FM LAB zone (13:
+//                    2OP x4, STACK x3, BELL x3, PAIRS x2, TABLE FM; 1 ms crossfade); MID: table zone (10, stepped,
 //                    1 ms crossfade); DOWN: model (harmonics / freq shift / interval)
-//   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through
-//                    the zone's frames; DOWN: per model (see MODELS)
-//   K3  UP:          dampener, per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law
+//   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); FM LAB: the zone's main parameter (2OP b 0..1.5, STACK /
+//                    BELL I2 0..4, PAIRS tine level 0..1, TABLE FM frame 0..1); MID: morph m 0..1 (smoothed,
+//                    continuous) through the zone's frames; DOWN: per model (see MODELS)
+//   K3  UP:          index: the per-band cap law (fc 150 Hz CCW -> 4 kHz CW open, k3^0.5; L = min(4000, fc) caps the
+//                    index, feedback and every FM LAB operator)
 //       MID:         dampener as UP (static: knob only, never modulated) + 2-pole SVF lowpass (12 dB/oct, Q 0.707)
 //                    250 Hz (CCW) -> 16 kHz (CW, practically open), plain exponential (noon 2 kHz); the K4 / K5
 //                    envelope moves the LP only
 //       DOWN:        per model (see MODELS)
-//   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (UP dampener, MID 2-pole LP; DOWN inert): CCW = pluck
+//   K4  SW3 MID / DOWN: pluck <-> swell on the K3 fc per onset (UP index, MID 2-pole LP; DOWN inert): CCW = pluck
 //                    (onset opens to the K3 fc, decays to the bottom 150 / 250 Hz; 0.45 s at the end -> 8 s at noon),
 //                    noon = plain K3, CW = swell (onset drops to the bottom, rises to the K3 fc; 10 ms -> 4 s)
-//       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
-//   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.15; XBAND / DOWN none): CCW
-//                    triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 % of each side,
-//                    rate 0.2 -> 20 Hz exponential over the side
-//       SW3 DOWN:    env target: CCW on K2's parameter, CW on K3's parameter (MID: the 2-pole LP cutoff); amount
-//                    |2 k5 - 1| (noon off)
+//       (retired LOOPING: envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms)
+//   K5  SW3 MID / DOWN: LFO on K2's parameter (UP FM feedback +-0.3, FM LAB b +-0.3 / I2 +-0.5 / Lt +-0.15 / frame
+//                    +-0.15, MID morph +-0.15; XBAND / DOWN none): CCW triangle (up to 80 Hz) | noon off | CW
+//                    staircase 100/50/0 %; depth fades in over the first 30 % of each side, rate 0.2 Hz -> top,
+//                    exponential over the side; phase synced on each onset
+//       (retired LOOPING: env target: CCW on K2's parameter, CW on K3's parameter; amount |2 k5 - 1|)
 //   K6  dry / wet    (shell)
 //   SW1 family       UP = FM, MID = tables, DOWN = harmonics & shift
 //   SW2 octave       UP = +1 oct, MID = as played, DOWN = -1 oct (one slot, crossfade EXP_OCT_XFADE_MS)
@@ -211,7 +251,8 @@
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
 // 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: the K5 LFO offset, its g acts on fc only);
 // stepped items from the raw knob.
-// DIAG second half: SW3 DOWN `loop e.. up|down|off d.. K2|K3|-`; SW3 MID `ps g.. dec|rise T.. (s) fce .. (Hz,
+// DIAG second half: FM LAB (SW3 DOWN, SW1 UP) `LAB <zone> <b|I2|Lt|pos> <knob> > <with LFO> fc <index fc at the
+// knob>` + the `ps` part below; retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
 // applied fc: UP dampener, MID 2-pole LP) lfo tri|stp|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on
 // SW1 DOWN. MID WT lines: `dmp .. lp .. eff ..` = the tables' dampener fc (knob, unmodulated), the LP cutoff at the
 // knob, the effective LP cutoff (Hz) instead of `fc` (parked ladder: lp / eff = the ladder's).
@@ -275,6 +316,17 @@ struct ExplorerTbScratch {
 static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
 // explorer_sin_tab + explorer_tb are filled by the first Init; further instances (SW3 DOWN) skip the build.
 static bool explorer_tables_built = false;
+// FM LAB operator state (SW3 DOWN instance only; ONE copy, SDRAM - cached write-back - keeps the DTCM .bss free):
+// per SW2 slot and band. Phase accumulators in cycles, -1 = fresh (starts at r x phi). One set per algorithm, so a
+// 1 ms crossfade between two algorithms never advances one state twice.
+struct ExplorerLabState {
+  float lpp[3][armbands::kArmBands];               // previous band phase phi (-1 = none: band silent / not tracked)
+  float dph[armbands::kArmBands];                  // this sample's wrapped phi - prev (2 = fresh), slot being run
+  float sp1[3][armbands::kArmBands], sp2[3][armbands::kArmBands];   // STACK: M1 / M2 phase
+  float bp1[3][armbands::kArmBands], bp2[3][armbands::kArmBands];   // BELL:  M1 / M2 phase
+  float tp[3][armbands::kArmBands];                                  // PAIRS: tine carrier C2 phase
+};
+static ExplorerLabState DSY_SDRAM_BSS explorer_lab_st;
 
 // K4 post filter stage: TPT state-variable filter (a local copy of armitage's ArmSVF).
 struct ExpSVF {
@@ -308,12 +360,16 @@ class Explorer : public Module {
   enum { kFM = 0, kXFM,                               // SW1 UP: FM ratio zones, XBAND zone
          kWT, kBIT,                                   // SW1 MID
          kHARM, kFSH, kISH,                           // SW1 DOWN
+         kLSTK, kLBELL, kLPAIR, kLTAB,                // FM LAB (SW3 DOWN, SW1 UP; its 2OP zones = kFM)
          kNumModels };
   enum { kRotFSH = 0, kRotISH = 1, kRotN = 2 };                  // rotation-phase users
 
-  // loop = false: ONE-SHOT envelope (SW3 MID); true: LOOPING envelope (SW3 DOWN). See K4 / K5 above.
-  explicit Explorer(bool loop = false) : loop_(loop) {}
+  // down = false: SW3 MID (ONE-SHOT); true: SW3 DOWN = FM LAB (ONE-SHOT + the lab on SW1 UP), or with
+  // EXP_LOOP_ENABLE the retired LOOPING variant. See K4 / K5 above.
+  explicit Explorer(bool down = false)
+      : loop_(down && explorer_k::EXP_LOOP_ENABLE), lab_(down && !explorer_k::EXP_LOOP_ENABLE) {}
   bool Looping() const { return loop_; }
+  bool Lab() const { return lab_; }
 
   void Init(float sr) override {
     using namespace explorer_k;
@@ -394,6 +450,24 @@ class Explorer : public Module {
       for (int z = 0; z < EXP_TB_ZONES; z++) { tb_off_[z] = off; off += EXP_TB_ZONE_FRAMES[z]; }
     }
     if (build) { BuildTables(); explorer_tables_built = true; }
+    // FM LAB TABLE FM: per-frame scale = 1 / peak of the frame's full version (int16 units) -> modulator peak 1
+    // (the band-limited versions of a frame share its scale: the dampener removes harmonics, not level).
+    for (int f = 0; f < kLabTbFrames; f++) {
+      const int16_t* t = explorer_tb[tb_off_[EXP_LAB_TB_ZONE] + f][EXP_TB_LEVELS - 1];
+      int pk = 0;
+      for (int i = 0; i < EXP_TB_SIZE; i++) { const int a = (t[i] < 0) ? -t[i] : t[i]; if (a > pk) pk = a; }
+      lab_tsc_[f] = (pk > 0) ? 1.f / (float)pk : 0.f;
+    }
+    for (int l = 0; l < EXP_TB_LEVELS - 1; l++)
+      lab_idh_[l] = 1.f / (float)(EXP_TB_LEVEL_H[l + 1] - EXP_TB_LEVEL_H[l]);
+    lab_idh_[EXP_TB_LEVELS - 1] = 0.f;
+    lab_z_t_ = 0;
+    l2r_.Jump(EXP_LAB_ZONES[0].r1);              // each algorithm's ratio slides start at its first zone
+    lsr1_.Jump(EXP_LAB_ZONES[4].r1);  lsr2_.Jump(EXP_LAB_ZONES[4].r2);
+    lbr1_.Jump(EXP_LAB_ZONES[7].r1);  lbr2_.Jump(EXP_LAB_ZONES[7].r2);
+    lpr_.Jump(EXP_LAB_ZONES[10].r2);
+    lab_trk_ = false;
+    diag_lab_z_ = -1;
     for (int o = 0; o < kSlots; o++) { ResetSlotState(o); slot_on_[o] = false; }
     dc_a_ = expf(-6.283185307f * EXP_DC_HZ / sr);
     dc_x1_ = dc_y1_ = 0.f;
@@ -489,8 +563,12 @@ class Explorer : public Module {
     if (fam < kUp || fam > kDown) fam = kMid;
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
-    int model, zone = 0;
-    if (fam == kUp) {                            // K1: FM ratio zones, last zone = XBAND
+    int model, zone = 0, labz = -1;
+    if (fam == kUp && lab_) {                    // FM LAB: K1 = the 13 curated zones (no XBAND)
+      labz = Quantize(k1, EXP_LAB_N_ZONES);
+      lab_z_t_ = labz;
+      model = LabModel(EXP_LAB_ZONES[labz].alg);
+    } else if (fam == kUp) {                     // K1: FM ratio zones, last zone = XBAND
       model = (Quantize(k1, EXP_N_UP) < EXP_FM_N_RATIOS) ? kFM : kXFM;
     } else if (fam == kMid) {                    // K1: table zone (+ bit table zone when enabled)
       const int z = Quantize(k1, EXP_N_MID);
@@ -541,7 +619,10 @@ class Explorer : public Module {
         const int lsh = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
         const float ldp = (u5 >= EXP_LFO_DEPTH_FRAC) ? 1.f : u5 * (1.f / EXP_LFO_DEPTH_FRAC);
         const float lhz = EXP_LFO_HZ_MIN * expf(u5 * logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN));
-        DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, fck, lfe,
+        float da = p.a, db = p.b;                // FM LAB (SW1 UP): main parameter at the knob / with the LFO
+        diag_lab_z_ = labz;
+        if (labz >= 0) LabDiagParam(labz, k2, da, db);
+        DiagControls(cs, led1, kv, fam, oct, model, zone, da, db, fck, lfe,
                      ps_g_, dir, 0.f, 0, ps_T_, (fam == kUp) ? damp_fc_ : lfe, lsh, ldp, lhz);
       }
     }
@@ -560,7 +641,7 @@ class Explorer : public Module {
                       // ladder), 0 on DOWN
     float lfe;        // SW1 MID: effective lowpass cutoff (Hz, incl. K4 / K5 envelope), else 0
     float dfc;        // SW1 MID: the tables' dampener fc (Hz, knob only - not modulated), else 0
-    bool  loop;       // variant: false ONE-SHOT (SW3 MID), true LOOPING (SW3 DOWN)
+    bool  loop;       // variant: false ONE-SHOT (SW3 MID, FM LAB), true retired LOOPING (EXP_LOOP_ENABLE)
     float env;        // LOOPING: envelope e (0..1) at the snapshot (before gate / sign / slide); ONE-SHOT: g
     int   dir;        // LOOPING K4: +1 CW up, -1 CCW down, 0 off (pad); ONE-SHOT: +1 rise (CW / noon), -1 decay
     float d;          // K5 amount |2 k5 - 1|
@@ -569,6 +650,8 @@ class Explorer : public Module {
                       // 0 on SW1 DOWN); LOOPING: 0
     int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 staircase (CW); LOOPING: 0
     float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
+    int   labz;       // FM LAB (SW3 DOWN, SW1 UP): zone 0..12 (a / b = main parameter at the knob / with the
+                      // K5 LFO, before the per-band caps); -1 = not the lab
     bool  mute;
   };
   void Activate() override {
@@ -594,8 +677,24 @@ class Explorer : public Module {
   static const char* ModelName(int m) {
     static const char* const n[kNumModels] = { "FM", "XBAND-FM",
                                                "WTABLE", "BITTAB",
-                                               "HARM", "FSHIFT", "INTERVAL" };
+                                               "HARM", "FSHIFT", "INTERVAL",
+                                               "STACK", "BELL", "PAIRS", "TABLE-FM" };
     return (m >= 0 && m < kNumModels) ? n[m] : "?";
+  }
+  // FM LAB zone name / main-parameter label (DIAG).
+  static const char* LabZoneName(int z) {
+    return (z >= 0 && z < explorer_k::EXP_LAB_N_ZONES) ? explorer_k::EXP_LAB_ZONES[z].name : "?";
+  }
+  static const char* LabParamName(int z) {
+    using namespace explorer_k;
+    if (z < 0 || z >= EXP_LAB_N_ZONES) return "?";
+    switch (EXP_LAB_ZONES[z].alg) {
+      case EXP_LAB_2OP:   return "b";
+      case EXP_LAB_STACK:
+      case EXP_LAB_BELL:  return "I2";
+      case EXP_LAB_PAIRS: return "Lt";
+      default:            return "pos";
+    }
   }
   static const char* ZoneName(int m, int z) {
     static const char* const wt[explorer_k::EXP_TB_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-ROUGH", "SQR-PWM",
@@ -643,13 +742,19 @@ class Explorer : public Module {
         vfrom_ = var_;
         var_ = var_t_;
         const int mn = var_ >> 6;
-        if (mn != (vfrom_ >> 6))                         // a new model starts cleared (items of the
+        if (mn != (vfrom_ >> 6)) {                       // a new model starts cleared (items of the
           for (int o = 0; o < kSlots; o++) ResetModelState(mn, o);   // same model share its state)
+          if (lab_) LabSlides(mn, true);                 // FM LAB: the entering algorithm's ratios jump
+        }
         // MID table zone -> table zone: EXP_TB_ZONE_XFADE_MS (WaveMorph's); every other change EXP_MODEL_XFADE_MS.
         mfade_cur_ = (mn == kWT && (vfrom_ >> 6) == kWT) ? zfade_len_ : mfade_len_;
         mfade_n_ = mfade_cur_;
       }
       const bool fading = (mfade_n_ > 0);
+      if (lab_) {                                // FM LAB: ratios of the current algorithm slide (1 ms) within it;
+        LabSlides(var_ >> 6, false);             // operator phase tracking while a STACK / BELL / PAIRS side runs
+        lab_trk_ = IsLabAcc(var_ >> 6) || (fading && IsLabAcc(vfrom_ >> 6));
+      }
       // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
       // ONE-SHOT: o3_ = g_s (UP dampener fc / MID 2-pole LP fc only: DampUpdate / TfUpdate) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
       // offset is the K5 LFO's, per model (LfoO2: FM feedback / table morph, 0 elsewhere), so a model crossfade
@@ -706,7 +811,7 @@ class Explorer : public Module {
   // Per-sample model parameters.
   struct Params {
     float a = 0.f, b = 0.f;     // sweep A / B as displayed (DIAG)
-    float p0 = 0.f, p1 = 0.f, p2 = 0.f, p3 = 0.f;   // model-specific (see Derive)
+    float p0 = 0.f, p1 = 0.f, p2 = 0.f, p3 = 0.f, p4 = 0.f;   // model-specific (see Derive)
     int   n0 = 0;               // integer item (partner offset, harmonic, packed table frame)
     int   zone = 0;
     const float* bt = nullptr;  // BITTAB: the selected 16-step waveform
@@ -866,7 +971,7 @@ class Explorer : public Module {
     ps_gs_ += mv_a_ * (ps_g_ - ps_gs_);
     if (fabsf(ps_g_ - ps_gs_) < EXP_CTRL_SNAP) ps_gs_ = ps_g_;
     o2_ = 0.f;
-    o3_ = ((var_ >> 6) >= kHARM) ? 1.f : ps_gs_;
+    o3_ = IsDownModel(var_ >> 6) ? 1.f : ps_gs_;
   }
 
   // ONE-SHOT instance (SW3 MID): K5 LFO, per 8 kHz sample (after PsUpdate). t5 = 2 k5s_ - 1, u = |t5|.
@@ -916,7 +1021,84 @@ class Explorer : public Module {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
-    return 0.f;
+    if (m == kLPAIR) return lfo_s_ * EXP_LAB_LFO_TINE_SWING;   // FM LAB PAIRS: tine level Lt (no cap on Lt)
+    if (m == kLTAB)  return lfo_s_ * EXP_LAB_LFO_POS_SWING;    // FM LAB TABLE FM: frame position
+    return 0.f;                                  // (FM LAB STACK / BELL: the I2 LFO is added after the caps, ShapeK)
+  }
+
+  // --- FM LAB helpers (SW3 DOWN instance, SW1 UP) ---
+  static inline bool IsDownModel(int m) { return m == kHARM || m == kFSH || m == kISH; }
+  // Algorithms with their own phase accumulators (explorer_lab_st).
+  static inline bool IsLabAcc(int m) { return m == kLSTK || m == kLBELL || m == kLPAIR; }
+  static inline int LabModel(int alg) {
+    using namespace explorer_k;
+    return (alg == EXP_LAB_2OP) ? kFM : (alg == EXP_LAB_STACK) ? kLSTK : (alg == EXP_LAB_BELL) ? kLBELL
+         : (alg == EXP_LAB_PAIRS) ? kLPAIR : kLTAB;
+  }
+  // Ratio slides of model mn from the K1 zone (only when the zone belongs to mn - var_ may lag the knob): jump =
+  // set at once (model entry, cleared state), else slide over EXP_DISC_SLIDE_MS; then every lab slide ticks.
+  inline void LabSlides(int mn, bool jump) {
+    using namespace explorer_k;
+    const int z = lab_z_t_;
+    const ExpLabZone& Z = EXP_LAB_ZONES[(z >= 0 && z < EXP_LAB_N_ZONES) ? z : 0];
+    if (LabModel(Z.alg) == mn) {
+      DSlide* a = nullptr;
+      DSlide* b = nullptr;
+      float va = Z.r1, vb = Z.r2;
+      if (mn == kFM)         { a = &l2r_; }
+      else if (mn == kLSTK)  { a = &lsr1_; b = &lsr2_; }
+      else if (mn == kLBELL) { a = &lbr1_; b = &lbr2_; }
+      else if (mn == kLPAIR) { b = &lpr_; }                   // PAIRS: r2 = the tine Rt (body fixed at 1)
+      if (jump) { if (a) a->Jump(va); if (b) b->Jump(vb); }
+      else      { if (a) a->Set(va, disc_len_); if (b) b->Set(vb, disc_len_); }
+    }
+    if (!jump) { l2r_.Tick(); lsr1_.Tick(); lsr2_.Tick(); lbr1_.Tick(); lbr2_.Tick(); lpr_.Tick(); }
+  }
+  // DIAG: FM LAB main parameter of zone z at the knob k2 (a) and with the current K5 LFO value (b), before the
+  // per-band caps: 2OP b, STACK / BELL I2, PAIRS Lt, TABLE FM frame position (0..1).
+  void LabDiagParam(int z, float k2, float& a, float& b) const {
+    using namespace explorer_k;
+    const float l = lfo_s_;
+    switch (EXP_LAB_ZONES[z].alg) {
+      case EXP_LAB_2OP:
+        a = EXP_FBFM_FB_MAX * k2; b = a + l * EXP_LFO_FB_SWING;
+        b = (b < 0.f) ? 0.f : (b > EXP_FBFM_FB_MAX) ? EXP_FBFM_FB_MAX : b; break;
+      case EXP_LAB_STACK:
+      case EXP_LAB_BELL:
+        a = EXP_LAB_I2_MAX * k2; b = a + l * EXP_LAB_LFO_I2_SWING;
+        b = (b < 0.f) ? 0.f : (b > EXP_LAB_I2_MAX) ? EXP_LAB_I2_MAX : b; break;
+      case EXP_LAB_PAIRS: a = k2; b = Clamp01(k2 + l * EXP_LAB_LFO_TINE_SWING); break;
+      default:            a = k2; b = Clamp01(k2 + l * EXP_LAB_LFO_POS_SWING); break;
+    }
+  }
+  // Index cap at the main-cap formula (Carson: f_c + r f' (I + 1) <= L, f_c = f'): I <= (L / f' - 1) / r - 1,
+  // floor 0 (ifp = 1 / f', ir = 1 / r) - the K3 index law; with EXP_FM_ENV_INDEX_FLOOR > 0 the envelope closes it
+  // only down to that floor (or the K3 knob's own cap, Lk), as kFM.
+  static inline float IndexCap(float L, float Lk, float ifp, float ir) {
+    using namespace explorer_k;
+    float ic = (L * ifp - 1.f) * ir - 1.f;
+    if (ic < 0.f) ic = 0.f;
+    if (EXP_FM_ENV_INDEX_FLOOR > 0.f) {
+      float ick = (Lk * ifp - 1.f) * ir - 1.f;
+      if (ick < 0.f) ick = 0.f;
+      const float fl = (EXP_FM_ENV_INDEX_FLOOR < ick) ? EXP_FM_ENV_INDEX_FLOOR : ick;
+      if (ic < fl) ic = fl;
+    }
+    return ic;
+  }
+  // Main index I: EXP_FM_INDEX capped (cap = IndexCap ...), + the K5 index swing (EXP_LFO_INDEX_SWING, as kFM),
+  // clamped [0, EXP_FM_INDEX].
+  inline float MainIndex(float cap) const {
+    using namespace explorer_k;
+    float I = (EXP_FM_INDEX > cap) ? cap : EXP_FM_INDEX;
+    I += lfo_s_ * EXP_LFO_INDEX_SWING;
+    return (I < 0.f) ? 0.f : (I > EXP_FM_INDEX) ? EXP_FM_INDEX : I;
+  }
+  // Operator phase at ratio r: fresh (pm < 0, or the band's phi had no previous value: d > 1) -> r phi, else
+  // pm + r d (d = this sample's wrapped phi step); wrapped to [0, 1).
+  static inline float LabAcc(float pm, float r, float ph, float d) {
+    pm = (pm < 0.f || d > 1.f) ? r * ph : pm + r * d;
+    return pm - floorf(pm);
   }
 
   // K3 dampener, once per audio block (nothing when its inputs did not move):
@@ -1144,7 +1326,7 @@ class Explorer : public Module {
     x = (hf - h0) / (h1 - h0);
   }
 
-  float DiscOf(int m) const { return (m == kFM) ? rfmc_.v : (m == kISH) ? ish_.v : 0.f; }
+  float DiscOf(int m) const { return (m == kFM) ? (lab_ ? l2r_.v : rfmc_.v) : (m == kISH) ? ish_.v : 0.f; }   // lab 2OP: its own ratio slide
 
   // Derived values per model from K2 / K3 (0..1), the slid discrete value (FM ratio / interval semitones) and
   // the envelope offsets o2 / o3 (knob units: 1 = the parameter's full span; 0 = knob value only). Every span is
@@ -1206,6 +1388,26 @@ class Explorer : public Module {
         p.p1 = 1.f / EXP_TB_ZONE_I16_SCALE[zone];
         p.a = pos; p.b = mm; break;
       }
+      case kLSTK:                          // FM LAB STACK / BELL: p0 = r1, p1 = r2 (slid), p2 = I2 at the knob
+      case kLBELL: {                       // (EXP_LAB_I2_MAX K2; cap + LFO per band in ShapeK), p3 = 1 / r2, p4 = 1 / r1
+        const bool st = (m == kLSTK);
+        const float r1 = st ? lsr1_.v : lbr1_.v, r2 = st ? lsr2_.v : lbr2_.v;
+        p.p0 = r1; p.p1 = r2; p.p2 = EXP_LAB_I2_MAX * Clamp01(k2); p.p3 = 1.f / r2; p.p4 = 1.f / r1;
+        p.a = r1; p.b = p.p2; break;
+      }
+      case kLPAIR:                         // FM LAB PAIRS: p0 = Rt (slid), p1 = 1 / Rt, p2 = tine level Lt (+ K5 LFO, [0, 1])
+        p.p0 = lpr_.v; p.p1 = 1.f / lpr_.v; p.p2 = Clamp01(k2 + o2);
+        p.a = p.p0; p.b = p.p2; break;
+      case kLTAB: {                        // FM LAB TABLE FM: frame position (K2 + K5 LFO, [0, 1]) over the SOFT A frames:
+        const float pos = (float)(kLabTbFrames - 1) * Clamp01(k2 + o2);   // n0 = packed frame below, p0 = fraction,
+        int f0 = (int)pos;                                                // p2 / p3 = the two frames' peak scales
+        if (f0 > kLabTbFrames - 2) f0 = kLabTbFrames - 2;
+        if (f0 < 0) f0 = 0;
+        p.n0 = tb_off_[EXP_LAB_TB_ZONE] + f0;
+        p.p0 = pos - (float)f0;
+        p.p2 = lab_tsc_[f0]; p.p3 = lab_tsc_[f0 + 1];
+        p.a = pos; p.b = Clamp01(k2 + o2); break;
+      }
       default: {                           // kBIT: bt = waveform zone (0..31); a = 1..32;
                                            // p0 / p1 / p2 = triangle / saw / pulse weights from K3
         p.bt = bt_all_[zone];
@@ -1230,7 +1432,7 @@ class Explorer : public Module {
 
   // Models that read the band phase phi_k (ph_).
   static inline bool NeedsPhase(int m) {
-    return m == kFM || m == kHARM || m == kWT || m == kBIT;
+    return m == kFM || m == kHARM || m == kWT || m == kBIT || m == kLSTK || m == kLBELL || m == kLPAIR || m == kLTAB;
   }
 
   // u_k = z'_k / |z'_k| for slot o into ur_ / ui_ (0 for silent bands); with need_ph also the phase
@@ -1256,6 +1458,27 @@ class Explorer : public Module {
       ui_[k] = zi * iv;
       if (need_ph) ph_[k] = FastAtan2Cycles(ui_[k], ur_[k]);   // the models' former call, same values
     }
+    if (lab_trk_) PrepLab(o);                    // FM LAB: operator phase steps from this ph_
+  }
+  // FM LAB (a STACK / BELL / PAIRS side running): per band of slot o, d = phi - phi_prev wrapped to [-0.5, 0.5)
+  // into dph (2 = fresh: band silent now or before), phi_prev = phi (-1 while silent). Shared by both sides of a
+  // crossfade; each algorithm accumulates its own operator phases from it (LabAcc).
+  void PrepLab(int o) {
+    const float* __restrict mg = mag_ + 1;
+    float* __restrict lpp = explorer_lab_st.lpp[o];
+    float* __restrict dph = explorer_lab_st.dph;
+    for (int k = 0; k < kBands; k++) {
+      if (mg[k] == 0.f) { lpp[k] = -1.f; dph[k] = 2.f; continue; }
+      const float ph = ph_[k], pp = lpp[k];
+      float d = 2.f;
+      if (pp >= 0.f) {
+        d = ph - pp;
+        if (d < -0.5f) d += 1.f;
+        else if (d >= 0.5f) d -= 1.f;
+      }
+      dph[k] = d;
+      lpp[k] = ph;
+    }
   }
 
   float Shape(int m, int o, const Params& p) {
@@ -1266,6 +1489,10 @@ class Explorer : public Module {
       case kISH:   return ShapeK<kISH>(o, p);
       case kHARM:  return ShapeK<kHARM>(o, p);
       case kWT:    return ShapeK<kWT>(o, p);
+      case kLSTK:  return ShapeK<kLSTK>(o, p);
+      case kLBELL: return ShapeK<kLBELL>(o, p);
+      case kLPAIR: return ShapeK<kLPAIR>(o, p);
+      case kLTAB:  return ShapeK<kLTAB>(o, p);
       default:     return ShapeK<kBIT>(o, p);
     }
   }
@@ -1311,11 +1538,18 @@ class Explorer : public Module {
     const uint8_t* __restrict tlo  = tblo_[o];                // EXP_TB_BLEND: lower version, weight 1 - x
     const float*   __restrict tx   = tbx_[o];                 //               blend weight x toward lo + 1
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
+    constexpr bool kCaps = EXP_ANTIFOLD && !EXP_FBFM_PUSHED;  // FM LAB anti-fold caps (as kFM: PUSHED / off = none)
+    const float* __restrict ldph = explorer_lab_st.dph;       // FM LAB: this sample's phi steps (PrepLab)
+    const float li2 = lfo_s_ * EXP_LAB_LFO_I2_SWING;          // FM LAB STACK / BELL: K5 LFO on I2, after the caps
+    const float itf = (M == kLPAIR) ? 1.f / (EXP_LAB_TINE_FADE * L) : 0.f;   // PAIRS tine fade: 1 / (0.25 L)
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
       if (a == 0.f) {                            // silent band: state cleared
         if (M == kFM) { pp_[o][k] = -1.f; m1_[o][k] = 0.f; m2_[o][k] = 0.f; }
+        if (M == kLSTK)  { explorer_lab_st.sp1[o][k] = -1.f; explorer_lab_st.sp2[o][k] = -1.f; }
+        if (M == kLBELL) { explorer_lab_st.bp1[o][k] = -1.f; explorer_lab_st.bp2[o][k] = -1.f; }
+        if (M == kLPAIR) explorer_lab_st.tp[o][k] = -1.f;
         continue;
       }
       const float cr = ur[k], ci = ui[k];
@@ -1357,6 +1591,116 @@ class Explorer : public Module {
         m1_[o][k] = mod;
         SinCos(I * mod, s, c);
         W = cr * c - ci * s;
+      } else if (M == kLSTK) {
+        // FM LAB STACK, M2 -> M1 -> C: M1 = sin(2 pi pm1 + I2 sin(2 pi pm2)), W = cos(2 pi phi + I M1).
+        const float ph = phs[k], d = ldph[k];
+        const float p1 = LabAcc(explorer_lab_st.sp1[o][k], p.p0, ph, d);
+        const float p2 = LabAcc(explorer_lab_st.sp2[o][k], p.p1, ph, d);
+        explorer_lab_st.sp1[o][k] = p1;
+        explorer_lab_st.sp2[o][k] = p2;
+        float I2 = p.p2, I = EXP_FM_INDEX;
+        if (kCaps) {                             // STACK M2 cap: r2 f' (I2 + 1) <= L
+          float c2 = L * ifp[k] * p.p3 - 1.f;
+          if (c2 < 0.f) c2 = 0.f;
+          if (I2 > c2) I2 = c2;
+        }
+        I2 += li2;                               // K5 LFO on I2, after the cap
+        I2 = (I2 < 0.f) ? 0.f : (I2 > EXP_LAB_I2_MAX) ? EXP_LAB_I2_MAX : I2;
+        // STACK carrier cap: M1's effective top T1 = r1 f' + r2 f' (I2 + 1) (Carson on M1, applied I2);
+        // f' + T1 (I + 1) <= L -> main-cap formula at r = T1 / f'
+        I = MainIndex(kCaps ? IndexCap(L, Lk, ifp[k], 1.f / (p.p0 + p.p1 * (I2 + 1.f))) : EXP_FM_INDEX);
+        float c1, s1, c2, s2, s, c;
+        CosSin01(p1, c1, s1);
+        const float m2 = Sin01(p2);
+        SinCos(I2 * m2, s2, c2);
+        float m1 = s1 * c2 + c1 * s2;            // sin(2 pi pm1 + I2 m2)
+        SinCos(I * m1, s, c);
+        W = cr * c - ci * s;
+      } else if (M == kLBELL) {
+        // FM LAB BELL, parallel: W = cos(2 pi phi + I sin(2 pi pm1) + I2 sin(2 pi pm2)).
+        const float ph = phs[k], d = ldph[k];
+        const float p1 = LabAcc(explorer_lab_st.bp1[o][k], p.p0, ph, d);
+        const float p2 = LabAcc(explorer_lab_st.bp2[o][k], p.p1, ph, d);
+        explorer_lab_st.bp1[o][k] = p1;
+        explorer_lab_st.bp2[o][k] = p2;
+        float I2 = p.p2;
+        if (kCaps) {                             // BELL M2 cap: I2 <= (L / f' - 1) / r2 - 1 (main-cap formula at r2)
+          float c2 = (L * ifp[k] - 1.f) * p.p3 - 1.f;
+          if (c2 < 0.f) c2 = 0.f;
+          if (I2 > c2) I2 = c2;
+        }
+        I2 += li2;                               // K5 LFO on I2, after the cap
+        I2 = (I2 < 0.f) ? 0.f : (I2 > EXP_LAB_I2_MAX) ? EXP_LAB_I2_MAX : I2;
+        const float I = MainIndex(kCaps ? IndexCap(L, Lk, ifp[k], p.p4) : EXP_FM_INDEX);   // main cap at r1
+        float s, c;
+        SinCos(I * Sin01(p1) + I2 * Sin01(p2), s, c);
+        W = cr * c - ci * s;
+      } else if (M == kLPAIR) {
+        // FM LAB PAIRS: body = cos(2 pi phi + I sin(2 pi phi)) (sin 2 pi phi = ci), tine = cos(2 pi pc + It sin(2 pi pc)),
+        // pc at Rt x phi; W = body + Lt g tine.
+        const float ph = phs[k], d = ldph[k];
+        const float pc = LabAcc(explorer_lab_st.tp[o][k], p.p0, ph, d);
+        explorer_lab_st.tp[o][k] = pc;
+        const float I = MainIndex(kCaps ? IndexCap(L, Lk, ifp[k], 1.f) : EXP_FM_INDEX);   // body: main cap at r = 1
+        float s, c;
+        SinCos(I * ci, s, c);
+        W = cr * c - ci * s;
+        float g = 1.f, It = EXP_LAB_TINE_I;
+        if (kCaps) {                             // PAIRS tine: fade clamp((L - Rt f') / (0.25 L), 0, 1); index cap
+          const float ft = p.p0 * fp[k];         // at its own carrier Rt f' (modulator at 1 x C2): It <= L / (Rt f') - 2
+          g = (L - ft) * itf;
+          g = (g < 0.f) ? 0.f : (g > 1.f) ? 1.f : g;
+          float ct = L * ifp[k] * p.p1 - 2.f;
+          if (ct < 0.f) ct = 0.f;
+          if (It > ct) It = ct;
+        }
+        const float lt = p.p2 * g;
+        if (lt != 0.f) {
+          float cc, sc;
+          CosSin01(pc, cc, sc);
+          SinCos(It * sc, s, c);
+          W += lt * (cc * c - sc * s);
+        }
+      } else if (M == kLTAB) {
+        // FM LAB TABLE FM: M1 = the SOFT A frames at phi (modulator at 1), peak-normalised, frame crossfade p0;
+        // W = cos(2 pi phi + I M1), main cap at r = 1. Modulator version from hf = L / f' (L = min(4000, index fc)):
+        // lo = largest version with H_lo <= hf, M1 = (1 - x) read(lo - 1) + x read(lo), x = (hf - H_lo) / (H_lo+1 - H_lo)
+        // (lo = 0: read(0) only; the last version H 127: x = 0 = read(96) - the SOFT A frames end at harmonic 24, so
+        // every version from 24 up is the same wave) - continuous in hf, every harmonic <= hf f' = L: never folds.
+        const float I = MainIndex(kCaps ? IndexCap(L, Lk, ifp[k], 1.f) : EXP_FM_INDEX);
+        if (I == 0.f) { W = cr; }
+        else {
+          const float ph = phs[k];
+          const float xi = ph * (float)EXP_TB_SIZE;
+          const int   i0 = (int)xi;
+          const float fr = xi - (float)i0;
+          const int   j0 = i0 & (EXP_TB_SIZE - 1), j1 = (i0 + 1) & (EXP_TB_SIZE - 1);
+          int lo = EXP_TB_LEVELS - 1;
+          float x = 1.f;
+          if (kCaps) {
+            const float hf = L * ifp[k];
+            const int hk = (hf >= (float)EXP_TB_HMAX) ? EXP_TB_HMAX : (hf < 0.f) ? 0 : (int)hf;
+            lo = wt_lv_of_h_[hk];
+            x = (hf - (float)EXP_TB_LEVEL_H[lo]) * lab_idh_[lo];   // last version: lab_idh_ 0 -> x = 0
+            x = (x < 0.f) ? 0.f : (x > 1.f) ? 1.f : x;
+          }
+          const int16_t* t0 = explorer_tb[p.n0][lo];
+          const int16_t* t1 = explorer_tb[p.n0 + 1][lo];
+          float v0 = ((float)t0[j0] + fr * (float)(t0[j1] - t0[j0])) * p.p2;
+          float v1 = ((float)t1[j0] + fr * (float)(t1[j1] - t1[j0])) * p.p3;
+          float m1 = v0 + p.p0 * (v1 - v0);      // read(lo)
+          if (lo > 0 && x < 1.f) {               // read(lo - 1), weight 1 - x
+            const int16_t* u0 = explorer_tb[p.n0][lo - 1];
+            const int16_t* u1 = explorer_tb[p.n0 + 1][lo - 1];
+            v0 = ((float)u0[j0] + fr * (float)(u0[j1] - u0[j0])) * p.p2;
+            v1 = ((float)u1[j0] + fr * (float)(u1[j1] - u1[j0])) * p.p3;
+            const float mp = v0 + p.p0 * (v1 - v0);
+            m1 = mp + x * (m1 - mp);
+          }
+          float s, c;
+          SinCos(I * m1, s, c);
+          W = cr * c - ci * s;
+        }
       } else if (M == kXFM) {
         const int q = k + p.n0;
         float W0 = cr;
@@ -1468,12 +1812,24 @@ class Explorer : public Module {
     for (int k = 0; k < kBands; k++) {
       if (m == kFM) { pm_[o][k] = 0.f; pp_[o][k] = -1.f; m1_[o][k] = m2_[o][k] = 0.f; }
       if (ru >= 0)  th_[ru][o][k] = 0.f;
+      if (lab_) {                                // FM LAB (shared state: the lab instance only)
+        ExplorerLabState& L = explorer_lab_st;
+        if (m == kLSTK)  { L.sp1[o][k] = -1.f; L.sp2[o][k] = -1.f; }
+        if (m == kLBELL) { L.bp1[o][k] = -1.f; L.bp2[o][k] = -1.f; }
+        if (m == kLPAIR) L.tp[o][k] = -1.f;
+      }
     }
   }
   void ResetSlotState(int o) {
     ResetModelState(kFM, o);
     ResetModelState(kFSH, o);
     ResetModelState(kISH, o);
+    if (lab_) {
+      ResetModelState(kLSTK, o);
+      ResetModelState(kLBELL, o);
+      ResetModelState(kLPAIR, o);
+      for (int k = 0; k < kBands; k++) explorer_lab_st.lpp[o][k] = -1.f;
+    }
   }
 
   static inline float Slide(float v, float t, float st) {
@@ -1915,6 +2271,7 @@ class Explorer : public Module {
     s.tgt = tgt;
     s.T = gT; s.fce = fce;
     s.lfo = lfo; s.lfod = lfod; s.lfohz = lfohz;
+    s.labz = diag_lab_z_;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -1948,6 +2305,8 @@ class Explorer : public Module {
     static_assert((EXP_SIN_SIZE & (EXP_SIN_SIZE - 1)) == 0, "power of two");
     static_assert(EXP_FM_INDEX + EXP_FBFM_FB_MAX < 90.f,
                   "SinCos offset covers |theta| < ~100 rad");
+    static_assert(EXP_FM_INDEX + EXP_LAB_I2_MAX < 90.f,
+                  "SinCos offset covers the FM LAB BELL phase I + I2");
     constexpr int   kMask = EXP_SIN_SIZE - 1;
     constexpr float kScale = (float)EXP_SIN_SIZE / 6.283185307f;
     const float x  = theta * kScale + 16384.f;
@@ -2061,7 +2420,16 @@ class Explorer : public Module {
   volatile float ft_t_ = 0.f;      // target t = 2 k4 - 1
   volatile bool filt_off_ = false; // SW1 UP: post filter faded out / not run
   // K4 / K5 envelope modulation
-  const bool loop_;                // variant: false ONE-SHOT (SW3 MID), true LOOPING (SW3 DOWN)
+  const bool loop_;                // retired LOOPING variant (SW3 DOWN, only with EXP_LOOP_ENABLE)
+  const bool lab_;                 // SW3 DOWN = FM LAB (ONE-SHOT + the lab zones on SW1 UP)
+  // FM LAB (lab_ only; operator phases in explorer_lab_st)
+  static constexpr int kLabTbFrames = explorer_k::EXP_TB_ZONE_FRAMES[explorer_k::EXP_LAB_TB_ZONE];   // SOFT A: 4
+  volatile int lab_z_t_ = 0;       // K1 zone (0..12), Controls
+  DSlide l2r_, lsr1_, lsr2_, lbr1_, lbr2_, lpr_;   // slid ratios: 2OP r, STACK r1 / r2, BELL r1 / r2, PAIRS Rt
+  bool  lab_trk_ = false;          // a STACK / BELL / PAIRS side runs this sample: PrepLab tracks the phi steps
+  float lab_tsc_[kLabTbFrames] = {};   // TABLE FM: 1 / peak (int16) per SOFT A frame
+  float lab_idh_[explorer_k::EXP_TB_LEVELS] = {};   // 1 / (H_l+1 - H_l), last 0
+  int   diag_lab_z_ = -1;          // DIAG: lab zone of the last Controls (-1 = not the lab)
   float k4s_ = 0.5f, k5s_ = 0.5f;  // smoothed K4 (t4 = 2 k4s_ - 1), K5 (t5 = 2 k5s_ - 1)
   volatile float k4_t_ = 0.5f, k5_t_ = 0.5f;
   // K3 dampener (per block, DampUpdate)

@@ -272,7 +272,7 @@ constexpr float EXP_TF_Q_MIN     = 0.3f;      // Q at K5 full CCW (soft, veiled)
 constexpr float EXP_TF_Q_MAX     = 3.0f;      // Q at K5 full CW (clear peak); exponential, noon ~0.95
 constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28: off again by ear; static open picks)
 
-// --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
+// --- SW3 MID + SW3 DOWN FM LAB (ONE-SHOT, both instances): K4 = pluck <-> swell (2026-10-28) --------------------
 // Target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the 2-pole lowpass cutoff (EXP_TF_*; parked ladder:
 // EXP_LAD_*), NOT the tables' dampener; SW1 DOWN: K4 inert.
 // K5 = LFO (below). g in [0, 1] per 8 kHz sample: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN), clamped
@@ -296,7 +296,7 @@ constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at no
 constexpr float    EXP_PS_RISE_SLOW_S      = 4.0f;     // s (2026-10-28: 36 -> 4); rise time T_r at K4 full CW (swell)
 constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimum travel time after a K4 side change until the next onset
 
-// --- SW3 MID (ONE-SHOT instance only): K5 = LFO (2026-10-28) -------------------------------------------------
+// --- SW3 MID + SW3 DOWN FM LAB (ONE-SHOT, both instances): K5 = LFO (2026-10-28; FM LAB swings: EXP_LAB_LFO_*) -
 // t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|. Noon (t5 == 0) = off: no modulation (applied value exactly 0).
 // Shape by side: CCW (t5 < 0) = triangle, bipolar -1..+1; CW (t5 > 0) = downward staircase EXP_LFO_STEPS (+1 / 0 / -1,
 // equal thirds of the cycle, repeating; 2026-10-28, was S&H). One shared LFO, per 8 kHz sample, free-running phase
@@ -328,7 +328,48 @@ constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the
 constexpr int      EXP_LFO_N_STEPS         = 3;   // CW: number of steps per cycle = number of values below
 constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW (2026-10-28): downward staircase with 3 levels (+1 / 0 / -1)
 
-// --- SW3 DOWN (LOOPING instance, Explorer(true)): K4 / K5 = generic envelope modulation (2026-10-28) -----------
+// --- SW3 DOWN = FM LAB (instance Explorer(true), 2026-10-28) -----------------------------------------------
+// The SW3 DOWN instance = the SW3 MID one-shot (K4 pluck <-> swell, K5 LFO, SW1 MID / DOWN identical) EXCEPT SW1 UP:
+// K1 = the 13 curated FM LAB zones below (equal zones), K2 = the zone's main parameter, K3 = index, no XBAND.
+// EXP_LOOP_ENABLE = true brings back the retired LOOPING variant on SW3 DOWN instead (generic K4 / K5 envelope,
+// code kept compiling, not reachable while false).
+constexpr bool EXP_LOOP_ENABLE = false;
+// Algorithms (explorer.h, MODELS / FM LAB; C = carrier at the band phase phi, ratios relative to phi):
+//   2OP    today's FM (model kFM): M1 at r1 with self-feedback b; K2 = b
+//   STACK  M2 -> M1 -> C: M1 = sin(2 pi pm1 + I2 sin(2 pi pm2)), C = cos(2 pi phi + I M1); K2 = I2
+//   BELL   parallel: C = cos(2 pi phi + I sin(2 pi pm1) + I2 sin(2 pi pm2)); K2 = I2
+//   PAIRS  body (C1 at 1, M1 at 1, index I, no feedback) + Lt x tine (C2 at Rt = r2, its modulator at 1 x C2,
+//          index EXP_LAB_TINE_I); K2 = Lt
+//   TABLE  M1 = the SOFT A frames (table zone EXP_LAB_TB_ZONE) at 1 x phi, peak-normalised, C = cos(2 pi phi + I M1);
+//          K2 = frame position
+enum ExpLabAlg { EXP_LAB_2OP = 0, EXP_LAB_STACK, EXP_LAB_BELL, EXP_LAB_PAIRS, EXP_LAB_TABLE };
+struct ExpLabZone { int alg; float r1, r2; const char* name; };   // r1 = M1 ratio, r2 = M2 ratio / PAIRS tine Rt
+constexpr int EXP_LAB_N_ZONES = 13;
+constexpr ExpLabZone EXP_LAB_ZONES[EXP_LAB_N_ZONES] = {
+  { EXP_LAB_2OP,   0.5f,  0.f,  "2OP-0.5"       },   //  1  2-op, modulator at 0.5
+  { EXP_LAB_2OP,   1.f,   0.f,  "2OP-1"         },   //  2  2-op, 1 (the former FB FM)
+  { EXP_LAB_2OP,   2.f,   0.f,  "2OP-2"         },   //  3  2-op, 2
+  { EXP_LAB_2OP,   3.f,   0.f,  "2OP-3"         },   //  4  2-op, 3
+  { EXP_LAB_STACK, 1.f,   1.f,  "STACK-1:1:1"   },   //  5  C : M1 : M2 = 1 : 1 : 1
+  { EXP_LAB_STACK, 2.f,   1.f,  "STACK-1:2:1"   },   //  6  1 : 2 : 1
+  { EXP_LAB_STACK, 1.f,   3.5f, "STACK-1:1:3.5" },   //  7  1 : 1 : 3.5
+  { EXP_LAB_BELL,  1.f,   3.5f, "BELL-1+3.5"    },   //  8  M1 1 + M2 3.5
+  { EXP_LAB_BELL,  1.41f, 2.76f,"BELL-1.41+2.76"},   //  9  M1 1.41 + M2 2.76
+  { EXP_LAB_BELL,  2.f,   7.1f, "BELL-2+7.1"    },   // 10  M1 2 + M2 7.1
+  { EXP_LAB_PAIRS, 1.f,   14.f, "PAIRS-14"      },   // 11  body 1:1 + tine at 14
+  { EXP_LAB_PAIRS, 1.f,   7.f,  "PAIRS-7"       },   // 12  body 1:1 + tine at 7
+  { EXP_LAB_TABLE, 1.f,   0.f,  "TABLE-FM"      },   // 13  SOFT A table modulator at 1
+};
+constexpr float EXP_LAB_I2_MAX          = 4.f;    // STACK / BELL: M2 index I2 at K2 CW (linear from 0)
+constexpr float EXP_LAB_TINE_I          = 1.0f;   // PAIRS: tine index (fixed), capped by the main-cap formula at Rt
+constexpr float EXP_LAB_TINE_FADE       = 0.25f;  // PAIRS: tine fade width, share of L: clamp((L - Rt f') / (this L), 0, 1)
+constexpr int   EXP_LAB_TB_ZONE         = 6;      // TABLE FM: table zone (0-based) = SOFT A (tine | clarinet | drawbar | mixture)
+constexpr float EXP_LAB_LFO_I2_SWING    = 0.5f;   // K5 LFO on I2 (STACK / BELL), +- at full depth, after the caps, [0, I2_MAX]
+constexpr float EXP_LAB_LFO_TINE_SWING  = 0.15f;  // K5 LFO on the tine level Lt (PAIRS), +-, [0, 1]
+constexpr float EXP_LAB_LFO_POS_SWING   = 0.15f;  // K5 LFO on the frame position (TABLE FM), +-, [0, 1]
+// (2OP: K5 LFO on b = EXP_LFO_FB_SWING, as SW3 MID.)
+
+// --- SW3 DOWN (RETIRED LOOPING instance, only with EXP_LOOP_ENABLE): K4 / K5 = generic envelope modulation (2026-10-28) ---
 // (The ONE-SHOT e law below is what SW3 MID ran before the glide / pluck-swell; its code stays in ExpEnv, not run.)
 // Envelope e (0..1), driven by the onset detector (below, always run; also the SW3 MID pluck-swell's trigger). t4 = 2 k4 - 1 (smoothed, lands exactly),
 // dir = sign(t4) (CW = up, CCW = down). Before the first onset e = 0. The envelope runs independently of noon;

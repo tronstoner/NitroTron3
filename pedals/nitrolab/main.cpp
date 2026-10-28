@@ -26,11 +26,14 @@
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.15; XBAND / DOWN none):
 //                          CCW triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
-// SW3 DOWN   = explorer   (the same module, second instance Explorer(true): generic K4 / K5 envelope modulation -
-//                          K4 = LOOPING envelope (triangle 0 -> 1 -> 0 ..., restarted per onset, ramp 4 s -> 30 ms,
-//                          CCW down | pad +-0.08 around noon off | CW up), K5 = its target + amount (CCW on the
-//                          K2 parameter | noon off | CW on the K3 parameter; MID: the 2-pole LP cutoff); shares the SW1 MID tables with SW3 MIDDLE.
-//                          WaveMorph (modules/wavemorph.h) is unwired, source kept)
+// SW3 DOWN   = FM LAB     (the same module, second instance Explorer(true): exactly SW3 MIDDLE (K4 pluck <-> swell,
+//                          K5 LFO, SW1 MID tables / DOWN models identical) EXCEPT SW1 UP: K1 = 13 curated FM zones
+//                          (2OP r 0.5 / 1 / 2 / 3, STACK 1:1:1 / 1:2:1 / 1:1:3.5, BELL 1+3.5 / 1.41+2.76 / 2+7.1,
+//                          PAIRS tine 14 / 7, TABLE FM; 1 ms crossfade), K2 = the zone's main parameter (2OP feedback b,
+//                          STACK / BELL M2 index I2, PAIRS tine level, TABLE FM frame), K3 = index (cap law, closes
+//                          every operator), K4 pluck <-> swell on the index, K5 LFO on K2's parameter; no XBAND.
+//                          Shares the SW1 MID tables with SW3 MIDDLE. The former LOOPING variant is retired
+//                          (EXP_LOOP_ENABLE, explorer_constants.h). WaveMorph (modules/wavemorph.h) is unwired, source kept)
 
 #include "daisy.h"
 #include "daisysp.h"
@@ -67,13 +70,13 @@ Hothouse       hw;
 ControlSurface cs;
 Led            led1, led2;   // Hothouse LED_1 / LED_2 (single-colour)
 
-// SW3 DOWN = slot 2 (constants.h still names it NL_MODE_WAVEMORPH): the looping explorer.
-static constexpr int NL_MODE_EXPLORER_LOOP = NL_MODE_WAVEMORPH;
+// SW3 DOWN = slot 2 (constants.h still names it NL_MODE_WAVEMORPH): the FM LAB explorer.
+static constexpr int NL_MODE_EXPLORER_LAB = NL_MODE_WAVEMORPH;
 
 Armitage armitage;
 Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 pluck <-> swell on the K3 fc (UP dampener / MID 2-pole LP)
-Explorer explorer_loop(true);      // SW3 DOWN:   generic K4 / K5, looping envelope (tables shared, built by the first Init)
-Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_loop };
+Explorer explorer_lab(true);       // SW3 DOWN:   FM LAB = SW3 MIDDLE + the lab zones on SW1 UP (tables shared, built by the first Init)
+Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_lab };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
 volatile int g_active = NL_MODE_ARMITAGE;
@@ -154,7 +157,7 @@ int main() {
 
   for (int i = 0; i < NL_MODE_COUNT; i++) modules[i]->Init(sr);
 
-  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=explorer (one-shot), 2=DOWN=explorer (looping).
+  // SW3 (toggle index 2): 0=UP=armitage, 1=MIDDLE=explorer (one-shot), 2=DOWN=explorer (FM LAB).
   int sel = cs.Switch(2);
   if (sel < 0 || sel >= NL_MODE_COUNT) sel = 0;
   g_active = sel;
@@ -210,31 +213,36 @@ int main() {
       } else if (diag_stage == 2) {
         // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
         // offset), K3 fc (knob; SW1 UP `fc` dampener; MID `dmp` the tables' dampener fc (knob, unmodulated), `lp` the
-        // 2-pole LP cutoff at the knob, `eff` the effective LP cutoff), envelope (DOWN `loop`: e, K4 dir, K5 amount
+        // 2-pole LP cutoff at the knob, `eff` the effective LP cutoff), envelope (retired LOOPING `loop`: e, K4 dir, K5 amount
         // d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in use (s), applied fc_eff `fce` in Hz (SW1 UP
         // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
-        // `ps - lfo -` on SW1 DOWN), mute, cpu
+        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB), SW1 UP: `LAB <zone> <param> <knob> > <with LFO>
+        // fc <index fc at the knob>` + the `ps` / `lfo` part (fce = the applied index fc)
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const unsigned cpu = (unsigned)(cpu_pk * 100.f + 0.5f);
         const char* zn = Explorer::ZoneName(d.model, d.zone);
         char env[96];
-        if (d.loop)                                           // SW3 DOWN: generic K4 / K5 envelope
+        if (d.loop)                                           // retired LOOPING variant: generic K4 / K5 envelope
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
-        else if (d.sw1 == 0)                                  // SW3 MID, SW1 UP: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
+        else if (d.sw1 == 0)                                  // SW3 MID / DOWN, SW1 UP: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " fce %d lfo %s d" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
-        else if (d.sw1 == 1)                                  // SW3 MID, SW1 MID: the same without fce (= eff)
+        else if (d.sw1 == 1)                                  // SW3 MID / DOWN, SW1 MID: the same without fce (= eff)
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " lfo %s d" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
-        else                                                  // SW3 MID, SW1 DOWN: K4 / K5 inert
+        else                                                  // SW3 MID / DOWN, SW1 DOWN: K4 / K5 inert
           snprintf(env, sizeof(env), " ps - lfo -");
-        if (d.model == Explorer::kFM)                         // A = ratio r, B = feedback b
+        if (d.labz >= 0)                                      // FM LAB: zone, main param knob > with LFO, index fc
+          hw.seed.PrintLine("LAB %s %s" D2F " >" D2F " fc %d%s mute %d cpu %u%%",
+                            Explorer::LabZoneName(d.labz), Explorer::LabParamName(d.labz), D2V(d.a), D2V(d.b),
+                            (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
+        else if (d.model == Explorer::kFM)                    // A = ratio r, B = feedback b
           hw.seed.PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
                             D2V(d.a), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kXFM)                   // A = partner n, B = index I
@@ -253,7 +261,7 @@ int main() {
                             Explorer::ModelName(d.model), D2SV(d.a), D2SV(d.b), env, d.mute ? 1 : 0, cpu);
         diag_stage = 0;
       } else if ((g_active == NL_MODE_EXPLORER && explorer.DiagTake(diag_xsnap)) ||
-                 (g_active == NL_MODE_EXPLORER_LOOP && explorer_loop.DiagTake(diag_xsnap))) {
+                 (g_active == NL_MODE_EXPLORER_LAB && explorer_lab.DiagTake(diag_xsnap))) {
         // explorer, first half: number / auto, knobs, switches
         static const char* const sw_name[3] = { "UP", "MID", "DOWN" };
         const Explorer::DiagSnap& d = diag_xsnap;
