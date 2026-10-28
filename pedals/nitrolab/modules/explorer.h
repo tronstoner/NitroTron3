@@ -440,6 +440,7 @@ class Explorer : public Module {
     ln_ps_rise_ = logf(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S);
     // ONE-SHOT K5 LFO (LfoUpdate): off at noon, phase 0.
     ln_lfo_ = logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN);
+    ln_lfo_ccw_ = logf(EXP_LFO_HZ_MAX_CCW / EXP_LFO_HZ_MIN);
     lfo_u_ = -1.f;                               // forces the rate / depth on the first sample
     lfo_inc_ = 0.f;
     lfo_depth_ = 0.f;
@@ -879,9 +880,9 @@ class Explorer : public Module {
     using namespace explorer_k;
     const float t5 = 2.f * k5s_ - 1.f;
     const float u = fabsf(t5);
-    if (u != lfo_u_) {
-      lfo_u_ = u;
-      lfo_inc_ = EXP_LFO_HZ_MIN * expf(u * ln_lfo_) / sr8_;
+    if (t5 != lfo_u_) {                          // (signed: the CCW side has its own top rate)
+      lfo_u_ = t5;
+      lfo_inc_ = EXP_LFO_HZ_MIN * expf(u * ((t5 < 0.f) ? ln_lfo_ccw_ : ln_lfo_)) / sr8_;
       lfo_depth_ = (u >= EXP_LFO_DEPTH_FRAC) ? 1.f : u * (1.f / EXP_LFO_DEPTH_FRAC);
     }
     if (onset && t5 > 0.f) lfo_ph_ = 0.f;       // CW stepped pattern: restarts on each attack (2026-10-28); CCW free-running
@@ -2116,6 +2117,7 @@ class Explorer : public Module {
   float ln_ps_rise_ = 0.f;         // ln(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S)
   // ONE-SHOT K5 LFO (LfoUpdate, loop_ = false)
   float ln_lfo_ = 0.f;             // ln(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)
+  float ln_lfo_ccw_ = 0.f;         // ln(EXP_LFO_HZ_MAX_CCW / EXP_LFO_HZ_MIN)
   float lfo_u_ = -1.f;             // u = |t5| the rate / depth were computed for
   float lfo_inc_ = 0.f;            // phase increment per 8 kHz sample
   float lfo_depth_ = 0.f;          // min(u / EXP_LFO_DEPTH_FRAC, 1)
