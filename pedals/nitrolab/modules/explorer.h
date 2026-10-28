@@ -905,7 +905,7 @@ class Explorer : public Module {
   // EXP_LFO_FB_SWING / span EXP_FBFM_FB_MAX, table morph swing EXP_LFO_MORPH_SWING / span 1; XBAND, BITTAB, DOWN: 0.
   inline float LfoO2(int m) const {
     using namespace explorer_k;
-    if (m == kFM) return lfo_s_ * (EXP_LFO_FB_SWING / EXP_FBFM_FB_MAX);
+    if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
     return 0.f;
   }
@@ -933,6 +933,10 @@ class Explorer : public Module {
       else       lf = lf * om + lo * (EXP_LFO_FM_FC_OCT * 0.6931472f);   // +- octaves on top of the envelope
       damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
       hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
+      // K3 knob value alone (no envelope): the envelope's index floor uses it (MID)
+      const float lk = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
+      const float fk = (lk >= damp_lnr_) ? EXP_DAMP_FMAX : (lk <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lk);
+      hc_fold_k_ = loop_ ? hc_fold_ : ((fk < EXP_FOLD_LIMIT_HZ) ? fk : EXP_FOLD_LIMIT_HZ);
     }
     if (k != tpk_k_) {                           // tables: the knob value only
       tpk_k_ = k;
@@ -1287,6 +1291,8 @@ class Explorer : public Module {
     const float* __restrict phs = ph_;
     const bool played = (o == kSP);
     const float L   = hc_fold_;                               // K3 dampener: min(FOLD_LIMIT_HZ, fc) (UP caps)
+    const float Lk  = hc_fold_k_;                             // K3 knob alone (no envelope)
+    const float lfb = lfo_s_ * EXP_LFO_FB_SWING;              // MID K5 LFO on the feedback, added AFTER the cap
     const int   pkf = pk_fade_n_;                             // dampener discrete pick slide running
     const float pkg = pk_g_;
     const uint8_t* __restrict wlv  = wtlv_[o];
@@ -1313,11 +1319,22 @@ class Explorer : public Module {
           const float x = L * ifp[k] * p.p1;     // L / (r f')
           float ic = (x - p.p1) - 1.f;           // (L / f' - 1) / r - 1
           if (ic < 0.f) ic = 0.f;
+          // envelope floor (2026-10-28): the envelope closes the index only down to EXP_FM_ENV_INDEX_FLOOR (or the
+          // K3 knob's own cap if that is lower)
+          const float xk = Lk * ifp[k] * p.p1;
+          float ick = (xk - p.p1) - 1.f;
+          if (ick < 0.f) ick = 0.f;
+          float fl = EXP_FM_ENV_INDEX_FLOOR;
+          if (fl > ick) fl = ick;
+          if (ic < fl) ic = fl;
           if (I > ic) I = ic;
           float bc = (x - 1.f) * (1.f / EXP_FBFM_FB_SPAN);
           if (bc < 0.f) bc = 0.f;
           if (b > bc) b = bc;
         }
+        b += lfb;                                // K5 LFO on top of the (envelope-capped) feedback, modular-style sum
+        if (b < 0.f) b = 0.f;
+        if (b > EXP_FBFM_FB_MAX) b = EXP_FBFM_FB_MAX;
         float cm, sm;
         CosSin01(pm, cm, sm);
         float s, c;
@@ -2045,6 +2062,7 @@ class Explorer : public Module {
   float damp_fc_ = 4000.f;         // UP fc (Hz, incl. the K3 envelope / pluck <-> swell)
   float damp_lnr_ = 0.f;           // ln(DAMP_FMAX / DAMP_FMIN)
   float hc_fold_ = 4000.f;         // min(EXP_FOLD_LIMIT_HZ, fc): L of the UP caps
+  float hc_fold_k_ = 4000.f;       // the same from the K3 knob alone (MID: the envelope's index floor)
   int   pk_fade_n_ = 0, pk_fade_len_ = 8; // discrete pick slide: samples left / length (EXP_DAMP_SLIDE_MS)
   float pk_g_ = 1.f;               // new-pick weight this sample
   // Parked SW1 MID K3 ladder lowpass (LadUpdate per 8 kHz sample, Ladder per block; EXP_LAD_ENABLE)
