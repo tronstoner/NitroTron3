@@ -16,10 +16,10 @@
 //                          (UP: FM ratio zones + XBAND, MID: table zone (WaveMorph's 10, copied),
 //                          DOWN: model), K2 = tone (MID: morph),
 //                          K3 = UP: dampener (per-band harmonic ceiling 150 Hz -> 4 kHz); MID: Moog ladder lowpass
-//                          (Mode A's, 80 Hz -> 8 kHz); DOWN: sweep,
+//                          (Mode A's, 250 Hz -> 8 kHz); DOWN: sweep,
 //                          SW2 = octave up / played / down;
 //                          K4 = pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; inert on DOWN):
-//                          CCW pluck (onset at the K3 fc, decays to the bottom 150 / 80 Hz, 0.45 s at the end -> 8 s
+//                          CCW pluck (onset at the K3 fc, decays to the bottom 150 / 250 Hz, 0.45 s at the end -> 8 s
 //                          at noon), noon plain K3, CW swell (onset at the bottom, rises to the K3 fc, 10 ms -> 4 s);
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none):
 //                          CCW triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 %,

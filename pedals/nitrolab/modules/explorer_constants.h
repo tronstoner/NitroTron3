@@ -218,7 +218,7 @@ constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new
 // (24 dB/oct) lowpass, tanh (Pade) on the input and every stage, single rate (no oversampling), at 48 kHz on the
 // wet AFTER interpolation + DC blocker, BEFORE the soft clipper. LOWPASS only, no makeup gain.
 // Cutoff (plain exponential on the smoothed K3, NOT the dampener's sqrt curve):
-//   fc_lad = LAD_FMIN (LAD_FMAX / LAD_FMIN)^k3   (k3 = 0 -> 80 Hz, noon -> 800 Hz, k3 = 1 -> 8 kHz)
+//   fc_lad = LAD_FMIN (LAD_FMAX / LAD_FMIN)^k3   (k3 = 0 -> 250 Hz, noon -> 1.4 kHz, k3 = 1 -> 8 kHz)
 // computed per 8 kHz sample (from the 10 ms-smoothed K3 and the 1 ms-slid envelope values), applied to the ladder
 // once per 8 kHz sample (6 x 48 kHz samples; SetCutoff only when fc changed).
 //   SW3 MID (ONE-SHOT) K4 pluck <-> swell: log2 fc = log2 LAD_FMIN + g_s (log2 fc_lad_knob - log2 LAD_FMIN).
@@ -226,7 +226,7 @@ constexpr float EXP_DAMP_SLIDE_MS = 1.f;      // ms; linear crossfade old -> new
 //   [LAD_FMIN, LAD_FMAX].
 // Family change (SW1 to / from MID): wet = x + m (ladder(x) - x), m slid linearly 0 <-> 1 over LAD_XFADE_MS;
 // ladder state cleared when it starts from m = 0; not run at all while m = 0 (SW1 UP / DOWN settled).
-constexpr float EXP_LAD_FMIN     = 80.f;      // Hz; ladder cutoff at K3 full CCW
+constexpr float EXP_LAD_FMIN     = 250.f;     // Hz; ladder cutoff at K3 full CCW (2026-10-28: 80 -> 250, 10:00 was nearly silent)
 constexpr float EXP_LAD_FMAX     = 8000.f;    // Hz; ladder cutoff at K3 full CW
 constexpr float EXP_LAD_RES      = 0.0f;      // MoogLadder resonance (feedback k = 4 res; 1.0 = self-oscillation
                                               // threshold): 0 = no feedback, no peak. = Mode A's own setting (Mode A
@@ -241,7 +241,7 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // --- SW3 MID (ONE-SHOT instance, Explorer(false)): K4 = pluck <-> swell (2026-10-28) ----------------------------
 // Target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the ladder cutoff (EXP_LAD_*); SW1 DOWN: K4 inert.
 // K5 = LFO (below). g in [0, 1] per 8 kHz sample: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN), clamped
-// [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_LAD_*, 80 Hz..8 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
+// [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_LAD_*, 250 Hz..8 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
 // EXP_ENV_FM_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
 //   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
 //   CW / noon     RISE:  target 1, T_r = RISE_FAST (RISE_SLOW / RISE_FAST)^|t4|; each onset with t4 > 0: g = 0

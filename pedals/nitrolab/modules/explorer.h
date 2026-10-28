@@ -28,7 +28,7 @@
 //   on the input and per stage, single rate 48 kHz (no oversampling), on the 48 kHz wet after the DC blocker, before
 //   the soft clipper. Resonance EXP_LAD_RES = 0 (Mode A's: no feedback, no peak), drive EXP_LAD_DRIVE = 1.8 (Mode
 //   A's LADDER_DRIVE; small-signal passband gain 1.8 = +5.1 dB), no makeup gain.
-//   fc_lad = 80 (8000 / 80)^k3 Hz (EXP_LAD_FMIN / FMAX, plain exponential on the smoothed K3; noon 800 Hz), per
+//   fc_lad = 250 (8000 / 250)^k3 Hz (EXP_LAD_FMIN / FMAX, plain exponential on the smoothed K3; noon 1.4 kHz), per
 //   8 kHz sample (LadUpdate; + the K4 / K5 envelope, see K4 / K5), set on the ladder once per 8 kHz sample (only when
 //   it changed): k3 is 10 ms-smoothed, the envelope values 1 ms-slid -> no zipper.
 //   Mix: wet = x + m (ladder(x) - x), m slid linearly 0 <-> 1 over EXP_LAD_XFADE_MS (10 ms) when the current
@@ -170,11 +170,11 @@
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through
 //                    the zone's frames; DOWN: per model (see MODELS)
 //   K3  UP:          dampener, per-band harmonic ceiling fc 150 Hz (CCW) -> 4 kHz (CW, open), k3^0.5 law
-//       MID:         ladder lowpass (Mode A's Moog ladder, 24 dB/oct, no resonance) 80 Hz (CCW) -> 8 kHz (CW),
-//                    plain exponential (noon 800 Hz)
+//       MID:         ladder lowpass (Mode A's Moog ladder, 24 dB/oct, no resonance) 250 Hz (CCW) -> 8 kHz (CW),
+//                    plain exponential (noon 1.4 kHz)
 //       DOWN:        per model (see MODELS)
 //   K4  SW3 MID:     pluck <-> swell on the K3 fc per onset (UP dampener, MID ladder; DOWN inert): CCW = pluck
-//                    (onset opens to the K3 fc, decays to the bottom 150 / 80 Hz; 0.45 s at the end -> 8 s at noon),
+//                    (onset opens to the K3 fc, decays to the bottom 150 / 250 Hz; 0.45 s at the end -> 8 s at noon),
 //                    noon = plain K3, CW = swell (onset drops to the bottom, rises to the K3 fc; 10 ms -> 4 s)
 //       SW3 DOWN:    envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms (ends)
 //   K5  SW3 MID:     LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.5; XBAND / DOWN none): CCW
