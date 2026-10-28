@@ -1034,7 +1034,7 @@ class Explorer : public Module {
       fc = (lf >= 1.f) ? EXP_TF_FMAX : (lf <= 0.f) ? EXP_TF_FMIN : EXP_TF_FMIN * expf(lf * tf_lnr_);
     } else {                                     // ONE-SHOT: g_s between EXP_TF_ENV_BOTTOM and the knob value (octaves)
       const float lk = (k3s_ >= 1.f) ? tf_lnr_ : (k3s_ <= 0.f) ? 0.f : k3s_ * tf_lnr_;   // ln(fc_knob / TF_FMIN)
-      const float lb = tf_lnb_;                                                          // ln(ENV_BOTTOM / TF_FMIN) < 0
+      const float lb = tf_lnb_ + k3s_ * (EXP_TF_ENV_BOTTOM_OCT * 0.6931472f);          // bottom rises with K3
       fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb));
     }
     tf_fcb_[sub] = fc;
