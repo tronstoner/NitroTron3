@@ -317,8 +317,8 @@ constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables: morph m sw
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
 // knob value), equal parts of the cycle, repeating. A square = { +1, -1 } with N 2.
-constexpr int      EXP_LFO_N_STEPS         = 3;
-constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };
+constexpr int      EXP_LFO_N_STEPS         = 8;   // CW: number of steps per cycle = number of values below
+constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { -1.f, -0.5f, 0.f, 0.5f, 1.f, 0.5f, 0.f, -0.5f };   // CW (2026-10-28): 5 levels up then down; was { 1, 0, -1 }
 
 // --- SW3 DOWN (LOOPING instance, Explorer(true)): K4 / K5 = generic envelope modulation (2026-10-28) -----------
 // (The ONE-SHOT e law below is what SW3 MID ran before the glide / pluck-swell; its code stays in ExpEnv, not run.)
