@@ -331,44 +331,58 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 
 // --- SW3 DOWN = FM LAB (instance Explorer(true), 2026-10-28) -----------------------------------------------
 // The SW3 DOWN instance = the SW3 MID one-shot (K4 pluck <-> swell, K5 LFO, SW1 MID / DOWN identical) EXCEPT SW1 UP:
-// K1 = the 13 curated FM LAB zones below (equal zones), K2 = the zone's main parameter, K3 = index, no XBAND.
+// K1 = the 12 curated FM LAB zones below (equal zones), K2 = the zone's main parameter, K3 = index, no XBAND.
 // EXP_LOOP_ENABLE = true brings back the retired LOOPING variant on SW3 DOWN instead (generic K4 / K5 envelope,
 // code kept compiling, not reachable while false).
 constexpr bool EXP_LOOP_ENABLE = false;
-// Algorithms (explorer.h, MODELS / FM LAB; C = carrier at the band phase phi, ratios relative to phi):
-//   2OP    today's FM (model kFM): M1 at r1 with self-feedback b; K2 = b
-//   STACK  M2 -> M1 -> C: M1 = sin(2 pi pm1 + I2 sin(2 pi pm2)), C = cos(2 pi phi + I M1); K2 = I2
-//   BELL   parallel: C = cos(2 pi phi + I sin(2 pi pm1) + I2 sin(2 pi pm2)); K2 = I2
-//   PAIRS  body (C1 at 1, M1 at 1, index I, no feedback) + Lt x tine (C2 at Rt = r2, its modulator at 1 x C2,
-//          index <= EXP_LAB_TINE_I under K3 + envelope, fades only near EXP_FOLD_LIMIT_HZ); K2 = Lt
-//   TABLE  M1 = the SOFT A frames (table zone EXP_LAB_TB_ZONE) at 1 x phi, peak-normalised, C = cos(2 pi phi + I M1);
-//          K2 = frame position
-enum ExpLabAlg { EXP_LAB_2OP = 0, EXP_LAB_STACK, EXP_LAB_BELL, EXP_LAB_PAIRS, EXP_LAB_TABLE };
-struct ExpLabZone { int alg; float r1, r2; const char* name; };   // r1 = M1 ratio, r2 = M2 ratio / PAIRS tine Rt
-constexpr int EXP_LAB_N_ZONES = 13;
+// Algorithms (explorer.h, MODELS / FM LAB; C = carrier at the band phase phi, ratios relative to phi; m = the
+// modulator sine with self-feedback, m = sin(2 pi pm + b (m[n-1] + m[n-2]) / 2) as 2OP):
+//   2OP     today's FM (model kFM): M at r1 with self-feedback b; K2 = b
+//   TWIN    M at 1 (feedback EXP_LAB_FB_FIXED) shared by C1 at phi and C2 at phi detuned by d cents (C2 phase advances
+//           by the phi step x 2^(d / 1200)); out = 0.5 (C1 + C2), each C = cos(2 pi phase + I m); K2 = d
+//   DUAL    M at r1 (feedback EXP_LAB_FB_FIXED) shared by C1 at phi and C2 at r2 = c2 x phi; out = C1 + Lc g C2
+//           (g = the C2 fade near EXP_FOLD_LIMIT_HZ, C2 index capped at its own carrier c2 f'); K2 = Lc
+//   MODOUT  2OP at r1 with feedback EXP_LAB_FB_FIXED; out = C + Lm g m (the modulator signal itself, faded near
+//           EXP_FOLD_LIMIT_HZ by its own frequency r1 f'); K2 = Lm
+//   BELL    parallel: C = cos(2 pi phi + I sin(2 pi pm1) + I2 sin(2 pi pm2)), M1 at r1, M2 at r2; K2 = I2
+// (2026-10-29: STACK, PAIRS, TABLE FM and the other BELL zones removed - code in git history, f440674.)
+enum ExpLabAlg { EXP_LAB_2OP = 0, EXP_LAB_TWIN, EXP_LAB_DUAL, EXP_LAB_MODOUT, EXP_LAB_BELL };
+struct ExpLabZone { int alg; float r1, r2; const char* name; };   // r1 = M (M1) ratio, r2 = DUAL c2 / BELL M2 ratio
+constexpr int EXP_LAB_N_ZONES = 12;
 constexpr ExpLabZone EXP_LAB_ZONES[EXP_LAB_N_ZONES] = {
-  { EXP_LAB_2OP,   0.5f,  0.f,  "2OP-0.5"       },   //  1  2-op, modulator at 0.5
-  { EXP_LAB_2OP,   1.f,   0.f,  "2OP-1"         },   //  2  2-op, 1 (the former FB FM)
-  { EXP_LAB_2OP,   2.f,   0.f,  "2OP-2"         },   //  3  2-op, 2
-  { EXP_LAB_2OP,   3.f,   0.f,  "2OP-3"         },   //  4  2-op, 3
-  { EXP_LAB_STACK, 1.f,   1.f,  "STACK-1:1:1"   },   //  5  C : M1 : M2 = 1 : 1 : 1
-  { EXP_LAB_STACK, 2.f,   1.f,  "STACK-1:2:1"   },   //  6  1 : 2 : 1
-  { EXP_LAB_STACK, 1.f,   3.5f, "STACK-1:1:3.5" },   //  7  1 : 1 : 3.5
-  { EXP_LAB_BELL,  1.f,   3.5f, "BELL-1+3.5"    },   //  8  M1 1 + M2 3.5
-  { EXP_LAB_BELL,  1.41f, 2.76f,"BELL-1.41+2.76"},   //  9  M1 1.41 + M2 2.76
-  { EXP_LAB_BELL,  2.f,   7.1f, "BELL-2+7.1"    },   // 10  M1 2 + M2 7.1
-  { EXP_LAB_PAIRS, 1.f,   3.5f, "PAIRS-t3.5"    },   // 11  body 1:1 + tine at 3.5
-  { EXP_LAB_PAIRS, 1.f,   5.f,  "PAIRS-t5"      },   // 12  body 1:1 + tine at 5
-  { EXP_LAB_TABLE, 1.f,   0.f,  "TABLE-FM"      },   // 13  SOFT A table modulator at 1
+  { EXP_LAB_2OP,    2.71828183f, 0.f,   "2OP-2.72"  },   //  1  2-op, modulator at e
+  { EXP_LAB_2OP,    2.41421356f, 0.f,   "2OP-2.41"  },   //  2  2-op, 1 + sqrt 2
+  { EXP_LAB_2OP,    1.61803399f, 0.f,   "2OP-1.62"  },   //  3  2-op, golden ratio
+  { EXP_LAB_2OP,    1.41421356f, 0.f,   "2OP-1.41"  },   //  4  2-op, sqrt 2
+  { EXP_LAB_2OP,    0.5f,        0.f,   "2OP-0.5"   },   //  5  2-op, 0.5
+  { EXP_LAB_2OP,    2.f,         0.f,   "2OP-2"     },   //  6  2-op, 2
+  { EXP_LAB_2OP,    1.f,         0.f,   "2OP-1"     },   //  7  2-op, 1 (the former FB FM)
+  { EXP_LAB_TWIN,   1.f,         0.f,   "TWIN"      },   //  8  M at 1 -> C1 + C2 detuned (K2 cents)
+  { EXP_LAB_DUAL,   1.f,         2.f,   "DUAL-2"    },   //  9  M at 1 -> C1 at 1 + C2 at 2 (K2 level)
+  { EXP_LAB_DUAL,   1.41421356f, 1.5f,  "DUAL-1.5"  },   // 10  M at sqrt 2 -> C1 at 1 + C2 at 1.5 (K2 level)
+  { EXP_LAB_MODOUT, 1.41421356f, 0.f,   "MODOUT"    },   // 11  2-op at sqrt 2 + the modulator itself (K2 level)
+  { EXP_LAB_BELL,   1.41421356f, 2.76f, "BELL"      },   // 12  M1 sqrt 2 + M2 2.76 (K2 = I2)
 };
-constexpr float EXP_LAB_I2_MAX          = 4.f;    // STACK / BELL: M2 index I2 at K2 CW (linear from 0)
-constexpr float EXP_LAB_TINE_I          = 1.0f;   // PAIRS: tine index max, capped by the main-cap formula at Rt (K3 + env)
-constexpr float EXP_LAB_TINE_FADE       = 0.25f;  // PAIRS: tine fade width, share of EXP_FOLD_LIMIT_HZ:
-                                                  //   clamp((EXP_FOLD_LIMIT_HZ - Rt f') / (this x EXP_FOLD_LIMIT_HZ), 0, 1)
-constexpr int   EXP_LAB_TB_ZONE         = 6;      // TABLE FM: table zone (0-based) = SOFT A (tine | clarinet | drawbar | mixture)
-constexpr float EXP_LAB_LFO_I2_SWING    = 0.5f;   // K5 LFO on I2 (STACK / BELL), +- at full depth, after the caps, [0, I2_MAX]
-constexpr float EXP_LAB_LFO_TINE_SWING  = 0.15f;  // K5 LFO on the tine level Lt (PAIRS), +-, [0, 1]
-constexpr float EXP_LAB_LFO_POS_SWING   = 0.15f;  // K5 LFO on the frame position (TABLE FM), +-, [0, 1]
+// DUAL zones in K1 order (each = its own model: a zone change is the 1 ms model crossfade, never a ratio slide).
+constexpr int ExpLabNthZone(int alg, int n, int z = 0) {
+  return (z >= EXP_LAB_N_ZONES) ? -1
+       : (EXP_LAB_ZONES[z].alg == alg) ? ((n == 0) ? z : ExpLabNthZone(alg, n - 1, z + 1))
+       : ExpLabNthZone(alg, n, z + 1);
+}
+static_assert(ExpLabNthZone(EXP_LAB_DUAL, 1) >= 0 && ExpLabNthZone(EXP_LAB_DUAL, 2) < 0, "exactly 2 DUAL zones");
+static_assert(ExpLabNthZone(EXP_LAB_TWIN, 0) >= 0 && ExpLabNthZone(EXP_LAB_TWIN, 1) < 0, "exactly 1 TWIN zone");
+static_assert(ExpLabNthZone(EXP_LAB_MODOUT, 0) >= 0 && ExpLabNthZone(EXP_LAB_MODOUT, 1) < 0, "exactly 1 MODOUT zone");
+static_assert(ExpLabNthZone(EXP_LAB_BELL, 0) >= 0 && ExpLabNthZone(EXP_LAB_BELL, 1) < 0, "exactly 1 BELL zone");
+static_assert(EXP_LAB_ZONES[0].alg == EXP_LAB_2OP, "the 2OP ratio slide starts at zone 1");
+constexpr float EXP_LAB_FB_FIXED        = 0.75f;  // TWIN / DUAL / MODOUT: modulator self-feedback b, fixed (2OP law +
+                                                  //   feedback cap b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN; no LFO on it)
+constexpr float EXP_LAB_TWIN_CENTS_MAX  = 30.f;   // TWIN: C2 detune d at K2 CW (cents, linear from 0)
+constexpr float EXP_LAB_I2_MAX          = 4.f;    // BELL: M2 index I2 at K2 CW (linear from 0)
+constexpr float EXP_LAB_TINE_FADE       = 0.25f;  // DUAL C2 / MODOUT modulator output: fade width, share of
+                                                  //   EXP_FOLD_LIMIT_HZ: g = clamp((EXP_FOLD_LIMIT_HZ - f) / (this x EXP_FOLD_LIMIT_HZ), 0, 1)
+constexpr float EXP_LAB_LFO_I2_SWING    = 0.5f;   // K5 LFO on I2 (BELL), +- at full depth, after the caps, [0, I2_MAX]
+constexpr float EXP_LAB_LFO_DETUNE_SWING = 8.f;   // K5 LFO on the TWIN detune d (cents), +-, [0, EXP_LAB_TWIN_CENTS_MAX]
+constexpr float EXP_LAB_LFO_LEVEL_SWING = 0.15f;  // K5 LFO on the DUAL C2 level Lc / MODOUT modulator level Lm, +-, [0, 1]
 // (2OP: K5 LFO on b = EXP_LFO_FB_SWING, as SW3 MID.)
 
 // --- SW3 DOWN (RETIRED LOOPING instance, only with EXP_LOOP_ENABLE): K4 / K5 = generic envelope modulation (2026-10-28) ---

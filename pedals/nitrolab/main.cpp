@@ -27,11 +27,12 @@
 //                          CCW triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
 // SW3 DOWN   = FM LAB     (the same module, second instance Explorer(true): exactly SW3 MIDDLE (K4 pluck <-> swell,
-//                          K5 LFO, SW1 MID tables / DOWN models identical) EXCEPT SW1 UP: K1 = 13 curated FM zones
-//                          (2OP r 0.5 / 1 / 2 / 3, STACK 1:1:1 / 1:2:1 / 1:1:3.5, BELL 1+3.5 / 1.41+2.76 / 2+7.1,
-//                          PAIRS tine 3.5 / 5, TABLE FM; 1 ms crossfade), K2 = the zone's main parameter (2OP feedback b,
-//                          STACK / BELL M2 index I2, PAIRS tine level, TABLE FM frame), K3 = index (cap law, closes
-//                          every operator), K4 pluck <-> swell on the index, K5 LFO on K2's parameter; no XBAND.
+//                          K5 LFO, SW1 MID tables / DOWN models identical) EXCEPT SW1 UP: K1 = 12 curated FM zones
+//                          (2OP r 2.718 / 2.414 / 1.618 / 1.414 / 0.5 / 2 / 1, TWIN, DUAL c2 2, DUAL c2 1.5 (r 1.414),
+//                          MODOUT (r 1.414), BELL 1.414 + 2.76; 1 ms crossfade), K2 = the zone's main parameter (2OP
+//                          feedback b, TWIN detune 0..30 cents, DUAL C2 level, MODOUT modulator level, BELL M2 index I2;
+//                          TWIN / DUAL / MODOUT: fixed modulator feedback 0.75), K3 = index (cap law, closes every
+//                          operator), K4 pluck <-> swell on the index, K5 LFO on K2's parameter; no XBAND.
 //                          Shares the SW1 MID tables with SW3 MIDDLE. The former LOOPING variant is retired
 //                          (EXP_LOOP_ENABLE, explorer_constants.h). WaveMorph (modules/wavemorph.h) is unwired, source kept)
 
