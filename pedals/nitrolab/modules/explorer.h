@@ -2,7 +2,7 @@
 //
 // explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 pluck <-> swell on
 // the K3 fc (UP index / MID 2-pole lowpass), K5 LFO on K2 feedback / morph) and SW3 DOWN (FM LAB: the same one-shot
-// engine with its own SW1 families - UP 2-OP FM, MID / DOWN placeholders, see FM LAB) on NitroLab: two instances of this class (constructor flag),
+// engine with its own SW1 families - UP 2-OP FM, MID DUAL VOICE, DOWN placeholder, see FM LAB) on NitroLab: two instances of this class (constructor flag),
 // sharing the read-only tables. (The former SW3 DOWN LOOPING variant is retired: EXP_LOOP_ENABLE, code kept.)
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
@@ -101,17 +101,36 @@
 //                16-bit Fibonacci LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits),
 //                17..32 = SQR v[j] = sq(j) cos(2 pi n j / 16), n = 1..16. Anti-fold: S_k steps (16 / 8 / 4 / 2,
 //                (S/2) f' <= L), pattern subsampled every 16 / S_k-th step.
-//  SW3 DOWN — FM LAB: OWN SW1 families (2026-10-28; families 2026-11-02, step 1 of 3). SW3 MID's FM / tables /
-//   harmonics & shift are NOT offered here (they stay on SW3 MID); every FM LAB family runs the kFM 2OP law above
-//   with its own ratio slide (l2r_, linear over EXP_DISC_SLIDE_MS 1 ms; the model never changes -> no crossfade).
+//  SW3 DOWN — FM LAB: OWN SW1 families (2026-10-28; families 2026-11-02, steps 1 + 2 of 3). SW3 MID's FM / tables /
+//   harmonics & shift are NOT offered here (they stay on SW3 MID). UP / DOWN run the kFM 2OP law above with its own
+//   ratio slide (l2r_, linear over EXP_DISC_SLIDE_MS 1 ms; no crossfade between them); MID = its own model kLDUAL
+//   (SW1 UP <-> MID / MID <-> DOWN = the 1 ms model crossfade, the entering model from cleared state).
 //   SW1 UP   = 2-OP FM. K1 = 12 equal stepped zones (EXP_LAB_ZONES), modulator ratio r CCW -> CW:
 //              0.25 / 0.5 / 1 / 1.41421 / 1.5 / 1.61803 / 2 / 2.41421 / 2.71828 / 3 / 3.14159 / 3.5
 //              (pm += r wrap(phi - phi_prev), fresh r phi; carrier at phi). K2 = feedback b 0..1.5 (EXP_FBFM_FB_MAX),
 //              K3 = INDEX (I = EXP_FM_INDEX 12 under the cap law: I <= (L / f' - 1) / r - 1, b <= (L / (r f') - 1) / 4,
 //              L = min(4000, fc)), K4 pluck <-> swell on the index fc, K5 LFO on b +- EXP_LFO_FB_SWING 0.3 after the
 //              caps, [0, 1.5] - all exactly as SW3 MID's FM ratio zones. No XBAND.
-//   SW1 MID  = DUAL VOICE (step 2, not built): PLACEHOLDER = the 2-OP family at r = 1 (EXP_LAB_PH_ZONE); K1 inert.
-//   SW1 DOWN = ADDITIVE (step 3, not built): the same placeholder (K4 / K5 act as on UP, not inert).
+//   SW1 MID  = DUAL VOICE (step 2, 2026-11-02; model kLDUAL). Two full 2-OP voices per band in parallel, v = A / B:
+//              pc_v at c_v x phi, pm_v at r_v x phi (accumulated per band from the wrapped phi step d; fresh / after
+//              silence / after the voice was skipped: c phi / r phi), m_v = sin(2 pi pm_v + b_v (m_v[n-1] + m_v[n-2]) / 2),
+//              V_v = cos(2 pi pc_v + I_v m_v);  W = gA fA VA + gB fB VB  (state: explorer_dual_st, SDRAM).
+//              K1 = 5 equal stepped zones (EXP_LAB_DUAL_ZONES, cA rA | cB rB):  1 c1 r1 | c1 r1.41421 (DUAL-1+1.41),
+//              2 c1 r2 | c1 r2.71828 (DUAL-2+2.72), 3 c1 r1 | c0.5 r0.5 (DUAL-OCT), 4 c1 r1 | c1.5 r1.5 (DUAL-5TH),
+//              5 c0.5 r0.5 | c1 r1.61803 (DUAL-SUB+1.62). A zone change SLIDES the four ratios linearly over
+//              EXP_DISC_SLIDE_MS (1 ms; phases / feedback continue, no crossfade, no doubled state); entering kLDUAL
+//              from UP / DOWN jumps them to the zone's values (cleared state, model crossfade).
+//              K2 = BLEND, equal power: x = clamp(k2 + EXP_LAB_LFO_BLEND_SWING l, 0, 1) (l = the K5 LFO),
+//              gA = cos(pi/2 x), gB = sin(pi/2 x) (exact 1 / 0 at the ends); a voice with gain g f = 0 exactly is not
+//              computed (K2 full CCW / CW = one voice's cost; it restarts fresh under a rising gain).
+//              b_v = EXP_LAB_DUAL_FB 0.75 under the 2OP feedback cap b <= (L / (r_v f') - 1) / 4 (no LFO).
+//              K3 = INDEX: I_v = EXP_FM_INDEX 12 under the Carson cap with the carrier at c_v f', modulator r_v f':
+//              I_v <= (L / f' - c_v) / r_v - 1 (floor 0; L = min(4000, fc) as UP, K4 pluck <-> swell on it).
+//              FADE per voice (engine limit, not L): f_v = clamp((EXP_FOLD_LIMIT_HZ - c_v f') / (EXP_LAB_DUAL_FADE 0.25 x
+//              EXP_FOLD_LIMIT_HZ), 0, 1) - applied to every voice as written, so a c = 1 voice also dips on the +1 slot's
+//              top bands (f' > 3 kHz: f' max 3.38 kHz -> f 0.62); played / -1 slots: only c > 1 voices fade.
+//   SW1 DOWN = ADDITIVE (step 3, not built): PLACEHOLDER = the 2-OP family at r = 1 (EXP_LAB_PH_ZONE); K1 inert
+//              (K4 / K5 act as on UP, not inert).
 //   (TWIN / DUAL / MODOUT / BELL and their lab operator state removed 2026-11-02: git history 598a4fd.)
 //
 //  SW1 DOWN — harmonics & shift (K1 = model, 3 equal zones; no dampener)
@@ -132,7 +151,7 @@
 // during a fade is picked up when that fade ends.
 //
 // K4 / K5 (constructor flag: Explorer(false) = SW3 MID, Explorer(true) = SW3 DOWN = FM LAB: both ONE-SHOT, same
-//   K4 / K5 laws; FM LAB: every family = the UP law (2-OP); EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
+//   K4 / K5 laws; FM LAB: every family = the UP index law (K4 on the index fc); EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
 //   Onset detector per 48 kHz input sample (EXP_ONSET_*, armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1
 //   (both smoothed, land exactly).
 //  ONE-SHOT (SW3 MID and FM LAB) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the index fc, SW1 MID the 2-pole
@@ -164,7 +183,8 @@
 //             a side change passes through depth 0
 //     target fixed per family, +- around the knob, clamped (Derive's K2 offset o2, per model via LfoO2):
 //       UP FM ratio zones  feedback b = capped b + 0.3 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
-//       FM LAB (all SW1)   feedback b as UP FM ratio zones (2-OP; MID / DOWN placeholders the same)
+//       FM LAB UP / DOWN   feedback b as UP FM ratio zones (2-OP; DOWN placeholder the same)
+//       FM LAB MID (DUAL)  blend x = k2 + 0.3 l (EXP_LAB_LFO_BLEND_SWING), [0, 1]
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
@@ -226,21 +246,22 @@
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 // CONTROL MAP SW3 DOWN = FM LAB (Explorer(true); see MODELS / FM LAB)
 //   K1  selection    SW1 UP: 2-OP ratio zone (12 equal stepped, r 0.25 / 0.5 / 1 / 1.41 / 1.5 / 1.62 / 2 / 2.41 /
-//                    2.72 / 3 / 3.14 / 3.5, ratio slid 1 ms); MID: inert (placeholder, step 2); DOWN: inert
-//                    (placeholder, step 3)
-//   K2  feedback b   0 -> 1.5 (every family)
-//   K3  index        the per-band cap law as SW3 MID UP (L = min(4000, fc) caps the index and the feedback)
-//   K4  pluck <-> swell on the index fc per onset (as SW3 MID UP; also on the MID / DOWN placeholders)
-//   K5  LFO on b +-0.3 after the caps (shapes / rates / sync as SW3 MID)
+//                    2.72 / 3 / 3.14 / 3.5, ratio slid 1 ms); MID: DUAL VOICE zone (5 equal stepped: 1+1.41 / 2+2.72 /
+//                    OCT / 5TH / SUB+1.62, ratios slid 1 ms); DOWN: inert (placeholder, step 3)
+//   K2  UP / DOWN: feedback b 0 -> 1.5; MID: blend A <-> B (equal power, CCW = A only, CW = B only)
+//   K3  index        the per-band cap law as SW3 MID UP (L = min(4000, fc) caps the index and the feedback; MID: both
+//                    voices, each at its own c / r)
+//   K4  pluck <-> swell on the index fc per onset (as SW3 MID UP; every FM LAB family)
+//   K5  LFO (shapes / rates / sync as SW3 MID): UP / DOWN on b +-0.3 after the caps; MID on the blend +-0.3
 //   K6 / SW2 / FS1 as SW3 MID
-//   SW1 family       UP = 2-OP FM, MID = DUAL VOICE (placeholder: 2-OP r 1, step 2), DOWN = ADDITIVE (placeholder:
-//                    2-OP r 1, step 3)
+//   SW1 family       UP = 2-OP FM, MID = DUAL VOICE, DOWN = ADDITIVE (placeholder: 2-OP r 1, step 3)
 //
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
 // 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: the K5 LFO offset, its g acts on fc only);
 // stepped items from the raw knob.
-// DIAG second half: FM LAB (SW3 DOWN) `LAB [MID-PH/|DOWN-PH/]2OP-<r> b <knob> > <with LFO> fc <index fc at the
-// knob>` + the UP `ps` part below (every family, incl. the placeholders: `2OP-1`); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
+// DIAG second half: FM LAB (SW3 DOWN) `LAB [DOWN-PH/]2OP-<r> b <knob> > <with LFO> fc <index fc at the knob>`
+// (UP / DOWN placeholder `2OP-1`), SW1 MID `LAB <DUAL zone name> bl <knob> > <with LFO> fc <index fc at the knob>`;
+// + the UP `ps` part below (every FM LAB family); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
 // applied fc: UP dampener, MID 2-pole LP) lfo tri|stp|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on
 // SW1 DOWN. MID WT lines: `dmp .. lp .. eff ..` = the tables' dampener fc (knob, unmodulated), the LP cutoff at the
 // knob, the effective LP cutoff (Hz) instead of `fc` (parked ladder: lp / eff = the ladder's).
@@ -270,7 +291,8 @@
 //
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
 // No dynamic allocation. Tables: 66 frames x 14 x 256 int16 = 462 KB in SDRAM (explorer_tb, own array, built once,
-// shared read-only by both instances; the second Init skips the build).
+// shared read-only by both instances; the second Init skips the build). FM LAB DUAL VOICE state: explorer_dual_st,
+// 9 x 3 x 84 floats = 9 KB SDRAM (one copy, the lab instance only).
 
 #include <cmath>
 #include <cstdint>
@@ -304,6 +326,15 @@ struct ExplorerTbScratch {
 static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
 // explorer_sin_tab + explorer_tb are filled by the first Init; further instances (SW3 DOWN) skip the build.
 static bool explorer_tables_built = false;
+// FM LAB DUAL VOICE state (SW3 DOWN instance only; ONE copy, SDRAM - cached write-back - keeps the DTCM .bss free;
+// 2026-11-02, as 598a4fd's lab operator state): per SW2 slot and band. Phases in cycles, -1 = fresh (starts at
+// c x phi / r x phi); lpp = previous band phase phi (-1 = none: band silent / just started).
+struct ExplorerDualState {
+  float lpp[3][armbands::kArmBands];                               // previous phi
+  float pc[2][3][armbands::kArmBands], pm[2][3][armbands::kArmBands];   // voice A / B: carrier / modulator phase
+  float f1[2][3][armbands::kArmBands], f2[2][3][armbands::kArmBands];   // voice A / B: modulator m[n-1] / m[n-2]
+};
+static ExplorerDualState DSY_SDRAM_BSS explorer_dual_st;
 
 // K4 post filter stage: TPT state-variable filter (a local copy of armitage's ArmSVF).
 struct ExpSVF {
@@ -336,7 +367,8 @@ class Explorer : public Module {
   // Global model ids (family offset + K1 zone).
   enum { kFM = 0, kXFM,                               // SW1 UP: FM ratio zones, XBAND zone
          kWT, kBIT,                                   // SW1 MID
-         kHARM, kFSH, kISH,                           // SW1 DOWN   (FM LAB, every family: kFM + its own ratio slide)
+         kHARM, kFSH, kISH,                           // SW1 DOWN   (FM LAB UP / DOWN placeholder: kFM + its own ratio slide)
+         kLDUAL,                                      // FM LAB SW1 MID: DUAL VOICE (zones = slid ratios, one model)
          kNumModels };
   enum { kRotFSH = 0, kRotISH = 1, kRotN = 2 };                  // rotation-phase users
 
@@ -428,6 +460,8 @@ class Explorer : public Module {
     if (build) { BuildTables(); explorer_tables_built = true; }
     lab_z_t_ = 0;
     l2r_.Jump(EXP_LAB_ZONES[0].r);               // the FM LAB 2-OP ratio slide starts at zone 1
+    lab_dz_t_ = 0;
+    DualSlides(true);                            // FM LAB DUAL VOICE: zone 1 ratios
     diag_lab_z_ = -1;
     for (int o = 0; o < kSlots; o++) { ResetSlotState(o); slot_on_[o] = false; }
     dc_a_ = expf(-6.283185307f * EXP_DC_HZ / sr);
@@ -526,9 +560,15 @@ class Explorer : public Module {
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
     int model, zone = 0, labz = -1;
-    if (lab_) {                                  // FM LAB: own families, all kFM (2-OP law, ratio from l2r_)
+    int dualz = -1;
+    if (lab_ && fam == kMid) {                   // FM LAB MID: DUAL VOICE, K1 = 5 stepped zones (ratios slid 1 ms)
+      dualz = Quantize(k1, EXP_LAB_DUAL_N_ZONES);
+      lab_dz_t_ = dualz;
+      lab_z_t_ = EXP_LAB_PH_ZONE;                // (2-OP ratio slide parked at r 1 while MID runs, as before)
+      model = kLDUAL;
+    } else if (lab_) {                           // FM LAB UP / DOWN: kFM (2-OP law, ratio from l2r_)
       labz = (fam == kUp) ? Quantize(k1, EXP_LAB_N_ZONES)   // UP: 2-OP, K1 = the 12 ratio zones (no XBAND)
-                          : EXP_LAB_PH_ZONE;                 // MID / DOWN: placeholder 2-OP r 1 (steps 2 / 3), K1 inert
+                          : EXP_LAB_PH_ZONE;                 // DOWN: placeholder 2-OP r 1 (step 3), K1 inert
       lab_z_t_ = labz;
       model = kFM;
     } else if (fam == kUp) {                     // K1: FM ratio zones, last zone = XBAND
@@ -586,7 +626,9 @@ class Explorer : public Module {
         const float lhz = EXP_LFO_HZ_MIN * expf(u5 * logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN));
         float da = p.a, db = p.b;                // FM LAB: feedback b at the knob / with the LFO
         diag_lab_z_ = labz;
+        diag_dual_z_ = dualz;
         if (labz >= 0) LabDiagParam(k2, da, db);
+        if (dualz >= 0) DualDiagParam(k2, da, db);
         DiagControls(cs, led1, kv, fam, oct, model, zone, da, db, fck, lfe,
                      ps_g_, dir, 0.f, 0, ps_T_, fmf ? damp_fc_ : lfe, lsh, ldp, lhz);
       }
@@ -615,8 +657,9 @@ class Explorer : public Module {
                       // 0 on SW1 DOWN); LOOPING: 0
     int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 staircase (CW); LOOPING: 0
     float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
-    int   labz;       // FM LAB (SW3 DOWN): 2-OP zone 0..11 (MID / DOWN placeholders: EXP_LAB_PH_ZONE; a / b =
-                      // feedback b at the knob / with the K5 LFO, before the per-band caps); -1 = not the lab
+    int   labz;       // FM LAB (SW3 DOWN) UP / DOWN: 2-OP zone 0..11 (DOWN placeholder: EXP_LAB_PH_ZONE; a / b =
+                      // feedback b at the knob / with the K5 LFO, before the per-band caps); -1 = not a 2-OP family
+    int   dualz;      // FM LAB SW1 MID DUAL VOICE: zone 0..4 (a / b = blend x at the knob / with the K5 LFO); else -1
     bool  mute;
   };
   void Activate() override {
@@ -642,12 +685,16 @@ class Explorer : public Module {
   static const char* ModelName(int m) {
     static const char* const n[kNumModels] = { "FM", "XBAND-FM",
                                                "WTABLE", "BITTAB",
-                                               "HARM", "FSHIFT", "INTERVAL" };
+                                               "HARM", "FSHIFT", "INTERVAL", "DUAL" };
     return (m >= 0 && m < kNumModels) ? n[m] : "?";
   }
   // FM LAB 2-OP zone name (DIAG).
   static const char* LabZoneName(int z) {
     return (z >= 0 && z < explorer_k::EXP_LAB_N_ZONES) ? explorer_k::EXP_LAB_ZONES[z].name : "?";
+  }
+  // FM LAB DUAL VOICE zone name (DIAG).
+  static const char* DualZoneName(int z) {
+    return (z >= 0 && z < explorer_k::EXP_LAB_DUAL_N_ZONES) ? explorer_k::EXP_LAB_DUAL_ZONES[z].name : "?";
   }
   static const char* ZoneName(int m, int z) {
     static const char* const wt[explorer_k::EXP_TB_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-ROUGH", "SQR-PWM",
@@ -698,6 +745,7 @@ class Explorer : public Module {
         const int mn = var_ >> 6;
         if (mn != (vfrom_ >> 6)) {                       // a new model starts cleared (items of the
           for (int o = 0; o < kSlots; o++) ResetModelState(mn, o);   // same model share its state)
+          if (mn == kLDUAL) DualSlides(true);            // FM LAB DUAL VOICE enters at its zone's ratios
         }
         // MID table zone -> table zone: EXP_TB_ZONE_XFADE_MS (WaveMorph's); every other change EXP_MODEL_XFADE_MS.
         mfade_cur_ = (mn == kWT && (vfrom_ >> 6) == kWT) ? zfade_len_ : mfade_len_;
@@ -708,6 +756,7 @@ class Explorer : public Module {
         const int z = lab_z_t_;
         l2r_.Set(EXP_LAB_ZONES[(z >= 0 && z < EXP_LAB_N_ZONES) ? z : 0].r, disc_len_);
         l2r_.Tick();
+        DualSlides(false);                       // DUAL VOICE: cA / rA / cB / rB slide (1 ms) to the K1 zone's
       }
       // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
       // ONE-SHOT: o3_ = g_s (UP dampener fc / MID 2-pole LP fc only: DampFmUpdate / TfUpdate) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
@@ -766,6 +815,7 @@ class Explorer : public Module {
   struct Params {
     float a = 0.f, b = 0.f;     // sweep A / B as displayed (DIAG)
     float p0 = 0.f, p1 = 0.f, p2 = 0.f, p3 = 0.f, p4 = 0.f;   // model-specific (see Derive)
+    float p5 = 0.f, p6 = 0.f, p7 = 0.f;                      // (FM LAB DUAL VOICE only)
     int   n0 = 0;               // integer item (partner offset, harmonic, packed table frame)
     int   zone = 0;
     const float* bt = nullptr;  // BITTAB: the selected 16-step waveform
@@ -974,6 +1024,7 @@ class Explorer : public Module {
   inline float LfoO2(int m) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
+    if (m == kLDUAL) return lfo_s_ * EXP_LAB_LFO_BLEND_SWING;   // FM LAB DUAL VOICE: blend x (span 1)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
     return 0.f;
   }
@@ -985,6 +1036,78 @@ class Explorer : public Module {
     using namespace explorer_k;
     a = EXP_FBFM_FB_MAX * k2; b = a + lfo_s_ * EXP_LFO_FB_SWING;
     b = (b < 0.f) ? 0.f : (b > EXP_FBFM_FB_MAX) ? EXP_FBFM_FB_MAX : b;
+  }
+
+  // DIAG: FM LAB DUAL VOICE blend x at the knob k2 (a) and with the current K5 LFO value (b), clamped [0, 1].
+  void DualDiagParam(float k2, float& a, float& b) const {
+    a = k2; b = Clamp01(k2 + lfo_s_ * explorer_k::EXP_LAB_LFO_BLEND_SWING);
+  }
+  // FM LAB DUAL VOICE: voice A / B carrier c and modulator r slide linearly (EXP_DISC_SLIDE_MS) to the K1 zone's
+  // values, per 8 kHz sample; jump = set at once (Init, entering the model from another one).
+  inline void DualSlides(bool jump) {
+    using namespace explorer_k;
+    const int z = lab_dz_t_;
+    const ExpLabDualZone& Z = EXP_LAB_DUAL_ZONES[(z >= 0 && z < EXP_LAB_DUAL_N_ZONES) ? z : 0];
+    if (jump) { dca_.Jump(Z.ca); dra_.Jump(Z.ra); dcb_.Jump(Z.cb); drb_.Jump(Z.rb); return; }
+    dca_.Set(Z.ca, disc_len_); dca_.Tick();
+    dra_.Set(Z.ra, disc_len_); dra_.Tick();
+    dcb_.Set(Z.cb, disc_len_); dcb_.Tick();
+    drb_.Set(Z.rb, disc_len_); drb_.Tick();
+  }
+  // Index cap, 2OP Carson form with the carrier at c f' and the modulator at r f' (c f' + r f' (I + 1) <= L):
+  // I <= (L / f' - c) / r - 1, floor 0 (ifp = 1 / f', ir = 1 / r; c = 1 = kFM's cap). With EXP_FM_ENV_INDEX_FLOOR > 0
+  // the envelope closes it only down to that floor (or the K3 knob's own cap, Lk), as kFM.
+  static inline float IndexCap(float L, float Lk, float ifp, float ir, float c) {
+    using namespace explorer_k;
+    float ic = (L * ifp - c) * ir - 1.f;
+    if (ic < 0.f) ic = 0.f;
+    if (EXP_FM_ENV_INDEX_FLOOR > 0.f) {
+      float ick = (Lk * ifp - c) * ir - 1.f;
+      if (ick < 0.f) ick = 0.f;
+      const float fl = (EXP_FM_ENV_INDEX_FLOOR < ick) ? EXP_FM_ENV_INDEX_FLOOR : ick;
+      if (ic < fl) ic = fl;
+    }
+    return ic;
+  }
+  // FM LAB DUAL VOICE, one voice v (0 = A, 1 = B) of band k in slot o: carrier phase pc at c x phi, modulator pm at
+  // r x phi (fresh: c phi / r phi, else + c d / + r d, d = the wrapped phi step), m = sin(2 pi pm + b (m1 + m2) / 2),
+  // returns cos(2 pi pc + I m). b = EXP_LAB_DUAL_FB under the 2OP feedback cap b <= (L / (r f') - 1) / FB_SPAN;
+  // I = EXP_FM_INDEX under IndexCap at this voice's c / r (EXP_ANTIFOLD && !EXP_FBFM_PUSHED, as kFM).
+  inline float DualVoice(int v, int o, int k, float ph, float d, bool fresh, float c, float r, float ir,
+                         float ifpk, float L, float Lk) {
+    using namespace explorer_k;
+    ExplorerDualState& S = explorer_dual_st;
+    float pc = S.pc[v][o][k], pm = S.pm[v][o][k];
+    if (fresh || pc < 0.f) { pc = c * ph; pm = r * ph; }
+    else                   { pc += c * d;  pm += r * d; }
+    pc -= floorf(pc);
+    pm -= floorf(pm);
+    S.pc[v][o][k] = pc;
+    S.pm[v][o][k] = pm;
+    float b = EXP_LAB_DUAL_FB, I = EXP_FM_INDEX;
+    if (EXP_ANTIFOLD && !EXP_FBFM_PUSHED) {
+      float bc = (L * ifpk * ir - 1.f) * (1.f / EXP_FBFM_FB_SPAN);
+      if (bc < 0.f) bc = 0.f;
+      if (b > bc) b = bc;
+      const float ic = IndexCap(L, Lk, ifpk, ir, c);
+      if (I > ic) I = ic;
+    }
+    float cm, sm, s, cs;
+    CosSin01(pm, cm, sm);
+    SinCos(b * 0.5f * (S.f1[v][o][k] + S.f2[v][o][k]), s, cs);
+    float mod = sm * cs + cm * s;                // sin(2 pi pm + b avg)
+    if (fabsf(mod) < EXP_DENORM) mod = 0.f;
+    S.f2[v][o][k] = S.f1[v][o][k];
+    S.f1[v][o][k] = mod;
+    SinCos(I * mod, s, cs);
+    float cc, sc;
+    CosSin01(pc, cc, sc);
+    return cc * cs - sc * s;                     // cos(2 pi pc + I m)
+  }
+  // Voice v of band k in slot o not computed (gain 0 / faded out) or band silent: fresh restart when it returns.
+  static inline void DualClear(int v, int o, int k) {
+    ExplorerDualState& S = explorer_dual_st;
+    S.pc[v][o][k] = -1.f; S.pm[v][o][k] = -1.f; S.f1[v][o][k] = 0.f; S.f2[v][o][k] = 0.f;
   }
 
   // K3 dampener UP (FM caps), per 8 kHz sample after EnvUpdate (nothing when its inputs did not move; 2026-10-28:
@@ -1240,6 +1363,16 @@ class Explorer : public Module {
         p.p0 = r; p.p1 = 1.f / r; p.p2 = EXP_FM_INDEX; p.p3 = EXP_FBFM_FB_MAX * Clamp01(k2 + o2);   // b in [0, FB_MAX]
         p.a = r; p.b = p.p3; break;
       }
+      case kLDUAL: {                       // FM LAB DUAL VOICE: p0 / p6 / p1 = cA / rA / 1 / rA, p2 / p7 / p3 = cB / rB /
+                                           // 1 / rB (slid), p4 / p5 = gA / gB: equal-power blend of x = clamp(k2 + o2)
+        p.p0 = dca_.v; p.p6 = dra_.v; p.p1 = 1.f / p.p6;
+        p.p2 = dcb_.v; p.p7 = drb_.v; p.p3 = 1.f / p.p7;
+        const float x = Clamp01(k2 + o2);          // o2 = the K5 LFO swing (LfoO2)
+        if (x <= 0.f)      { p.p4 = 1.f; p.p5 = 0.f; }   // exact ends: the other voice is not computed
+        else if (x >= 1.f) { p.p4 = 0.f; p.p5 = 1.f; }
+        else CosSin01(0.25f * x, p.p4, p.p5);      // gA = cos(pi/2 x), gB = sin(pi/2 x)
+        p.a = x; p.b = x; break;
+      }
       case kXFM:                           // n0 = partner offset, p1 = I
         p.n0 = EXP_XB_PARTNER;
         p.p1 = EXP_FM_INDEX;
@@ -1307,7 +1440,7 @@ class Explorer : public Module {
 
   // Models that read the band phase phi_k (ph_).
   static inline bool NeedsPhase(int m) {
-    return m == kFM || m == kHARM || m == kWT || m == kBIT;
+    return m == kFM || m == kHARM || m == kWT || m == kBIT || m == kLDUAL;
   }
 
   // u_k = z'_k / |z'_k| for slot o into ur_ / ui_ (0 for silent bands); with need_ph also the phase
@@ -1343,6 +1476,7 @@ class Explorer : public Module {
       case kISH:   return ShapeK<kISH>(o, p);
       case kHARM:  return ShapeK<kHARM>(o, p);
       case kWT:    return ShapeK<kWT>(o, p);
+      case kLDUAL: return ShapeK<kLDUAL>(o, p);
       default:     return ShapeK<kBIT>(o, p);
     }
   }
@@ -1393,6 +1527,7 @@ class Explorer : public Module {
       const float a = mg[k];
       if (a == 0.f) {                            // silent band: state cleared
         if (M == kFM) { pp_[o][k] = -1.f; m1_[o][k] = 0.f; m2_[o][k] = 0.f; }
+        if (M == kLDUAL) { explorer_dual_st.lpp[o][k] = -1.f; DualClear(0, o, k); DualClear(1, o, k); }
         continue;
       }
       const float cr = ur[k], ci = ui[k];
@@ -1434,6 +1569,31 @@ class Explorer : public Module {
         m1_[o][k] = mod;
         SinCos(I * mod, s, c);
         W = cr * c - ci * s;
+      } else if (M == kLDUAL) {
+        // FM LAB DUAL VOICE: W = gA fA VA + gB fB VB, V = cos(2 pi pc + I m) per voice (DualVoice);
+        // fade f = clamp((EXP_FOLD_LIMIT_HZ - c f') / (EXP_LAB_DUAL_FADE EXP_FOLD_LIMIT_HZ), 0, 1) per voice.
+        // A voice whose gain g f is exactly 0 is not computed (fresh restart when it returns).
+        constexpr float itf = 1.f / (EXP_LAB_DUAL_FADE * EXP_FOLD_LIMIT_HZ);
+        const float ph = phs[k];
+        float& lp = explorer_dual_st.lpp[o][k];
+        float d = 0.f;
+        const bool fresh = (lp < 0.f);
+        if (!fresh) {
+          d = ph - lp;
+          if (d < -0.5f) d += 1.f;
+          else if (d >= 0.5f) d -= 1.f;
+        }
+        lp = ph;
+        float fA = (EXP_FOLD_LIMIT_HZ - p.p0 * fp[k]) * itf;
+        fA = (fA < 0.f) ? 0.f : (fA > 1.f) ? 1.f : fA;
+        float fB = (EXP_FOLD_LIMIT_HZ - p.p2 * fp[k]) * itf;
+        fB = (fB < 0.f) ? 0.f : (fB > 1.f) ? 1.f : fB;
+        const float gA = p.p4 * fA, gB = p.p5 * fB;
+        W = 0.f;
+        if (gA != 0.f) W += gA * DualVoice(0, o, k, ph, d, fresh, p.p0, p.p6, p.p1, ifp[k], L, Lk);
+        else           DualClear(0, o, k);
+        if (gB != 0.f) W += gB * DualVoice(1, o, k, ph, d, fresh, p.p2, p.p7, p.p3, ifp[k], L, Lk);
+        else           DualClear(1, o, k);
       } else if (M == kXFM) {
         const int q = k + p.n0;
         float W0 = cr;
@@ -1545,12 +1705,18 @@ class Explorer : public Module {
     for (int k = 0; k < kBands; k++) {
       if (m == kFM) { pm_[o][k] = 0.f; pp_[o][k] = -1.f; m1_[o][k] = m2_[o][k] = 0.f; }
       if (ru >= 0)  th_[ru][o][k] = 0.f;
+      if (m == kLDUAL && lab_) {                 // FM LAB DUAL VOICE (shared SDRAM state: the lab instance only)
+        explorer_dual_st.lpp[o][k] = -1.f;
+        DualClear(0, o, k);
+        DualClear(1, o, k);
+      }
     }
   }
   void ResetSlotState(int o) {
     ResetModelState(kFM, o);
     ResetModelState(kFSH, o);
     ResetModelState(kISH, o);
+    if (lab_) ResetModelState(kLDUAL, o);
   }
 
   static inline float Slide(float v, float t, float st) {
@@ -1993,6 +2159,7 @@ class Explorer : public Module {
     s.T = gT; s.fce = fce;
     s.lfo = lfo; s.lfod = lfod; s.lfohz = lfohz;
     s.labz = diag_lab_z_;
+    s.dualz = diag_dual_z_;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -2140,11 +2307,14 @@ class Explorer : public Module {
   volatile bool filt_off_ = false; // SW1 UP: post filter faded out / not run
   // K4 / K5 envelope modulation
   const bool loop_;                // retired LOOPING variant (SW3 DOWN, only with EXP_LOOP_ENABLE)
-  const bool lab_;                 // SW3 DOWN = FM LAB (ONE-SHOT, own SW1 families: UP 2-OP, MID / DOWN placeholders)
+  const bool lab_;                 // SW3 DOWN = FM LAB (ONE-SHOT, own SW1 families: UP 2-OP, MID DUAL VOICE, DOWN placeholder)
   // FM LAB (lab_ only)
   volatile int lab_z_t_ = 0;       // 2-OP zone (0..11; UP: K1, MID / DOWN: EXP_LAB_PH_ZONE), Controls
   DSlide l2r_;                     // slid 2-OP ratio r
   int   diag_lab_z_ = -1;          // DIAG: lab zone of the last Controls (-1 = not the lab)
+  volatile int lab_dz_t_ = 0;      // DUAL VOICE zone (0..4, SW1 MID: K1), Controls
+  DSlide dca_, dra_, dcb_, drb_;   // DUAL VOICE: slid carrier / modulator ratio of voice A / B
+  int   diag_dual_z_ = -1;         // DIAG: DUAL VOICE zone of the last Controls (-1 = not DUAL)
   float k4s_ = 0.5f, k5s_ = 0.5f;  // smoothed K4 (t4 = 2 k4s_ - 1), K5 (t5 = 2 k5s_ - 1)
   volatile float k4_t_ = 0.5f, k5_t_ = 0.5f;
   // K3 dampener (UP caps per 8 kHz sample, DampFmUpdate; table picks per block, DampUpdate)

@@ -334,9 +334,13 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 // (SW3 MID's FM / tables / harmonics & shift are NOT offered here; they stay on SW3 MID):
 //   SW1 UP   = 2-OP FM: K1 = the 12 equal stepped ratio zones below (kFM 2OP law, ratio slid 1 ms between zones),
 //              K2 = feedback b, K3 = index, K4 pluck <-> swell on the index, K5 LFO on b (+- EXP_LFO_FB_SWING).
-//   SW1 MID  = DUAL VOICE (step 2, not built yet): placeholder = the 2-OP family at ratio 1 (zone EXP_LAB_PH_ZONE),
+//   SW1 MID  = DUAL VOICE (step 2, 2026-11-02): two full 2-OP voices A / B in parallel per band (each its own carrier
+//              at c x phi and modulator at r x phi, modulator self-feedback fixed EXP_LAB_DUAL_FB under the 2OP feedback
+//              cap); K1 = the 5 equal stepped zones EXP_LAB_DUAL_ZONES (cA rA | cB rB, slid 1 ms between zones),
+//              K2 = BLEND A <-> B (equal power), K3 = index (both voices, each capped at its own c / r), K4 pluck <->
+//              swell on the index, K5 LFO on the blend (+- EXP_LAB_LFO_BLEND_SWING).
+//   SW1 DOWN = ADDITIVE (step 3, not built yet): placeholder = the 2-OP family at ratio 1 (zone EXP_LAB_PH_ZONE),
 //              K1 inert, K2..K5 as SW1 UP.
-//   SW1 DOWN = ADDITIVE (step 3, not built yet): the same placeholder.
 // EXP_LOOP_ENABLE = true brings back the retired LOOPING variant on SW3 DOWN instead (generic K4 / K5 envelope,
 // code kept compiling, not reachable while false).
 // (2026-11-02: TWIN / DUAL-2 / DUAL-1.5 / MODOUT / BELL removed - code in git history, 598a4fd; STACK / PAIRS /
@@ -358,9 +362,23 @@ constexpr ExpLabZone EXP_LAB_ZONES[EXP_LAB_N_ZONES] = {   // SW1 UP, K1 CCW -> C
   { 3.14159265f, "2OP-3.14" },   // 11  pi
   { 3.5f,        "2OP-3.5"  },   // 12
 };
-constexpr int EXP_LAB_PH_ZONE = 2;   // SW1 MID / DOWN placeholder (steps 2 / 3): the 2-OP zone at ratio 1
+constexpr int EXP_LAB_PH_ZONE = 2;   // SW1 DOWN placeholder (step 3): the 2-OP zone at ratio 1
 static_assert(EXP_LAB_ZONES[EXP_LAB_PH_ZONE].r == 1.f, "placeholder = 2-OP at ratio 1");
 // (2OP: K5 LFO on b = EXP_LFO_FB_SWING, as SW3 MID.)
+// SW1 MID = DUAL VOICE: K1 zones (carrier c / modulator r of voice A and B, both relative to the band phase phi).
+struct ExpLabDualZone { float ca, ra, cb, rb; const char* name; };
+constexpr int EXP_LAB_DUAL_N_ZONES = 5;
+constexpr ExpLabDualZone EXP_LAB_DUAL_ZONES[EXP_LAB_DUAL_N_ZONES] = {   // K1 CCW -> CW
+  { 1.f,  1.f,  1.f,  1.41421356f, "DUAL-1+1.41"   },   // 1  A c1 r1     | B c1 r1.41421
+  { 1.f,  2.f,  1.f,  2.71828183f, "DUAL-2+2.72"   },   // 2  A c1 r2     | B c1 r2.71828
+  { 1.f,  1.f,  0.5f, 0.5f,        "DUAL-OCT"      },   // 3  A c1 r1     | B c0.5 r0.5  (octave layer below)
+  { 1.f,  1.f,  1.5f, 1.5f,        "DUAL-5TH"      },   // 4  A c1 r1     | B c1.5 r1.5  (fifth layer above)
+  { 0.5f, 0.5f, 1.f,  1.61803399f, "DUAL-SUB+1.62" },   // 5  A c0.5 r0.5 | B c1 r1.61803
+};
+constexpr float EXP_LAB_DUAL_FB          = 0.75f;  // both voices: modulator self-feedback b, fixed (2OP law + its cap, no LFO)
+constexpr float EXP_LAB_DUAL_FADE        = 0.25f;  // voice fade width near the engine limit, share of EXP_FOLD_LIMIT_HZ:
+                                                   // g = clamp((EXP_FOLD_LIMIT_HZ - c f') / (this x EXP_FOLD_LIMIT_HZ), 0, 1)
+constexpr float EXP_LAB_LFO_BLEND_SWING  = 0.3f;   // K5 LFO on the blend x (+-, after the knob), x clamped [0, 1]
 
 // --- SW3 DOWN (RETIRED LOOPING instance, only with EXP_LOOP_ENABLE): K4 / K5 = generic envelope modulation (2026-10-28) ---
 // (The ONE-SHOT e law below is what SW3 MID ran before the glide / pluck-swell; its code stays in ExpEnv, not run.)
