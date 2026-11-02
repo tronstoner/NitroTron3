@@ -2,7 +2,7 @@
 //
 // explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 pluck <-> swell on
 // the K3 fc (UP index / MID 2-pole lowpass), K5 LFO on K2 feedback / morph) and SW3 DOWN (FM LAB: the same one-shot
-// engine with its own SW1 families - UP 2-OP FM, MID DUAL VOICE, DOWN placeholder, see FM LAB) on NitroLab: two instances of this class (constructor flag),
+// engine with its own SW1 families - UP 2-OP FM, MID DUAL VOICE, DOWN ADDITIVE, see FM LAB) on NitroLab: two instances of this class (constructor flag),
 // sharing the read-only tables. (The former SW3 DOWN LOOPING variant is retired: EXP_LOOP_ENABLE, code kept.)
 //
 // The band engine is COPIED from armitage.h (not shared): the input is decimated 48 -> 8 kHz,
@@ -101,10 +101,10 @@
 //                16-bit Fibonacci LFSR, seed EXP_BT_SEED, tap set EXP_BT_TAPS[i], first 16 new bits),
 //                17..32 = SQR v[j] = sq(j) cos(2 pi n j / 16), n = 1..16. Anti-fold: S_k steps (16 / 8 / 4 / 2,
 //                (S/2) f' <= L), pattern subsampled every 16 / S_k-th step.
-//  SW3 DOWN — FM LAB: OWN SW1 families (2026-10-28; families 2026-11-02, steps 1 + 2 of 3). SW3 MID's FM / tables /
-//   harmonics & shift are NOT offered here (they stay on SW3 MID). UP / DOWN run the kFM 2OP law above with its own
-//   ratio slide (l2r_, linear over EXP_DISC_SLIDE_MS 1 ms; no crossfade between them); MID = its own model kLDUAL
-//   (SW1 UP <-> MID / MID <-> DOWN = the 1 ms model crossfade, the entering model from cleared state).
+//  SW3 DOWN — FM LAB: OWN SW1 families (2026-10-28; families 2026-11-02, steps 1 - 3). SW3 MID's FM / tables /
+//   harmonics & shift are NOT offered here (they stay on SW3 MID). UP runs the kFM 2OP law above with its own
+//   ratio slide (l2r_, linear over EXP_DISC_SLIDE_MS 1 ms); MID = its own model kLDUAL, DOWN = kLADD (every SW1 change =
+//   the 1 ms model crossfade, the entering model from cleared state).
 //   SW1 UP   = 2-OP FM. K1 = 12 equal stepped zones (EXP_LAB_ZONES), modulator ratio r CCW -> CW:
 //              0.25 / 0.5 / 1 / 1.41421 / 1.5 / 1.61803 / 2 / 2.41421 / 2.71828 / 3 / 3.14159 / 3.5
 //              (pm += r wrap(phi - phi_prev), fresh r phi; carrier at phi). K2 = feedback b 0..1.5 (EXP_FBFM_FB_MAX),
@@ -129,8 +129,46 @@
 //              FADE per voice (engine limit, not L): f_v = clamp((EXP_FOLD_LIMIT_HZ - c_v f') / (EXP_LAB_DUAL_FADE 0.25 x
 //              EXP_FOLD_LIMIT_HZ), 0, 1) - applied to every voice as written, so a c = 1 voice also dips on the +1 slot's
 //              top bands (f' > 3 kHz: f' max 3.38 kHz -> f 0.62); played / -1 slots: only c > 1 voices fade.
-//   SW1 DOWN = ADDITIVE (step 3, not built): PLACEHOLDER = the 2-OP family at r = 1 (EXP_LAB_PH_ZONE); K1 inert
-//              (K4 / K5 act as on UP, not inert).
+//   SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, item = K1 zone). One harmonic series per band built on the
+//              slot's unit phasor v = u_k (as Armitage ADD: harmonics by repeated complex multiplication), FM on the
+//              series fundamental at ratio 1, no feedback: q = b e^{j I x} (b = v, x = Im v = sin 2 pi phi; SUB: b = w,
+//              x = Im w, see SUB), harmonic m = Re(q^m) (FM index m I on harmonic m).
+//              h = "harmonics" macro in [0, 1]: M_eff = 1 + 15 h (EXP_ADD_M_MAX 16), g_m = clamp(M_eff - m + 1, 0, 1),
+//              s = 1 - 0.4 h (EXP_ADD_S_MIN 0.6), weight w_m = g_m m^-s / N, N = sqrt(sum_members (g_m m^-s)^2) (RMS of
+//              the series = one unit sine at every h; the per-band anti-fold below is NOT renormalised; recomputed when
+//              h / the series moved). The fundamental m = 1 is always kept (w_1 = 1 / N); m >= 2 additionally x
+//              h_mk = clamp((Fe - m f0) / EXP_HARM_FEDGE 400, 0, 1), Fe = EXP_HARM_FMAX 3800 (harmonics on K2 / fixed) or
+//              min(3800, L) (harmonics on K3), f0 = the series fundamental (f'_k; SUB f'_k / 2).
+//              FM index I = EXP_ADD_FM_I_MAX 6 k^2 (k = the index knob value), per band capped with the 2OP cap at r 1:
+//              I <= L_c / f0 - 2 (floor 0; IndexCap c 1 r 1): L_c = L (K3 = index: K4 pluck <-> swell closes it) or the
+//              K3 knob's own L without envelope (model B). Band out W = sum_m w_m h_mk Re(q^m).
+//              SERIES  SAW m = 1..16 | ODD m = 1, 3, .., 15 (step q^2) | OCT m in {1, 2, 4, 8, 16} (repeated squaring) |
+//                      SUB components k / 2 x f' (k = 1..2 M, count g_k = clamp(2 M_eff - k + 1, 0, 1), weight k^-s;
+//                      k odd = the sub partials): base w = the half-angle phasor of v (w^2 = v): w0 = (sqrt((1 + Re v) / 2),
+//                      sign(Im v) sqrt((1 - Re v) / 2)), sign continuation per slot / band (w = -w0 when w0 . w[n-1] < 0;
+//                      own state, the slot's own v - so on the -1 slot SUB = two octaves below the played note).
+//              K1 = 12 equal stepped zones (EXP_ADD_ZONES), every change = the 1 ms model crossfade (items share the state):
+//                1 SAW-A  2 SAW-B  3 ODD-A  4 ODD-B  5 OCT-A  6 OCT-B  7 SUB-A  8 SUB-B  9 UNI-SAW  10 UNI-ODD
+//                11 UNI-SAW-H  12 STRETCH
+//              model A: K2 = h (K5 LFO: h = clamp(k2 + 0.3 l, 0, 1)), K3 = index k (L = the index fc incl. K4).
+//              model B: K2 = index k = clamp(k2 + 0.3 l, 0, 1) (K5 LFO, knob units), cap at the K3 knob's L (no
+//                       envelope); K3 = h_eff = g_s k3 (K4 pluck <-> swell moves h between 0 and the K3 value),
+//                       Fe = min(3800, L) (L follows K3 and g_s as on UP).
+//              UNISON (9 UNI-SAW, 10 UNI-ODD: h = 1, K3 = index as A; 11 UNI-SAW-H: K3 = h as B, no FM): copy 2 = the
+//                       same series on q2 = q e^{j 2 pi theta} (every harmonic m shifted by m theta, proportional);
+//                       W = (S(q) + u S(q2)) / sqrt(1 + u^2) (equal power for uncorrelated copies; at the noon offset
+//                       the fundamental is exactly level-matched), u = K2 (u = 0: copy 2 not computed, theta runs on).
+//                       K5 = BEAT SPEED (no LFO): t5 = 2 k5 - 1, rate = 0.1 (8 / 0.1)^|t5| Hz (EXP_ADD_BEAT_MIN / MAX),
+//                       noon 0 (theta frozen); CCW: theta += rate f0 / EXP_ADD_BEAT_REF_HZ 100 / sr8 (proportional to
+//                       the note), CW: theta += rate / sr8 (same Hz on every band). theta starts at EXP_ADD_UNI_PHASE
+//                       0.25 cycle (entering a unison zone from another zone / model). State: explorer_add_st (SDRAM);
+//                       in a crossfade between two unison zones only the entering one advances theta.
+//              STRETCH (12): 8 harmonics (EXP_ADD_STR_M, w_m = m^-1 / N), harmonic m at rho_m f', rho_m = m^(1 + delta),
+//                       own phase accumulator per harmonic (p_m += rho_m d, d = the wrapped phi step; fresh: rho_m phi),
+//                       out cos(2 pi p_m + rho_m I x); h_mk on rho_m f0 (Fe 3800); delta = EXP_ADD_STR_MAX 0.05 x
+//                       clamp(k2 + 0.3 l, 0, 1) (K5 LFO), K3 = index as A. Phases: explorer_add_st (SDRAM).
+//              K4 = pluck <-> swell (index fc on A / UNI 9, 10 / STRETCH; h and L on B / UNI 11); K5 = the LFO above or
+//              (UNISON) beat speed.
 //   (TWIN / DUAL / MODOUT / BELL and their lab operator state removed 2026-11-02: git history 598a4fd.)
 //
 //  SW1 DOWN — harmonics & shift (K1 = model, 3 equal zones; no dampener)
@@ -155,7 +193,8 @@
 //   Onset detector per 48 kHz input sample (EXP_ONSET_*, armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1
 //   (both smoothed, land exactly).
 //  ONE-SHOT (SW3 MID and FM LAB) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the index fc, SW1 MID the 2-pole
-//   LP cutoff (not the tables' dampener); SW1 DOWN: K4 inert (no model offsets); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
+//   LP cutoff (not the tables' dampener); SW1 DOWN: K4 inert (no model offsets; FM LAB DOWN = ADDITIVE: the index fc,
+//   and g_s on h in B / UNI-SAW-H); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
 //     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per 8 kHz sample
 //          (DampFmUpdate).
 //     MID: LP log2 fc = log2 250 + g_s (log2 fc_f_knob - log2 250), [250, 16000] Hz, per 8 kHz sample (TfUpdate).
@@ -183,7 +222,9 @@
 //             a side change passes through depth 0
 //     target fixed per family, +- around the knob, clamped (Derive's K2 offset o2, per model via LfoO2):
 //       UP FM ratio zones  feedback b = capped b + 0.3 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
-//       FM LAB UP / DOWN   feedback b as UP FM ratio zones (2-OP; DOWN placeholder the same)
+//       FM LAB UP          feedback b as UP FM ratio zones (2-OP)
+//       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
+//                          UNISON: no LFO (K5 = beat speed)
 //       FM LAB MID (DUAL)  blend x = k2 + 0.3 l (EXP_LAB_LFO_BLEND_SWING), [0, 1]
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
@@ -247,20 +288,26 @@
 // CONTROL MAP SW3 DOWN = FM LAB (Explorer(true); see MODELS / FM LAB)
 //   K1  selection    SW1 UP: 2-OP ratio zone (12 equal stepped, r 0.25 / 0.5 / 1 / 1.41 / 1.5 / 1.62 / 2 / 2.41 /
 //                    2.72 / 3 / 3.14 / 3.5, ratio slid 1 ms); MID: DUAL VOICE zone (5 equal stepped: 1+1.41 / 2+2.72 /
-//                    OCT / 5TH / SUB+1.62, ratios slid 1 ms); DOWN: inert (placeholder, step 3)
-//   K2  UP / DOWN: feedback b 0 -> 1.5; MID: blend A <-> B (equal power, CCW = A only, CW = B only)
-//   K3  index        the per-band cap law as SW3 MID UP (L = min(4000, fc) caps the index and the feedback; MID: both
-//                    voices, each at its own c / r)
-//   K4  pluck <-> swell on the index fc per onset (as SW3 MID UP; every FM LAB family)
-//   K5  LFO (shapes / rates / sync as SW3 MID): UP / DOWN on b +-0.3 after the caps; MID on the blend +-0.3
+//                    OCT / 5TH / SUB+1.62, ratios slid 1 ms); DOWN: ADDITIVE zone (12 equal stepped, 1 ms crossfade):
+//                    SAW-A / SAW-B / ODD-A / ODD-B / OCT-A / OCT-B / SUB-A / SUB-B / UNI-SAW / UNI-ODD / UNI-SAW-H / STRETCH
+//   K2  UP: feedback b 0 -> 1.5; MID: blend A <-> B (equal power, CCW = A only, CW = B only); DOWN: A harmonics h,
+//                    B index (0 -> 6 rad, k^2), UNI unison amount u, STRETCH delta 0 -> 0.05
+//   K3  index        UP / MID: the per-band cap law as SW3 MID UP (L = min(4000, fc) caps the index and the feedback; MID:
+//                    both voices, each at its own c / r); DOWN: A / UNI-SAW / UNI-ODD / STRETCH index (6 k3^2, capped
+//                    by L), B / UNI-SAW-H harmonics h (and L on their anti-fold edge)
+//   K4  pluck <-> swell on the index fc per onset (as SW3 MID UP; every FM LAB family; DOWN B / UNI-SAW-H: also h)
+//   K5  LFO (shapes / rates / sync as SW3 MID): UP on b +-0.3 after the caps; MID on the blend +-0.3; DOWN: A on h,
+//                    B on the index knob, STRETCH on delta (+-0.3 knob units); UNI: BEAT SPEED (CCW 8 Hz x f'/100 Hz
+//                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential)
 //   K6 / SW2 / FS1 as SW3 MID
-//   SW1 family       UP = 2-OP FM, MID = DUAL VOICE, DOWN = ADDITIVE (placeholder: 2-OP r 1, step 3)
+//   SW1 family       UP = 2-OP FM, MID = DUAL VOICE, DOWN = ADDITIVE
 //
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
 // 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: the K5 LFO offset, its g acts on fc only);
 // stepped items from the raw knob.
-// DIAG second half: FM LAB (SW3 DOWN) `LAB [DOWN-PH/]2OP-<r> b <knob> > <with LFO> fc <index fc at the knob>`
-// (UP / DOWN placeholder `2OP-1`), SW1 MID `LAB <DUAL zone name> bl <knob> > <with LFO> fc <index fc at the knob>`;
+// DIAG second half: FM LAB (SW3 DOWN) `LAB 2OP-<r> b <knob> > <with LFO> fc <index fc at the knob>` (UP),
+// SW1 MID `LAB <DUAL zone name> bl <knob> > <with LFO> fc <index fc at the knob>`, SW1 DOWN `LAB ADD-<zone> <K2 name>
+// <knob> > <with LFO | beat Hz + prop / hz / off> <K3 name> <value at the knob> fc ..` (K2 / K3 names h / I / u / d);
 // + the UP `ps` part below (every FM LAB family); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
 // applied fc: UP dampener, MID 2-pole LP) lfo tri|stp|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on
 // SW1 DOWN. MID WT lines: `dmp .. lp .. eff ..` = the tables' dampener fc (knob, unmodulated), the LP cutoff at the
@@ -292,7 +339,8 @@
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
 // No dynamic allocation. Tables: 66 frames x 14 x 256 int16 = 462 KB in SDRAM (explorer_tb, own array, built once,
 // shared read-only by both instances; the second Init skips the build). FM LAB DUAL VOICE state: explorer_dual_st,
-// 9 x 3 x 84 floats = 9 KB SDRAM (one copy, the lab instance only).
+// 9 x 3 x 84 floats = 9 KB SDRAM; ADDITIVE state: explorer_add_st, 12 x 3 x 84 floats = 12 KB SDRAM (one copy each,
+// the lab instance only).
 
 #include <cmath>
 #include <cstdint>
@@ -335,6 +383,14 @@ struct ExplorerDualState {
   float f1[2][3][armbands::kArmBands], f2[2][3][armbands::kArmBands];   // voice A / B: modulator m[n-1] / m[n-2]
 };
 static ExplorerDualState DSY_SDRAM_BSS explorer_dual_st;
+// FM LAB ADDITIVE state (SW3 DOWN instance only; ONE copy, SDRAM, 2026-11-02): per SW2 slot and band.
+struct ExplorerAddState {
+  float th[3][armbands::kArmBands];                                // UNISON: detune phase theta (cycles)
+  float wr[3][armbands::kArmBands], wi[3][armbands::kArmBands];   // SUB: previous half phasor w (0, 0 = none)
+  float slp[3][armbands::kArmBands];                               // STRETCH: previous phi (-1 = fresh)
+  float sp[explorer_k::EXP_ADD_STR_M][3][armbands::kArmBands];     // STRETCH: phase of harmonic m (cycles)
+};
+static ExplorerAddState DSY_SDRAM_BSS explorer_add_st;
 
 // K4 post filter stage: TPT state-variable filter (a local copy of armitage's ArmSVF).
 struct ExpSVF {
@@ -369,6 +425,7 @@ class Explorer : public Module {
          kWT, kBIT,                                   // SW1 MID
          kHARM, kFSH, kISH,                           // SW1 DOWN   (FM LAB UP / DOWN placeholder: kFM + its own ratio slide)
          kLDUAL,                                      // FM LAB SW1 MID: DUAL VOICE (zones = slid ratios, one model)
+         kLADD,                                       // FM LAB SW1 DOWN: ADDITIVE (item = K1 zone 0..11)
          kNumModels };
   enum { kRotFSH = 0, kRotISH = 1, kRotN = 2 };                  // rotation-phase users
 
@@ -462,6 +519,9 @@ class Explorer : public Module {
     l2r_.Jump(EXP_LAB_ZONES[0].r);               // the FM LAB 2-OP ratio slide starts at zone 1
     lab_dz_t_ = 0;
     DualSlides(true);                            // FM LAB DUAL VOICE: zone 1 ratios
+    for (int m = 1; m <= EXP_ADD_K_MAX; m++) add_ln_[m] = logf((float)m);   // FM LAB ADDITIVE: m^-s = exp(-s ln m)
+    for (int c = 0; c < 2; c++) { add_ks_[c] = -1; add_kh_[c] = -1.f; add_kd_[c] = -1.f; }
+    diag_add_z_ = -1;
     diag_lab_z_ = -1;
     for (int o = 0; o < kSlots; o++) { ResetSlotState(o); slot_on_[o] = false; }
     dc_a_ = expf(-6.283185307f * EXP_DC_HZ / sr);
@@ -560,15 +620,19 @@ class Explorer : public Module {
     int oct = cs.Switch(1);
     if (oct < kUp || oct > kDown) oct = kMid;
     int model, zone = 0, labz = -1;
-    int dualz = -1;
-    if (lab_ && fam == kMid) {                   // FM LAB MID: DUAL VOICE, K1 = 5 stepped zones (ratios slid 1 ms)
+    int dualz = -1, addz = -1;
+    if (lab_ && fam == kDown) {                  // FM LAB DOWN: ADDITIVE, K1 = 12 stepped zones (1 ms model crossfade)
+      addz = Quantize(k1, EXP_ADD_N_ZONES);
+      lab_z_t_ = EXP_LAB_PH_ZONE;                // (2-OP ratio slide rests at r 1)
+      model = kLADD;
+      zone = addz;
+    } else if (lab_ && fam == kMid) {                   // FM LAB MID: DUAL VOICE, K1 = 5 stepped zones (ratios slid 1 ms)
       dualz = Quantize(k1, EXP_LAB_DUAL_N_ZONES);
       lab_dz_t_ = dualz;
       lab_z_t_ = EXP_LAB_PH_ZONE;                // (2-OP ratio slide parked at r 1 while MID runs, as before)
       model = kLDUAL;
-    } else if (lab_) {                           // FM LAB UP / DOWN: kFM (2-OP law, ratio from l2r_)
-      labz = (fam == kUp) ? Quantize(k1, EXP_LAB_N_ZONES)   // UP: 2-OP, K1 = the 12 ratio zones (no XBAND)
-                          : EXP_LAB_PH_ZONE;                 // DOWN: placeholder 2-OP r 1 (step 3), K1 inert
+    } else if (lab_) {                           // FM LAB UP: kFM (2-OP law, ratio from l2r_)
+      labz = Quantize(k1, EXP_LAB_N_ZONES);      // K1 = the 12 ratio zones (no XBAND)
       lab_z_t_ = labz;
       model = kFM;
     } else if (fam == kUp) {                     // K1: FM ratio zones, last zone = XBAND
@@ -627,8 +691,10 @@ class Explorer : public Module {
         float da = p.a, db = p.b;                // FM LAB: feedback b at the knob / with the LFO
         diag_lab_z_ = labz;
         diag_dual_z_ = dualz;
+        diag_add_z_ = addz;
         if (labz >= 0) LabDiagParam(k2, da, db);
         if (dualz >= 0) DualDiagParam(k2, da, db);
+        if (addz >= 0) AddDiagParam(addz, k2, k3, k5, da, db);
         DiagControls(cs, led1, kv, fam, oct, model, zone, da, db, fck, lfe,
                      ps_g_, dir, 0.f, 0, ps_T_, fmf ? damp_fc_ : lfe, lsh, ldp, lhz);
       }
@@ -660,6 +726,10 @@ class Explorer : public Module {
     int   labz;       // FM LAB (SW3 DOWN) UP / DOWN: 2-OP zone 0..11 (DOWN placeholder: EXP_LAB_PH_ZONE; a / b =
                       // feedback b at the knob / with the K5 LFO, before the per-band caps); -1 = not a 2-OP family
     int   dualz;      // FM LAB SW1 MID DUAL VOICE: zone 0..4 (a / b = blend x at the knob / with the K5 LFO); else -1
+    int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
+                      // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
+    float c3;
+    int   bm;
     bool  mute;
   };
   void Activate() override {
@@ -685,12 +755,29 @@ class Explorer : public Module {
   static const char* ModelName(int m) {
     static const char* const n[kNumModels] = { "FM", "XBAND-FM",
                                                "WTABLE", "BITTAB",
-                                               "HARM", "FSHIFT", "INTERVAL", "DUAL" };
+                                               "HARM", "FSHIFT", "INTERVAL", "DUAL", "ADD" };
     return (m >= 0 && m < kNumModels) ? n[m] : "?";
   }
   // FM LAB 2-OP zone name (DIAG).
   static const char* LabZoneName(int z) {
     return (z >= 0 && z < explorer_k::EXP_LAB_N_ZONES) ? explorer_k::EXP_LAB_ZONES[z].name : "?";
+  }
+  // FM LAB ADDITIVE zone name (DIAG).
+  static const char* AddZoneName(int z) {
+    return (z >= 0 && z < explorer_k::EXP_ADD_N_ZONES) ? explorer_k::EXP_ADD_ZONES[z].name : "?";
+  }
+  // FM LAB ADDITIVE K2 / K3 parameter names (DIAG): h harmonics, I index, u unison amount, d stretch delta.
+  static const char* AddK2Name(int z) {
+    using namespace explorer_k;
+    if (z < 0 || z >= EXP_ADD_N_ZONES) return "?";
+    const int c = EXP_ADD_ZONES[z].ctl;
+    return (c == kAddA) ? "h" : (c == kAddB) ? "I" : (c == kAddStrC) ? "d" : "u";
+  }
+  static const char* AddK3Name(int z) {
+    using namespace explorer_k;
+    if (z < 0 || z >= EXP_ADD_N_ZONES) return "?";
+    const int c = EXP_ADD_ZONES[z].ctl;
+    return (c == kAddB || c == kAddUniH) ? "h" : "I";
   }
   // FM LAB DUAL VOICE zone name (DIAG).
   static const char* DualZoneName(int z) {
@@ -746,6 +833,8 @@ class Explorer : public Module {
         if (mn != (vfrom_ >> 6)) {                       // a new model starts cleared (items of the
           for (int o = 0; o < kSlots; o++) ResetModelState(mn, o);   // same model share its state)
           if (mn == kLDUAL) DualSlides(true);            // FM LAB DUAL VOICE enters at its zone's ratios
+        } else if (mn == kLADD) {                        // ADDITIVE zone -> zone: the entering zone's own state fresh
+          AddEnterZone(var_ & 63, vfrom_ & 63);
         }
         // MID table zone -> table zone: EXP_TB_ZONE_XFADE_MS (WaveMorph's); every other change EXP_MODEL_XFADE_MS.
         mfade_cur_ = (mn == kWT && (vfrom_ >> 6) == kWT) ? zfade_len_ : mfade_len_;
@@ -766,6 +855,11 @@ class Explorer : public Module {
       const int mnew = var_ >> 6, mold = vfrom_ >> 6;
       pn_ = Derive(mnew, var_ & 63, k2s_, k3s_, DiscOf(mnew), loop_ ? o2_ : LfoO2(mnew), d3);
       if (fading) pf_ = Derive(mold, vfrom_ & 63, k2s_, k3s_, DiscOf(mold), loop_ ? o2_ : LfoO2(mold), d3);
+      if (mnew == kLADD) AddWeights(pn_, 0);    // ADDITIVE: series weights (cached; recomputed when h / series moved)
+      if (fading && mold == kLADD) AddWeights(pf_, 1);
+      // ADDITIVE unison theta: advanced by the entering side; by the fading side only when the entering one has none
+      pn_.adv = true;
+      pf_.adv = !(mnew == kLADD && AddIsUni(var_ & 63));
       mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_cur_ + 1) : 1.f;
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
       if (EXP_LAD_ENABLE) LadUpdate((int)(i / kFactor));   // parked SW1 MID ladder: mix target + cutoff
@@ -819,6 +913,12 @@ class Explorer : public Module {
     int   n0 = 0;               // integer item (partner offset, harmonic, packed table frame)
     int   zone = 0;
     const float* bt = nullptr;  // BITTAB: the selected 16-step waveform
+    // FM LAB ADDITIVE (kLADD): series / control kind, weight table w_m (AddWeights), highest member, STRETCH rho_m,
+    // flags (cap at the K3 knob's L; anti-fold edge Fe = min(3800, L)); adv = this side advances the unison theta
+    int   ser = 0, ctl = 0, top = 1;
+    const float* aw = nullptr;
+    const float* ar = nullptr;
+    bool  capk = false, fel = false, adv = true;
   };
 
   // Linear slide of a snapped value to its new item over a fixed number of 8 kHz samples.
@@ -1025,6 +1125,8 @@ class Explorer : public Module {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
     if (m == kLDUAL) return lfo_s_ * EXP_LAB_LFO_BLEND_SWING;   // FM LAB DUAL VOICE: blend x (span 1)
+    if (m == kLADD) return lfo_s_ * EXP_ADD_LFO_SWING;          // FM LAB ADDITIVE: A h / B index knob / STRETCH delta
+                                                                 // (Derive; not used by the UNISON zones)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
     return 0.f;
   }
@@ -1108,6 +1210,269 @@ class Explorer : public Module {
   static inline void DualClear(int v, int o, int k) {
     ExplorerDualState& S = explorer_dual_st;
     S.pc[v][o][k] = -1.f; S.pm[v][o][k] = -1.f; S.f1[v][o][k] = 0.f; S.f2[v][o][k] = 0.f;
+  }
+
+  // --- FM LAB ADDITIVE helpers (SW1 DOWN, model kLADD; see FM LAB SW1 DOWN in the header) ---
+  static inline bool AddIsUni(int z) {
+    using namespace explorer_k;
+    if (z < 0 || z >= EXP_ADD_N_ZONES) return false;
+    const int c = EXP_ADD_ZONES[z].ctl;
+    return c == kAddUniI || c == kAddUniH;
+  }
+  // Zone zo -> zone zn inside kLADD (the items share explorer_add_st): the entering zone's own state starts fresh -
+  // unison theta at EXP_ADD_UNI_PHASE (from a non-unison zone), SUB half phasor without history, STRETCH phases fresh.
+  void AddEnterZone(int zn, int zo) {
+    using namespace explorer_k;
+    if (!lab_ || zn < 0 || zn >= EXP_ADD_N_ZONES || zo < 0 || zo >= EXP_ADD_N_ZONES) return;
+    const int sn = EXP_ADD_ZONES[zn].series, so = EXP_ADD_ZONES[zo].series;
+    const bool th = AddIsUni(zn) && !AddIsUni(zo);
+    const bool wh = (sn == kAddSub) && (so != kAddSub);
+    const bool st = (sn == kAddStr) && (so != kAddStr);
+    ExplorerAddState& A = explorer_add_st;
+    for (int o = 0; o < kSlots; o++)
+      for (int k = 0; k < kBands; k++) {
+        if (th) A.th[o][k] = EXP_ADD_UNI_PHASE;
+        if (wh) A.wr[o][k] = A.wi[o][k] = 0.f;
+        if (st) A.slp[o][k] = -1.f;
+      }
+  }
+  // Series weights into cache c (0 = the current side pn_, 1 = the fading side pf_), recomputed only when the series,
+  // h (p7) or delta (p5) moved:
+  //   SAW / ODD / OCT: members m <= 16 (ODD odd m, OCT powers of 2), g_m = clamp(M_eff - m + 1, 0, 1),
+  //     M_eff = 1 + h (M_MAX - 1); SUB: k <= 32, g_k = clamp(2 M_eff - k + 1, 0, 1); w = g m^-s, s = 1 - h (1 - S_MIN)
+  //   STRETCH: w_m = 1 / m (m = 1..STR_M), rho_m = m^(1 + delta)
+  //   then w /= sqrt(sum w^2) (the series' RMS = one unit sine). p.aw / p.ar / p.top point at the cache.
+  void AddWeights(Params& p, int c) {
+    using namespace explorer_k;
+    const float h = p.p7, d = p.p5;
+    const int ser = p.ser;
+    if (ser != add_ks_[c] || h != add_kh_[c] || d != add_kd_[c]) {
+      add_ks_[c] = ser; add_kh_[c] = h; add_kd_[c] = d;
+      float* w = add_w_[c];
+      for (int m = 0; m <= EXP_ADD_K_MAX; m++) w[m] = 0.f;
+      int top = 1;
+      if (ser == kAddStr) {
+        float* r = add_rho_[c];
+        r[0] = 0.f;
+        for (int m = 1; m <= EXP_ADD_STR_M; m++) {
+          w[m] = 1.f / (float)m;
+          r[m] = (float)m * expf(d * add_ln_[m]);   // m^(1 + delta)
+        }
+        top = EXP_ADD_STR_M;
+      } else {
+        const float me = 1.f + h * (float)(EXP_ADD_M_MAX - 1);
+        const float sx = 1.f - h * (1.f - EXP_ADD_S_MIN);
+        const bool sub = (ser == kAddSub);
+        const int kmax = sub ? EXP_ADD_K_MAX : EXP_ADD_M_MAX;
+        const float cnt = sub ? 2.f * me : me;
+        for (int m = 1; m <= kmax; m++) {
+          if (ser == kAddOdd && !(m & 1)) continue;
+          if (ser == kAddOct && (m & (m - 1))) continue;
+          float g = cnt - (float)m + 1.f;
+          if (g <= 0.f) break;
+          if (g > 1.f) g = 1.f;
+          w[m] = g * expf(-sx * add_ln_[m]);
+          top = m;
+        }
+      }
+      float e = 0.f;
+      for (int m = 1; m <= top; m++) e += w[m] * w[m];
+      const float in = (e > 0.f) ? 1.f / sqrtf(e) : 0.f;
+      for (int m = 1; m <= top; m++) w[m] *= in;
+      add_top_[c] = top;
+    }
+    p.aw = add_w_[c];
+    p.ar = add_rho_[c];
+    p.top = add_top_[c];
+  }
+  // DIAG: K2 parameter at the knob (a) and with the K5 LFO (b; UNISON: the beat rate in Hz, mode in diag_add_bm_),
+  // K3 parameter at the knob (diag_add_c3_). h / u / delta / index in their own units (index rad, before the cap).
+  void AddDiagParam(int z, float k2, float k3, float k5, float& a, float& b) {
+    using namespace explorer_k;
+    const int c = EXP_ADD_ZONES[(z >= 0 && z < EXP_ADD_N_ZONES) ? z : 0].ctl;
+    const float kl = Clamp01(k2 + lfo_s_ * EXP_ADD_LFO_SWING);
+    const float i3 = EXP_ADD_FM_I_MAX * k3 * k3;
+    diag_add_bm_ = 0;
+    switch (c) {
+      case kAddA: a = k2; b = kl; diag_add_c3_ = i3; break;
+      case kAddB: a = EXP_ADD_FM_I_MAX * k2 * k2; b = EXP_ADD_FM_I_MAX * kl * kl; diag_add_c3_ = k3; break;
+      case kAddStrC: a = EXP_ADD_STR_MAX * k2; b = EXP_ADD_STR_MAX * kl; diag_add_c3_ = i3; break;
+      default: {                                 // UNISON: u, beat rate (Hz) + mode
+        const float t5 = 2.f * k5 - 1.f;
+        a = k2;
+        b = (t5 == 0.f) ? 0.f : EXP_ADD_BEAT_MIN * expf(fabsf(t5) * logf(EXP_ADD_BEAT_MAX / EXP_ADD_BEAT_MIN));
+        diag_add_bm_ = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
+        diag_add_c3_ = (c == kAddUniH) ? k3 : i3;
+        break;
+      }
+    }
+  }
+  // Series sum of one band: sum_m w_m h_mk Re(q^m) over the series' members (m = 1 always kept, no edge), h_mk =
+  // clamp((Fe - m f0) / FEDGE, 0, 1) (monotone in m: the loop stops at the first 0). SAW / SUB step q (SUB: w indexes
+  // k, f0 = f' / 2), ODD steps q^2, OCT squares.
+  template <int S>
+  static inline float SeriesSum(float qr, float qi, float f0, float Fe, const float* __restrict w, int top) {
+    using namespace explorer_k;
+    constexpr float ie = 1.f / EXP_HARM_FEDGE;
+    float sum = w[1] * qr;
+    float pr = qr, pi = qi;
+    if (S == kAddOct) {
+      for (int m = 2; m <= top; m <<= 1) {
+        const float t = pr * pr - pi * pi;
+        pi = 2.f * pr * pi;
+        pr = t;
+        float h = (Fe - (float)m * f0) * ie;
+        if (h <= 0.f) break;
+        if (h > 1.f) h = 1.f;
+        sum += w[m] * h * pr;
+      }
+      return sum;
+    }
+    constexpr int dm = (S == kAddOdd) ? 2 : 1;
+    float sr = qr, si = qi;
+    if (S == kAddOdd) { sr = qr * qr - qi * qi; si = 2.f * qr * qi; }
+    const float df = (float)dm * f0;
+    float mf = f0;
+    for (int m = 1 + dm; m <= top; m += dm) {
+      const float t = pr * sr - pi * si;
+      pi = pr * si + pi * sr;
+      pr = t;
+      mf += df;
+      float h = (Fe - mf) * ie;
+      if (h <= 0.f) break;
+      if (h > 1.f) h = 1.f;
+      sum += w[m] * h * pr;
+    }
+    return sum;
+  }
+  // STRETCH band sum: harmonic m at rho_m f0, own phase p_m (fresh: rho_m phi, else + rho_m d, d = the wrapped phi
+  // step; every accumulator advances, also above the edge), out sum_m w_m h_mk cos(2 pi p_m + rho_m I x) (ix = I x),
+  // h_mk on rho_m f0 (m >= 2).
+  inline float StretchSum(int o, int k, float ph, float f0, float ix, float Fe, const float* __restrict w,
+                          const float* __restrict rho) {
+    using namespace explorer_k;
+    constexpr float ie = 1.f / EXP_HARM_FEDGE;
+    ExplorerAddState& A = explorer_add_st;
+    float& lp = A.slp[o][k];
+    const bool fresh = (lp < 0.f);
+    float d = 0.f;
+    if (!fresh) {
+      d = ph - lp;
+      if (d < -0.5f) d += 1.f;
+      else if (d >= 0.5f) d -= 1.f;
+    }
+    lp = ph;
+    float sum = 0.f;
+    for (int m = 1; m <= EXP_ADD_STR_M; m++) {
+      const float r = rho[m];
+      float pm = fresh ? r * ph : A.sp[m - 1][o][k] + r * d;
+      pm -= floorf(pm);
+      A.sp[m - 1][o][k] = pm;
+      float h = 1.f;
+      if (m > 1) {
+        h = (Fe - r * f0) * ie;
+        if (h <= 0.f) continue;
+        if (h > 1.f) h = 1.f;
+      }
+      float arg = pm;                            // cos(2 pi p_m + rho_m I x) = Cos01(frac(p_m + rho_m I x / 2 pi))
+      if (ix != 0.f) {
+        arg += r * ix * 0.159154943f;
+        arg -= floorf(arg);
+      }
+      sum += w[m] * h * Cos01(arg);
+    }
+    return sum;
+  }
+  // FM LAB ADDITIVE: sum_k w_k a_k W_k (series S; U = unison). Per band: base b = v (SUB: the continued half phasor
+  // w, f0 = f' / 2), I = min(p0, IndexCap at r 1 with L_c), q = b e^{j I Im b}, W = SeriesSum (UNISON: + u x the
+  // same on q e^{j 2 pi theta}, x 1 / sqrt(1 + u^2); STRETCH: StretchSum).
+  float ShapeAdd(int o, const Params& p) {
+    using namespace explorer_k;
+    const bool uni = (p.ctl == kAddUniI || p.ctl == kAddUniH);
+    switch (p.ser) {
+      case kAddSaw: return uni ? ShapeAddT<kAddSaw, true>(o, p) : ShapeAddT<kAddSaw, false>(o, p);
+      case kAddOdd: return uni ? ShapeAddT<kAddOdd, true>(o, p) : ShapeAddT<kAddOdd, false>(o, p);
+      case kAddOct: return ShapeAddT<kAddOct, false>(o, p);
+      case kAddSub: return ShapeAddT<kAddSub, false>(o, p);
+      default:      return ShapeAddT<kAddStr, false>(o, p);
+    }
+  }
+  template <int S, bool U>
+  float ShapeAddT(int o, const Params& p) {
+    using namespace explorer_k;
+    static_assert(EXP_ADD_FM_I_MAX < 90.f, "SinCos offset covers the index");
+    const float* __restrict mg  = mag_ + 1;
+    const float* __restrict ur  = ur_;
+    const float* __restrict ui  = ui_;
+    const float* __restrict fp  = fp_[o];
+    const float* __restrict ifp = ifp_[o];
+    const float* __restrict phs = ph_;
+    const bool played = (o == kSP);
+    const float L  = hc_fold_;
+    const float Lc = p.capk ? hc_fold_k_ : L;                 // index cap: K3 knob alone (B) or incl. the envelope
+    const float Fe = (p.fel && L < EXP_HARM_FMAX) ? L : EXP_HARM_FMAX;   // anti-fold edge
+    const float I0 = p.p0;
+    const float* __restrict w = p.aw;
+    const int top = p.top;
+    ExplorerAddState& A = explorer_add_st;
+    float acc = 0.f;
+    for (int k = 0; k < kBands; k++) {
+      const float a = mg[k];
+      if (a == 0.f) {                            // silent band: SUB / STRETCH history cleared (theta runs on later)
+        if (S == kAddSub) { A.wr[o][k] = 0.f; A.wi[o][k] = 0.f; }
+        if (S == kAddStr) A.slp[o][k] = -1.f;
+        continue;
+      }
+      float br = ur[k], bi = ui[k];
+      float f0 = fp[k], if0 = ifp[k];
+      if (S == kAddSub) {                        // half-angle phasor w (w^2 = v), sign continued
+        const float vr = br;
+        float c = sqrtf(fmaxf(0.5f + 0.5f * vr, 0.f));
+        float s = sqrtf(fmaxf(0.5f - 0.5f * vr, 0.f));
+        if (bi < 0.f) s = -s;
+        float& pr = A.wr[o][k];
+        float& pi = A.wi[o][k];
+        if (c * pr + s * pi < 0.f) { c = -c; s = -s; }
+        pr = c; pi = s;
+        br = c; bi = s;
+        f0 *= 0.5f; if0 *= 2.f;
+      }
+      float I = I0;
+      if (EXP_ANTIFOLD && I > 0.f) {
+        const float ic = IndexCap(Lc, Lc, if0, 1.f, 1.f);   // I <= L_c / f0 - 2
+        if (I > ic) I = ic;
+      }
+      const float ix = I * bi;                   // modulator at ratio 1: sin of the series fundamental
+      float W;
+      if (S == kAddStr) {
+        W = StretchSum(o, k, phs[k], f0, ix, Fe, w, p.ar);
+      } else {
+        float qr = br, qi = bi;
+        if (ix != 0.f) {
+          float sn, cs;
+          SinCos(ix, sn, cs);
+          qr = br * cs - bi * sn;
+          qi = br * sn + bi * cs;
+        }
+        W = SeriesSum<S>(qr, qi, f0, Fe, w, top);
+        if (U) {
+          float& th = A.th[o][k];
+          if (p.adv) {
+            float t = th + p.p3 + p.p4 * f0;
+            t -= floorf(t);
+            th = t;
+          }
+          if (p.p1 > 0.f) {
+            float c, s;
+            CosSin01(th, c, s);
+            const float q2r = qr * c - qi * s, q2i = qr * s + qi * c;
+            W = (W + p.p1 * SeriesSum<S>(q2r, q2i, f0, Fe, w, top)) * p.p2;
+          }
+        }
+      }
+      acc += (played ? wmid_[k] : 1.f) * a * W;
+    }
+    return acc;
   }
 
   // K3 dampener UP (FM caps), per 8 kHz sample after EnvUpdate (nothing when its inputs did not move; 2026-10-28:
@@ -1373,6 +1738,37 @@ class Explorer : public Module {
         else CosSin01(0.25f * x, p.p4, p.p5);      // gA = cos(pi/2 x), gB = sin(pi/2 x)
         p.a = x; p.b = x; break;
       }
+      case kLADD: {                        // FM LAB ADDITIVE: p0 = I (before the per-band cap), p1 = u, p2 = 1 / sqrt(1 + u^2),
+                                           // p3 / p4 = theta step constant / per Hz of f0 (cycles per 8 kHz sample),
+                                           // p5 = delta, p7 = h; o2 = the K5 LFO in knob units (LfoO2)
+        const ExpAddZone& Z = EXP_ADD_ZONES[(zone >= 0 && zone < EXP_ADD_N_ZONES) ? zone : 0];
+        p.ser = Z.series; p.ctl = Z.ctl;
+        const float gs = loop_ ? 1.f : ps_gs_;     // K4 pluck <-> swell g_s (1 = the K3 value)
+        float h = 1.f, ki = 0.f;
+        switch (Z.ctl) {
+          case kAddA:    h = Clamp01(k2 + o2); ki = k3; break;
+          case kAddB:    ki = Clamp01(k2 + o2); h = gs * k3; p.capk = true; p.fel = true; break;
+          case kAddUniI: h = 1.f; ki = k3; break;
+          case kAddUniH: h = gs * k3; ki = 0.f; p.fel = true; break;
+          default:       h = 1.f; ki = k3; p.p5 = EXP_ADD_STR_MAX * Clamp01(k2 + o2); break;   // STRETCH
+        }
+        p.p7 = h;
+        p.p0 = EXP_ADD_FM_I_MAX * ki * ki;
+        if (Z.ctl == kAddUniI || Z.ctl == kAddUniH) {
+          const float u = k2;
+          p.p1 = u;
+          p.p2 = 1.f / sqrtf(1.f + u * u);
+          const float t5 = 2.f * k5s_ - 1.f;
+          if (t5 != 0.f) {                         // beat rate: MIN (MAX / MIN)^|t5|; noon 0 (theta frozen)
+            const float rate = EXP_ADD_BEAT_MIN * expf(fabsf(t5) * logf(EXP_ADD_BEAT_MAX / EXP_ADD_BEAT_MIN));
+            if (t5 < 0.f) p.p4 = rate / (EXP_ADD_BEAT_REF_HZ * sr8_);   // CCW: proportional to f0
+            else          p.p3 = rate / sr8_;                           // CW: the same Hz on every band
+          }
+        } else {
+          p.p2 = 1.f;
+        }
+        p.a = h; p.b = p.p0; break;
+      }
       case kXFM:                           // n0 = partner offset, p1 = I
         p.n0 = EXP_XB_PARTNER;
         p.p1 = EXP_FM_INDEX;
@@ -1431,16 +1827,23 @@ class Explorer : public Module {
   // One 8 kHz sample of slot o: derive u_k, return the model's band sum sum_k w_k a_k W_k.
   float RunSlot(int o, bool fading) {
     if (!slot_on_[o]) { ResetSlotState(o); slot_on_[o] = true; }
-    const int mn = var_ >> 6;
-    Prep(o, NeedsPhase(mn) || (fading && NeedsPhase(vfrom_ >> 6)));
+    Prep(o, NeedsPhaseV(var_) || (fading && NeedsPhaseV(vfrom_)));
     float sh = Shape(var_ >> 6, o, pn_);
     if (fading) sh = (1.f - mg_) * Shape(vfrom_ >> 6, o, pf_) + mg_ * sh;
     return sh;
   }
 
-  // Models that read the band phase phi_k (ph_).
+  // Models that read the band phase phi_k (ph_); ADDITIVE: only the STRETCH zone (the others work on the phasor).
   static inline bool NeedsPhase(int m) {
     return m == kFM || m == kHARM || m == kWT || m == kBIT || m == kLDUAL;
+  }
+  static inline bool NeedsPhaseV(int var) {
+    const int m = var >> 6;
+    if (m == kLADD) {
+      const int z = var & 63;
+      return z >= 0 && z < explorer_k::EXP_ADD_N_ZONES && explorer_k::EXP_ADD_ZONES[z].series == explorer_k::kAddStr;
+    }
+    return NeedsPhase(m);
   }
 
   // u_k = z'_k / |z'_k| for slot o into ur_ / ui_ (0 for silent bands); with need_ph also the phase
@@ -1477,6 +1880,7 @@ class Explorer : public Module {
       case kHARM:  return ShapeK<kHARM>(o, p);
       case kWT:    return ShapeK<kWT>(o, p);
       case kLDUAL: return ShapeK<kLDUAL>(o, p);
+      case kLADD:  return ShapeAdd(o, p);
       default:     return ShapeK<kBIT>(o, p);
     }
   }
@@ -1710,13 +2114,19 @@ class Explorer : public Module {
         DualClear(0, o, k);
         DualClear(1, o, k);
       }
+      if (m == kLADD && lab_) {                  // FM LAB ADDITIVE (SDRAM, the lab instance only)
+        ExplorerAddState& A = explorer_add_st;
+        A.th[o][k] = explorer_k::EXP_ADD_UNI_PHASE;
+        A.wr[o][k] = A.wi[o][k] = 0.f;
+        A.slp[o][k] = -1.f;
+      }
     }
   }
   void ResetSlotState(int o) {
     ResetModelState(kFM, o);
     ResetModelState(kFSH, o);
     ResetModelState(kISH, o);
-    if (lab_) ResetModelState(kLDUAL, o);
+    if (lab_) { ResetModelState(kLDUAL, o); ResetModelState(kLADD, o); }
   }
 
   static inline float Slide(float v, float t, float st) {
@@ -2160,6 +2570,9 @@ class Explorer : public Module {
     s.lfo = lfo; s.lfod = lfod; s.lfohz = lfohz;
     s.labz = diag_lab_z_;
     s.dualz = diag_dual_z_;
+    s.addz = diag_add_z_;
+    s.c3 = diag_add_c3_;
+    s.bm = diag_add_bm_;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -2315,6 +2728,15 @@ class Explorer : public Module {
   volatile int lab_dz_t_ = 0;      // DUAL VOICE zone (0..4, SW1 MID: K1), Controls
   DSlide dca_, dra_, dcb_, drb_;   // DUAL VOICE: slid carrier / modulator ratio of voice A / B
   int   diag_dual_z_ = -1;         // DIAG: DUAL VOICE zone of the last Controls (-1 = not DUAL)
+  // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
+  float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
+  float add_rho_[2][explorer_k::EXP_ADD_STR_M + 1] = {};
+  float add_ln_[explorer_k::EXP_ADD_K_MAX + 1] = {};
+  int   add_ks_[2] = { -1, -1 }, add_top_[2] = { 1, 1 };
+  float add_kh_[2] = { -1.f, -1.f }, add_kd_[2] = { -1.f, -1.f };
+  int   diag_add_z_ = -1;          // DIAG: ADDITIVE zone of the last Controls (-1 = not ADDITIVE)
+  float diag_add_c3_ = 0.f;        // DIAG: ADDITIVE K3 parameter at the knob
+  int   diag_add_bm_ = 0;          // DIAG: ADDITIVE unison beat mode (0 off, 1 prop, 2 Hz)
   float k4s_ = 0.5f, k5s_ = 0.5f;  // smoothed K4 (t4 = 2 k4s_ - 1), K5 (t5 = 2 k5s_ - 1)
   volatile float k4_t_ = 0.5f, k5_t_ = 0.5f;
   // K3 dampener (UP caps per 8 kHz sample, DampFmUpdate; table picks per block, DampUpdate)

@@ -34,8 +34,11 @@
 //                          SW1 MID = DUAL VOICE: two 2-OP voices A / B per band (fixed feedback 0.75), K1 = 5 stepped
 //                          zones 1+1.41 / 2+2.72 / OCT / 5TH / SUB+1.62 (ratios slid 1 ms), K2 = blend A <-> B (equal
 //                          power), K3 = index (both, own caps), K4 pluck <-> swell on the index, K5 LFO on the blend
-//                          (+-0.3). SW1 DOWN = ADDITIVE: not built yet (step 3) - placeholder = the 2-OP at ratio 1
-//                          (K1 inert, K2..K5 as UP). The former LOOPING variant is retired
+//                          (+-0.3). SW1 DOWN = ADDITIVE: one harmonic series per band (FM on its fundamental), K1 = 12
+//                          stepped zones SAW / ODD / OCT / SUB in model A (K2 harmonics, K3 index) and B (K2 index, K3
+//                          harmonics), UNI-SAW / UNI-ODD / UNI-SAW-H (K2 unison amount, K5 beat speed), STRETCH (K2
+//                          stretch); K4 pluck <-> swell on K3, K5 LFO on K2 (+-0.3; unison: beat speed). The former
+//                          LOOPING variant is retired
 //                          (EXP_LOOP_ENABLE, explorer_constants.h). WaveMorph (modules/wavemorph.h) is unwired, source kept)
 
 #include "daisy.h"
@@ -78,7 +81,7 @@ static constexpr int NL_MODE_EXPLORER_LAB = NL_MODE_WAVEMORPH;
 
 Armitage armitage;
 Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 pluck <-> swell on the K3 fc (UP dampener / MID 2-pole LP)
-Explorer explorer_lab(true);       // SW3 DOWN:   FM LAB = SW3 MIDDLE's engine, own SW1 families (UP 2-OP, MID DUAL VOICE, DOWN placeholder)
+Explorer explorer_lab(true);       // SW3 DOWN:   FM LAB = SW3 MIDDLE's engine, own SW1 families (UP 2-OP, MID DUAL VOICE, DOWN ADDITIVE)
 Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_lab };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
@@ -219,9 +222,10 @@ int main() {
         // 2-pole LP cutoff at the knob, `eff` the effective LP cutoff), envelope (retired LOOPING `loop`: e, K4 dir, K5 amount
         // d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in use (s), applied fc_eff `fce` in Hz (SW1 UP
         // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
-        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP / DOWN `LAB [DOWN-PH/]<zone> b <knob>
-        // > <with LFO> fc <index fc at the knob>` (DOWN = the step 3 placeholder, 2OP-1), MID `LAB <DUAL zone> bl <blend
-        // knob> > <with LFO> fc ..`; + the UP `ps` / `lfo` part (fce = the applied index fc)
+        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP `LAB <zone> b <knob> > <with LFO> fc <index fc
+        // at the knob>`, MID `LAB <DUAL zone> bl <blend knob> > <with LFO> fc ..`, DOWN `LAB ADD-<zone> <K2 name> <knob>
+        // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
+        // `u <knob> bt <beat Hz> prop|hz|off`); + the UP `ps` / `lfo` part (fce = the applied index fc)
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
@@ -232,7 +236,7 @@ int main() {
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
-        else if (d.sw1 == 0 || d.labz >= 0 || d.dualz >= 0)   // SW1 UP / every FM LAB family: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
+        else if (d.sw1 == 0 || d.labz >= 0 || d.dualz >= 0 || d.addz >= 0)   // SW1 UP / every FM LAB family: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " fce %d lfo %s d" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
@@ -242,13 +246,21 @@ int main() {
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
         else                                                  // SW3 MID / DOWN, SW1 DOWN: K4 / K5 inert
           snprintf(env, sizeof(env), " ps - lfo -");
-        if (d.dualz >= 0)                                     // FM LAB MID: DUAL zone, blend knob > with LFO, index fc
+        if (d.addz >= 0 && Explorer::AddK2Name(d.addz)[0] == 'u')   // FM LAB DOWN unison: u, beat Hz + mode, K3
+          hw.seed.PrintLine("LAB %s u" D2F " bt" D2F " %s %s" D2F " fc %d%s mute %d cpu %u%%",
+                            Explorer::AddZoneName(d.addz), D2V(d.a), D2V(d.b),
+                            d.bm == 1 ? "prop" : d.bm == 2 ? "hz" : "off", Explorer::AddK3Name(d.addz), D2V(d.c3),
+                            (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
+        else if (d.addz >= 0)                                 // FM LAB DOWN: zone, K2 knob > with LFO, K3 knob, index fc
+          hw.seed.PrintLine("LAB %s %s" D2F " >" D2F " %s" D2F " fc %d%s mute %d cpu %u%%",
+                            Explorer::AddZoneName(d.addz), Explorer::AddK2Name(d.addz), D2V(d.a), D2V(d.b),
+                            Explorer::AddK3Name(d.addz), D2V(d.c3), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
+        else if (d.dualz >= 0)                                // FM LAB MID: DUAL zone, blend knob > with LFO, index fc
           hw.seed.PrintLine("LAB %s bl" D2F " >" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::DualZoneName(d.dualz), D2V(d.a), D2V(d.b),
                             (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.labz >= 0)                                 // FM LAB UP / DOWN: (placeholder,) zone, b knob > with LFO, index fc
-          hw.seed.PrintLine("LAB %s%s b" D2F " >" D2F " fc %d%s mute %d cpu %u%%",
-                            d.sw1 == 2 ? "DOWN-PH/" : "",
+        else if (d.labz >= 0)                                 // FM LAB UP: zone, b knob > with LFO, index fc
+          hw.seed.PrintLine("LAB %s b" D2F " >" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::LabZoneName(d.labz), D2V(d.a), D2V(d.b),
                             (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kFM)                    // A = ratio r, B = feedback b

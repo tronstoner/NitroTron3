@@ -339,8 +339,9 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 //              cap); K1 = the 5 equal stepped zones EXP_LAB_DUAL_ZONES (cA rA | cB rB, slid 1 ms between zones),
 //              K2 = BLEND A <-> B (equal power), K3 = index (both voices, each capped at its own c / r), K4 pluck <->
 //              swell on the index, K5 LFO on the blend (+- EXP_LAB_LFO_BLEND_SWING).
-//   SW1 DOWN = ADDITIVE (step 3, not built yet): placeholder = the 2-OP family at ratio 1 (zone EXP_LAB_PH_ZONE),
-//              K1 inert, K2..K5 as SW1 UP.
+//   SW1 DOWN = ADDITIVE (step 3, 2026-11-02): K1 = the 12 equal stepped zones EXP_ADD_ZONES (series SAW / ODD /
+//              OCT / SUB in model A / B, UNISON x 3, STRETCH), see EXP_ADD_* below and explorer.h.
+//              (EXP_LAB_PH_ZONE: the 2-OP ratio slide rests at r 1 while MID / DOWN run.)
 // EXP_LOOP_ENABLE = true brings back the retired LOOPING variant on SW3 DOWN instead (generic K4 / K5 envelope,
 // code kept compiling, not reachable while false).
 // (2026-11-02: TWIN / DUAL-2 / DUAL-1.5 / MODOUT / BELL removed - code in git history, 598a4fd; STACK / PAIRS /
@@ -362,8 +363,8 @@ constexpr ExpLabZone EXP_LAB_ZONES[EXP_LAB_N_ZONES] = {   // SW1 UP, K1 CCW -> C
   { 3.14159265f, "2OP-3.14" },   // 11  pi
   { 3.5f,        "2OP-3.5"  },   // 12
 };
-constexpr int EXP_LAB_PH_ZONE = 2;   // SW1 DOWN placeholder (step 3): the 2-OP zone at ratio 1
-static_assert(EXP_LAB_ZONES[EXP_LAB_PH_ZONE].r == 1.f, "placeholder = 2-OP at ratio 1");
+constexpr int EXP_LAB_PH_ZONE = 2;   // the 2-OP zone at ratio 1: where the 2-OP ratio slide rests while SW1 MID / DOWN run
+static_assert(EXP_LAB_ZONES[EXP_LAB_PH_ZONE].r == 1.f, "rest zone = 2-OP at ratio 1");
 // (2OP: K5 LFO on b = EXP_LFO_FB_SWING, as SW3 MID.)
 // SW1 MID = DUAL VOICE: K1 zones (carrier c / modulator r of voice A and B, both relative to the band phase phi).
 struct ExpLabDualZone { float ca, ra, cb, rb; const char* name; };
@@ -379,6 +380,46 @@ constexpr float EXP_LAB_DUAL_FB          = 0.75f;  // both voices: modulator sel
 constexpr float EXP_LAB_DUAL_FADE        = 0.25f;  // voice fade width near the engine limit, share of EXP_FOLD_LIMIT_HZ:
                                                    // g = clamp((EXP_FOLD_LIMIT_HZ - c f') / (this x EXP_FOLD_LIMIT_HZ), 0, 1)
 constexpr float EXP_LAB_LFO_BLEND_SWING  = 0.3f;   // K5 LFO on the blend x (+-, after the knob), x clamped [0, 1]
+// SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
+// (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
+// harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).
+//   "harmonics" macro h in [0, 1]: M_eff = 1 + h (EXP_ADD_M_MAX - 1), g_m = clamp(M_eff - m + 1, 0, 1),
+//   amplitude g_m / m^s, s = 1 - h (1 - EXP_ADD_S_MIN); anti-fold h_mk = clamp((Fe - m f0) / EXP_HARM_FEDGE, 0, 1),
+//   Fe = EXP_HARM_FMAX (3800; = ARM_ADD_FMAX / FEDGE), where the harmonics are on K3: Fe = min(3800, L).
+//   FM index I = EXP_ADD_FM_I_MAX k^2 (k = the index knob), capped per band with the 2OP cap at r 1: I <= L / f0 - 2.
+enum ExpAddSeries { kAddSaw = 0, kAddOdd = 1, kAddOct = 2, kAddSub = 3, kAddStr = 4 };
+enum ExpAddCtl    { kAddA = 0,     // model A: K2 = h (K5 LFO), K3 = FM index (L incl. K4)
+                    kAddB = 1,     // model B: K2 = FM index (K5 LFO, cap at the K3 knob's L), K3 = h (h_eff = g_s h)
+                    kAddUniI = 2,  // unison, h = 1, K2 = u, K3 = FM index (as A), K5 = beat speed
+                    kAddUniH = 3,  // unison, K2 = u, K3 = h (as B, no FM), K5 = beat speed
+                    kAddStrC = 4 };// stretch, K2 = delta (K5 LFO), K3 = FM index (as A)
+struct ExpAddZone { int series; int ctl; const char* name; };
+constexpr int EXP_ADD_N_ZONES = 12;
+constexpr ExpAddZone EXP_ADD_ZONES[EXP_ADD_N_ZONES] = {   // K1 CCW -> CW
+  { kAddSaw, kAddA,    "ADD-SAW-A"     },   //  1
+  { kAddSaw, kAddB,    "ADD-SAW-B"     },   //  2
+  { kAddOdd, kAddA,    "ADD-ODD-A"     },   //  3
+  { kAddOdd, kAddB,    "ADD-ODD-B"     },   //  4
+  { kAddOct, kAddA,    "ADD-OCT-A"     },   //  5  m in {1, 2, 4, 8, 16}
+  { kAddOct, kAddB,    "ADD-OCT-B"     },   //  6
+  { kAddSub, kAddA,    "ADD-SUB-A"     },   //  7  components k / 2 x f', k = 1 .. 2 M
+  { kAddSub, kAddB,    "ADD-SUB-B"     },   //  8
+  { kAddSaw, kAddUniI, "ADD-UNI-SAW"   },   //  9
+  { kAddOdd, kAddUniI, "ADD-UNI-ODD"   },   // 10
+  { kAddSaw, kAddUniH, "ADD-UNI-SAW-H" },   // 11
+  { kAddStr, kAddStrC, "ADD-STRETCH"   },   // 12
+};
+constexpr int   EXP_ADD_M_MAX       = 16;      // highest harmonic at h = 1 (SUB: k up to 2 x this)
+constexpr float EXP_ADD_S_MIN       = 0.6f;    // amplitude exponent s at h = 1 (1 / m -> 1 / m^0.6)
+constexpr int   EXP_ADD_K_MAX       = 2 * EXP_ADD_M_MAX;   // weight table size (SUB components)
+constexpr float EXP_ADD_FM_I_MAX    = 6.f;     // rad; FM index at the index knob CW (I = this k^2)
+constexpr float EXP_ADD_LFO_SWING   = 0.3f;    // K5 LFO swing in knob units (A: on h, B: on the index knob, STRETCH: on delta)
+constexpr float EXP_ADD_UNI_PHASE   = 0.25f;   // cycles; unison copy 2 starts with this fixed phase offset
+constexpr float EXP_ADD_BEAT_MIN    = 0.1f;    // Hz; unison beat rate just off noon (K5)
+constexpr float EXP_ADD_BEAT_MAX    = 8.f;     // Hz; unison beat rate at K5 CCW / CW
+constexpr float EXP_ADD_BEAT_REF_HZ = 100.f;   // Hz; CCW (proportional): theta rate = rate x f' / this
+constexpr int   EXP_ADD_STR_M       = 8;       // STRETCH: harmonics (fixed, 1 / m)
+constexpr float EXP_ADD_STR_MAX     = 0.05f;   // STRETCH: delta at K2 CW (harmonic m at m^(1 + delta) f')
 
 // --- SW3 DOWN (RETIRED LOOPING instance, only with EXP_LOOP_ENABLE): K4 / K5 = generic envelope modulation (2026-10-28) ---
 // (The ONE-SHOT e law below is what SW3 MID ran before the glide / pluck-swell; its code stays in ExpEnv, not run.)
