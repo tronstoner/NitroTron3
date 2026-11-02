@@ -26,14 +26,13 @@
 //                          K5 = LFO on K2's parameter (UP FM feedback +-0.75, MID morph +-0.15; XBAND / DOWN none):
 //                          CCW triangle | noon off | CW staircase 100/50/0 %; depth fades in over the first 30 %,
 //                          rate 0.2 -> 20 Hz exponential over each side)
-// SW3 DOWN   = FM LAB     (the same module, second instance Explorer(true): exactly SW3 MIDDLE (K4 pluck <-> swell,
-//                          K5 LFO, SW1 MID tables / DOWN models identical) EXCEPT SW1 UP: K1 = 12 curated FM zones
-//                          (2OP r 2.718 / 2.414 / 1.618 / 1.414 / 0.5 / 2 / 1, TWIN, DUAL c2 2, DUAL c2 1.5 (r 1.414),
-//                          MODOUT (r 1.414), BELL 1.414 + 2.76; 1 ms crossfade), K2 = the zone's main parameter (2OP
-//                          feedback b, TWIN detune 0..30 cents, DUAL C2 level, MODOUT modulator level, BELL M2 index I2;
-//                          TWIN / DUAL / MODOUT: fixed modulator feedback 0.75), K3 = index (cap law, closes every
-//                          operator), K4 pluck <-> swell on the index, K5 LFO on K2's parameter; no XBAND.
-//                          Shares the SW1 MID tables with SW3 MIDDLE. The former LOOPING variant is retired
+// SW3 DOWN   = FM LAB     (the same module, second instance Explorer(true): SW3 MIDDLE's one-shot engine with its OWN
+//                          SW1 families (SW3 MIDDLE's FM / tables / harmonics & shift not offered here):
+//                          SW1 UP = 2-OP FM: K1 = 12 stepped ratio zones 0.25 / 0.5 / 1 / 1.414 / 1.5 / 1.618 / 2 /
+//                          2.414 / 2.718 / 3 / 3.142 / 3.5 (1 ms ratio slide), K2 = feedback b 0..1.5, K3 = index (cap
+//                          law), K4 pluck <-> swell on the index, K5 LFO on b (+-0.3); no XBAND.
+//                          SW1 MID = DUAL VOICE, SW1 DOWN = ADDITIVE: not built yet (steps 2 / 3) - placeholder =
+//                          the 2-OP at ratio 1 (K1 inert, K2..K5 as UP). The former LOOPING variant is retired
 //                          (EXP_LOOP_ENABLE, explorer_constants.h). WaveMorph (modules/wavemorph.h) is unwired, source kept)
 
 #include "daisy.h"
@@ -76,7 +75,7 @@ static constexpr int NL_MODE_EXPLORER_LAB = NL_MODE_WAVEMORPH;
 
 Armitage armitage;
 Explorer explorer;                 // SW3 MIDDLE: ONE-SHOT = K4 pluck <-> swell on the K3 fc (UP dampener / MID 2-pole LP)
-Explorer explorer_lab(true);       // SW3 DOWN:   FM LAB = SW3 MIDDLE + the lab zones on SW1 UP (tables shared, built by the first Init)
+Explorer explorer_lab(true);       // SW3 DOWN:   FM LAB = SW3 MIDDLE's engine, own SW1 families (UP 2-OP; MID / DOWN placeholders)
 Module*  modules[NL_MODE_COUNT] = { &armitage, &explorer, &explorer_lab };
 
 // Active mode index. Written in the main loop (SW3), read in the audio ISR.
@@ -217,8 +216,9 @@ int main() {
         // 2-pole LP cutoff at the knob, `eff` the effective LP cutoff), envelope (retired LOOPING `loop`: e, K4 dir, K5 amount
         // d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in use (s), applied fc_eff `fce` in Hz (SW1 UP
         // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
-        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB), SW1 UP: `LAB <zone> <param> <knob> > <with LFO>
-        // fc <index fc at the knob>` + the `ps` / `lfo` part (fce = the applied index fc)
+        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB), every SW1: `LAB [MID-PH/|DOWN-PH/]<zone> b <knob>
+        // > <with LFO> fc <index fc at the knob>` + the UP `ps` / `lfo` part (fce = the applied index fc; MID / DOWN =
+        // the step 2 / 3 placeholders, 2OP-1)
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
@@ -229,7 +229,7 @@ int main() {
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
-        else if (d.sw1 == 0)                                  // SW3 MID / DOWN, SW1 UP: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
+        else if (d.sw1 == 0 || d.labz >= 0)                   // SW1 UP / every FM LAB family: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " fce %d lfo %s d" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
@@ -239,9 +239,10 @@ int main() {
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
         else                                                  // SW3 MID / DOWN, SW1 DOWN: K4 / K5 inert
           snprintf(env, sizeof(env), " ps - lfo -");
-        if (d.labz >= 0)                                      // FM LAB: zone, main param knob > with LFO, index fc
-          hw.seed.PrintLine("LAB %s %s" D2F " >" D2F " fc %d%s mute %d cpu %u%%",
-                            Explorer::LabZoneName(d.labz), Explorer::LabParamName(d.labz), D2V(d.a), D2V(d.b),
+        if (d.labz >= 0)                                      // FM LAB: (placeholder,) zone, b knob > with LFO, index fc
+          hw.seed.PrintLine("LAB %s%s b" D2F " >" D2F " fc %d%s mute %d cpu %u%%",
+                            d.sw1 == 1 ? "MID-PH/" : d.sw1 == 2 ? "DOWN-PH/" : "",
+                            Explorer::LabZoneName(d.labz), D2V(d.a), D2V(d.b),
                             (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kFM)                    // A = ratio r, B = feedback b
           hw.seed.PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
