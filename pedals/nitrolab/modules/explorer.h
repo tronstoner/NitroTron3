@@ -114,7 +114,7 @@
 //   SW1 MID  = DUAL VOICE (step 2, 2026-11-02; model kLDUAL). Two full 2-OP voices per band in parallel, v = A / B:
 //              pc_v at c_v x phi, pm_v at r_v x phi (accumulated per band from the wrapped phi step d; fresh / after
 //              silence / after the voice was skipped: c phi / r phi), m_v = sin(2 pi pm_v + b_v (m_v[n-1] + m_v[n-2]) / 2),
-//              V_v = cos(2 pi pc_v + I_v m_v);  W = gA fA VA + gB fB VB  (state: explorer_dual_st, SDRAM).
+//              V_v = cos(2 pi pc_v + I_v m_v);  W = gA fA VA + gB fB VB  (state: explorer_dual_st, D2 SRAM).
 //              K1 = 5 equal stepped zones (EXP_LAB_DUAL_ZONES, cA rA | cB rB):  1 c1 r1 | c1 r1.41421 (DUAL-1+1.41),
 //              2 c1 r2 | c1 r2.71828 (DUAL-2+2.72), 3 c1 r1 | c0.5 r0.5 (DUAL-OCT), 4 c1 r1 | c1.5 r1.5 (DUAL-5TH),
 //              5 c0.5 r0.5 | c1 r1.61803 (DUAL-SUB+1.62). A zone change SLIDES the four ratios linearly over
@@ -161,12 +161,12 @@
 //                       K5 = BEAT SPEED (no LFO): t5 = 2 k5 - 1, rate = 0.1 (8 / 0.1)^|t5| Hz (EXP_ADD_BEAT_MIN / MAX),
 //                       noon 0 (theta frozen); CCW: theta += rate f0 / EXP_ADD_BEAT_REF_HZ 100 / sr8 (proportional to
 //                       the note), CW: theta += rate / sr8 (same Hz on every band). theta starts at EXP_ADD_UNI_PHASE
-//                       0.25 cycle (entering a unison zone from another zone / model). State: explorer_add_st (SDRAM);
+//                       0.25 cycle (entering a unison zone from another zone / model). State: explorer_add_st (D2 SRAM);
 //                       in a crossfade between two unison zones only the entering one advances theta.
 //              STRETCH (12): 8 harmonics (EXP_ADD_STR_M, w_m = m^-1 / N), harmonic m at rho_m f', rho_m = m^(1 + delta),
 //                       own phase accumulator per harmonic (p_m += rho_m d, d = the wrapped phi step; fresh: rho_m phi),
 //                       out cos(2 pi p_m + rho_m I x); h_mk on rho_m f0 (Fe 3800); delta = EXP_ADD_STR_MAX 0.05 x
-//                       clamp(k2 + 0.3 l, 0, 1) (K5 LFO), K3 = index as A. Phases: explorer_add_st (SDRAM).
+//                       clamp(k2 + 0.3 l, 0, 1) (K5 LFO), K3 = index as A. Phases: explorer_add_st (D2 SRAM).
 //              K4 = pluck <-> swell (index fc on A / UNI 9, 10 / STRETCH; h and L on B / UNI 11); K5 = the LFO above or
 //              (UNISON) beat speed.
 //   (TWIN / DUAL / MODOUT / BELL and their lab operator state removed 2026-11-02: git history 598a4fd.)
@@ -339,8 +339,8 @@
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
 // No dynamic allocation. Tables: 66 frames x 14 x 256 int16 = 462 KB in SDRAM (explorer_tb, own array, built once,
 // shared read-only by both instances; the second Init skips the build). FM LAB DUAL VOICE state: explorer_dual_st,
-// 9 x 3 x 84 floats = 9 KB SDRAM; ADDITIVE state: explorer_add_st, 12 x 3 x 84 floats = 12 KB SDRAM (one copy each,
-// the lab instance only).
+// 9 x 3 x 84 floats = 9 KB; ADDITIVE state: explorer_add_st, 12 x 3 x 84 floats = 12 KB (one copy each, the lab
+// instance only; both in D2 SRAM, EXP_FAST_BSS - 2026-11-02, were SDRAM).
 
 #include <cmath>
 #include <cstdint>
@@ -357,9 +357,23 @@
 #ifndef DSY_SDRAM_BSS
 #define DSY_SDRAM_BSS          // host builds
 #endif
+// Fast internal RAM for the FM LAB hot per-band state (2026-11-02; was SDRAM): D2 SRAM via the linker script's
+// `.heap` input section (STM32H750IB_sram.lds: NOLOAD, region RAM_D2 at 0x30008000, 256 KB; nothing else uses it -
+// newlib's _sbrk starts at `end`, which the linker places after it). Outside the 32 KB non-cacheable DMA window
+// (0x30000000, libDaisy MPU region 0) = normal cacheable memory; D2 SRAM1..3 clocks are enabled in SystemInit. No
+// DMA touches it. NOLOAD = not zeroed at boot: the lab instance's Init (ResetSlotState) initialises it, as it did in
+// SDRAM. DTCM (the default .bss) is ~89 % used; AXI SRAM has no NOLOAD section in this linker script. 32-byte aligned
+// (cache line). Host builds: plain .bss.
+#if defined(__arm__) && defined(__ARM_ARCH_7EM__)
+#define EXP_FAST_BSS __attribute__((section(".heap"), aligned(32)))
+#else
+#define EXP_FAST_BSS
+#endif
 
 // Shared read-only sin table (filled in Init; DTCM = zero-wait-state reads).
-static float DTCM_MEM_SECTION explorer_sin_tab[explorer_k::EXP_SIN_SIZE];
+// One guard entry [EXP_SIN_SIZE] = [0] (2026-11-02, CPU): the interpolation reads i + 1 without the wrap mask (same
+// values, bit for bit).
+static float DTCM_MEM_SECTION explorer_sin_tab[explorer_k::EXP_SIN_SIZE + 1];
 
 // SW1 MID frame tables (WaveMorph's, copied), packed: [zone offset + frame][level][sample], int16
 // (scale EXP_TB_ZONE_I16_SCALE[zone]), SDRAM. Explorer's own array (not WaveMorph's).
@@ -374,23 +388,27 @@ struct ExplorerTbScratch {
 static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
 // explorer_sin_tab + explorer_tb are filled by the first Init; further instances (SW3 DOWN) skip the build.
 static bool explorer_tables_built = false;
-// FM LAB DUAL VOICE state (SW3 DOWN instance only; ONE copy, SDRAM - cached write-back - keeps the DTCM .bss free;
-// 2026-11-02, as 598a4fd's lab operator state): per SW2 slot and band. Phases in cycles, -1 = fresh (starts at
+// FM LAB DUAL VOICE state (SW3 DOWN instance only; ONE copy, D2 SRAM (EXP_FAST_BSS) - keeps the DTCM .bss free;
+// 2026-11-02, as 598a4fd's lab operator state): per SW2 slot and band, one 36-byte record per band (all of a band's
+// voice state together: one base address in the band loop). Phases in cycles, -1 = fresh (starts at
 // c x phi / r x phi); lpp = previous band phase phi (-1 = none: band silent / just started).
-struct ExplorerDualState {
-  float lpp[3][armbands::kArmBands];                               // previous phi
-  float pc[2][3][armbands::kArmBands], pm[2][3][armbands::kArmBands];   // voice A / B: carrier / modulator phase
-  float f1[2][3][armbands::kArmBands], f2[2][3][armbands::kArmBands];   // voice A / B: modulator m[n-1] / m[n-2]
+struct ExpDualBand {
+  float lpp;                                   // previous phi
+  float pc[2], pm[2];                          // voice A / B: carrier / modulator phase
+  float f1[2], f2[2];                          // voice A / B: modulator m[n-1] / m[n-2]
 };
-static ExplorerDualState DSY_SDRAM_BSS explorer_dual_st;
-// FM LAB ADDITIVE state (SW3 DOWN instance only; ONE copy, SDRAM, 2026-11-02): per SW2 slot and band.
+struct ExplorerDualState {
+  ExpDualBand b[3][armbands::kArmBands];
+};
+static ExplorerDualState EXP_FAST_BSS explorer_dual_st;
+// FM LAB ADDITIVE state (SW3 DOWN instance only; ONE copy, D2 SRAM (EXP_FAST_BSS), 2026-11-02): per SW2 slot and band.
 struct ExplorerAddState {
   float th[3][armbands::kArmBands];                                // UNISON: detune phase theta (cycles)
   float wr[3][armbands::kArmBands], wi[3][armbands::kArmBands];   // SUB: previous half phasor w (0, 0 = none)
   float slp[3][armbands::kArmBands];                               // STRETCH: previous phi (-1 = fresh)
   float sp[explorer_k::EXP_ADD_STR_M][3][armbands::kArmBands];     // STRETCH: phase of harmonic m (cycles)
 };
-static ExplorerAddState DSY_SDRAM_BSS explorer_add_st;
+static ExplorerAddState EXP_FAST_BSS explorer_add_st;
 
 // K4 post filter stage: TPT state-variable filter (a local copy of armitage's ArmSVF).
 struct ExpSVF {
@@ -444,6 +462,7 @@ class Explorer : public Module {
     if (build)
       for (int i = 0; i < EXP_SIN_SIZE; i++)
         explorer_sin_tab[i] = sinf(6.283185307f * (float)i / (float)EXP_SIN_SIZE);
+    if (build) explorer_sin_tab[EXP_SIN_SIZE] = explorer_sin_tab[0];   // guard entry (wrap without the mask)
     for (int k = 0; k < kBands + 2; k++) mag_[k] = 0.f;
     static const float r[kSlots] = { 2.f, 1.f, 0.5f };          // up / played / down
     for (int k = 0; k < kBands; k++) {
@@ -1161,8 +1180,7 @@ class Explorer : public Module {
   // the envelope closes it only down to that floor (or the K3 knob's own cap, Lk), as kFM.
   static inline float IndexCap(float L, float Lk, float ifp, float ir, float c) {
     using namespace explorer_k;
-    float ic = (L * ifp - c) * ir - 1.f;
-    if (ic < 0.f) ic = 0.f;
+    float ic = fmaxf((L * ifp - c) * ir - 1.f, 0.f);         // floor 0 (vmaxnm: same value, no flag stall)
     if (EXP_FM_ENV_INDEX_FLOOR > 0.f) {
       float ick = (Lk * ifp - c) * ir - 1.f;
       if (ick < 0.f) ick = 0.f;
@@ -1175,41 +1193,41 @@ class Explorer : public Module {
   // r x phi (fresh: c phi / r phi, else + c d / + r d, d = the wrapped phi step), m = sin(2 pi pm + b (m1 + m2) / 2),
   // returns cos(2 pi pc + I m). b = EXP_LAB_DUAL_FB under the 2OP feedback cap b <= (L / (r f') - 1) / FB_SPAN;
   // I = EXP_FM_INDEX under IndexCap at this voice's c / r (EXP_ANTIFOLD && !EXP_FBFM_PUSHED, as kFM).
-  inline float DualVoice(int v, int o, int k, float ph, float d, bool fresh, float c, float r, float ir,
-                         float ifpk, float L, float Lk) {
+  // 2026-11-02 (CPU): always inlined (was an out-of-line call with its own frame), SinCos inlined (SinCosI), state
+  // per band record B; the carrier cos(2 pi pc + I m) is ONE table read Cos01(pc + I m / 2 pi + 2) (was SinCos(I m) +
+  // CosSin01(pc) combined) - same table and interpolation, deviation <= ~3e-5 per voice (table precision, about
+  // -90 dB re the voice), the feedback path (mod, f1 / f2) is unchanged bit for bit.
+  __attribute__((always_inline)) inline float DualVoice(ExpDualBand& B, int v, float ph, float d, bool fresh,
+                                                        float c, float r, float ir, float ifpk, float L, float Lk) {
     using namespace explorer_k;
-    ExplorerDualState& S = explorer_dual_st;
-    float pc = S.pc[v][o][k], pm = S.pm[v][o][k];
+    float pc = B.pc[v], pm = B.pm[v];
     if (fresh || pc < 0.f) { pc = c * ph; pm = r * ph; }
     else                   { pc += c * d;  pm += r * d; }
     pc -= floorf(pc);
     pm -= floorf(pm);
-    S.pc[v][o][k] = pc;
-    S.pm[v][o][k] = pm;
+    B.pc[v] = pc;
+    B.pm[v] = pm;
     float b = EXP_LAB_DUAL_FB, I = EXP_FM_INDEX;
     if (EXP_ANTIFOLD && !EXP_FBFM_PUSHED) {
-      float bc = (L * ifpk * ir - 1.f) * (1.f / EXP_FBFM_FB_SPAN);
-      if (bc < 0.f) bc = 0.f;
-      if (b > bc) b = bc;
-      const float ic = IndexCap(L, Lk, ifpk, ir, c);
-      if (I > ic) I = ic;
+      // clamps as vmaxnm / vminnm (same values: no NaN, (x - 1) is never -0): no FPSCR flag transfer per clamp
+      const float bc = fmaxf((L * ifpk * ir - 1.f) * (1.f / EXP_FBFM_FB_SPAN), 0.f);
+      b = fminf(b, bc);
+      I = fminf(I, IndexCap(L, Lk, ifpk, ir, c));
     }
     float cm, sm, s, cs;
     CosSin01(pm, cm, sm);
-    SinCos(b * 0.5f * (S.f1[v][o][k] + S.f2[v][o][k]), s, cs);
+    SinCosI(b * 0.5f * (B.f1[v] + B.f2[v]), s, cs);
     float mod = sm * cs + cm * s;                // sin(2 pi pm + b avg)
     if (fabsf(mod) < EXP_DENORM) mod = 0.f;
-    S.f2[v][o][k] = S.f1[v][o][k];
-    S.f1[v][o][k] = mod;
-    SinCos(I * mod, s, cs);
-    float cc, sc;
-    CosSin01(pc, cc, sc);
-    return cc * cs - sc * s;                     // cos(2 pi pc + I m)
+    B.f2[v] = B.f1[v];
+    B.f1[v] = mod;
+    // cos(2 pi pc + I m) = Cos01(pc + I m / 2 pi + 2): pc in [0, 1), |I m| <= 12.0001 rad < 2 cycles -> argument > 0
+    static_assert(EXP_FM_INDEX < 12.5f, "DUAL carrier offset 2 cycles covers |I m|");
+    return Cos01(pc + I * mod * 0.159154943f + 2.f);
   }
-  // Voice v of band k in slot o not computed (gain 0 / faded out) or band silent: fresh restart when it returns.
-  static inline void DualClear(int v, int o, int k) {
-    ExplorerDualState& S = explorer_dual_st;
-    S.pc[v][o][k] = -1.f; S.pm[v][o][k] = -1.f; S.f1[v][o][k] = 0.f; S.f2[v][o][k] = 0.f;
+  // Voice v of band record B not computed (gain 0 / faded out) or band silent: fresh restart when it returns.
+  static inline void DualClear(ExpDualBand& B, int v) {
+    B.pc[v] = -1.f; B.pm[v] = -1.f; B.f1[v] = 0.f; B.f2[v] = 0.f;
   }
 
   // --- FM LAB ADDITIVE helpers (SW1 DOWN, model kLADD; see FM LAB SW1 DOWN in the header) ---
@@ -1310,8 +1328,19 @@ class Explorer : public Module {
   // Series sum of one band: sum_m w_m h_mk Re(q^m) over the series' members (m = 1 always kept, no edge), h_mk =
   // clamp((Fe - m f0) / FEDGE, 0, 1) (monotone in m: the loop stops at the first 0). SAW / SUB step q (SUB: w indexes
   // k, f0 = f' / 2), ODD steps q^2, OCT squares.
+  //
+  // 2026-11-02 (CPU, same output bit for bit): members with m f0 <= Fe - FEDGE - 1 Hz (m <= SafeTop) have h_mk >= 1.002
+  // whatever the float rounding of the running m f0 (mf: error < 0.01 Hz; SafeTop's (Fe - 401) / f0: < 0.1 Hz), so the
+  // clamp gives exactly 1 and w_m 1 = w_m: those run without the edge arithmetic / compares (mf still advances, so
+  // the edge members see the same mf as before). Edge members: the original loop, unchanged.
+  static inline int SafeTop(float Fe, float if0, int top) {
+    const float x = (Fe - (explorer_k::EXP_HARM_FEDGE + 1.f)) * if0;
+    if (!(x >= 1.f)) return 1;                   // no member above the fundamental is safe
+    return (x >= (float)top) ? top : (int)x;
+  }
   template <int S>
-  static inline float SeriesSum(float qr, float qi, float f0, float Fe, const float* __restrict w, int top) {
+  static inline float SeriesSum(float qr, float qi, float f0, float if0, float Fe, const float* __restrict w,
+                                int top) {
     using namespace explorer_k;
     constexpr float ie = 1.f / EXP_HARM_FEDGE;
     float sum = w[1] * qr;
@@ -1333,17 +1362,74 @@ class Explorer : public Module {
     if (S == kAddOdd) { sr = qr * qr - qi * qi; si = 2.f * qr * qi; }
     const float df = (float)dm * f0;
     float mf = f0;
-    for (int m = 1 + dm; m <= top; m += dm) {
+    int m = 1 + dm;
+    const int ms = SafeTop(Fe, if0, top);
+    for (; m <= ms; m += dm) {                   // h_mk = 1 exactly
+      const float t = pr * sr - pi * si;
+      pi = pr * si + pi * sr;
+      pr = t;
+      mf += df;
+      sum += w[m] * pr;
+    }
+    for (; m <= top; m += dm) {
       const float t = pr * sr - pi * si;
       pi = pr * si + pi * sr;
       pr = t;
       mf += df;
       float h = (Fe - mf) * ie;
       if (h <= 0.f) break;
-      if (h > 1.f) h = 1.f;
+      h = fminf(h, 1.f);
       sum += w[m] * h * pr;
     }
     return sum;
+  }
+  // UNISON (SAW / ODD): both copies' series sums in ONE pass (2026-11-02, CPU): s1 = SeriesSum(q), s2 = SeriesSum(q2)
+  // with the same per-copy operations and order as two separate calls (bit for bit), sharing m f0, the edge h_mk and
+  // the loop; two independent phasor chains interleave in the pipeline.
+  template <int S>
+  static inline void SeriesSum2(float qr, float qi, float q2r, float q2i, float f0, float if0, float Fe,
+                                const float* __restrict w, int top, float& s1, float& s2) {
+    using namespace explorer_k;
+    constexpr float ie = 1.f / EXP_HARM_FEDGE;
+    float sum = w[1] * qr, sum2 = w[1] * q2r;
+    float pr = qr, pi = qi, p2r = q2r, p2i = q2i;
+    constexpr int dm = (S == kAddOdd) ? 2 : 1;
+    float sr = qr, si = qi, s2r = q2r, s2i = q2i;
+    if (S == kAddOdd) {
+      sr = qr * qr - qi * qi; si = 2.f * qr * qi;
+      s2r = q2r * q2r - q2i * q2i; s2i = 2.f * q2r * q2i;
+    }
+    const float df = (float)dm * f0;
+    float mf = f0;
+    int m = 1 + dm;
+    const int ms = SafeTop(Fe, if0, top);
+    for (; m <= ms; m += dm) {                   // h_mk = 1 exactly
+      const float t = pr * sr - pi * si;
+      pi = pr * si + pi * sr;
+      pr = t;
+      const float t2 = p2r * s2r - p2i * s2i;
+      p2i = p2r * s2i + p2i * s2r;
+      p2r = t2;
+      mf += df;
+      sum += w[m] * pr;
+      sum2 += w[m] * p2r;
+    }
+    for (; m <= top; m += dm) {
+      const float t = pr * sr - pi * si;
+      pi = pr * si + pi * sr;
+      pr = t;
+      const float t2 = p2r * s2r - p2i * s2i;
+      p2i = p2r * s2i + p2i * s2r;
+      p2r = t2;
+      mf += df;
+      float h = (Fe - mf) * ie;
+      if (h <= 0.f) break;
+      h = fminf(h, 1.f);
+      sum += w[m] * h * pr;
+      sum2 += w[m] * h * p2r;
+    }
+    s1 = sum;
+    s2 = sum2;
   }
   // STRETCH band sum: harmonic m at rho_m f0, own phase p_m (fresh: rho_m phi, else + rho_m d, d = the wrapped phi
   // step; every accumulator advances, also above the edge), out sum_m w_m h_mk cos(2 pi p_m + rho_m I x) (ix = I x),
@@ -1454,7 +1540,6 @@ class Explorer : public Module {
           qr = br * cs - bi * sn;
           qi = br * sn + bi * cs;
         }
-        W = SeriesSum<S>(qr, qi, f0, Fe, w, top);
         if (U) {
           float& th = A.th[o][k];
           if (p.adv) {
@@ -1462,12 +1547,18 @@ class Explorer : public Module {
             t -= floorf(t);
             th = t;
           }
-          if (p.p1 > 0.f) {
+          if (p.p1 > 0.f) {                      // both copies in one pass (SeriesSum2 = the two former calls)
             float c, s;
             CosSin01(th, c, s);
             const float q2r = qr * c - qi * s, q2i = qr * s + qi * c;
-            W = (W + p.p1 * SeriesSum<S>(q2r, q2i, f0, Fe, w, top)) * p.p2;
+            float s1, s2;
+            SeriesSum2<S>(qr, qi, q2r, q2i, f0, if0, Fe, w, top, s1, s2);
+            W = (s1 + p.p1 * s2) * p.p2;
+          } else {
+            W = SeriesSum<S>(qr, qi, f0, if0, Fe, w, top);
           }
+        } else {
+          W = SeriesSum<S>(qr, qi, f0, if0, Fe, w, top);
         }
       }
       acc += (played ? wmid_[k] : 1.f) * a * W;
@@ -1931,7 +2022,10 @@ class Explorer : public Module {
       const float a = mg[k];
       if (a == 0.f) {                            // silent band: state cleared
         if (M == kFM) { pp_[o][k] = -1.f; m1_[o][k] = 0.f; m2_[o][k] = 0.f; }
-        if (M == kLDUAL) { explorer_dual_st.lpp[o][k] = -1.f; DualClear(0, o, k); DualClear(1, o, k); }
+        if (M == kLDUAL) {
+          ExpDualBand& B = explorer_dual_st.b[o][k];
+          B.lpp = -1.f; DualClear(B, 0); DualClear(B, 1);
+        }
         continue;
       }
       const float cr = ur[k], ci = ui[k];
@@ -1979,7 +2073,8 @@ class Explorer : public Module {
         // A voice whose gain g f is exactly 0 is not computed (fresh restart when it returns).
         constexpr float itf = 1.f / (EXP_LAB_DUAL_FADE * EXP_FOLD_LIMIT_HZ);
         const float ph = phs[k];
-        float& lp = explorer_dual_st.lpp[o][k];
+        ExpDualBand& B = explorer_dual_st.b[o][k];
+        float& lp = B.lpp;
         float d = 0.f;
         const bool fresh = (lp < 0.f);
         if (!fresh) {
@@ -1988,16 +2083,14 @@ class Explorer : public Module {
           else if (d >= 0.5f) d -= 1.f;
         }
         lp = ph;
-        float fA = (EXP_FOLD_LIMIT_HZ - p.p0 * fp[k]) * itf;
-        fA = (fA < 0.f) ? 0.f : (fA > 1.f) ? 1.f : fA;
-        float fB = (EXP_FOLD_LIMIT_HZ - p.p2 * fp[k]) * itf;
-        fB = (fB < 0.f) ? 0.f : (fB > 1.f) ? 1.f : fB;
+        const float fA = fminf(fmaxf((EXP_FOLD_LIMIT_HZ - p.p0 * fp[k]) * itf, 0.f), 1.f);   // clamp [0, 1]
+        const float fB = fminf(fmaxf((EXP_FOLD_LIMIT_HZ - p.p2 * fp[k]) * itf, 0.f), 1.f);
         const float gA = p.p4 * fA, gB = p.p5 * fB;
         W = 0.f;
-        if (gA != 0.f) W += gA * DualVoice(0, o, k, ph, d, fresh, p.p0, p.p6, p.p1, ifp[k], L, Lk);
-        else           DualClear(0, o, k);
-        if (gB != 0.f) W += gB * DualVoice(1, o, k, ph, d, fresh, p.p2, p.p7, p.p3, ifp[k], L, Lk);
-        else           DualClear(1, o, k);
+        if (gA != 0.f) W += gA * DualVoice(B, 0, ph, d, fresh, p.p0, p.p6, p.p1, ifp[k], L, Lk);
+        else           DualClear(B, 0);
+        if (gB != 0.f) W += gB * DualVoice(B, 1, ph, d, fresh, p.p2, p.p7, p.p3, ifp[k], L, Lk);
+        else           DualClear(B, 1);
       } else if (M == kXFM) {
         const int q = k + p.n0;
         float W0 = cr;
@@ -2109,12 +2202,13 @@ class Explorer : public Module {
     for (int k = 0; k < kBands; k++) {
       if (m == kFM) { pm_[o][k] = 0.f; pp_[o][k] = -1.f; m1_[o][k] = m2_[o][k] = 0.f; }
       if (ru >= 0)  th_[ru][o][k] = 0.f;
-      if (m == kLDUAL && lab_) {                 // FM LAB DUAL VOICE (shared SDRAM state: the lab instance only)
-        explorer_dual_st.lpp[o][k] = -1.f;
-        DualClear(0, o, k);
-        DualClear(1, o, k);
+      if (m == kLDUAL && lab_) {                 // FM LAB DUAL VOICE (shared D2 SRAM state: the lab instance only)
+        ExpDualBand& B = explorer_dual_st.b[o][k];
+        B.lpp = -1.f;
+        DualClear(B, 0);
+        DualClear(B, 1);
       }
-      if (m == kLADD && lab_) {                  // FM LAB ADDITIVE (SDRAM, the lab instance only)
+      if (m == kLADD && lab_) {                  // FM LAB ADDITIVE (D2 SRAM, the lab instance only)
         ExplorerAddState& A = explorer_add_st;
         A.th[o][k] = explorer_k::EXP_ADD_UNI_PHASE;
         A.wr[o][k] = A.wi[o][k] = 0.f;
@@ -2601,7 +2695,9 @@ class Explorer : public Module {
   }
 
   // --- fast trig (copied from armitage, own table) ---
-  static inline void SinCos(float theta, float& s, float& c) {
+  // SinCosI = the same, always inlined (FM LAB DUAL VOICE hot path, 2026-11-02); SinCos keeps its callers as before.
+  static inline void SinCos(float theta, float& s, float& c) { SinCosI(theta, s, c); }
+  __attribute__((always_inline)) static inline void SinCosI(float theta, float& s, float& c) {
     using namespace explorer_k;
     static_assert((EXP_SIN_SIZE & (EXP_SIN_SIZE - 1)) == 0, "power of two");
     static_assert(EXP_FM_INDEX + EXP_FBFM_FB_MAX < 90.f,
@@ -2613,8 +2709,8 @@ class Explorer : public Module {
     const float fr = x - (float)ix;
     const int   i0 = ix & kMask;
     const int   q  = (ix + EXP_SIN_SIZE / 4) & kMask;
-    const float s0 = explorer_sin_tab[i0], s1 = explorer_sin_tab[(i0 + 1) & kMask];
-    const float c0 = explorer_sin_tab[q],  c1 = explorer_sin_tab[(q + 1) & kMask];
+    const float s0 = explorer_sin_tab[i0], s1 = explorer_sin_tab[i0 + 1];
+    const float c0 = explorer_sin_tab[q],  c1 = explorer_sin_tab[q + 1];
     s = s0 + fr * (s1 - s0);
     c = c0 + fr * (c1 - c0);
   }
@@ -2626,7 +2722,7 @@ class Explorer : public Module {
     const int   ix = (int)xi;
     const float fr = xi - (float)ix;
     const int   q  = (ix + EXP_SIN_SIZE / 4) & kMask;
-    const float c0 = explorer_sin_tab[q], c1 = explorer_sin_tab[(q + 1) & kMask];
+    const float c0 = explorer_sin_tab[q], c1 = explorer_sin_tab[q + 1];
     return c0 + fr * (c1 - c0);
   }
   // sin(2 pi x), x >= 0.
@@ -2637,7 +2733,7 @@ class Explorer : public Module {
     const int   ix = (int)xi;
     const float fr = xi - (float)ix;
     const int   i0 = ix & kMask;
-    const float s0 = explorer_sin_tab[i0], s1 = explorer_sin_tab[(i0 + 1) & kMask];
+    const float s0 = explorer_sin_tab[i0], s1 = explorer_sin_tab[i0 + 1];
     return s0 + fr * (s1 - s0);
   }
   // cos and sin of 2 pi x, x >= 0.
@@ -2649,8 +2745,8 @@ class Explorer : public Module {
     const float fr = xi - (float)ix;
     const int   i0 = ix & kMask;
     const int   q  = (ix + EXP_SIN_SIZE / 4) & kMask;
-    const float c0 = explorer_sin_tab[q],  c1 = explorer_sin_tab[(q + 1) & kMask];
-    const float s0 = explorer_sin_tab[i0], s1 = explorer_sin_tab[(i0 + 1) & kMask];
+    const float c0 = explorer_sin_tab[q],  c1 = explorer_sin_tab[q + 1];
+    const float s0 = explorer_sin_tab[i0], s1 = explorer_sin_tab[i0 + 1];
     c = c0 + fr * (c1 - c0);
     s = s0 + fr * (s1 - s0);
   }
