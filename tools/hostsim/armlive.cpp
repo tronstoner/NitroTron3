@@ -255,8 +255,8 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
              d.a, d.b, d.sge, d.sm == 1 ? "trav" : d.sm == 2 ? "swp" : "still", d.sv,
              d.sm == 1 ? "Hz" : d.sm == 2 ? "s" : "", env, mu);
   else if (d.labz >= 0)
-    snprintf(line, sizeof line, "LAB %s r%.2f %s I%.2f b%.2f u%.2f%s mute %s", Explorer::LabZoneName(d.labz), d.a,
-             Explorer::LabSideName(d.lside), d.b, d.lb, d.lue, env, mu);
+    snprintf(line, sizeof line, "LAB %s r%.2f %s fc %d b%.2f u%.2f%s mute %s", Explorer::LabZoneName(d.labz), d.a,
+             Explorer::LabSideName(d.lside), (int)(d.b + 0.5f), d.lb, d.lue, env, mu);
   else if (d.model == Explorer::kFM)
     snprintf(line, sizeof line, "FM r%.2f b%.2f fc %d%s mute %s", d.a, d.b, (int)(d.fc + 0.5f), env, mu);
   else if (d.model == Explorer::kXFM)

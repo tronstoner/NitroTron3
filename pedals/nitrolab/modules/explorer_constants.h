@@ -355,11 +355,11 @@ constexpr bool EXP_LOOP_ENABLE = false;
 //        zone 8: r 1 / 1.414), slid 1 ms; FREE = r = EXP_LAB_FREE_RMIN (EXP_LAB_FREE_RMAX / EXP_LAB_FREE_RMIN)^k2
 //        (0.125 -> 8, noon 1) on the smoothed K2, continuous (no snapping).
 //   K3 = bipolar character, t3 = 2 k3 - 1 (smoothed), u = |t3|, u_eff = g_s u (K4 pluck <-> swell):
-//        index I = EXP_FM_INDEX u_eff^EXP_LAB_INDEX_CURVE (both sides; noon = 0 = pure sine);
+//        PITCH-DEPENDENT index = SW3 MID's approved law with k3 -> u_eff: index fc = EXP_DAMP_FMIN
+//        (EXP_DAMP_FMAX / EXP_DAMP_FMIN)^(u_eff^EXP_DAMP_CURVE), L = min(EXP_FOLD_LIMIT_HZ, fc); I = EXP_FM_INDEX capped
+//        per band I <= (L / f' - 1) / r - 1 (floor 0), both sides (noon: L 150 Hz -> index ~0 = pure sine);
 //        CCW (t3 < 0) "hollow": feedback b = 0;
-//        CW  (t3 > 0): b = EXP_FBFM_FB_MAX clamp((u_eff - EXP_LAB_FB_ONSET) / (1 - EXP_LAB_FB_ONSET), 0, 1);
-//        per band the 2OP anti-fold caps at L = EXP_FOLD_LIMIT_HZ (no K3 dampener here): I <= (L / f' - 1) / r - 1,
-//        b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN.
+//        CW  (t3 > 0): b = EXP_FBFM_FB_MAX u_eff (linear from noon), capped per band b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN.
 //   K5 = LFO on b (+- EXP_LFO_FB_SWING, after the caps, [0, EXP_FBFM_FB_MAX]); on the swell side (t4 > 0) its depth
 //        x g_s (fade-in with the rise), else full depth.
 constexpr int   EXP_LAB_N_MODES = 3;
@@ -388,8 +388,6 @@ constexpr float EXP_LAB_DISH_R[EXP_LAB_N_STEPS] = {   // DISHARMONIC, K2 CCW -> 
 };
 constexpr float EXP_LAB_FREE_RMIN   = 0.125f;  // FREE: r at K2 CCW (r = RMIN (RMAX / RMIN)^k2, noon = 1)
 constexpr float EXP_LAB_FREE_RMAX   = 8.f;     // FREE: r at K2 CW
-constexpr float EXP_LAB_INDEX_CURVE = 1.f;     // K3: I = EXP_FM_INDEX u_eff^this (1 = linear; 2 = square)
-constexpr float EXP_LAB_FB_ONSET    = 0.3f;    // K3 CW: feedback starts at u_eff = this, reaches EXP_FBFM_FB_MAX at 1
 constexpr float EXP_LAB_REST_R      = 1.f;     // the 2-OP ratio slide rests here while SW1 MID / DOWN run
 // SW1 MID = SPECTRAL (2026-11-03; model kLSPEC, see explorer.h FM LAB SW1 MID). Partial n = 1..EXP_SPEC_M of the
 // band's SAW series (q = v^n, no FM), weight W(n) = tilt(n) comb(n), comb(1) = 1, W /= sqrt(sum_n W(n)^2):

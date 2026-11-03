@@ -116,11 +116,12 @@
 //                r = 0.125 64^k2 (EXP_LAB_FREE_RMIN / RMAX: 0.125 -> 8, noon 1) on the smoothed K2, continuous (the
 //                1 ms slide follows the target).
 //              K3 = BIPOLAR CHARACTER (LabChar): t3 = 2 k3 - 1 (smoothed, lands exactly), u = |t3|, u_eff = g_s u (K4);
-//                index I = EXP_FM_INDEX 12 u_eff^EXP_LAB_INDEX_CURVE (1 = linear) on both sides; noon = I 0, b 0 =
-//                pure sine. CCW (t3 < 0) "hollow": b = 0. CW (t3 > 0): b = EXP_FBFM_FB_MAX 1.5 x
-//                clamp((u_eff - EXP_LAB_FB_ONSET 0.3) / 0.7, 0, 1). No K3 dampener: per band the 2OP anti-fold caps
-//                at L = EXP_FOLD_LIMIT_HZ (4 kHz): I <= (L / f' - 1) / r - 1, b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN 4
-//                (floor 0).
+//                PITCH-DEPENDENT index (2026-11-03, SW3 MID's approved law with k3 -> u_eff; LabFmUpdate, per 8 kHz
+//                sample): index fc = EXP_DAMP_FMIN 150 (EXP_DAMP_FMAX 4000 / 150)^(DampCurve(u_eff)) (= DampFc(u_eff),
+//                sqrt law), L = min(EXP_FOLD_LIMIT_HZ, fc); I = EXP_FM_INDEX 12 capped per band I <= (L / f' - 1) / r - 1
+//                (floor 0) on both sides; noon (u_eff 0) = L 150 Hz -> index ~0 = pure sine. CCW (t3 < 0) "hollow":
+//                b = 0. CW (t3 > 0): b = EXP_FBFM_FB_MAX 1.5 u_eff (linear from noon, with the index), capped per band
+//                b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN 4 (floor 0), the same L.
 //              K4 = pluck <-> swell ALONG K3 (PsUpdate times / laws): u_eff = g_s u - the envelope moves between the
 //                sine (g 0) and the K3 position (g 1), on whichever side K3 is.
 //              K5 = LFO on b +- EXP_LFO_FB_SWING 0.3, added after the caps, [0, 1.5]; on the swell side (t4 > 0) its
@@ -319,8 +320,9 @@
 //                    SAW-A / SAW-B / ODD-A / ODD-B / OCT-A / OCT-B / SUB-A / SUB-B / UNI-SAW / UNI-ODD / UNI-SAW-H / STRETCH
 //   K2  UP: ratio r (HARMONIC / DISHARMONIC: 15 stepped zones, noon 1 / 1.414; FREE: 0.125 -> 8 continuous); MID: comb density nu 0 -> 0.5 (CW = every second partial notched); DOWN: A harmonics h,
 //                    B index (0 -> 6 rad, k^2), UNI unison amount u, STRETCH delta 0 -> 0.05
-//   K3  index        UP: bipolar character: CCW hollow (index 0 -> 12, no feedback) | noon pure sine | CW index 0 -> 12 +
-//                    feedback 0 -> 1.5 from 30 % (caps at 4 kHz); MID: TILT
+//   K3  index        UP: bipolar character, pitch-dependent index (SW3 MID's law, k3 -> u_eff: index fc 150 -> 4000 Hz,
+//                    index 12 capped per band): CCW hollow (no feedback) | noon pure sine | CW + feedback 0 -> 1.5 from
+//                    noon (same caps); MID: TILT
 //                    gamma 3 (dull) -> 1 (noon, saw) -> 0 (flat); DOWN: A / UNI-SAW / UNI-ODD / STRETCH index (6 k3^2, capped
 //                    by L), B / UNI-SAW-H harmonics h (and L on their anti-fold edge)
 //   K4  pluck <-> swell per onset (as SW3 MID UP): UP along K3 (sine <-> the K3 position); DOWN on the index fc (DOWN
@@ -337,8 +339,8 @@
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
 // 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: the K5 LFO offset, its g acts on fc only);
 // stepped items from the raw knob.
-// DIAG second half: FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb I<index> b<feedback> (at the
-// knob, K4 g 1) u<u_eff now>` + ` ps g.. dec|rise T.. lfo tri|stp|off d<depth at the knob> ><x swell fade now> ..Hz`,
+// DIAG second half: FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb fc<index fc Hz> b<feedback> (at
+// the knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo tri|stp|off d<depth at the knob> ><x swell fade now> ..Hz`,
 // SW1 MID `LAB SPEC-<zone> nu <density at the knob> ga <tilt gamma at the knob> > <with the K4 envelope> k5 trav <Hz> |
 // swp <T s> | still` + ` ps g.. dec|rise T..` (no fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
 // <knob> > <with LFO | beat Hz + prop / hz / off> <K3 name> <value at the knob> fc ..` (K2 / K3 names h / I / u / d);
@@ -560,6 +562,8 @@ class Explorer : public Module {
     lab_st_t_ = EXP_LAB_N_STEPS / 2;
     l2r_.Jump(EXP_LAB_REST_R);
     lab_fbf_ = 1.f;                              // K5 LFO fade-in factor (swell side: g_s)
+    lab_ue_c_ = -1.f;                            // forces LabFmUpdate on the first sample
+    lab_L_ = EXP_FOLD_LIMIT_HZ;
     lab_sz_t_ = 0;
     SpecSlides(true);                            // FM LAB SPECTRAL: zone 1 warp / exponent
     for (int n = 1; n <= EXP_SPEC_M; n++) {      // ln n (tilt), ln((n - 1) / (M - 1)) (warp; n >= 2)
@@ -784,7 +788,8 @@ class Explorer : public Module {
     int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 staircase (CW); LOOPING: 0
     float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
     int   labz;       // FM LAB (SW3 DOWN) UP 2-OP: mode 0 HARMONIC / 1 DISHARMONIC / 2 FREE (a = ratio r at the knob, b =
-                      // index I at the knob, lb = feedback b at the knob (both K4 g = 1, before the per-band caps), lue =
+                      // index fc (Hz) at the knob (caps' L = min(4000, fc)), lb = feedback b at the knob (both K4 g = 1,
+                      // before the per-band caps), lue =
                       // u_eff with the current g_s, llfd = K5 depth at the knob x the swell fade-in now, lside = K3 side
                       // -1 hollow / 0 sine / +1 feedback); -1 = not the 2-OP family
     float lb, lue, llfd;
@@ -880,6 +885,7 @@ class Explorer : public Module {
       if (fabsf(k5_t_ - k5s_) < EXP_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: no target)
       EnvUpdate();                               // envelope e -> slid v -> offsets o2_ / o3_ (consumes the onset flag)
       DampFmUpdate();                            // K3 dampener UP caps (smoothed K3 + o3 + LFO), per 8 kHz sample
+      if (lab_) LabFmUpdate();                   // FM LAB 2-OP index fc / L from u_eff (smoothed K3 x g_s)
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
       rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
       rfmc_.Tick();
@@ -1227,25 +1233,26 @@ class Explorer : public Module {
     return (m == 0) ? EXP_LAB_HARM_R[st] : EXP_LAB_DISH_R[st];
   }
   // FM LAB 2-OP K3 character at the smoothed / knob k3 and envelope g_s: t3 = 2 k3 - 1, u_eff = g_s |t3|,
-  // I = EXP_FM_INDEX u_eff^EXP_LAB_INDEX_CURVE, b = 0 (CCW / noon) or EXP_FBFM_FB_MAX clamp((u_eff - ONSET) / (1 - ONSET))
-  // (CW); before the per-band caps.
+  // I = EXP_FM_INDEX, b = 0 (CCW / noon) or EXP_FBFM_FB_MAX u_eff (CW); before the per-band caps at L (LabFc).
   static inline void LabChar(float k3, float gs, float& I, float& b, float& ue) {
     using namespace explorer_k;
     const float t3 = 2.f * k3 - 1.f;
     ue = gs * fabsf(t3);
     if (ue > 1.f) ue = 1.f;
-    I = EXP_FM_INDEX * ((EXP_LAB_INDEX_CURVE == 1.f) ? ue : (EXP_LAB_INDEX_CURVE == 2.f) ? ue * ue
-                                                       : powf(ue, EXP_LAB_INDEX_CURVE));
-    b = (t3 > 0.f) ? EXP_FBFM_FB_MAX * Clamp01((ue - EXP_LAB_FB_ONSET) * (1.f / (1.f - EXP_LAB_FB_ONSET))) : 0.f;
+    I = EXP_FM_INDEX;
+    b = (t3 > 0.f) ? EXP_FBFM_FB_MAX * ue : 0.f;
   }
-  // DIAG: FM LAB 2-OP at the knob values: a = ratio r (FREE: from the raw knob), b = index I (K4 g = 1), diag_lab_b_ =
-  // feedback b (g = 1), diag_lab_side_ (-1 hollow, 0 sine, +1 feedback side), diag_lab_ue_ = u_eff with the current
+  // FM LAB 2-OP index fc (Hz) at u_eff: SW3 MID's law with k3 -> u_eff (DampFc); L = min(EXP_FOLD_LIMIT_HZ, this).
+  static inline float LabFc(float ue) { return DampFc(ue); }
+  // DIAG: FM LAB 2-OP at the knob values: a = ratio r (FREE: from the raw knob), b = index fc (Hz, K4 g = 1; the caps'
+  // L = min(EXP_FOLD_LIMIT_HZ, this)), diag_lab_b_ = feedback b (g = 1, before the caps), diag_lab_side_ (-1 hollow, 0 sine, +1 feedback side), diag_lab_ue_ = u_eff with the current
   // g_s, diag_lab_lfd_ = the K5 depth at the knob x the fade-in factor (swell side: g_s now, else 1).
   void LabDiagParam(int m, float k2, float k3, float k4, float lfod, float& a, float& b) {
     using namespace explorer_k;
     a = LabRatio(m, Quantize(k2, EXP_LAB_N_STEPS), k2);
-    float ue;
-    LabChar(k3, 1.f, b, diag_lab_b_, ue);
+    float ue, I;
+    LabChar(k3, 1.f, I, diag_lab_b_, ue);
+    b = LabFc(ue);
     const float t3 = 2.f * k3 - 1.f;
     diag_lab_side_ = (t3 < 0.f) ? -1 : (t3 > 0.f) ? 1 : 0;
     float Ig, bg;
@@ -1772,6 +1779,19 @@ class Explorer : public Module {
       }
     }
   }
+  // FM LAB 2-OP (lab_ only) caps' L, per 8 kHz sample after EnvUpdate (nothing when u_eff did not move): u_eff =
+  //   g_s |2 k3s - 1| (LOOPING: g 1), fc = LabFc(u_eff) = SW3 MID's law with k3 -> u_eff, lab_L_ = min(FOLD_LIMIT_HZ, fc).
+  //   No envelope floor, no LFO on L (K5 acts on b only). SW3 MID's DampFmUpdate state is not touched.
+  void LabFmUpdate() {
+    using namespace explorer_k;
+    float ue = (loop_ ? 1.f : ps_gs_) * fabsf(2.f * k3s_ - 1.f);
+    if (ue > 1.f) ue = 1.f;
+    if (ue != lab_ue_c_) {
+      lab_ue_c_ = ue;
+      const float fc = LabFc(ue);
+      lab_L_ = (fc < EXP_FOLD_LIMIT_HZ) ? fc : EXP_FOLD_LIMIT_HZ;
+    }
+  }
   // K3 dampener, table part, once per audio block:
   //   MID (table / bit-table picks), from the smoothed K3 ONLY (not modulated; 2026-10-28 late, back as before the
   //     ladder): tpk_fc_ = DampFc(k3) (sqrt law); the picks follow (Repick) only for the SW2 slots running or about
@@ -2181,9 +2201,10 @@ class Explorer : public Module {
     const float* __restrict ifp = ifp_[o];
     const float* __restrict phs = ph_;
     const bool played = (o == kSP);
-    // FM LAB (lab_, only kFM reads these): no K3 dampener - the caps sit at the engine limit; K5 LFO x the fade-in.
-    const float L   = lab_ ? EXP_FOLD_LIMIT_HZ : hc_fold_;    // K3 dampener: min(FOLD_LIMIT_HZ, fc) (UP caps)
-    const float Lk  = lab_ ? EXP_FOLD_LIMIT_HZ : hc_fold_k_;  // K3 knob alone (no envelope)
+    // FM LAB (lab_, only kFM reads these): L = lab_L_ (u_eff law, LabFmUpdate) for both (no envelope floor: Lk = L ->
+    // floor 0); K5 LFO x the fade-in.
+    const float L   = lab_ ? lab_L_ : hc_fold_;               // K3 dampener: min(FOLD_LIMIT_HZ, fc) (UP caps)
+    const float Lk  = lab_ ? lab_L_ : hc_fold_k_;             // K3 knob alone (no envelope)
     const float lfb = lfo_s_ * EXP_LFO_FB_SWING * (lab_ ? lab_fbf_ : 1.f);   // K5 LFO on the feedback, added AFTER the cap
     const int   pkf = pk_fade_n_;                             // dampener discrete pick slide running
     const float pkg = pk_g_;
@@ -2969,6 +2990,8 @@ class Explorer : public Module {
   volatile int lab_st_t_ = 7;      // 2-OP ratio zone (K2, 0..14; HARMONIC / DISHARMONIC), Controls
   DSlide l2r_;                     // slid 2-OP ratio r
   float lab_fbf_ = 1.f;            // K5 LFO fade-in factor on b (swell side: g_s, else 1; slid 1 ms)
+  float lab_ue_c_ = -1.f;          // u_eff of the last LabFmUpdate (-1 = recompute)
+  float lab_L_ = 4000.f;           // 2-OP caps' L = min(EXP_FOLD_LIMIT_HZ, LabFc(u_eff)) (Hz)
   int   diag_lab_z_ = -1;          // DIAG: lab UP mode of the last Controls (-1 = not the lab UP)
   float diag_lab_b_ = 0.f, diag_lab_ue_ = 0.f, diag_lab_lfd_ = 0.f;   // DIAG: b at the knob, u_eff now, LFO depth x fade
   int   diag_lab_side_ = 0;        // DIAG: K3 side (-1 hollow, 0 sine, +1 feedback)
