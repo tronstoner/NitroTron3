@@ -334,11 +334,11 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 // (SW3 MID's FM / tables / harmonics & shift are NOT offered here; they stay on SW3 MID):
 //   SW1 UP   = 2-OP FM: K1 = the 12 equal stepped ratio zones below (kFM 2OP law, ratio slid 1 ms between zones),
 //              K2 = feedback b, K3 = index, K4 pluck <-> swell on the index, K5 LFO on b (+- EXP_LFO_FB_SWING).
-//   SW1 MID  = DUAL VOICE (step 2, 2026-11-02): two full 2-OP voices A / B in parallel per band (each its own carrier
-//              at c x phi and modulator at r x phi, modulator self-feedback fixed EXP_LAB_DUAL_FB under the 2OP feedback
-//              cap); K1 = the 5 equal stepped zones EXP_LAB_DUAL_ZONES (cA rA | cB rB, slid 1 ms between zones),
-//              K2 = BLEND A <-> B (equal power), K3 = index (both voices, each capped at its own c / r), K4 pluck <->
-//              swell on the index, K5 LFO on the blend (+- EXP_LAB_LFO_BLEND_SWING).
+//   SW1 MID  = SPECTRAL (2026-11-03, Odessa-style; replaces DUAL VOICE - in git history at 224f328): per band the
+//              ADDITIVE SAW series (16 exact harmonics, no FM, anti-fold edge 3800 / 400 Hz), every partial n weighted by
+//              W(n) = tilt(n) comb(n) (the same for all bands), RMS-normalised; K1 = the 6 zones EXP_SPEC_ZONES (warp,
+//              peaking; slid 1 ms), K2 = comb density, K3 = tilt (K4 pluck <-> swell on it), K5 = comb movement
+//              (CCW LFO on the comb position, noon still, CW one sweep per onset). See EXP_SPEC_* below and explorer.h.
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02): K1 = the 12 equal stepped zones EXP_ADD_ZONES (series SAW / ODD /
 //              OCT / SUB in model A / B, UNISON x 3, STRETCH), see EXP_ADD_* below and explorer.h.
 //              (EXP_LAB_PH_ZONE: the 2-OP ratio slide rests at r 1 while MID / DOWN run.)
@@ -366,20 +366,34 @@ constexpr ExpLabZone EXP_LAB_ZONES[EXP_LAB_N_ZONES] = {   // SW1 UP, K1 CCW -> C
 constexpr int EXP_LAB_PH_ZONE = 2;   // the 2-OP zone at ratio 1: where the 2-OP ratio slide rests while SW1 MID / DOWN run
 static_assert(EXP_LAB_ZONES[EXP_LAB_PH_ZONE].r == 1.f, "rest zone = 2-OP at ratio 1");
 // (2OP: K5 LFO on b = EXP_LFO_FB_SWING, as SW3 MID.)
-// SW1 MID = DUAL VOICE: K1 zones (carrier c / modulator r of voice A and B, both relative to the band phase phi).
-struct ExpLabDualZone { float ca, ra, cb, rb; const char* name; };
-constexpr int EXP_LAB_DUAL_N_ZONES = 5;
-constexpr ExpLabDualZone EXP_LAB_DUAL_ZONES[EXP_LAB_DUAL_N_ZONES] = {   // K1 CCW -> CW
-  { 1.f,  1.f,  1.f,  1.41421356f, "DUAL-1+1.41"   },   // 1  A c1 r1     | B c1 r1.41421
-  { 1.f,  2.f,  1.f,  2.71828183f, "DUAL-2+2.72"   },   // 2  A c1 r2     | B c1 r2.71828
-  { 1.f,  1.f,  0.5f, 0.5f,        "DUAL-OCT"      },   // 3  A c1 r1     | B c0.5 r0.5  (octave layer below)
-  { 1.f,  1.f,  1.5f, 1.5f,        "DUAL-5TH"      },   // 4  A c1 r1     | B c1.5 r1.5  (fifth layer above)
-  { 0.5f, 0.5f, 1.f,  1.61803399f, "DUAL-SUB+1.62" },   // 5  A c0.5 r0.5 | B c1 r1.61803
+// SW1 MID = SPECTRAL (2026-11-03; model kLSPEC, see explorer.h FM LAB SW1 MID). Partial n = 1..EXP_SPEC_M of the
+// band's SAW series (q = v^n, no FM), weight W(n) = tilt(n) comb(n), comb(1) = 1, W /= sqrt(sum_n W(n)^2):
+//   tilt(n) = n^-gamma, gamma = 3 -> 1 over k3_eff [0, 0.5], 1 -> 0 over [0.5, 1] (k3_eff = g_s k3, K4 pluck <-> swell)
+//   comb(n) = (0.5 + 0.5 cos(2 pi (nu y(n) + phi)))^e, nu = EXP_SPEC_NU_MAX k2, y(n) = 15 ((n - 1) / 15)^(1 / (1 + 2 w))
+//            (= x(n) - 1; w = warp), e = peaking exponent; phi = comb position (K5).
+struct ExpSpecZone { float warp, peak; const char* name; };
+constexpr float EXP_SPEC_PEAK_NARROW = 0.25f;   // comb exponent e "narrow": wide passbands, narrow notches
+constexpr float EXP_SPEC_PEAK_PEAKY  = 4.0f;    // comb exponent e "peaky": narrow peaks, wide notches
+constexpr int EXP_SPEC_N_ZONES = 6;
+constexpr ExpSpecZone EXP_SPEC_ZONES[EXP_SPEC_N_ZONES] = {   // K1 CCW -> CW (equal stepped; warp / e slid 1 ms)
+  { 0.f,  EXP_SPEC_PEAK_NARROW, "SPEC-EVEN-N" },   // 1  even notch spacing, narrow
+  { 0.f,  EXP_SPEC_PEAK_PEAKY,  "SPEC-EVEN-P" },   // 2  even, peaky
+  { 0.5f, EXP_SPEC_PEAK_NARROW, "SPEC-W05-N"  },   // 3  half warp, narrow
+  { 0.5f, EXP_SPEC_PEAK_PEAKY,  "SPEC-W05-P"  },   // 4  half warp, peaky
+  { 1.f,  EXP_SPEC_PEAK_NARROW, "SPEC-WARP-N" },   // 5  full warp (dense low / sparse high notches), narrow
+  { 1.f,  EXP_SPEC_PEAK_PEAKY,  "SPEC-WARP-P" },   // 6  full warp, peaky
 };
-constexpr float EXP_LAB_DUAL_FB          = 0.75f;  // both voices: modulator self-feedback b, fixed (2OP law + its cap, no LFO)
-constexpr float EXP_LAB_DUAL_FADE        = 0.25f;  // voice fade width near the engine limit, share of EXP_FOLD_LIMIT_HZ:
-                                                   // g = clamp((EXP_FOLD_LIMIT_HZ - c f') / (this x EXP_FOLD_LIMIT_HZ), 0, 1)
-constexpr float EXP_LAB_LFO_BLEND_SWING  = 0.3f;   // K5 LFO on the blend x (+-, after the knob), x clamped [0, 1]
+constexpr int   EXP_SPEC_M          = 16;      // partials per band (the ADDITIVE SAW count)
+constexpr float EXP_SPEC_NU_MAX     = 0.5f;    // comb density nu at K2 CW (0.5 = a notch on every second partial)
+constexpr float EXP_SPEC_WARP_K     = 2.f;     // warp exponent 1 / (1 + this w)
+constexpr float EXP_SPEC_GAMMA_MAX  = 3.f;     // tilt exponent at k3_eff = 0 (dull)
+constexpr float EXP_SPEC_GAMMA_MID  = 1.f;     // ... at noon (saw); 0 at k3_eff = 1 (flat)
+constexpr float EXP_SPEC_LFO_HZ_MIN = 0.05f;   // K5 CCW: comb position travel rate just off noon (Hz, cycles of phi)
+constexpr float EXP_SPEC_LFO_HZ_MAX = 10.f;    // ... at full CCW (exponential in |t5|)
+constexpr float EXP_SPEC_ENV_T_MIN  = 0.05f;   // K5 CW: one sweep phi 0 -> 1 per onset, T just off noon (s)
+constexpr float EXP_SPEC_ENV_T_MAX  = 4.f;     // ... at full CW (exponential in |t5|)
+constexpr float EXP_SPEC_PHI_SLIDE_MS = 1.f;   // ms; one-pole tau on the applied phi (shortest way round): onset
+                                               // restarts / mode changes / noon return glide, no weight jump
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
 // harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).
