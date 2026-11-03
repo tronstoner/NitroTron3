@@ -1,8 +1,8 @@
-# Host simulator for the NitroLab armitage module. `make` here (or
+# Host simulator for the NitroLab modules (armitage, explorer, FM LAB; shell = nl_shell.h). `make` here (or
 # `make -C tools/hostsim` from the repo root) builds ./armsim (offline renderer)
 # and ./armlive (real-time + WebSocket control, ui.html).
 # Same include layout as tools/host: hardware stubs first, then the pedal
-# shell headers, then the shared core; the module compiles unmodified.
+# shell headers, then the shared core; the modules compile unmodified.
 ROOT     := ../..
 ifeq ($(origin CXX),default)
 CXX      := clang++
@@ -14,7 +14,7 @@ CXXFLAGS ?= -O2 -std=c++17 -Wall
 CFLAGS   ?= -O2 -w
 INCLUDES := -I$(ROOT)/tools/host/stub -I$(ROOT)/pedals/nitrolab \
             -I$(ROOT)/src/core/blocks -I$(ROOT)/src/core/util -I.
-MODDEPS  := armitage_host.h host_tunables.h wav.h \
+MODDEPS  := nl_shell.h armitage_host.h host_tunables.h wav.h \
             $(wildcard $(ROOT)/pedals/nitrolab/modules/*.h) $(ROOT)/pedals/nitrolab/constants.h \
             $(ROOT)/pedals/nitrolab/module.h
 # armlive is built with the DIAG gate on (CT3_DIAG_BUILD -> NL_DIAG) so the

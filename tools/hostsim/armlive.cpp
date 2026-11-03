@@ -1,8 +1,9 @@
-// armlive — real-time host version of armsim for the NitroLab armitage module.
+// armlive — real-time host version of armsim for the NitroLab modules:
+// armitage (SW3 UP), explorer (SW3 MID), FM LAB (SW3 DOWN), switchable live.
 //
-// Same engine path as armsim.cpp (unmodified module, 48 kHz, 48-frame blocks,
-// PreProcess -> Process -> the shell's K6 equal-power mix, FS1 tap, Controls()
-// every 10th block), but driven by an audio device callback (miniaudio, default
+// Same engine path as armsim.cpp (nl_shell.h: unmodified modules, 48 kHz,
+// 48-frame blocks, SW3 selection, PreProcess -> Process -> the shell's K6
+// equal-power mix, FS1 tap, Controls() every 10th block), but driven by an audio device callback (miniaudio, default
 // output; input = a looped WAV or the default capture device, first channel).
 // A localhost WebSocket server (ws_server.h) takes control messages from
 // ui.html (served over HTTP); constants are live-editable tunables.
@@ -19,7 +20,7 @@
 //
 // Usage: see tools/hostsim/README.md, or `armlive --help`.
 
-#include "armitage_host.h"
+#include "nl_shell.h"
 #include "const_docs.h"
 #include "json_mini.h"
 #include "wav.h"
@@ -35,8 +36,7 @@
 
 uint32_t daisy::System::now_ms = 0;
 
-static const float  kSR = 48000.f;                // the shell's SAI rate
-static const int    kControlEveryBlocks = 10;     // main loop: hw.DelayMs(10) -> Controls()
+using nlshell::kSR;
 static const size_t B = NL_BLOCK_SIZE;            // 48
 static const int    kMeterFrames = 4800;          // meter window: 100 ms
 
@@ -70,30 +70,23 @@ struct Meter { float peak, rms, in_peak, cpu; uint32_t reinits; };
 // Shared state (server -> audio): continuous controls as atomics.
 struct Shared {
   std::atomic<float> knob[6];
-  std::atomic<int>   sw[2];
+  std::atomic<int>   sw[3];               // SW1, SW2, SW3 (SW3 = module: 0 armitage, 1 explorer, 2 FM LAB)
+  std::atomic<int>   active{0};           // audio -> server: the module the engine runs now
   std::atomic<int>   src{0};            // 0 = WAV, 1 = input device
   std::atomic<float> wav_gain{1.f};     // = level / file peak (1 = as is)
   std::atomic<float> in_gain{1.f};
   Spsc<Op, 256>  ops;                   // server -> audio
   Spsc<Ack, 1024> acks;                 // audio -> server (> ops: never full in practice)
   Spsc<Meter, 64> meters;               // audio -> server
-  Spsc<Armitage::DiagSnap, 64> diags;   // audio -> server
+  Spsc<nlshell::DiagMsg, 64> diags;     // audio -> server (tagged with the module)
 };
-
-// Remapped knob value 0..1 -> the raw ADC value RemapKnob() maps back to it.
-static float RawKnob(float k) { return KNOB_MIN + (KNOB_MAX - KNOB_MIN) * k; }
 
 // ---------------------------------------------------------------------------
 // The shell (identical arithmetic to armsim.cpp's block loop).
 struct Engine {
   Shared* sh = nullptr;
-  Armitage* arm = nullptr;
-  Module* mod = nullptr;
-  daisy::Led led1, led2;
-  ControlSurface cs;
-  float mix_smoothed = 0.f, dry_bypass = 0.f;
+  nlshell::Shell* shell = nullptr;
   size_t blk = 0;
-  bool fs1_pending = false;
   uint32_t reinits = 0;
   // block FIFO: 48 frames of latency between the callback and the engine
   float in_acc[NL_BLOCK_SIZE] = {};
@@ -107,18 +100,15 @@ struct Engine {
   double m_ss = 0.0, m_proc_s = 0.0;
   int m_n = 0;
 
+  void LoadControls() {
+    for (int i = 0; i < 6; i++) shell->cs.knob[i] = nlshell::RawKnob(sh->knob[i].load(std::memory_order_relaxed));
+    for (int i = 0; i < 3; i++) shell->cs.sw[i] = sh->sw[i].load(std::memory_order_relaxed);
+  }
+
   void Start(bool fs1_at_start) {
-    for (int i = 0; i < 6; i++) cs.knob[i] = RawKnob(sh->knob[i].load());
-    cs.sw[0] = sh->sw[0].load();
-    cs.sw[1] = sh->sw[1].load();
-    cs.sw[2] = 0;                              // SW3 UP = armitage
-    daisy::System::now_ms = 0;
-    mod->Init(kSR);
-    mod->Activate();
-    // The K6 smoother starts AT its target (as in armsim, see README).
-    mix_smoothed = MixCurve(RemapKnob(cs.Knob(5)));
-    dry_bypass = mod->Bypassed() ? 1.f : 0.f;
-    fs1_pending = fs1_at_start;
+    LoadControls();
+    shell->Start(fs1_at_start);
+    sh->active.store(shell->active);
   }
 
   // Applies one constant op on the audio thread. Returns nullptr or an error.
@@ -150,54 +140,25 @@ struct Engine {
     bool reinit = false;
     while (sh->ops.Pop(op)) {
       const char* err = nullptr;
-      if (op.type == OP_TAP) fs1_pending = true;
+      if (op.type == OP_TAP) shell->fs1_pending = true;
       else { err = ApplyTunable(op); if (!err) reinit = true; }
       sh->acks.Push({op.seq, err});
     }
-    if (reinit) {                              // constants read in Init() take effect
-      mod->Init(kSR);
-      mod->Activate();
+    if (reinit) {                              // armitage constants read in Init() take effect
+      shell->ReinitArmitage();
       reinits++;
     }
-    for (int i = 0; i < 6; i++) cs.knob[i] = RawKnob(sh->knob[i].load(std::memory_order_relaxed));
-    cs.sw[0] = sh->sw[0].load(std::memory_order_relaxed);
-    cs.sw[1] = sh->sw[1].load(std::memory_order_relaxed);
-    // --- armsim's control tick ---
-    cs.fs[0].rising = fs1_pending;
-    cs.fs[0].down = fs1_pending;
-    fs1_pending = false;
-    mod->Controls(cs, led1, led2);
-    cs.fs[0].rising = cs.fs[0].down = false;
-    led1.Update();
-    led2.Update();
-    daisy::System::now_ms += 10;
-    Armitage::DiagSnap s;
-    while (arm->DiagTake(s)) sh->diags.Push(s);
+    LoadControls();
+    // --- the shell's main-loop tick (SW3, Controls(), DIAG snapshots) ---
+    shell->ControlTick([this](const nlshell::DiagMsg& m) { sh->diags.Push(m); });
+    sh->active.store(shell->active, std::memory_order_relaxed);
   }
 
   // One 48-frame block: x -> y (armsim's loop body).
   void Block(const float* in, float* out) {
-    if (blk % kControlEveryBlocks == 0) ControlTick();
+    if (blk % nlshell::kControlEveryBlocks == 0) ControlTick();
     blk++;
-    float wet_buf[NL_BLOCK_SIZE];
-    float pre_buf[NL_BLOCK_SIZE];
-    for (size_t i = 0; i < B; i++) pre_buf[i] = in[i];
-    mod->PreProcess(pre_buf, B);
-    mod->Process(pre_buf, wet_buf, B);
-    if (mod->OwnsOutput()) {
-      for (size_t i = 0; i < B; i++) out[i] = wet_buf[i];
-      return;
-    }
-    const float mix_target = MixCurve(RemapKnob(cs.Knob(5)));
-    const float byp_target = mod->Bypassed() ? 1.f : 0.f;
-    for (size_t i = 0; i < B; i++) {
-      mix_smoothed += (mix_target - mix_smoothed) * NL_MIX_SMOOTH;
-      dry_bypass   += (byp_target - dry_bypass)  * NL_MIX_SMOOTH;
-      const float wg = sqrtf(mix_smoothed);
-      float dg = sqrtf(1.f - mix_smoothed);
-      dg += (1.f - dg) * dry_bypass;
-      out[i] = pre_buf[i] * dg + wet_buf[i] * wg;
-    }
+    shell->Process(in, out);
   }
 
   // The device callback body. cap: interleaved capture (cap_ch channels, may be
@@ -238,7 +199,7 @@ struct Engine {
 
 static Shared  g_sh;
 static Engine  g_eng;
-static Armitage g_arm;                           // large: static
+static nlshell::Shell g_shell;                   // large: static
 static std::atomic<bool> g_quit{false};
 
 static void DataCallback(ma_device* dev, void* out, const void* in, ma_uint32 frames) {
@@ -259,6 +220,63 @@ static const char* ModeName(int m) {
   switch (m) { case 0: return "SAW"; case 1: return "PULSE"; case 2: return "ADD";
                case 3: return "FB"; case 4: return "UNSHAPED"; }
   return "?";
+}
+
+// Explorer / FM LAB DIAG second half, as pedals/nitrolab/main.cpp prints it
+// (same branches and names; %.2f instead of the firmware's FLT_FMT(2) macros).
+static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
+  char env[128], line[256];
+  const char* lfo = d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off";
+  const char* dir = d.dir < 0 ? "dec" : "rise";
+  if (d.loop)
+    snprintf(env, sizeof env, " loop e%.2f %s d%.2f %s", d.env, d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", d.d,
+             d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
+  else if (d.specz >= 0)
+    snprintf(env, sizeof env, " ps g%.2f %s T%.2f", d.env, dir, d.T);
+  else if (d.sw1 == 0 || d.labz >= 0 || d.addz >= 0)
+    snprintf(env, sizeof env, " ps g%.2f %s T%.2f fce %d lfo %s d%.2f %.2fHz", d.env, dir, d.T, (int)(d.fce + 0.5f),
+             lfo, d.lfod, d.lfohz);
+  else if (d.sw1 == 1)
+    snprintf(env, sizeof env, " ps g%.2f %s T%.2f lfo %s d%.2f %.2fHz", d.env, dir, d.T, lfo, d.lfod, d.lfohz);
+  else
+    snprintf(env, sizeof env, " ps - lfo -");
+  const char* zn = Explorer::ZoneName(d.model, d.zone);
+  const char* mu = d.mute ? "1" : "0";
+  if (d.addz >= 0 && Explorer::AddK2Name(d.addz)[0] == 'u')
+    snprintf(line, sizeof line, "LAB %s u%.2f bt%.2f %s %s%.2f fc %d%s mute %s", Explorer::AddZoneName(d.addz), d.a, d.b,
+             d.bm == 1 ? "prop" : d.bm == 2 ? "hz" : "off", Explorer::AddK3Name(d.addz), d.c3, (int)(d.fc + 0.5f), env, mu);
+  else if (d.addz >= 0)
+    snprintf(line, sizeof line, "LAB %s %s%.2f >%.2f %s%.2f fc %d%s mute %s", Explorer::AddZoneName(d.addz),
+             Explorer::AddK2Name(d.addz), d.a, d.b, Explorer::AddK3Name(d.addz), d.c3, (int)(d.fc + 0.5f), env, mu);
+  else if (d.specz >= 0)
+    snprintf(line, sizeof line, "LAB %s nu%.2f ga%.2f >%.2f k5 %s%.2f%s%s mute %s", Explorer::SpecZoneName(d.specz),
+             d.a, d.b, d.sge, d.sm == 1 ? "trav" : d.sm == 2 ? "swp" : "still", d.sv,
+             d.sm == 1 ? "Hz" : d.sm == 2 ? "s" : "", env, mu);
+  else if (d.labz >= 0)
+    snprintf(line, sizeof line, "LAB %s b%.2f >%.2f fc %d%s mute %s", Explorer::LabZoneName(d.labz), d.a, d.b,
+             (int)(d.fc + 0.5f), env, mu);
+  else if (d.model == Explorer::kFM)
+    snprintf(line, sizeof line, "FM r%.2f b%.2f fc %d%s mute %s", d.a, d.b, (int)(d.fc + 0.5f), env, mu);
+  else if (d.model == Explorer::kXFM)
+    snprintf(line, sizeof line, "XBAND-FM n%d I%.2f fc %d%s mute %s", (int)(d.a + 0.5f), d.b, (int)(d.fc + 0.5f), env, mu);
+  else if (d.model == Explorer::kWT)
+    snprintf(line, sizeof line, "WT/%s m%.2f pos%.2f dmp %d lp %d eff %d%s mute %s", zn, d.b, d.a, (int)(d.dfc + 0.5f),
+             (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+  else if (d.sw1 == 1)
+    snprintf(line, sizeof line, "%s%s%s A%.2f B%.2f dmp %d lp %d eff %d%s mute %s", Explorer::ModelName(d.model),
+             zn[0] ? "/" : "", zn, d.a, d.b, (int)(d.dfc + 0.5f), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+  else
+    snprintf(line, sizeof line, "%s A%.2f B%.2f%s mute %s", Explorer::ModelName(d.model), d.a, d.b, env, mu);
+  return line;
+}
+
+// The selection name K1 picked (zone / model), for the page.
+static std::string ExplorerZone(const Explorer::DiagSnap& d) {
+  if (d.addz >= 0) return Explorer::AddZoneName(d.addz);
+  if (d.specz >= 0) return Explorer::SpecZoneName(d.specz);
+  if (d.labz >= 0) return Explorer::LabZoneName(d.labz);
+  const char* zn = Explorer::ZoneName(d.model, d.zone);
+  return std::string(Explorer::ModelName(d.model)) + (zn[0] ? std::string("/") + zn : std::string());
 }
 
 // Shortest text that reads back as the same value (float: as Dump()).
@@ -324,8 +342,10 @@ static void Usage(FILE* f) {
     "  --gain G          linear gain on the capture input (default 1)\n"
     "  --k1 .. --k6 V    start knob positions 0..1 (default K1 .5, K2 .5, K3 0, K4 .5, K5 .5, K6 1)\n"
     "  --sw1/--sw2 up|mid|down   start switch positions (default mid / mid)\n"
+    "  --sw3 up|mid|down start module: up = armitage (default), mid = explorer, down = FM LAB\n"
+    "  --module armitage|explorer|lab   same as --sw3\n"
     "  --fs1 0|1         1 = FS1 tapped once at the start\n"
-    "  --set NAME=VALUE  start value of an armitage_constants.h tunable (repeatable)\n"
+    "  --set NAME=VALUE  start value of an armitage_constants.h tunable (repeatable; armitage only)\n"
     "  --ws-port N       WebSocket port (default 8765)\n"
     "  --http-port N     HTTP port serving ui.html (default 8766)\n"
     "  --ui FILE         the page to serve (default: ui.html next to the executable)\n"
@@ -349,7 +369,7 @@ int main(int argc, char** argv) {
   float level = -1.f, gain = 1.f, seconds = 2.f;
   bool start_input = false, selftest = false, null_audio = false;
   float knob[6] = {0.5f, 0.5f, 0.f, 0.5f, 0.5f, 1.f};
-  int sw[2] = {1, 1};
+  int sw[3] = {1, 1, nlshell::kArmitage};
   int fs1 = 0, ws_port = 8765, http_port = 8766;
   std::string ui_path, constants_path;
   std::vector<const char*> sets;
@@ -371,6 +391,10 @@ int main(int argc, char** argv) {
       const int v = ParseSwitch(need(a.c_str()));
       if (v < 0) { fprintf(stderr, "armlive: %s expects up|mid|down\n", a.c_str()); return 2; }
       sw[a[4] - '1'] = v;
+    }
+    else if (a == "--sw3" || a == "--module") {
+      sw[2] = nlshell::ParseModule(need(a.c_str()));
+      if (sw[2] < 0) { fprintf(stderr, "armlive: %s expects up|mid|down or armitage|explorer|lab\n", a.c_str()); return 2; }
     }
     else if (a == "--fs1") fs1 = atoi(need("--fs1"));
     else if (a == "--set") sets.push_back(need("--set"));
@@ -413,14 +437,12 @@ int main(int argc, char** argv) {
   };
 
   for (int i = 0; i < 6; i++) g_sh.knob[i].store(knob[i]);
-  g_sh.sw[0].store(sw[0]);
-  g_sh.sw[1].store(sw[1]);
+  for (int i = 0; i < 3; i++) g_sh.sw[i].store(sw[i]);
   g_sh.src.store(start_input ? 1 : 0);
   g_sh.wav_gain.store(WavGain(level));
   g_sh.in_gain.store(gain);
   g_eng.sh = &g_sh;
-  g_eng.arm = &g_arm;
-  g_eng.mod = &g_arm;
+  g_eng.shell = &g_shell;
   g_eng.wav = src.empty() ? nullptr : src.data();
   g_eng.wav_len = src.size();
 
@@ -561,7 +583,7 @@ int main(int argc, char** argv) {
   std::vector<int> new_clients;
   std::vector<Op> backlog;                     // ops the full ring could not take yet
   Meter meter{0.f, 0.f, 0.f, 0.f, 0};
-  Armitage::DiagSnap diag{};
+  nlshell::DiagMsg diag{};
   bool have_diag = false;
   auto diag_t = std::chrono::steady_clock::now();
   const auto t_start = diag_t;
@@ -574,6 +596,7 @@ int main(int argc, char** argv) {
     std::string s = "{\"state\":{\"k\":[";
     for (int i = 0; i < 6; i++) s += (i ? "," : "") + json::Num(k_now[i], 9);
     s += "],\"sw1\":\"" + std::string(SwName(g_sh.sw[0].load())) + "\",\"sw2\":\"" + SwName(g_sh.sw[1].load()) +
+         "\",\"sw3\":\"" + SwName(g_sh.sw[2].load()) + "\",\"module\":\"" + nlshell::ModuleName(g_sh.sw[2].load()) +
          "\",\"src\":\"" + (g_sh.src.load() ? "input" : "wav") + "\",\"level\":" + json::Num(lvl) +
          ",\"gain\":" + json::Num(g_sh.in_gain.load()) + ",\"wav\":" + json::Esc(in_path ? in_path : "") +
          ",\"input_ok\":" + (input_ok ? "true" : "false") + "}}";
@@ -606,10 +629,14 @@ int main(int argc, char** argv) {
           k_now[i] = k;
           g_sh.knob[i].store(k, std::memory_order_relaxed);
         }
-      } else if (key == "sw1" || key == "sw2") {
+      } else if (key == "sw1" || key == "sw2" || key == "sw3") {
         const int s = (x.t == json::Value::Str) ? ParseSwitch(x.s) : -1;
         if (s < 0) { Err(key + " expects up|mid|down"); continue; }
         g_sh.sw[key[2] - '1'].store(s, std::memory_order_relaxed);
+      } else if (key == "module") {
+        const int s = (x.t == json::Value::Str) ? nlshell::ParseModule(x.s.c_str()) : -1;
+        if (s < 0) { Err("module expects armitage|explorer|lab"); continue; }
+        g_sh.sw[2].store(s, std::memory_order_relaxed);
       } else if (key == "fs1") {
         Op op{};
         op.type = OP_TAP;
@@ -691,8 +718,10 @@ int main(int argc, char** argv) {
     }
     Meter m;
     while (g_sh.meters.Pop(m)) meter = m;
-    Armitage::DiagSnap d;
+    nlshell::DiagMsg d;
     while (g_sh.diags.Pop(d)) { diag = d; have_diag = true; diag_t = std::chrono::steady_clock::now(); }
+    const int active = g_sh.active.load(std::memory_order_relaxed);
+    if (have_diag && diag.mod != active) have_diag = false;   // another module's snapshot: stale
 
     const auto now = std::chrono::steady_clock::now();
     if (now >= next_status) {
@@ -703,15 +732,36 @@ int main(int argc, char** argv) {
                         ",\"rms\":" + json::Num(meter.rms, 5) + ",\"in_peak\":" + json::Num(meter.in_peak, 5) +
                         ",\"reinits\":" + std::to_string(meter.reinits) +
                         ",\"src\":\"" + (g_sh.src.load() ? "input" : "wav") + "\"";
+        s += ",\"active\":\"" + std::string(nlshell::ModuleName(active)) + "\"";
         if (have_diag) {
-          s += ",\"diag_age_ms\":" + std::to_string((long)std::chrono::duration_cast<std::chrono::milliseconds>(now - diag_t).count()) +
-               ",\"n\":" + std::to_string(diag.n) + ",\"mode\":\"" + ModeName(diag.mode) + "\",\"h\":" + json::Num(diag.h, 4) +
-               ",\"k\":[" + json::Num(diag.k[0], 4) + "," + json::Num(diag.k[1], 4) + "," + json::Num(diag.k[2], 4) + "," +
-               json::Num(diag.k[3], 4) + "," + json::Num(diag.k[4], 4) + "],\"sw1\":\"" + SwName(diag.sw1) + "\",\"sw2\":\"" + SwName(diag.sw2) +
-               "\",\"beta\":" + json::Num(diag.beta, 4) + ",\"filt_t\":" + json::Num(diag.filt_t, 4) +
-               ",\"fm\":" + json::Num(diag.fm, 4) + ",\"env_t2\":" + json::Num(diag.env_t2, 4) + ",\"env_e\":" + json::Num(diag.env_e, 4) +
-               ",\"envf_t2\":" + json::Num(diag.envf_t2, 4) + ",\"envf_e\":" + json::Num(diag.envf_e, 4) + ",\"fol\":" + json::Num(diag.fol, 4) +
-               ",\"oct\":" + std::to_string(diag.oct) + ",\"mute\":" + (diag.mute ? "true" : "false");
+          s += ",\"diag_mod\":\"" + std::string(nlshell::ModuleName(diag.mod)) + "\"" +
+               ",\"diag_age_ms\":" + std::to_string((long)std::chrono::duration_cast<std::chrono::milliseconds>(now - diag_t).count());
+          if (diag.mod == nlshell::kArmitage) {
+            const Armitage::DiagSnap& a = diag.a;
+            s += ",\"n\":" + std::to_string(a.n) + ",\"mode\":\"" + ModeName(a.mode) + "\",\"h\":" + json::Num(a.h, 4) +
+                 ",\"k\":[" + json::Num(a.k[0], 4) + "," + json::Num(a.k[1], 4) + "," + json::Num(a.k[2], 4) + "," +
+                 json::Num(a.k[3], 4) + "," + json::Num(a.k[4], 4) + "],\"sw1\":\"" + SwName(a.sw1) + "\",\"sw2\":\"" + SwName(a.sw2) +
+                 "\",\"beta\":" + json::Num(a.beta, 4) + ",\"filt_t\":" + json::Num(a.filt_t, 4) +
+                 ",\"fm\":" + json::Num(a.fm, 4) + ",\"env_t2\":" + json::Num(a.env_t2, 4) + ",\"env_e\":" + json::Num(a.env_e, 4) +
+                 ",\"envf_t2\":" + json::Num(a.envf_t2, 4) + ",\"envf_e\":" + json::Num(a.envf_e, 4) + ",\"fol\":" + json::Num(a.fol, 4) +
+                 ",\"oct\":" + std::to_string(a.oct) + ",\"mute\":" + (a.mute ? "true" : "false");
+          } else {
+            const Explorer::DiagSnap& x = diag.x;
+            auto N = [](float v) { return json::Num(v, 5); };
+            const bool add = x.addz >= 0;
+            s += ",\"n\":" + std::to_string(x.n) + ",\"k\":[" + N(x.k[0]) + "," + N(x.k[1]) + "," + N(x.k[2]) + "," +
+                 N(x.k[3]) + "," + N(x.k[4]) + "],\"sw1\":\"" + SwName(x.sw1) + "\",\"sw2\":\"" + SwName(x.sw2) + "\"" +
+                 ",\"model\":" + json::Esc(Explorer::ModelName(x.model)) + ",\"zone\":" + json::Esc(ExplorerZone(x)) +
+                 ",\"line\":" + json::Esc(ExplorerDiagLine(x)) +
+                 ",\"labz\":" + std::to_string(x.labz) + ",\"specz\":" + std::to_string(x.specz) + ",\"addz\":" + std::to_string(x.addz) +
+                 ",\"k2n\":" + json::Esc(add ? Explorer::AddK2Name(x.addz) : "") + ",\"k3n\":" + json::Esc(add ? Explorer::AddK3Name(x.addz) : "") +
+                 ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
+                 ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
+                 ",\"sge\":" + N(x.sge) + ",\"sv\":" + N(x.sv) + ",\"sm\":" + std::to_string(x.sm) +
+                 ",\"env\":" + N(x.env) + ",\"dir\":" + std::to_string(x.dir) + ",\"T\":" + N(x.T) + ",\"fce\":" + N(x.fce) +
+                 ",\"lfo\":" + std::to_string(x.lfo) + ",\"lfod\":" + N(x.lfod) + ",\"lfohz\":" + N(x.lfohz) +
+                 ",\"loop\":" + (x.loop ? "true" : "false") + ",\"mute\":" + (x.mute ? "true" : "false");
+          }
         }
         srv.Broadcast(s + "}");
       }

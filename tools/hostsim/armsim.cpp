@@ -1,15 +1,17 @@
-// armsim — offline renderer for the NitroLab armitage module (SW3 UP).
+// armsim — offline renderer for the NitroLab modules: armitage (SW3 UP),
+// explorer (SW3 MID), FM LAB (SW3 DOWN; --sw3 / --module).
 //
-// Runs the unmodified module (pedals/nitrolab/modules/armitage.h) the way the
+// Runs the unmodified modules (pedals/nitrolab/modules/armitage.h, explorer.h) the way the
 // NitroLab shell (pedals/nitrolab/main.cpp) does: 48 kHz, 48-frame audio
 // blocks, PreProcess -> Process -> the shell's K6 equal-power dry/wet mix
 // (one-pole NL_MIX_SMOOTH per sample, MixCurve(RemapKnob(K6))), Controls()
 // at the main-loop rate (every 10 ms = every 10th block). Mono in / mono out.
-// Constants are runtime tunables: --set NAME=value (see --dump-constants).
+// Armitage's constants are runtime tunables: --set NAME=value (see --dump-constants);
+// explorer's are constexpr (no overrides). The shell itself is nl_shell.h.
 //
 // Usage: see tools/hostsim/README.md, or `armsim --help`.
 
-#include "armitage_host.h"
+#include "nl_shell.h"
 #include "wav.h"
 
 #include <string>
@@ -17,8 +19,6 @@
 
 uint32_t daisy::System::now_ms = 0;
 
-static const float kSR = 48000.f;                 // the shell's SAI rate
-static const int   kControlEveryBlocks = 10;      // main loop: hw.DelayMs(10) -> Controls()
 
 static void Usage(FILE* f) {
   fprintf(f,
@@ -30,8 +30,10 @@ static void Usage(FILE* f) {
     "  --level P         scale the input so its peak is P (e.g. 0.18); default: as is\n"
     "  --k1 .. --k6 V    knob positions 0..1 (default K1 .5, K2 .5, K3 0, K4 .5, K5 .5, K6 1)\n"
     "  --sw1/--sw2 up|mid|down   (default mid / mid)\n"
-    "  --fs1 0|1         1 = FS1 tapped once at the start (armitage: wet muted)\n"
-    "  --set NAME=VALUE  override an armitage_constants.h tunable (repeatable)\n"
+    "  --sw3 up|mid|down module: up = armitage (default), mid = explorer, down = FM LAB\n"
+    "  --module armitage|explorer|lab   same as --sw3\n"
+    "  --fs1 0|1         1 = FS1 tapped once at the start (all three modules: wet muted)\n"
+    "  --set NAME=VALUE  override an armitage_constants.h tunable (repeatable; armitage only)\n"
     "  --dump-constants  print every constant (after --set) and exit\n");
 }
 
@@ -42,9 +44,6 @@ static int ParseSwitch(const char* s) {
   return -1;
 }
 
-// Remapped knob value 0..1 -> the raw ADC value RemapKnob() maps back to it.
-static float RawKnob(float k) { return KNOB_MIN + (KNOB_MAX - KNOB_MIN) * k; }
-
 int main(int argc, char** argv) {
   const char* in_path = nullptr;
   const char* out_path = nullptr;
@@ -54,6 +53,7 @@ int main(int argc, char** argv) {
   float knob[6] = {0.5f, 0.5f, 0.f, 0.5f, 0.5f, 1.f};
   int sw[2] = {1, 1};
   int fs1 = 0;
+  int module = nlshell::kArmitage;
   bool dump = false;
   std::vector<const char*> sets;
 
@@ -75,6 +75,10 @@ int main(int argc, char** argv) {
       const int v = ParseSwitch(need(a.c_str()));
       if (v < 0) { fprintf(stderr, "armsim: %s expects up|mid|down\n", a.c_str()); return 2; }
       sw[a[4] - '1'] = v;
+    }
+    else if (a == "--sw3" || a == "--module") {
+      module = nlshell::ParseModule(need(a.c_str()));
+      if (module < 0) { fprintf(stderr, "armsim: %s expects up|mid|down or armitage|explorer|lab\n", a.c_str()); return 2; }
     }
     else if (a == "--fs1") fs1 = atoi(need("--fs1"));
     else if (a == "--set") sets.push_back(need("--set"));
@@ -125,60 +129,18 @@ int main(int argc, char** argv) {
   const size_t B = NL_BLOCK_SIZE;
   x.resize((n_out + B - 1) / B * B, 0.f);   // last partial block zero-padded, cut afterwards
 
-  // --- the shell ------------------------------------------------------------
-  static Armitage armitage;                  // large: keep it off the stack
-  Module* mod = &armitage;
-  daisy::Led led1, led2;
-  ControlSurface cs;
-  for (int i = 0; i < 6; i++) cs.knob[i] = RawKnob(knob[i]);
-  cs.sw[0] = sw[0];
-  cs.sw[1] = sw[1];
-  cs.sw[2] = 0;                              // SW3 UP = armitage
-
-  daisy::System::now_ms = 0;
-  mod->Init(kSR);
-  mod->Activate();
-
-  float wet_buf[NL_BLOCK_SIZE];
-  float pre_buf[NL_BLOCK_SIZE];
-  // The K6 smoother starts AT its target (the knob has been there all along),
-  // matching Controls() running before the first block (see README).
-  float mix_smoothed = MixCurve(RemapKnob(cs.Knob(5)));
-  float dry_bypass = mod->Bypassed() ? 1.f : 0.f;
+  // --- the shell (nl_shell.h = pedals/nitrolab/main.cpp) -------------------
+  static nlshell::Shell sh;                  // large: keep it off the stack
+  for (int i = 0; i < 6; i++) sh.cs.knob[i] = nlshell::RawKnob(knob[i]);
+  sh.cs.sw[0] = sw[0];
+  sh.cs.sw[1] = sw[1];
+  sh.cs.sw[2] = module;                      // SW3: 0 UP armitage, 1 MID explorer, 2 DOWN FM LAB
+  sh.Start(fs1 != 0);
 
   std::vector<float> y(x.size(), 0.f);
-  bool fs1_pending = (fs1 != 0);
   for (size_t blk = 0; blk * B < x.size(); blk++) {
-    if (blk % kControlEveryBlocks == 0) {
-      cs.fs[0].rising = fs1_pending;         // one tap edge, on the first control tick
-      cs.fs[0].down = fs1_pending;
-      fs1_pending = false;
-      mod->Controls(cs, led1, led2);
-      cs.fs[0].rising = cs.fs[0].down = false;
-      led1.Update();
-      led2.Update();
-      daisy::System::now_ms += 10;
-    }
-    const float* in = &x[blk * B];
-    float* out = &y[blk * B];
-
-    for (size_t i = 0; i < B; i++) pre_buf[i] = in[i];
-    mod->PreProcess(pre_buf, B);
-    mod->Process(pre_buf, wet_buf, B);
-    if (mod->OwnsOutput()) {
-      for (size_t i = 0; i < B; i++) out[i] = wet_buf[i];
-      continue;
-    }
-    const float mix_target = MixCurve(RemapKnob(cs.Knob(5)));
-    const float byp_target = mod->Bypassed() ? 1.f : 0.f;
-    for (size_t i = 0; i < B; i++) {
-      mix_smoothed += (mix_target - mix_smoothed) * NL_MIX_SMOOTH;
-      dry_bypass   += (byp_target - dry_bypass)  * NL_MIX_SMOOTH;
-      const float wg = sqrtf(mix_smoothed);
-      float dg = sqrtf(1.f - mix_smoothed);
-      dg += (1.f - dg) * dry_bypass;
-      out[i] = pre_buf[i] * dg + wet_buf[i] * wg;
-    }
+    if (blk % nlshell::kControlEveryBlocks == 0) sh.ControlTick();
+    sh.Process(&x[blk * B], &y[blk * B]);
   }
   y.resize(n_out);
 
@@ -196,8 +158,8 @@ int main(int argc, char** argv) {
   float peak = 0.f;
   double ss = 0.0;
   for (float v : y) { peak = fmaxf(peak, fabsf(v)); ss += (double)v * v; }
-  fprintf(stderr, "armsim: %zu samples (%.2f s), out peak %.4f, rms %.4f%s\n",
-          y.size(), y.size() / 48000.0, peak, sqrt(ss / (double)(y.empty() ? 1 : y.size())),
+  fprintf(stderr, "armsim: %s, %zu samples (%.2f s), out peak %.4f, rms %.4f%s\n",
+          nlshell::ModuleTitle(module), y.size(), y.size() / 48000.0, peak, sqrt(ss / (double)(y.empty() ? 1 : y.size())),
           clipped ? " (24-bit clipped samples present)" : "");
   if (clipped) fprintf(stderr, "armsim: %zu samples clipped at the 24-bit WAV write\n", clipped);
   return 0;

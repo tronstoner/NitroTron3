@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>armlive</title>
+<title>NitroLab Live</title>
 <style>
   :root { --bg:#14161a; --panel:#1d2026; --line:#2c3038; --fg:#d8dbe0; --dim:#8a909b; --acc:#6fb3ff; --warn:#ff8a6f; --ok:#7fd88f; }
   * { box-sizing: border-box; }
@@ -30,6 +30,8 @@
   .knob .val { font-family: ui-monospace, Menlo, monospace; }
   .knob .noon { font-size: 11px; padding: 1px 8px; margin: 2px 0 4px; }
   .knob .mean { font-size: 11px; color: var(--acc); min-height: 3.2em; }
+  .knob .now { font-size: 11px; font-family: ui-monospace, Menlo, monospace; color: var(--ok); min-height: 1.4em; }
+  #constpanel.inactive { opacity: .55; }
   fieldset { border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px 8px; margin: 0; }
   legend { color: var(--dim); }
   label { cursor: pointer; }
@@ -71,7 +73,7 @@
 
 <div class="panel">
   <div class="row" style="justify-content: space-between">
-    <div><b>armlive</b> &middot; NitroLab armitage (SW3 UP) &middot; <span id="conn" class="off">disconnected</span></div>
+    <div><b>armlive</b> &middot; NitroLab <span id="modtitle">&mdash;</span> &middot; <span id="conn" class="off">disconnected</span></div>
     <div class="mono" id="cpu">host cpu &mdash;</div>
   </div>
   <div id="diag" class="mono">DIAG &mdash;</div>
@@ -82,10 +84,15 @@
   <h2>Controls</h2>
   <div class="knobs" id="knobs"></div>
   <div class="row" style="margin-top: 10px">
-    <fieldset><legend>SW1 mode pair</legend>
-      <label><input type="radio" name="sw1" value="up"> UP &middot; FB | ADD</label><br>
-      <label><input type="radio" name="sw1" value="mid"> MID &middot; SAW | PULSE</label><br>
-      <label><input type="radio" name="sw1" value="down"> DOWN &middot; unshaped</label>
+    <fieldset><legend>SW3 module</legend>
+      <label><input type="radio" name="sw3" value="up"> UP &middot; Armitage</label><br>
+      <label><input type="radio" name="sw3" value="mid"> MID &middot; Explorer</label><br>
+      <label><input type="radio" name="sw3" value="down"> DOWN &middot; FM LAB</label>
+    </fieldset>
+    <fieldset><legend id="sw1legend">SW1</legend>
+      <label><input type="radio" name="sw1" value="up"> UP &middot; <span class="sw1l" data-p="up"></span></label><br>
+      <label><input type="radio" name="sw1" value="mid"> MID &middot; <span class="sw1l" data-p="mid"></span></label><br>
+      <label><input type="radio" name="sw1" value="down"> DOWN &middot; <span class="sw1l" data-p="down"></span></label>
     </fieldset>
     <fieldset><legend>SW2 octave</legend>
       <label><input type="radio" name="sw2" value="up"> UP &middot; octave up</label><br>
@@ -114,8 +121,8 @@
   </div>
 </div>
 
-<div class="panel">
-  <h2>Constants (<span id="cfile">armitage_constants.h</span>)</h2>
+<div class="panel" id="constpanel">
+  <h2>Armitage constants (<span id="cfile">armitage_constants.h</span>) <span id="constnote" class="hint"></span></h2>
   <div class="row" style="align-items: center; margin-bottom: 6px">
     <label><input type="checkbox" id="onlyset"> show changed only</label>
     <label title="show every comment block from armitage_constants.h in the table (otherwise: hover a name)"><input type="checkbox" id="docs"> docs</label>
@@ -138,7 +145,8 @@
 "use strict";
 // ---- configuration --------------------------------------------------------
 const CFG = {
-  wsUrl: "ws://" + (location.hostname || "localhost") + ":8765",
+  // WebSocket port: 8765, or ?ws=N in the page URL (armlive --ws-port N)
+  wsUrl: "ws://" + (location.hostname || "localhost") + ":" + (new URLSearchParams(location.search).get("ws") || "8765"),
   locale: "en-US",           // number display (one helper below, change here)
 };
 
@@ -179,6 +187,57 @@ const MEANING = {
   FB:       ["FB (UP, CW): feedback beta = max · K1²", FMENV, "FM index 0 → 12 rad (squared, × K2 gain)", FILT_UP, FENV, "dry → wet"],
   UNSHAPED: ["SW1 DOWN: unshaped band sum, K1 does nothing", "nothing (unshaped)", "nothing (unshaped)", FILT, FENV, "dry → wet"],
 };
+
+// ---- explorer / FM LAB (from the CONTROL MAPs in pedals/nitrolab/modules/explorer.h) ----
+const PS_UP = "pluck ↔ swell per onset on the K3 fc: CCW pluck (opens to K3, decays to the bottom; 1 s → 8 s at noon) | noon plain K3 | CW swell (from the bottom up to K3; 10 ms → 4 s)";
+const LFO_SHAPES = "CCW triangle | noon off | CW staircase 100/50/0 %; rate 0.2 → 20 Hz, depth in over the first 30 %";
+const XMEAN = {
+  explorer: {
+    up:   ["FM ratio zone (14 ratios) | XBAND at full CW", "feedback b 0 → 1.5 (XBAND: inert)", "index: per-band cap, fc 150 Hz → 4 kHz (k3^0.5)", PS_UP, "LFO on feedback ±0.3: " + LFO_SHAPES, "dry → wet"],
+    mid:  ["table zone (10, stepped, 1 ms crossfade)", "morph m 0 → 1 through the zone's frames", "dampener 150 Hz → 4 kHz (knob only) + 2-pole LP 250 Hz → 16 kHz", PS_UP.replace("the K3 fc", "the 2-pole LP cutoff"), "LFO on morph ±0.15: " + LFO_SHAPES, "dry → wet"],
+    down: ["model: HARMONICS / FREQ SHIFT / INTERVAL", "HARMONICS n 1 → 6 | FREQ SHIFT ±800 Hz (noon 0) | INTERVAL −12 → +12 st", "HARMONICS blend to the fundamental | FREQ SHIFT fixed → proportional | INTERVAL ±50 cents", "inert on SW1 DOWN", "inert on SW1 DOWN", "dry → wet"],
+  },
+  lab: {
+    up:   ["2-OP ratio zone (12): 0.25 / 0.5 / 1 / 1.41 / 1.5 / 1.62 / 2 / 2.41 / 2.72 / 3 / 3.14 / 3.5", "feedback b 0 → 1.5", "index (cap law, fc 150 Hz → 4 kHz)", PS_UP.replace("the K3 fc", "the index fc"), "LFO on b ±0.3: " + LFO_SHAPES, "dry → wet"],
+    mid:  ["SPECTRAL zone (6): EVEN-N / EVEN-P / W05-N / W05-P / WARP-N / WARP-P (warp 0 / 0.5 / 1 × narrow / peaky comb)", "comb density nu 0 → 0.5 (CW = every second partial notched)", "tilt gamma 3 (dull) → 1 (noon, saw) → 0 (flat)", "pluck ↔ swell on the tilt (pluck bright → dull, swell dull → K3)", "comb movement: CCW travel 0.05 → 10 Hz | noon still | CW one sweep per onset 0.05 → 4 s", "dry → wet"],
+    down: ["ADDITIVE zone (12): SAW / ODD / OCT / SUB × A, B · UNI-SAW · UNI-ODD · UNI-SAW-H · STRETCH", "A: harmonics h | B: index (0 → 6 rad, k²) | UNI: unison amount | STRETCH: delta 0 → 0.05", "A / UNI-SAW / UNI-ODD / STRETCH: index 6 k3² | B / UNI-SAW-H: harmonics h", "pluck ↔ swell on the index fc (B / UNI-SAW-H: also h)", "LFO ±0.3 on the K2 parameter | UNI: beat speed (CCW ∝ note | noon 0 | CW Hz)", "dry → wet"],
+  },
+};
+// Module-level labels (SW1 positions, short knob roles).
+const MODS = {
+  armitage: { title: "Armitage (SW3 UP)", sw1: "SW1 mode pair", sw1l: { up: "FB | ADD", mid: "SAW | PULSE", down: "unshaped" },
+              roles: KNOBS.map(k => k.role) },
+  explorer: { title: "Explorer (SW3 MID)", sw1: "SW1 family", sw1l: { up: "FM (ratio zones, XBAND)", mid: "tables", down: "harmonics & shift" },
+              roles: ["selection", "tone", "index / filter", "pluck ↔ swell", "LFO on K2", "dry / wet (shell)"] },
+  lab:      { title: "FM LAB (SW3 DOWN)", sw1: "SW1 family", sw1l: { up: "2-OP FM", mid: "SPECTRAL", down: "ADDITIVE" },
+              roles: ["selection", "K2 parameter", "K3 parameter", "pluck ↔ swell", "LFO / movement", "dry / wet (shell)"] },
+};
+const SW3_TO_MOD = { up: "armitage", mid: "explorer", down: "lab" };
+let curMod = null, curSw1 = null;
+function applyModule(mod, sw1) {
+  if (mod === curMod && sw1 === curSw1) return;
+  const changedMod = mod !== curMod;
+  curMod = mod; curSw1 = sw1;
+  const M = MODS[mod];
+  document.getElementById("modtitle").textContent = M.title;
+  document.getElementById("sw1legend").textContent = M.sw1;
+  for (const el of document.querySelectorAll(".sw1l")) el.textContent = M.sw1l[el.dataset.p];
+  knobEls.forEach((e, i) => { e.role.textContent = M.roles[i]; });
+  if (mod !== "armitage") {
+    const mean = XMEAN[mod][sw1] || XMEAN[mod].mid;
+    knobEls.forEach((e, i) => { e.mean.textContent = mean[i]; });
+  } else if (changedMod) {
+    knobEls.forEach((e) => { e.mean.textContent = "—"; });   // filled from the DIAG mode
+  }
+  if (changedMod) {
+    knobEls.forEach((e) => { e.now.textContent = ""; });
+    document.getElementById("diag").textContent = "DIAG — (waiting for the module's snapshot: controls still ~0.6 s, or FS1)";
+  }
+  const cp = document.getElementById("constpanel");
+  cp.classList.toggle("inactive", mod !== "armitage");
+  document.getElementById("constnote").textContent = mod === "armitage" ? "" :
+    "— armitage only; changes re-init armitage, the active module is not affected (explorer constants are constexpr)";
+}
 
 // ---- websocket ------------------------------------------------------------
 let ws = null;
@@ -250,9 +309,10 @@ function buildKnobs() {
     const val = document.createElement("div"); val.className = "val";
     const noon = document.createElement("button"); noon.className = "noon"; noon.textContent = "noon";
     const mean = document.createElement("div"); mean.className = "mean"; mean.textContent = "—";
-    d.append(val, noon, mean);
+    const now = document.createElement("div"); now.className = "now"; now.textContent = "";
+    d.append(val, noon, mean, now);
     box.appendChild(d);
-    const ke = { v: 0.5, svg, fill, ptr, val, mean };
+    const ke = { v: 0.5, svg, fill, ptr, val, mean, now, role: d.querySelector(".role") };
     knobEls.push(ke);
     const user = (v) => { setKnob(i, v); queueKnobs(); };
     // drag
@@ -318,16 +378,22 @@ function setRadio(name, val) {
 }
 function applyState(s) {
   s.k.forEach((v, i) => setKnob(i, v));
-  setRadio("sw1", s.sw1); setRadio("sw2", s.sw2); setRadio("src", s.src);
+  setRadio("sw1", s.sw1); setRadio("sw2", s.sw2); setRadio("sw3", s.sw3); setRadio("src", s.src);
+  applyModule(SW3_TO_MOD[s.sw3] || "armitage", s.sw1);
   document.querySelector("input[name=src][value=input]").disabled = !s.input_ok;
   document.querySelector("input[name=src][value=wav]").disabled = !s.wav;
   document.getElementById("wavname").textContent = s.wav ? s.wav.split("/").pop() : "(no WAV)";
   if (s.level > 0) { level.value = s.level; } levelv.textContent = s.level > 0 ? fmt(s.level, 2) : "as is";
   gain.value = s.gain; gainv.textContent = fmt(s.gain, 2);
 }
-for (const n of ["sw1", "sw2", "src"])
+for (const n of ["sw1", "sw2", "sw3", "src"])
   for (const el of document.querySelectorAll(`input[name=${n}]`))
-    el.addEventListener("change", () => { if (el.checked) send({ [n]: el.value }); });
+    el.addEventListener("change", () => {
+      if (!el.checked) return;
+      send({ [n]: el.value });
+      if (n === "sw3") applyModule(SW3_TO_MOD[el.value], curSw1);
+      if (n === "sw1") applyModule(curMod, el.value);
+    });
 document.getElementById("fs1").addEventListener("click", () => send({ fs1: 1 }));
 const level = document.getElementById("level"), levelv = document.getElementById("levelv");
 const gain = document.getElementById("gain"), gainv = document.getElementById("gainv");
@@ -346,19 +412,74 @@ function applyStatus(m) {
   document.getElementById("inpv").textContent = fmtDb(m.in_peak);
   setBar("peakb", m.peak); setBar("rmsb", m.rms); setBar("inpb", m.in_peak);
   const mu = document.getElementById("mute");
-  if (m.mode) {
-    const swU = (s) => s.toUpperCase();
+  if (m.active) applyModule(m.active, curSw1 || "mid");
+  const swU = (x) => x.toUpperCase();
+  const age = `  (snapshot ${fmt(m.diag_age_ms / 1000, 1)} s old; the module writes one once the controls settled, or on FS1)`;
+  if (m.diag_mod === "armitage" && m.mode) {
     document.getElementById("diag").textContent =
       `DIAG ${m.n ? "#" + m.n : "auto"}  ${m.mode}  h ${fmt(m.h, 2)}  K1..K5 ${m.k.map(x => fmt(x, 2)).join(" ")}` +
       `  SW1 ${swU(m.sw1)}  SW2 ${swU(m.sw2)}  beta ${fmt(m.beta, 2)}  filt_t ${fmt(m.filt_t, 2)}` +
       `  fm ${fmt(m.fm, 2)}  env t2 ${fmt(m.env_t2, 2)} e ${fmt(m.env_e, 2)}  fmenv t2 ${fmt(m.envf_t2, 2)} g ${fmt(m.envf_e, 2)}` +
-      `  mute ${m.mute ? "ON" : "off"}` +
-      `  (snapshot ${fmt(m.diag_age_ms / 1000, 1)} s old; the module writes one once the controls settled)`;
+      `  mute ${m.mute ? "ON" : "off"}` + age;
     const mean = MEANING[m.mode];
     if (mean) knobEls.forEach((e, i) => { e.mean.textContent = mean[i]; });
+  } else if (m.diag_mod && m.diag_mod !== "armitage") {
+    applyModule(m.diag_mod, m.sw1);
+    const octName = { up: "up", mid: "played", down: "down" };
+    document.getElementById("diag").textContent =
+      `DIAG ${m.n ? "#" + m.n : "auto"}  ${m.zone}  K1..K5 ${m.k.map(x => fmt(x, 2)).join(" ")}  SW1 ${swU(m.sw1)}  oct ${octName[m.sw2]}` +
+      `\n${m.line}` + age;
+    const now = explorerNow(m);
+    knobEls.forEach((e, i) => { e.now.textContent = now[i] || ""; });
+  }
+  if (m.diag_mod && "mute" in m) {
     mu.textContent = "mute " + (m.mute ? "ON" : "off");
     mu.className = m.mute ? "on" : "";
   }
+}
+// Explorer / FM LAB: the values each knob sets now (from the DIAG snapshot = values at the knob,
+// envelope / LFO state at the snapshot moment).
+function explorerNow(m) {
+  const hz = (v) => fmt(v, 0) + " Hz";
+  const ps = `g ${fmt(m.env, 2)} ${m.dir < 0 ? "decay" : "rise"} T ${fmt(m.T, 2)} s`;
+  const lfo = m.lfo === 0 ? "LFO off" : `${m.lfo === 1 ? "triangle" : "staircase"} depth ${fmt(m.lfod, 2)} · ${fmt(m.lfohz, 2)} Hz`;
+  const r = [m.zone, "", "", "", "", ""];
+  if (m.addz >= 0) {
+    const uni = m.k2n === "u";
+    r[1] = uni ? `u ${fmt(m.a, 2)}` : `${m.k2n} ${fmt(m.a, 2)} → ${fmt(m.b, 2)} with LFO`;
+    r[2] = `${m.k3n} ${fmt(m.c3, 2)} · fc ${hz(m.fc)}`;
+    r[3] = `${ps} · fc ${hz(m.fce)}`;
+    r[4] = uni ? `beat ${fmt(m.b, 2)} Hz ${m.bm === 1 ? "∝ note" : m.bm === 2 ? "constant" : "off"}` : lfo;
+  } else if (m.specz >= 0) {
+    r[1] = `nu ${fmt(m.a, 2)}`;
+    r[2] = `gamma ${fmt(m.b, 2)} → ${fmt(m.sge, 2)} with K4`;
+    r[3] = ps;
+    r[4] = m.sm === 1 ? `travel ${fmt(m.sv, 2)} Hz` : m.sm === 2 ? `sweep ${fmt(m.sv, 2)} s per onset` : "still";
+  } else if (m.labz >= 0) {
+    r[1] = `b ${fmt(m.a, 2)} → ${fmt(m.b, 2)} with LFO`;
+    r[2] = `index fc ${hz(m.fc)}`;
+    r[3] = `${ps} · fc ${hz(m.fce)}`;
+    r[4] = lfo;
+  } else if (m.model === "FM") {
+    r[1] = `r ${fmt(m.a, 2)} · b ${fmt(m.b, 2)}`;
+    r[2] = `fc ${hz(m.fc)}`;
+    r[3] = `${ps} · fc ${hz(m.fce)}`;
+    r[4] = lfo;
+  } else if (m.model === "XBAND-FM") {
+    r[1] = `partner n ${fmt(m.a, 0)} · I ${fmt(m.b, 2)} (K2 inert)`;
+    r[2] = `fc ${hz(m.fc)}`;
+    r[3] = `${ps} · fc ${hz(m.fce)}`;
+    r[4] = lfo;
+  } else if (m.sw1 === "mid") {
+    r[1] = `morph ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)}`;
+    r[2] = `damp ${hz(m.dfc)} · LP ${hz(m.fc)}`;
+    r[3] = `${ps} · LP now ${hz(m.lfe)}`;
+    r[4] = lfo;
+  } else {
+    r[1] = `A ${fmt(m.a, 2)}`;
+    r[2] = `B ${fmt(m.b, 2)}`;
+  }
+  return r;
 }
 
 // ---- constants panel ----------------------------------------------------------
