@@ -203,7 +203,7 @@ Server -> client:
   `"zone"` (zone / model name), `"line"` (the firmware's DIAG second half),
   `"labz"` / `"specz"` / `"addz"` (FM LAB family zone, -1 = not that family),
   `"k2n"` / `"k3n"` (ADDITIVE parameter names), and the raw `DiagSnap` values
-  `"a"`, `"b"`, `"c3"`, `"bm"`, `"fc"`, `"lfe"`, `"dfc"`, `"sge"`, `"sv"`, `"sm"`,
+  `"a"`, `"b"`, `"lb"`, `"lue"`, `"llfd"`, `"lside"` (FM LAB 2-OP), `"c3"`, `"bm"`, `"fc"`, `"lfe"`, `"dfc"`, `"sge"`, `"sv"`, `"sm"`,
   `"env"`, `"dir"`, `"T"`, `"fce"`, `"lfo"`, `"lfod"`, `"lfohz"`, `"loop"`,
   `"mute"` (meanings: `Explorer::DiagSnap` in `explorer.h`). A snapshot of a
   module that is no longer active is dropped.

@@ -28,9 +28,11 @@
 //                          rate 0.2 -> 20 Hz exponential over each side)
 // SW3 DOWN   = FM LAB     (the same module, second instance Explorer(true): SW3 MIDDLE's one-shot engine with its OWN
 //                          SW1 families (SW3 MIDDLE's FM / tables / harmonics & shift not offered here):
-//                          SW1 UP = 2-OP FM: K1 = 12 stepped ratio zones 0.25 / 0.5 / 1 / 1.414 / 1.5 / 1.618 / 2 /
-//                          2.414 / 2.718 / 3 / 3.142 / 3.5 (1 ms ratio slide), K2 = feedback b 0..1.5, K3 = index (cap
-//                          law), K4 pluck <-> swell on the index, K5 LFO on b (+-0.3); no XBAND.
+//                          SW1 UP = 2-OP FM: K1 = 3 stepped modes HARMONIC / DISHARMONIC / FREE (1 ms ratio slide),
+//                          K2 = ratio (15 stepped zones, noon 1 / 1.414; FREE 0.125 -> 8 continuous), K3 = bipolar
+//                          character (CCW hollow index 0 -> 12 | noon pure sine | CW index + feedback 0 -> 1.5 from
+//                          30 %; caps at 4 kHz), K4 pluck <-> swell along K3 (sine <-> the K3 position), K5 LFO on b
+//                          (+-0.3, faded in with the swell); no XBAND.
 //                          SW1 MID = SPECTRAL (Odessa-style): the additive SAW series per band (16 partials, no FM),
 //                          weights tilt x comb in the partial-number domain (RMS-normalised), K1 = 6 stepped zones
 //                          warp 0 / 0.5 / 1 x narrow / peaky comb (slid 1 ms), K2 = comb density (0 none -> every
@@ -224,24 +226,28 @@ int main() {
         // 2-pole LP cutoff at the knob, `eff` the effective LP cutoff), envelope (retired LOOPING `loop`: e, K4 dir, K5 amount
         // d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in use (s), applied fc_eff `fce` in Hz (SW1 UP
         // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
-        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP `LAB <zone> b <knob> > <with LFO> fc <index fc
-        // at the knob>`, MID `LAB SPEC-<zone> nu <density> ga <tilt gamma knob> > <with K4 env> k5 trav <Hz> | swp <T s> |
+        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb
+        // I<index> b<feedback> (knob, K4 g 1) u<u_eff now>` + ` ps g.. dec|rise T.. lfo .. d<knob depth> ><x swell fade> ..Hz`, MID `LAB SPEC-<zone> nu <density> ga <tilt gamma knob> > <with K4 env> k5 trav <Hz> | swp <T s> |
         // still` + ` ps g.. dec|rise T..` (no fce / lfo), DOWN `LAB ADD-<zone> <K2 name> <knob>
         // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
-        // `u <knob> bt <beat Hz> prop|hz|off`); + the UP `ps` / `lfo` part (fce = the applied index fc; UP / DOWN)
+        // `u <knob> bt <beat Hz> prop|hz|off`); + the UP `ps` / `lfo` part (fce = the applied index fc; DOWN)
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const unsigned cpu = (unsigned)(cpu_pk * 100.f + 0.5f);
         const char* zn = Explorer::ZoneName(d.model, d.zone);
-        char env[96];
+        char env[128];
         if (d.loop)                                           // retired LOOPING variant: generic K4 / K5 envelope
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
         else if (d.specz >= 0)                                // FM LAB MID SPECTRAL: K4 pluck <-> swell on the tilt (g, side, T s)
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F, D2V(d.env), d.dir < 0 ? "dec" : "rise", D2V(d.T));
-        else if (d.sw1 == 0 || d.labz >= 0 || d.addz >= 0)   // SW1 UP / FM LAB UP, DOWN: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
+        else if (d.labz >= 0)                                 // FM LAB UP: pluck <-> swell (g, side, T s), LFO depth > x fade
+          snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " lfo %s d" D2F " >" D2F " " D2F "Hz", D2V(d.env),
+                   d.dir < 0 ? "dec" : "rise", D2V(d.T),
+                   d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.llfd), D2V(d.lfohz));
+        else if (d.sw1 == 0 || d.addz >= 0)                   // SW1 UP / FM LAB DOWN: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " fce %d lfo %s d" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
@@ -265,10 +271,10 @@ int main() {
                             Explorer::SpecZoneName(d.specz), D2V(d.a), D2V(d.b), D2V(d.sge),
                             d.sm == 1 ? "trav" : d.sm == 2 ? "swp" : "still", D2V(d.sv),
                             d.sm == 1 ? "Hz" : d.sm == 2 ? "s" : "", env, d.mute ? 1 : 0, cpu);
-        else if (d.labz >= 0)                                 // FM LAB UP: zone, b knob > with LFO, index fc
-          hw.seed.PrintLine("LAB %s b" D2F " >" D2F " fc %d%s mute %d cpu %u%%",
-                            Explorer::LabZoneName(d.labz), D2V(d.a), D2V(d.b),
-                            (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
+        else if (d.labz >= 0)                                 // FM LAB UP: mode, ratio, K3 side, index, feedback, u_eff
+          hw.seed.PrintLine("LAB %s r" D2F " %s I" D2F " b" D2F " u" D2F "%s mute %d cpu %u%%",
+                            Explorer::LabZoneName(d.labz), D2V(d.a), Explorer::LabSideName(d.lside), D2V(d.b),
+                            D2V(d.lb), D2V(d.lue), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kFM)                    // A = ratio r, B = feedback b
           hw.seed.PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
                             D2V(d.a), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);

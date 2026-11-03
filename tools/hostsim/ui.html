@@ -198,7 +198,7 @@ const XMEAN = {
     down: ["model: HARMONICS / FREQ SHIFT / INTERVAL", "HARMONICS n 1 → 6 | FREQ SHIFT ±800 Hz (noon 0) | INTERVAL −12 → +12 st", "HARMONICS blend to the fundamental | FREQ SHIFT fixed → proportional | INTERVAL ±50 cents", "inert on SW1 DOWN", "inert on SW1 DOWN", "dry → wet"],
   },
   lab: {
-    up:   ["2-OP ratio zone (12): 0.25 / 0.5 / 1 / 1.41 / 1.5 / 1.62 / 2 / 2.41 / 2.72 / 3 / 3.14 / 3.5", "feedback b 0 → 1.5", "index (cap law, fc 150 Hz → 4 kHz)", PS_UP.replace("the K3 fc", "the index fc"), "LFO on b ±0.3: " + LFO_SHAPES, "dry → wet"],
+    up:   ["2-OP mode (3): HARMONIC / DISHARMONIC / FREE (ratio slides 1 ms)", "ratio: HARMONIC 0.125 … [1] … 5 | DISHARMONIC 0.354 … [1.414] … 3.606 (15 stepped zones, [noon]) | FREE 0.125 → 8 continuous (noon 1)", "character: CCW hollow (index 0 → 12, no feedback) | noon pure sine | CW index 0 → 12 + feedback 0 → 1.5 from 30 % (caps at 4 kHz)", "pluck ↔ swell along K3 per onset: CCW pluck (K3 position → sine; 1 s → 8 s at noon) | noon plain K3 | CW swell (sine → K3 position; 10 ms → 4 s)", "LFO on feedback ±0.3 (swell side: depth fades in with the rise): " + LFO_SHAPES, "dry → wet"],
     mid:  ["SPECTRAL zone (6): EVEN-N / EVEN-P / W05-N / W05-P / WARP-N / WARP-P (warp 0 / 0.5 / 1 × narrow / peaky comb)", "comb density nu 0 → 0.5 (CW = every second partial notched)", "tilt gamma 3 (dull) → 1 (noon, saw) → 0 (flat)", "pluck ↔ swell on the tilt (pluck bright → dull, swell dull → K3)", "comb movement: CCW travel 0.05 → 10 Hz | noon still | CW one sweep per onset 0.05 → 4 s", "dry → wet"],
     down: ["ADDITIVE zone (12): SAW / ODD / OCT / SUB × A, B · UNI-SAW · UNI-ODD · UNI-SAW-H · STRETCH", "A: harmonics h | B: index (0 → 6 rad, k²) | UNI: unison amount | STRETCH: delta 0 → 0.05", "A / UNI-SAW / UNI-ODD / STRETCH: index 6 k3² | B / UNI-SAW-H: harmonics h", "pluck ↔ swell on the index fc (B / UNI-SAW-H: also h)", "LFO ±0.3 on the K2 parameter | UNI: beat speed (CCW ∝ note | noon 0 | CW Hz)", "dry → wet"],
   },
@@ -456,10 +456,11 @@ function explorerNow(m) {
     r[3] = ps;
     r[4] = m.sm === 1 ? `travel ${fmt(m.sv, 2)} Hz` : m.sm === 2 ? `sweep ${fmt(m.sv, 2)} s per onset` : "still";
   } else if (m.labz >= 0) {
-    r[1] = `b ${fmt(m.a, 2)} → ${fmt(m.b, 2)} with LFO`;
-    r[2] = `index fc ${hz(m.fc)}`;
-    r[3] = `${ps} · fc ${hz(m.fce)}`;
-    r[4] = lfo;
+    const side = m.lside < 0 ? "hollow" : m.lside > 0 ? "feedback" : "sine";
+    r[1] = `r ${fmt(m.a, 3)}`;
+    r[2] = `${side} · I ${fmt(m.b, 2)} · b ${fmt(m.lb, 2)}`;
+    r[3] = `${ps} · u ${fmt(m.lue, 2)} now`;
+    r[4] = m.lfo === 0 ? lfo : `${lfo} → depth ${fmt(m.llfd, 2)} with the swell fade`;
   } else if (m.model === "FM") {
     r[1] = `r ${fmt(m.a, 2)} · b ${fmt(m.b, 2)}`;
     r[2] = `fc ${hz(m.fc)}`;

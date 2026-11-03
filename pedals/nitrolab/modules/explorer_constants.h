@@ -332,8 +332,9 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 // --- SW3 DOWN = FM LAB (instance Explorer(true), 2026-10-28; own SW1 families 2026-11-02) --------------------
 // The SW3 DOWN instance = the SW3 MID one-shot engine (K4 pluck <-> swell, K5 LFO), but with its OWN SW1 families
 // (SW3 MID's FM / tables / harmonics & shift are NOT offered here; they stay on SW3 MID):
-//   SW1 UP   = 2-OP FM: K1 = the 12 equal stepped ratio zones below (kFM 2OP law, ratio slid 1 ms between zones),
-//              K2 = feedback b, K3 = index, K4 pluck <-> swell on the index, K5 LFO on b (+- EXP_LFO_FB_SWING).
+//   SW1 UP   = 2-OP FM (kFM 2OP law, 2026-11-03 control model, see EXP_LAB_* below): K1 = mode HARMONIC / DISHARMONIC /
+//              FREE, K2 = ratio, K3 = bipolar character (CCW hollow index, noon sine, CW index + feedback), K4 pluck <->
+//              swell along K3, K5 LFO on b (+- EXP_LFO_FB_SWING, faded in with the swell).
 //   SW1 MID  = SPECTRAL (2026-11-03, Odessa-style; replaces DUAL VOICE - in git history at 224f328): per band the
 //              ADDITIVE SAW series (16 exact harmonics, no FM, anti-fold edge 3800 / 400 Hz), every partial n weighted by
 //              W(n) = tilt(n) comb(n) (the same for all bands), RMS-normalised; K1 = the 6 zones EXP_SPEC_ZONES (warp,
@@ -341,31 +342,55 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 //              (CCW LFO on the comb position, noon still, CW one sweep per onset). See EXP_SPEC_* below and explorer.h.
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02): K1 = the 12 equal stepped zones EXP_ADD_ZONES (series SAW / ODD /
 //              OCT / SUB in model A / B, UNISON x 3, STRETCH), see EXP_ADD_* below and explorer.h.
-//              (EXP_LAB_PH_ZONE: the 2-OP ratio slide rests at r 1 while MID / DOWN run.)
+//              (EXP_LAB_REST_R: the 2-OP ratio slide rests at r 1 while MID / DOWN run.)
 // EXP_LOOP_ENABLE = true brings back the retired LOOPING variant on SW3 DOWN instead (generic K4 / K5 envelope,
 // code kept compiling, not reachable while false).
 // (2026-11-02: TWIN / DUAL-2 / DUAL-1.5 / MODOUT / BELL removed - code in git history, 598a4fd; STACK / PAIRS /
 // TABLE FM at f440674.)
 constexpr bool EXP_LOOP_ENABLE = false;
-struct ExpLabZone { float r; const char* name; };   // r = modulator ratio (carrier at the band phase phi)
-constexpr int EXP_LAB_N_ZONES = 12;
-constexpr ExpLabZone EXP_LAB_ZONES[EXP_LAB_N_ZONES] = {   // SW1 UP, K1 CCW -> CW (sorted by ratio)
-  { 0.25f,       "2OP-0.25" },   //  1
-  { 0.5f,        "2OP-0.5"  },   //  2
-  { 1.f,         "2OP-1"    },   //  3  (the former FB FM)
-  { 1.41421356f, "2OP-1.41" },   //  4  sqrt 2
-  { 1.5f,        "2OP-1.5"  },   //  5
-  { 1.61803399f, "2OP-1.62" },   //  6  golden ratio
-  { 2.f,         "2OP-2"    },   //  7
-  { 2.41421356f, "2OP-2.41" },   //  8  1 + sqrt 2
-  { 2.71828183f, "2OP-2.72" },   //  9  e
-  { 3.f,         "2OP-3"    },   // 10
-  { 3.14159265f, "2OP-3.14" },   // 11  pi
-  { 3.5f,        "2OP-3.5"  },   // 12
+// SW1 UP = 2-OP FM control model (2026-11-03; replaces the 12 sorted ratio zones EXP_LAB_ZONES - git history 0a96e41):
+//   K1 = 3 equal stepped modes (EXP_LAB_MODE_NAMES): HARMONIC | DISHARMONIC | FREE; a mode change slides the ratio over
+//        EXP_DISC_SLIDE_MS (1 ms), no crossfade (the model stays kFM).
+//   K2 = modulator ratio r: HARMONIC / DISHARMONIC = 15 equal stepped zones (EXP_LAB_HARM_R / EXP_LAB_DISH_R, noon =
+//        zone 8: r 1 / 1.414), slid 1 ms; FREE = r = EXP_LAB_FREE_RMIN (EXP_LAB_FREE_RMAX / EXP_LAB_FREE_RMIN)^k2
+//        (0.125 -> 8, noon 1) on the smoothed K2, continuous (no snapping).
+//   K3 = bipolar character, t3 = 2 k3 - 1 (smoothed), u = |t3|, u_eff = g_s u (K4 pluck <-> swell):
+//        index I = EXP_FM_INDEX u_eff^EXP_LAB_INDEX_CURVE (both sides; noon = 0 = pure sine);
+//        CCW (t3 < 0) "hollow": feedback b = 0;
+//        CW  (t3 > 0): b = EXP_FBFM_FB_MAX clamp((u_eff - EXP_LAB_FB_ONSET) / (1 - EXP_LAB_FB_ONSET), 0, 1);
+//        per band the 2OP anti-fold caps at L = EXP_FOLD_LIMIT_HZ (no K3 dampener here): I <= (L / f' - 1) / r - 1,
+//        b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN.
+//   K5 = LFO on b (+- EXP_LFO_FB_SWING, after the caps, [0, EXP_FBFM_FB_MAX]); on the swell side (t4 > 0) its depth
+//        x g_s (fade-in with the rise), else full depth.
+constexpr int   EXP_LAB_N_MODES = 3;
+constexpr int   EXP_LAB_FREE    = 2;          // K1 mode index of FREE
+constexpr const char* EXP_LAB_MODE_NAMES[EXP_LAB_N_MODES] = { "2OP-HARM", "2OP-DISH", "2OP-FREE" };
+constexpr int   EXP_LAB_N_STEPS = 15;         // K2 zones in HARMONIC / DISHARMONIC
+constexpr float EXP_LAB_HARM_R[EXP_LAB_N_STEPS] = {   // HARMONIC, K2 CCW -> CW (zone 8 = noon = 1)
+  0.125f, 0.2f, 0.25f, 0.333333f, 0.5f, 0.666667f, 0.75f, 1.f,
+  1.333333f, 1.5f, 2.f, 2.5f, 3.f, 4.f, 5.f };
+constexpr float EXP_LAB_DISH_R[EXP_LAB_N_STEPS] = {   // DISHARMONIC, K2 CCW -> CW (zone 8 = noon = sqrt 2)
+  0.353553f,  // sqrt 2 / 4
+  0.707107f,  // 1 / sqrt 2
+  0.809017f,  // golden / 2
+  1.059463f,  // 2^(1/12)
+  1.122462f,  // 2^(2/12)
+  1.224745f,  // sqrt 1.5
+  1.259921f,  // 2^(1/3)
+  1.414214f,  // sqrt 2
+  1.618034f,  // golden ratio
+  1.732051f,  // sqrt 3
+  2.236068f,  // sqrt 5
+  2.414214f,  // 1 + sqrt 2
+  2.718282f,  // e
+  3.141593f,  // pi
+  3.605551f   // sqrt 13
 };
-constexpr int EXP_LAB_PH_ZONE = 2;   // the 2-OP zone at ratio 1: where the 2-OP ratio slide rests while SW1 MID / DOWN run
-static_assert(EXP_LAB_ZONES[EXP_LAB_PH_ZONE].r == 1.f, "rest zone = 2-OP at ratio 1");
-// (2OP: K5 LFO on b = EXP_LFO_FB_SWING, as SW3 MID.)
+constexpr float EXP_LAB_FREE_RMIN   = 0.125f;  // FREE: r at K2 CCW (r = RMIN (RMAX / RMIN)^k2, noon = 1)
+constexpr float EXP_LAB_FREE_RMAX   = 8.f;     // FREE: r at K2 CW
+constexpr float EXP_LAB_INDEX_CURVE = 1.f;     // K3: I = EXP_FM_INDEX u_eff^this (1 = linear; 2 = square)
+constexpr float EXP_LAB_FB_ONSET    = 0.3f;    // K3 CW: feedback starts at u_eff = this, reaches EXP_FBFM_FB_MAX at 1
+constexpr float EXP_LAB_REST_R      = 1.f;     // the 2-OP ratio slide rests here while SW1 MID / DOWN run
 // SW1 MID = SPECTRAL (2026-11-03; model kLSPEC, see explorer.h FM LAB SW1 MID). Partial n = 1..EXP_SPEC_M of the
 // band's SAW series (q = v^n, no FM), weight W(n) = tilt(n) comb(n), comb(1) = 1, W /= sqrt(sum_n W(n)^2):
 //   tilt(n) = n^-gamma, gamma = 3 -> 1 over k3_eff [0, 0.5], 1 -> 0 over [0.5, 1] (k3_eff = g_s k3, K4 pluck <-> swell)
