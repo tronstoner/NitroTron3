@@ -138,25 +138,16 @@
 //                (x(1) = 1, x(16) = 16; w = 0 even notch spacing, w = 1 notches dense at the bottom / sparse at the top).
 //              PHASE CONVENTION: y counts from the fundamental, so nu = 0 = no notches (at phi = 0) and nu = 0.5, phi = 0
 //                removes the EVEN partials (odd series) - i.e. the cos(2 pi nu x(n) + 2 pi phi') form with phi' = phi - nu.
-//              K1 = 6 equal stepped zones (EXP_SPEC_ZONES, warp w / exponent e): EVEN-N (0, 0.25)  EVEN-P (0, 4)
-//                W05-N (0.5, 0.25)  W05-P (0.5, 4)  WARP-N (1, 0.25)  WARP-P (1, 4). A zone change SLIDES w and e linearly
-//                over EXP_DISC_SLIDE_MS (1 ms; the weights follow per sample; no crossfade, no doubled engine); entering
-//                kLSPEC from UP / DOWN sets them at once (model crossfade). b^e: e = 4 b^2^2, e = 0.25 sqrt sqrt b,
-//                between (during a slide) exp(e ln b).
-//              K2 = DENSITY nu = 0.5 k2 (EXP_SPEC_NU_MAX; smoothed K2, no LFO).
-//              K3 = TILT gamma = 3 - 4 k (k <= 0.5), 2 - 2 k (k > 0.5): 3 dull -> 1 saw (noon) -> 0 flat, k = k3_eff =
-//                g_s k3 (K4 pluck <-> swell, the PsUpdate law: g_s moves the tilt between gamma 3 and the K3 value).
-//              K5 = COMB MOVEMENT, t5 = 2 k5 - 1 (smoothed), target phi_t (SpecUpdate, per 8 kHz sample, lab instance):
-//                CCW  phi_t += rate / sr8, free-running wrap (the notches keep travelling up through the partials; no
-//                     triangle), rate = 0.05 (10 / 0.05)^|t5| Hz (EXP_SPEC_LFO_HZ_MIN / MAX); entering CCW it continues
-//                     from the applied phi (no jump).
-//                noon phi_t = 0 (still).
-//                CW   each onset phi_t = 0, then linear to 1 over T = 0.05 (4 / 0.05)^|t5| s (EXP_SPEC_ENV_T_MIN / MAX),
-//                     rests at 1 (= the comb of 0); 1 before the first onset / on the other sides.
-//              Applied phi = one-pole toward phi_t the shortest way round (tau EXP_SPEC_PHI_SLIDE_MS 1 ms, kept in [0, 1),
-//                lands exactly): onset restarts, side changes and the noon return glide over ~1 ms instead of jumping.
-//              NOTE: at nu = 0 the comb has no spacing, so a moving phi scales partials 2..16 together against the
-//                fundamental (overtone tremolo down to the bare fundamental at phi = 0.5).
+//              CONTROLS (2026-11-03 rework; all from the one-pole smoothed knobs, EXP_CTRL_SMOOTH_MS, landing exactly;
+//                no envelope, no LFO, no zones - K4 pluck <-> swell and the K5 comb movement do not act on SPECTRAL):
+//              K1 = COMB SHAPE e = 0.25 16^k1 (EXP_SPEC_E_MIN / MAX, continuous): CCW 0.25 narrow notches, noon 1 plain
+//                cosine, CW 4 peaky; b^e = exp(e ln b) (b = 0 -> 0); e recomputed only when the smoothed K1 moved.
+//              K2 = DENSITY nu = 0.5 k2 (EXP_SPEC_NU_MAX).
+//              K3 = TILT gamma = 3 - 4 k3 (k3 <= 0.5), 2 - 2 k3 (k3 > 0.5): 3 dull -> 1 saw (noon) -> 0 flat.
+//              K4 = WARP w = k4, 0 (even notch spacing) -> 1 (dense at the bottom / sparse at the top), continuous.
+//              K5 = COMB POSITION phi = k5, static, 0 -> 1 = one notch period over the full travel (phi 1 == phi 0).
+//              NOTE: at nu = 0 the comb has no spacing, so phi scales partials 2..16 together against the fundamental
+//                (down to the bare fundamental at phi = 0.5).
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, item = K1 zone). One harmonic series per band built on the
 //              slot's unit phasor v = u_k (as Armitage ADD: harmonics by repeated complex multiplication), FM on the
 //              series fundamental at ratio 1, no feedback: q = b e^{j I x} (b = v, x = Im v = sin 2 pi phi; SUB: b = w,
@@ -218,12 +209,12 @@
 //
 // K4 / K5 (constructor flag: Explorer(false) = SW3 MID, Explorer(true) = SW3 DOWN = FM LAB: both ONE-SHOT, same
 //   K4 / K5 laws; FM LAB: UP 2-OP = K4 along the K3 character (u_eff = g_s u), DOWN = the UP index law (K4 on the
-//   index fc), MID SPECTRAL: K4 on the tilt; EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
+//   index fc), MID SPECTRAL: K4 = warp, no envelope; EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
 //   Onset detector per 48 kHz input sample (EXP_ONSET_*, armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1
 //   (both smoothed, land exactly).
 //  ONE-SHOT (SW3 MID and FM LAB) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the index fc, SW1 MID the 2-pole
 //   LP cutoff (not the tables' dampener); SW1 DOWN: K4 inert (no model offsets; FM LAB DOWN = ADDITIVE: the index fc,
-//   and g_s on h in B / UNI-SAW-H; FM LAB MID = SPECTRAL: g_s on the tilt, k3_eff = g_s k3); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
+//   and g_s on h in B / UNI-SAW-H; FM LAB MID = SPECTRAL: K4 = warp, not pluck <-> swell); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
 //     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per 8 kHz sample
 //          (DampFmUpdate).
 //     MID: LP log2 fc = log2 250 + g_s (log2 fc_f_knob - log2 250), [250, 16000] Hz, per 8 kHz sample (TfUpdate).
@@ -254,7 +245,7 @@
 //       FM LAB UP          feedback b as UP FM ratio zones (2-OP); swell side (t4 > 0): depth x g_s (fade-in)
 //       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
 //                          UNISON: no LFO (K5 = beat speed)
-//       FM LAB MID (SPEC)  none (K5 = comb movement, SpecUpdate; the shared LFO runs on, unused)
+//       FM LAB MID (SPEC)  none (K5 = static comb position; the shared LFO runs on, unused)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
@@ -315,8 +306,8 @@
 //   FS1 wet mute     toggle, LED2 on while muted; LED1 on. FS2 unused.
 //   DIAG builds: FS1 tap also = numbered "note this setting" line; `auto` line after settling.
 // CONTROL MAP SW3 DOWN = FM LAB (Explorer(true); see MODELS / FM LAB)
-//   K1  selection    SW1 UP: 2-OP mode (3 equal stepped: HARMONIC / DISHARMONIC / FREE, ratio slid 1 ms); MID: SPECTRAL zone (6 equal stepped: EVEN-N / EVEN-P /
-//                    W05-N / W05-P / WARP-N / WARP-P = warp 0 / 0.5 / 1 x narrow / peaky comb, slid 1 ms); DOWN: ADDITIVE zone (12 equal stepped, 1 ms crossfade):
+//   K1  selection    SW1 UP: 2-OP mode (3 equal stepped: HARMONIC / DISHARMONIC / FREE, ratio slid 1 ms); MID: COMB SHAPE e 0.25 (narrow) -> 1 (noon,
+//                    cosine) -> 4 (peaky), continuous (smoothed); DOWN: ADDITIVE zone (12 equal stepped, 1 ms crossfade):
 //                    SAW-A / SAW-B / ODD-A / ODD-B / OCT-A / OCT-B / SUB-A / SUB-B / UNI-SAW / UNI-ODD / UNI-SAW-H / STRETCH
 //   K2  UP: ratio r (HARMONIC / DISHARMONIC: 15 stepped zones, noon 1 / 1.414; FREE: 0.125 -> 8 continuous); MID: comb density nu 0 -> 0.5 (CW = every second partial notched); DOWN: A harmonics h,
 //                    B index (0 -> 6 rad, k^2), UNI unison amount u, STRETCH delta 0 -> 0.05
@@ -326,13 +317,13 @@
 //                    gamma 3 (dull) -> 1 (noon, saw) -> 0 (flat); DOWN: A / UNI-SAW / UNI-ODD / STRETCH index (6 k3^2, capped
 //                    by L), B / UNI-SAW-H harmonics h (and L on their anti-fold edge)
 //   K4  pluck <-> swell per onset (as SW3 MID UP): UP along K3 (sine <-> the K3 position); DOWN on the index fc (DOWN
-//                    B / UNI-SAW-H: also h); MID on the
-//                    tilt (k3_eff = g_s k3: pluck = bright -> dull gamma 3, swell = dull -> the K3 tilt)
+//                    B / UNI-SAW-H: also h); MID: no envelope -
+//                    WARP w 0 (even notches) -> 1 (dense low / sparse high), continuous
 //   K5  UP / DOWN: LFO (shapes / rates / sync as SW3 MID): UP on b +-0.3 after the caps (swell side: depth x g_s);
 //                    DOWN: A on h,
 //                    B on the index knob, STRETCH on delta (+-0.3 knob units); UNI: BEAT SPEED (CCW 8 Hz x f'/100 Hz
-//                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: COMB MOVEMENT:
-//                    CCW notches travel 0.05 -> 10 Hz | noon still (phi 0) | CW one sweep per onset 0.05 -> 4 s
+//                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: COMB POSITION phi
+//                    0 -> 1 (one notch period over the full travel), static
 //   K6 / SW2 / FS1 as SW3 MID
 //   SW1 family       UP = 2-OP FM, MID = SPECTRAL, DOWN = ADDITIVE
 //
@@ -341,8 +332,8 @@
 // stepped items from the raw knob.
 // DIAG second half: FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb fc<index fc Hz> b<feedback> (at
 // the knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo tri|stp|off d<depth at the knob> ><x swell fade now> ..Hz`,
-// SW1 MID `LAB SPEC-<zone> nu <density at the knob> ga <tilt gamma at the knob> > <with the K4 envelope> k5 trav <Hz> |
-// swp <T s> | still` + ` ps g.. dec|rise T..` (no fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
+// SW1 MID `LAB SPEC e<comb exponent> w<warp> ph<comb position> nu<density> ga<tilt gamma>` (all at the knob; no ps /
+// fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
 // <knob> > <with LFO | beat Hz + prop / hz / off> <K3 name> <value at the knob> fc ..` (K2 / K3 names h / I / u / d);
 // + the UP `ps` part below (FM LAB DOWN); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
 // applied fc: UP dampener, MID 2-pole LP) lfo tri|stp|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on
@@ -564,8 +555,6 @@ class Explorer : public Module {
     lab_fbf_ = 1.f;                              // K5 LFO fade-in factor (swell side: g_s)
     lab_ue_c_ = -1.f;                            // forces LabFmUpdate on the first sample
     lab_L_ = EXP_FOLD_LIMIT_HZ;
-    lab_sz_t_ = 0;
-    SpecSlides(true);                            // FM LAB SPECTRAL: zone 1 warp / exponent
     for (int n = 1; n <= EXP_SPEC_M; n++) {      // ln n (tilt), ln((n - 1) / (M - 1)) (warp; n >= 2)
       sp_ln_[n] = logf((float)n);
       sp_lr_[n] = (n >= 2) ? logf((float)(n - 1) / (float)(EXP_SPEC_M - 1)) : 0.f;
@@ -573,15 +562,8 @@ class Explorer : public Module {
       sp_tilt_[n] = sp_comb_[n] = spec_w_[n] = 0.f;
     }
     spec_w_[1] = sp_tilt_[1] = sp_comb_[1] = 1.f;
-    sk_w_ = sk_g_ = sk_nu_ = sk_e_ = sk_ph_ = -1.f;   // forces every part on the first SpecWeights
-    sp_ph_ = sp_lph_ = 0.f;
-    sp_env_ = 1.f;                               // CW sweep at rest (1 = the comb of 0) before the first onset
-    sp_md_ = 0;
-    sp_t5_ = 2.f;                                // forces rate / T on the first SpecUpdate
-    sp_inc_ = sp_einc_ = 0.f;
-    sp_a_ = 1.f - expf(-1000.f / (EXP_SPEC_PHI_SLIDE_MS * sr8_));
-    sp_ln_lfo_ = logf(EXP_SPEC_LFO_HZ_MAX / EXP_SPEC_LFO_HZ_MIN);
-    sp_ln_env_ = logf(EXP_SPEC_ENV_T_MAX / EXP_SPEC_ENV_T_MIN);
+    sk_w_ = sk_g_ = sk_nu_ = sk_e_ = sk_ph_ = sk_k1_ = -1.f;   // forces every part on the first SpecWeights
+    sp_ln_e_ = logf(EXP_SPEC_E_MAX / EXP_SPEC_E_MIN);
     for (int m = 1; m <= EXP_ADD_K_MAX; m++) add_ln_[m] = logf((float)m);   // FM LAB ADDITIVE: m^-s = exp(-s ln m)
     for (int c = 0; c < 2; c++) { add_ks_[c] = -1; add_kh_[c] = -1.f; add_kd_[c] = -1.f; }
     diag_add_z_ = -1;
@@ -600,6 +582,7 @@ class Explorer : public Module {
     if (disc_len_ < 1) disc_len_ = 1;
     oct_step_ = 1.f / (EXP_OCT_XFADE_MS * 0.001f * sr8_);
     var_ = var_t_ = vfrom_ = VarKey(kFM, 0);
+    k1s_ = k1_t_ = 0.f;                          // smoothed K1 (FM LAB SPECTRAL comb shape only)
     k2s_ = k2_t_ = 0.f;
     k3s_ = k3_t_ = 0.f;
     k4s_ = k4_t_ = 0.5f;                         // K4 noon = envelope not applied
@@ -689,9 +672,8 @@ class Explorer : public Module {
       lab_m_t_ = -1;                             // (2-OP ratio slide rests at r 1)
       model = kLADD;
       zone = addz;
-    } else if (lab_ && fam == kMid) {            // FM LAB MID: SPECTRAL, K1 = 6 stepped zones (warp / exponent slid 1 ms)
-      specz = Quantize(k1, EXP_SPEC_N_ZONES);
-      lab_sz_t_ = specz;
+    } else if (lab_ && fam == kMid) {            // FM LAB MID: SPECTRAL, K1 = comb shape (continuous, smoothed)
+      specz = 0;
       lab_m_t_ = -1;                             // (2-OP ratio slide parked at r 1 while MID runs, as before)
       model = kLSPEC;
     } else if (lab_) {                           // FM LAB UP: kFM (2-OP law, ratio from l2r_; K3 / K4 / K5 in Derive / ShapeK)
@@ -713,6 +695,7 @@ class Explorer : public Module {
     if (ri > EXP_FM_N_RATIOS - 1) ri = EXP_FM_N_RATIOS - 1;           // ratio in the XBAND zone)
     rfmc_i_t_ = ri;
     ish_t_ = Quantize(k2, 2 * EXP_IS_SEMI_MAX + 1) - EXP_IS_SEMI_MAX; // interval, semitones
+    k1_t_ = k1;
     k2_t_ = k2;
     k3_t_ = k3;
     k4_t_ = k4;
@@ -757,7 +740,7 @@ class Explorer : public Module {
         diag_spec_z_ = specz;
         diag_add_z_ = addz;
         if (labz >= 0) LabDiagParam(labz, k2, k3, k4, ldp, da, db);
-        if (specz >= 0) SpecDiagParam(k2, k3, k5, da, db);
+        if (specz >= 0) SpecDiagParam(k1, k2, k3, k4, k5, da, db);
         if (addz >= 0) AddDiagParam(addz, k2, k3, k5, da, db);
         DiagControls(cs, led1, kv, fam, oct, model, zone, da, db, fck, lfe,
                      ps_g_, dir, 0.f, 0, ps_T_, fmf ? damp_fc_ : lfe, lsh, ldp, lhz);
@@ -794,11 +777,9 @@ class Explorer : public Module {
                       // -1 hollow / 0 sine / +1 feedback); -1 = not the 2-OP family
     float lb, lue, llfd;
     int   lside;
-    int   specz;      // FM LAB SW1 MID SPECTRAL: zone 0..5 (a = density nu at the knob, b = tilt gamma at the knob,
-                      // sge = gamma with the K4 envelope (g_s now), sm = K5 0 still / 1 trav (CCW) / 2 sweep (CW),
-                      // sv = travel rate Hz (CCW) / sweep T s (CW) at the knob); else -1
-    float sge, sv;
-    int   sm;
+    int   specz;      // FM LAB SW1 MID SPECTRAL: 0 (a = density nu, b = tilt gamma, se = comb exponent e, sw = warp w,
+                      // sph = comb position phi, all at the knob); else -1
+    float se, sw, sph;
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
     float c3;
@@ -854,10 +835,8 @@ class Explorer : public Module {
     const int c = EXP_ADD_ZONES[z].ctl;
     return (c == kAddB || c == kAddUniH) ? "h" : "I";
   }
-  // FM LAB SPECTRAL zone name (DIAG).
-  static const char* SpecZoneName(int z) {
-    return (z >= 0 && z < explorer_k::EXP_SPEC_N_ZONES) ? explorer_k::EXP_SPEC_ZONES[z].name : "?";
-  }
+  // FM LAB SPECTRAL name (DIAG; no zones since 2026-11-03 continuous K1).
+  static const char* SpecZoneName(int z) { return (z >= 0) ? "SPEC" : "?"; }
   static const char* ZoneName(int m, int z) {
     static const char* const wt[explorer_k::EXP_TB_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-ROUGH", "SQR-PWM",
                                                              "VOCAL", "PPG-CLASSIC", "SOFT-A", "SOFT-B",
@@ -876,6 +855,8 @@ class Explorer : public Module {
         if (EXP_FOLLOW_ENABLE) fol_y_ = fol_.Process(in[i + j]);
       }
       const float d = dec_(in + i);
+      k1s_ += (k1_t_ - k1s_) * ca;
+      if (fabsf(k1_t_ - k1s_) < EXP_CTRL_SNAP) k1s_ = k1_t_;   // land exactly
       k2s_ += (k2_t_ - k2s_) * ca;
       k3s_ += (k3_t_ - k3s_) * ca;
       if (fabsf(k3_t_ - k3s_) < EXP_CTRL_SNAP) k3s_ = k3_t_;   // land exactly (dampener re-picks stop)
@@ -908,7 +889,6 @@ class Explorer : public Module {
         const int mn = var_ >> 6;
         if (mn != (vfrom_ >> 6)) {                       // a new model starts cleared (items of the
           for (int o = 0; o < kSlots; o++) ResetModelState(mn, o);   // same model share its state)
-          if (mn == kLSPEC) SpecSlides(true);            // FM LAB SPECTRAL enters at its zone's warp / exponent
         } else if (mn == kLADD) {                        // ADDITIVE zone -> zone: the entering zone's own state fresh
           AddEnterZone(var_ & 63, vfrom_ & 63);
         }
@@ -920,7 +900,6 @@ class Explorer : public Module {
       if (lab_) {                                // FM LAB: the 2-OP ratio slides (1 ms) to K1 mode / K2's (MID / DOWN: r 1)
         l2r_.Set(LabRatio(lab_m_t_, lab_st_t_, k2s_), disc_len_);   // FREE: target follows the smoothed K2
         l2r_.Tick();
-        SpecSlides(false);                       // SPECTRAL: warp w / exponent e slide (1 ms) to the K1 zone's
       }
       // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
       // ONE-SHOT: o3_ = g_s (UP dampener fc / MID 2-pole LP fc only: DampFmUpdate / TfUpdate) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
@@ -1083,7 +1062,6 @@ class Explorer : public Module {
     if (!loop_) {
       PsUpdate(onset, t4); LfoUpdate(onset);
       if (lab_) {
-        SpecUpdate(onset);
         // FM LAB 2-OP K5 fade-in: LFO depth x g_s on the swell side (t4 > 0), full depth on decay / noon; one-pole slid
         // (mv_a_ = EXP_ENV_FM_SLIDE_MS 1 ms, lands exactly) so a side change mid-swell doesn't step the feedback.
         const float ft = (t4 > 0.f) ? ps_gs_ : 1.f;
@@ -1212,7 +1190,7 @@ class Explorer : public Module {
   inline float LfoO2(int m) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
-    // (FM LAB SPECTRAL: none - K5 = comb movement, SpecUpdate)
+    // (FM LAB SPECTRAL: none - K5 = static comb position)
     if (m == kLADD) return lfo_s_ * EXP_ADD_LFO_SWING;          // FM LAB ADDITIVE: A h / B index knob / STRETCH delta
                                                                  // (Derive; not used by the UNISON zones)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
@@ -1261,17 +1239,19 @@ class Explorer : public Module {
   }
 
   // --- FM LAB SPECTRAL helpers (SW1 MID, model kLSPEC; see FM LAB SW1 MID in the header) ---
-  // DIAG: density nu at the knob (a), tilt gamma at the knob (b) and with the current K4 g_s (diag_spec_ge_), K5 mode
-  // (0 still, 1 trav CCW, 2 sweep CW) and its rate (Hz) / sweep time (s) at the knob value.
-  void SpecDiagParam(float k2, float k3, float k5, float& a, float& b) {
+  // DIAG, all at the knob values: density nu (a), tilt gamma (b), comb exponent e, warp w, comb position phi.
+  void SpecDiagParam(float k1, float k2, float k3, float k4, float k5, float& a, float& b) {
     using namespace explorer_k;
     a = EXP_SPEC_NU_MAX * Clamp01(k2);
     b = SpecGamma(k3);
-    diag_spec_ge_ = SpecGamma(ps_gs_ * k3);
-    const float t5 = 2.f * k5 - 1.f, u = fabsf(t5);
-    diag_spec_m_ = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
-    diag_spec_v_ = (t5 < 0.f) ? EXP_SPEC_LFO_HZ_MIN * expf(u * logf(EXP_SPEC_LFO_HZ_MAX / EXP_SPEC_LFO_HZ_MIN))
-                 : (t5 > 0.f) ? EXP_SPEC_ENV_T_MIN * expf(u * logf(EXP_SPEC_ENV_T_MAX / EXP_SPEC_ENV_T_MIN)) : 0.f;
+    diag_spec_e_ = SpecExp(k1);
+    diag_spec_w_ = Clamp01(k4);
+    diag_spec_ph_ = Clamp01(k5);
+  }
+  // Comb exponent e at k1 (0..1): E_MIN (E_MAX / E_MIN)^k1 = 0.25 16^k1 (CCW 0.25 narrow, noon 1, CW 4 peaky).
+  inline float SpecExp(float k1) const {
+    using namespace explorer_k;
+    return EXP_SPEC_E_MIN * expf(Clamp01(k1) * sp_ln_e_);
   }
   // Tilt exponent gamma at k (0..1): GAMMA_MAX -> GAMMA_MID over [0, 0.5], GAMMA_MID -> 0 over [0.5, 1] (linear).
   static inline float SpecGamma(float k) {
@@ -1280,65 +1260,17 @@ class Explorer : public Module {
     return (k <= 0.5f) ? EXP_SPEC_GAMMA_MAX + (EXP_SPEC_GAMMA_MID - EXP_SPEC_GAMMA_MAX) * (2.f * k)
                        : EXP_SPEC_GAMMA_MID * (2.f - 2.f * k);
   }
-  // Warp w / comb exponent e slide linearly (EXP_DISC_SLIDE_MS) to the K1 zone's values, per 8 kHz sample; jump = set
-  // at once (Init, entering kLSPEC from another model).
-  inline void SpecSlides(bool jump) {
-    using namespace explorer_k;
-    const int z = lab_sz_t_;
-    const ExpSpecZone& Z = EXP_SPEC_ZONES[(z >= 0 && z < EXP_SPEC_N_ZONES) ? z : 0];
-    if (jump) { spw_.Jump(Z.warp); spe_.Jump(Z.peak); return; }
-    spw_.Set(Z.warp, disc_len_); spw_.Tick();
-    spe_.Set(Z.peak, disc_len_); spe_.Tick();
-  }
-  // K5 COMB MOVEMENT, per 8 kHz sample on the lab instance (EnvUpdate, after PsUpdate / LfoUpdate). t5 = 2 k5s_ - 1;
-  // rate / T recomputed only when t5 moved. Target phi_t: CCW free-running wrap (entering CCW: from the applied phi),
-  // noon 0, CW the onset sweep 0 -> 1 linear over T, resting at 1 (also off the CW side). Applied sp_ph_ = one-pole
-  // toward phi_t along the shortest way round (sp_a_, tau EXP_SPEC_PHI_SLIDE_MS), kept in [0, 1), lands exactly.
-  inline void SpecUpdate(bool onset) {
-    using namespace explorer_k;
-    const float t5 = 2.f * k5s_ - 1.f;
-    if (t5 != sp_t5_) {
-      sp_t5_ = t5;
-      const float u = fabsf(t5);
-      sp_inc_  = EXP_SPEC_LFO_HZ_MIN * expf(u * sp_ln_lfo_) / sr8_;
-      sp_einc_ = 1.f / (EXP_SPEC_ENV_T_MIN * expf(u * sp_ln_env_) * sr8_);
-    }
-    const int md = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
-    if (md == 2) {
-      if (onset) sp_env_ = 0.f;                  // each onset: the sweep restarts at 0
-      else if (sp_env_ < 1.f) { sp_env_ += sp_einc_; if (sp_env_ > 1.f) sp_env_ = 1.f; }
-    } else {
-      sp_env_ = 1.f;                             // at rest off the CW side
-    }
-    float tg;
-    if (md == 1) {
-      if (sp_md_ != 1) sp_lph_ = sp_ph_;         // entering CCW: travel on from where the comb is
-      sp_lph_ += sp_inc_;
-      sp_lph_ -= floorf(sp_lph_);
-      tg = sp_lph_;
-    } else {
-      tg = (md == 2) ? sp_env_ : 0.f;
-    }
-    sp_md_ = md;
-    tg -= floorf(tg);                            // 1 == 0
-    float df = tg - sp_ph_;
-    df -= floorf(df + 0.5f);                     // shortest way round, [-0.5, 0.5)
-    if (fabsf(df) < EXP_CTRL_SNAP) sp_ph_ = tg;
-    else {
-      float ph = sp_ph_ + sp_a_ * df;
-      ph -= floorf(ph);
-      sp_ph_ = ph;
-    }
-  }
   // Partial weights spec_w_[1..M] (shared by every band / slot), per 8 kHz sample while kLSPEC runs (either side of a
   // model crossfade), each part only when its inputs moved: y(n) when w moved (M - 1 expf), tilt when gamma moved
   // (M - 1 expf), comb when nu / w / e / phi moved (M - 1 table cos + the exponent), then the product + RMS norm.
-  //   nu = NU_MAX k2s_, gamma = SpecGamma(g_s k3s_), w / e = the slid zone values, phi = sp_ph_.
+  //   nu = NU_MAX k2s_, gamma = SpecGamma(k3s_), e = SpecExp(k1s_), w = k4s_, phi = k5s_ (all smoothed knobs).
   void SpecWeights(Params& p) {
     using namespace explorer_k;
     const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_);
-    const float ga = SpecGamma((loop_ ? 1.f : ps_gs_) * k3s_);
-    const float w = spw_.v, e = spe_.v, ph = sp_ph_;
+    const float ga = SpecGamma(k3s_);
+    const float w = Clamp01(k4s_), ph = Clamp01(k5s_);
+    if (k1s_ != sk_k1_) { sk_k1_ = k1s_; sp_e_ = SpecExp(k1s_); }   // e only when K1 moved
+    const float e = sp_e_;
     bool redo = false;
     if (w != sk_w_) {                            // y(n) = (M - 1) ((n - 1) / (M - 1))^(1 / (1 + K w))
       sk_w_ = w;
@@ -1353,15 +1285,10 @@ class Explorer : public Module {
     }
     if (nu != sk_nu_ || e != sk_e_ || ph != sk_ph_) {   // comb(n) = (0.5 + 0.5 cos(2 pi (nu y(n) + phi)))^e
       sk_nu_ = nu; sk_e_ = e; sk_ph_ = ph;
-      const bool e4 = (e == 4.f), eq = (e == 0.25f);   // the zone ends exactly
       for (int n = 2; n <= EXP_SPEC_M; n++) {
         float b = 0.5f + 0.5f * Cos01(nu * sp_y_[n] + ph);   // argument >= 0
         b = fminf(fmaxf(b, 0.f), 1.f);
-        float c;
-        if (e4)          { const float b2 = b * b; c = b2 * b2; }
-        else if (eq)     c = sqrtf(sqrtf(b));
-        else             c = (b > 0.f) ? expf(e * logf(b)) : 0.f;
-        sp_comb_[n] = c;
+        sp_comb_[n] = (b > 0.f) ? expf(e * logf(b)) : 0.f;   // b^e, general path (b = 0 -> 0)
       }
       redo = true;
     }
@@ -2023,7 +1950,7 @@ class Explorer : public Module {
       }
       case kLSPEC:                         // FM LAB SPECTRAL: weights in SpecWeights (Process); a / b = nu / gamma
         p.a = explorer_k::EXP_SPEC_NU_MAX * Clamp01(k2);
-        p.b = SpecGamma((loop_ ? 1.f : ps_gs_) * k3);
+        p.b = SpecGamma(k3);
         break;
       case kLADD: {                        // FM LAB ADDITIVE: p0 = I (before the per-band cap), p1 = u, p2 = 1 / sqrt(1 + u^2),
                                            // p3 / p4 = theta step constant / per Hz of f0 (cycles per 8 kHz sample),
@@ -2829,9 +2756,9 @@ class Explorer : public Module {
     s.labz = diag_lab_z_;
     s.lb = diag_lab_b_; s.lue = diag_lab_ue_; s.llfd = diag_lab_lfd_; s.lside = diag_lab_side_;
     s.specz = diag_spec_z_;
-    s.sge = diag_spec_ge_;
-    s.sv = diag_spec_v_;
-    s.sm = diag_spec_m_;
+    s.se = diag_spec_e_;
+    s.sw = diag_spec_w_;
+    s.sph = diag_spec_ph_;
     s.addz = diag_add_z_;
     s.c3 = diag_add_c3_;
     s.bm = diag_add_bm_;
@@ -2969,8 +2896,8 @@ class Explorer : public Module {
   int   zfade_len_ = 8;            // MID table zone change fade (EXP_TB_ZONE_XFADE_MS) in 8 kHz samples
   int   mfade_cur_ = 8;            // length of the running fade (mfade_len_ or zfade_len_)
   float mg_ = 1.f;                 // new-model gain during a fade
-  float k2s_ = 0.f, k3s_ = 0.f;                       // smoothed knobs
-  volatile float k2_t_ = 0.f, k3_t_ = 0.f;           // targets
+  float k1s_ = 0.f, k2s_ = 0.f, k3s_ = 0.f;           // smoothed knobs (K1: FM LAB SPECTRAL only)
+  volatile float k1_t_ = 0.f, k2_t_ = 0.f, k3_t_ = 0.f;   // targets
   volatile int rfmc_i_t_ = 0, ish_t_ = 0;   // snapped items: FM ratio index, interval semitones
   DSlide rfmc_, ish_;              // their slid values
   int   disc_len_ = 8;             // EXP_DISC_SLIDE_MS in 8 kHz samples
@@ -2996,8 +2923,6 @@ class Explorer : public Module {
   float diag_lab_b_ = 0.f, diag_lab_ue_ = 0.f, diag_lab_lfd_ = 0.f;   // DIAG: b at the knob, u_eff now, LFO depth x fade
   int   diag_lab_side_ = 0;        // DIAG: K3 side (-1 hollow, 0 sine, +1 feedback)
   // FM LAB SPECTRAL (SW1 MID)
-  volatile int lab_sz_t_ = 0;      // SPECTRAL zone (0..5, K1), Controls
-  DSlide spw_, spe_;               // slid warp w / comb exponent e
   float spec_w_[explorer_k::EXP_SPEC_M + 1] = {};   // partial weights W(n), n = 1..M (RMS-normalised)
   float sp_tilt_[explorer_k::EXP_SPEC_M + 1] = {};  // n^-gamma
   float sp_comb_[explorer_k::EXP_SPEC_M + 1] = {};  // comb(n)
@@ -3005,17 +2930,10 @@ class Explorer : public Module {
   float sp_ln_[explorer_k::EXP_SPEC_M + 1] = {};    // ln n
   float sp_lr_[explorer_k::EXP_SPEC_M + 1] = {};    // ln((n - 1) / (M - 1)), n >= 2
   float sk_w_ = -1.f, sk_g_ = -1.f, sk_nu_ = -1.f, sk_e_ = -1.f, sk_ph_ = -1.f;   // inputs the parts were made for
-  float sp_ph_ = 0.f;              // applied comb position phi [0, 1) (slid)
-  float sp_lph_ = 0.f;             // K5 CCW travel phase (target)
-  float sp_env_ = 1.f;             // K5 CW onset sweep 0 -> 1 (rests at 1)
-  int   sp_md_ = 0;                // K5 side of the last sample: 0 still, 1 CCW, 2 CW
-  float sp_t5_ = 2.f;              // t5 the rate / T were computed for
-  float sp_inc_ = 0.f, sp_einc_ = 0.f;   // CCW phase / CW sweep increment per 8 kHz sample
-  float sp_a_ = 0.f;               // phi slide coefficient (tau EXP_SPEC_PHI_SLIDE_MS)
-  float sp_ln_lfo_ = 0.f, sp_ln_env_ = 0.f;   // ln(LFO_HZ_MAX / MIN), ln(ENV_T_MAX / MIN)
-  int   diag_spec_z_ = -1;         // DIAG: SPECTRAL zone of the last Controls (-1 = not SPECTRAL)
-  float diag_spec_ge_ = 0.f, diag_spec_v_ = 0.f;   // DIAG: gamma with the envelope, K5 rate Hz / T s
-  int   diag_spec_m_ = 0;          // DIAG: K5 mode 0 still, 1 trav, 2 sweep
+  float sk_k1_ = -1.f, sp_e_ = 1.f;  // K1 the comb exponent e was computed for, e
+  float sp_ln_e_ = 0.f;            // ln(E_MAX / E_MIN)
+  int   diag_spec_z_ = -1;         // DIAG: 0 = SPECTRAL in the last Controls, -1 = not
+  float diag_spec_e_ = 0.f, diag_spec_w_ = 0.f, diag_spec_ph_ = 0.f;   // DIAG: e, w, phi at the knob
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
   float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
   float add_rho_[2][explorer_k::EXP_ADD_STR_M + 1] = {};
