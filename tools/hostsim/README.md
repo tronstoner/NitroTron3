@@ -142,7 +142,7 @@ the SW1 labels and the knob roles follow SW3.
   and under each knob (green) the value it sets now: K1 zone, K2 parameter
   (at the knob → with the K5 LFO), K3 (fc / tilt / index or harmonics), K4
   pluck ↔ swell state (g, decay / rise, T, applied fc), K5 LFO shape / depth /
-  rate, SPECTRAL e / warp / comb position or UNISON beat. These are the values of the
+  rate, SPECTRAL e / warp / partials N or UNISON beat. These are the values of the
   module's last DIAG snapshot, not a live meter: the envelope g is the value at
   the snapshot moment.
 

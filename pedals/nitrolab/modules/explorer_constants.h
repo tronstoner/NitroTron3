@@ -337,8 +337,8 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 //              swell along K3, K5 LFO on b (+- EXP_LFO_FB_SWING, faded in with the swell).
 //   SW1 MID  = SPECTRAL (2026-11-03, Odessa-style; replaces DUAL VOICE - in git history at 224f328): per band the
 //              ADDITIVE SAW series (16 exact harmonics, no FM, anti-fold edge 3800 / 400 Hz), every partial n weighted by
-//              W(n) = tilt(n) comb(n) (the same for all bands), RMS-normalised; K1 = comb shape (exponent e, continuous),
-//              K2 = comb density, K3 = tilt, K4 = warp, K5 = comb position (static). All smoothed knobs, no envelope /
+//              W(n) = tilt(n) comb(n) p(n) (the same for all bands), RMS-normalised; K1 = comb shape (exponent e, continuous),
+//              K2 = comb density, K3 = tilt, K4 = warp, K5 = partials (1 -> 16, continuous fade). All smoothed knobs, no envelope /
 //              LFO. See EXP_SPEC_* below and explorer.h.
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02): K1 = the 12 equal stepped zones EXP_ADD_ZONES (series SAW / ODD /
 //              OCT / SUB in model A / B, UNISON x 3, STRETCH), see EXP_ADD_* below and explorer.h.
@@ -390,10 +390,11 @@ constexpr float EXP_LAB_FREE_RMIN   = 0.125f;  // FREE: r at K2 CCW (r = RMIN (R
 constexpr float EXP_LAB_FREE_RMAX   = 8.f;     // FREE: r at K2 CW
 constexpr float EXP_LAB_REST_R      = 1.f;     // the 2-OP ratio slide rests here while SW1 MID / DOWN run
 // SW1 MID = SPECTRAL (2026-11-03; model kLSPEC, see explorer.h FM LAB SW1 MID). Partial n = 1..EXP_SPEC_M of the
-// band's SAW series (q = v^n, no FM), weight W(n) = tilt(n) comb(n), comb(1) = 1, W /= sqrt(sum_n W(n)^2):
+// band's SAW series (q = v^n, no FM), weight W(n) = tilt(n) comb(n) p(n), comb(1) = p(1) = 1, W /= sqrt(sum_n W(n)^2):
 //   tilt(n) = n^-gamma, gamma = 3 -> 1 over k3 [0, 0.5], 1 -> 0 over [0.5, 1] (smoothed K3, no envelope)
-//   comb(n) = (0.5 + 0.5 cos(2 pi (nu y(n) + phi)))^e, nu = EXP_SPEC_NU_MAX k2, y(n) = 15 ((n - 1) / 15)^(1 / (1 + 2 w))
-//            (= x(n) - 1; w = warp = K4), e = comb exponent (K1, continuous); phi = comb position (K5, static).
+//   comb(n) = (0.5 + 0.5 cos(2 pi nu y(n)))^e, nu = EXP_SPEC_NU_MAX k2, y(n) = 15 ((n - 1) / 15)^(1 / (1 + 2 w))
+//            (= x(n) - 1; w = warp = K4), e = comb exponent (K1, continuous); comb position phi fixed 0.
+//   p(n) = clamp(N - (n - 1), 0, 1), N = 1 + 15 k5 (partials, K5: CCW fundamental only -> CW all 16).
 constexpr float EXP_SPEC_E_MIN = 0.25f;   // comb exponent e at K1 CCW ("narrow": wide passbands, narrow notches)
 constexpr float EXP_SPEC_E_MAX = 4.0f;    // ... at K1 CW ("peaky"); e = E_MIN (E_MAX / E_MIN)^k1, noon 1 (plain cosine)
 constexpr int   EXP_SPEC_M          = 16;      // partials per band (the ADDITIVE SAW count)

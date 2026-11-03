@@ -131,23 +131,24 @@
 //              n = 1..16 (EXP_SPEC_M), anti-fold edge h_nk = clamp((3800 - n f') / 400, 0, 1) (EXP_HARM_FMAX / FEDGE,
 //              fixed; n = 1 no edge); band out W = sum_n W(n) h_nk Re(v^n) (SeriesSum SAW). No per-band state.
 //              Weights in the PARTIAL-NUMBER domain, the same for every band and slot, per 8 kHz sample and only when
-//              an input moved (tilt when gamma moved, comb when nu / w / e / phi moved; SpecWeights):
-//                W(n) = tilt(n) comb(n), then W /= sqrt(sum_n W(n)^2) (n = 1 counts; the per-band edge is NOT renormalised)
+//              an input moved (tilt when gamma moved, comb when nu / w / e moved, partials when N moved; SpecWeights):
+//                W(n) = tilt(n) comb(n) p(n), then W /= sqrt(sum_n W(n)^2) (n = 1 counts; the per-band edge is NOT renormalised)
 //                tilt(n) = n^-gamma;  comb(1) = 1 (fundamental always kept), n >= 2:
-//                comb(n) = (0.5 + 0.5 cos(2 pi (nu y(n) + phi)))^e,  y(n) = x(n) - 1 = 15 ((n - 1) / 15)^(1 / (1 + 2 w))
+//                comb(n) = (0.5 + 0.5 cos(2 pi nu y(n)))^e (comb position phi fixed at 0),  y(n) = x(n) - 1 = 15 ((n - 1) / 15)^(1 / (1 + 2 w))
 //                (x(1) = 1, x(16) = 16; w = 0 even notch spacing, w = 1 notches dense at the bottom / sparse at the top).
-//              PHASE CONVENTION: y counts from the fundamental, so nu = 0 = no notches (at phi = 0) and nu = 0.5, phi = 0
-//                removes the EVEN partials (odd series) - i.e. the cos(2 pi nu x(n) + 2 pi phi') form with phi' = phi - nu.
+//                p(n) = clamp(N - (n - 1), 0, 1), N = 1 + 15 k5 (partials count, continuous; p(1) = 1 always).
+//              PHASE CONVENTION: y counts from the fundamental, so nu = 0 = no notches and nu = 0.5
+//                removes the EVEN partials (odd series).
 //              CONTROLS (2026-11-03 rework; all from the one-pole smoothed knobs, EXP_CTRL_SMOOTH_MS, landing exactly;
-//                no envelope, no LFO, no zones - K4 pluck <-> swell and the K5 comb movement do not act on SPECTRAL):
+//                no envelope, no LFO, no zones - K4 pluck <-> swell and the K5 LFO do not act on SPECTRAL):
 //              K1 = COMB SHAPE e = 0.25 16^k1 (EXP_SPEC_E_MIN / MAX, continuous): CCW 0.25 narrow notches, noon 1 plain
 //                cosine, CW 4 peaky; b^e = exp(e ln b) (b = 0 -> 0); e recomputed only when the smoothed K1 moved.
 //              K2 = DENSITY nu = 0.5 k2 (EXP_SPEC_NU_MAX).
 //              K3 = TILT gamma = 3 - 4 k3 (k3 <= 0.5), 2 - 2 k3 (k3 > 0.5): 3 dull -> 1 saw (noon) -> 0 flat.
 //              K4 = WARP w = k4, 0 (even notch spacing) -> 1 (dense at the bottom / sparse at the top), continuous.
-//              K5 = COMB POSITION phi = k5, static, 0 -> 1 = one notch period over the full travel (phi 1 == phi 0).
-//              NOTE: at nu = 0 the comb has no spacing, so phi scales partials 2..16 together against the fundamental
-//                (down to the bare fundamental at phi = 0.5).
+//              K5 = PARTIALS N = 1 + 15 k5 (2026-11-03, Odessa-style, continuous fade): CCW fundamental only (sine),
+//                CW all 16; partial n weighted p(n) = clamp(N - (n - 1), 0, 1), so the top partial fades in as K5 turns
+//                (no steps). Applied before the RMS normalisation.
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, item = K1 zone). One harmonic series per band built on the
 //              slot's unit phasor v = u_k (as Armitage ADD: harmonics by repeated complex multiplication), FM on the
 //              series fundamental at ratio 1, no feedback: q = b e^{j I x} (b = v, x = Im v = sin 2 pi phi; SUB: b = w,
@@ -245,7 +246,7 @@
 //       FM LAB UP          feedback b as UP FM ratio zones (2-OP); swell side (t4 > 0): depth x g_s (fade-in)
 //       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
 //                          UNISON: no LFO (K5 = beat speed)
-//       FM LAB MID (SPEC)  none (K5 = static comb position; the shared LFO runs on, unused)
+//       FM LAB MID (SPEC)  none (K5 = partials N; the shared LFO runs on, unused)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
@@ -322,8 +323,8 @@
 //   K5  UP / DOWN: LFO (shapes / rates / sync as SW3 MID): UP on b +-0.3 after the caps (swell side: depth x g_s);
 //                    DOWN: A on h,
 //                    B on the index knob, STRETCH on delta (+-0.3 knob units); UNI: BEAT SPEED (CCW 8 Hz x f'/100 Hz
-//                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: COMB POSITION phi
-//                    0 -> 1 (one notch period over the full travel), static
+//                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: PARTIALS
+//                    N = 1 + 15 k5 (CCW fundamental only -> CW all 16, continuous fade of the top partial)
 //   K6 / SW2 / FS1 as SW3 MID
 //   SW1 family       UP = 2-OP FM, MID = SPECTRAL, DOWN = ADDITIVE
 //
@@ -332,7 +333,7 @@
 // stepped items from the raw knob.
 // DIAG second half: FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb fc<index fc Hz> b<feedback> (at
 // the knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo tri|stp|off d<depth at the knob> ><x swell fade now> ..Hz`,
-// SW1 MID `LAB SPEC e<comb exponent> w<warp> ph<comb position> nu<density> ga<tilt gamma>` (all at the knob; no ps /
+// SW1 MID `LAB SPEC e<comb exponent> w<warp> n<partial count N> nu<density> ga<tilt gamma>` (all at the knob; no ps /
 // fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
 // <knob> > <with LFO | beat Hz + prop / hz / off> <K3 name> <value at the knob> fc ..` (K2 / K3 names h / I / u / d);
 // + the UP `ps` part below (FM LAB DOWN); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
@@ -562,7 +563,7 @@ class Explorer : public Module {
       sp_tilt_[n] = sp_comb_[n] = spec_w_[n] = 0.f;
     }
     spec_w_[1] = sp_tilt_[1] = sp_comb_[1] = 1.f;
-    sk_w_ = sk_g_ = sk_nu_ = sk_e_ = sk_ph_ = sk_k1_ = -1.f;   // forces every part on the first SpecWeights
+    sk_w_ = sk_g_ = sk_nu_ = sk_e_ = sk_pn_ = sk_k1_ = -1.f;   // forces every part on the first SpecWeights
     sp_ln_e_ = logf(EXP_SPEC_E_MAX / EXP_SPEC_E_MIN);
     for (int m = 1; m <= EXP_ADD_K_MAX; m++) add_ln_[m] = logf((float)m);   // FM LAB ADDITIVE: m^-s = exp(-s ln m)
     for (int c = 0; c < 2; c++) { add_ks_[c] = -1; add_kh_[c] = -1.f; add_kd_[c] = -1.f; }
@@ -778,8 +779,8 @@ class Explorer : public Module {
     float lb, lue, llfd;
     int   lside;
     int   specz;      // FM LAB SW1 MID SPECTRAL: 0 (a = density nu, b = tilt gamma, se = comb exponent e, sw = warp w,
-                      // sph = comb position phi, all at the knob); else -1
-    float se, sw, sph;
+                      // sn = partial count N, all at the knob); else -1
+    float se, sw, sn;
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
     float c3;
@@ -1190,7 +1191,7 @@ class Explorer : public Module {
   inline float LfoO2(int m) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
-    // (FM LAB SPECTRAL: none - K5 = static comb position)
+    // (FM LAB SPECTRAL: none - K5 = partials N)
     if (m == kLADD) return lfo_s_ * EXP_ADD_LFO_SWING;          // FM LAB ADDITIVE: A h / B index knob / STRETCH delta
                                                                  // (Derive; not used by the UNISON zones)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
@@ -1239,14 +1240,14 @@ class Explorer : public Module {
   }
 
   // --- FM LAB SPECTRAL helpers (SW1 MID, model kLSPEC; see FM LAB SW1 MID in the header) ---
-  // DIAG, all at the knob values: density nu (a), tilt gamma (b), comb exponent e, warp w, comb position phi.
+  // DIAG, all at the knob values: density nu (a), tilt gamma (b), comb exponent e, warp w, partial count N.
   void SpecDiagParam(float k1, float k2, float k3, float k4, float k5, float& a, float& b) {
     using namespace explorer_k;
     a = EXP_SPEC_NU_MAX * Clamp01(k2);
     b = SpecGamma(k3);
     diag_spec_e_ = SpecExp(k1);
     diag_spec_w_ = Clamp01(k4);
-    diag_spec_ph_ = Clamp01(k5);
+    diag_spec_n_ = 1.f + (float)(EXP_SPEC_M - 1) * Clamp01(k5);
   }
   // Comb exponent e at k1 (0..1): E_MIN (E_MAX / E_MIN)^k1 = 0.25 16^k1 (CCW 0.25 narrow, noon 1, CW 4 peaky).
   inline float SpecExp(float k1) const {
@@ -1262,13 +1263,15 @@ class Explorer : public Module {
   }
   // Partial weights spec_w_[1..M] (shared by every band / slot), per 8 kHz sample while kLSPEC runs (either side of a
   // model crossfade), each part only when its inputs moved: y(n) when w moved (M - 1 expf), tilt when gamma moved
-  // (M - 1 expf), comb when nu / w / e / phi moved (M - 1 table cos + the exponent), then the product + RMS norm.
-  //   nu = NU_MAX k2s_, gamma = SpecGamma(k3s_), e = SpecExp(k1s_), w = k4s_, phi = k5s_ (all smoothed knobs).
+  // (M - 1 expf), comb when nu / w / e moved (M - 1 table cos + the exponent; phi fixed 0), partials p(n) when N moved, then the
+  // product + RMS norm.
+  //   nu = NU_MAX k2s_, gamma = SpecGamma(k3s_), e = SpecExp(k1s_), w = k4s_, N = 1 + (M - 1) k5s_ (all smoothed knobs).
   void SpecWeights(Params& p) {
     using namespace explorer_k;
     const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_);
     const float ga = SpecGamma(k3s_);
-    const float w = Clamp01(k4s_), ph = Clamp01(k5s_);
+    const float w = Clamp01(k4s_);
+    const float pn = 1.f + (float)(EXP_SPEC_M - 1) * Clamp01(k5s_);
     if (k1s_ != sk_k1_) { sk_k1_ = k1s_; sp_e_ = SpecExp(k1s_); }   // e only when K1 moved
     const float e = sp_e_;
     bool redo = false;
@@ -1283,19 +1286,24 @@ class Explorer : public Module {
       for (int n = 2; n <= EXP_SPEC_M; n++) sp_tilt_[n] = expf(-ga * sp_ln_[n]);
       redo = true;
     }
-    if (nu != sk_nu_ || e != sk_e_ || ph != sk_ph_) {   // comb(n) = (0.5 + 0.5 cos(2 pi (nu y(n) + phi)))^e
-      sk_nu_ = nu; sk_e_ = e; sk_ph_ = ph;
+    if (pn != sk_pn_) {                          // p(n) = clamp(N - (n - 1), 0, 1)
+      sk_pn_ = pn;
+      for (int n = 2; n <= EXP_SPEC_M; n++) sp_pn_[n] = fminf(fmaxf(pn - (float)(n - 1), 0.f), 1.f);
+      redo = true;
+    }
+    if (nu != sk_nu_ || e != sk_e_) {            // comb(n) = (0.5 + 0.5 cos(2 pi nu y(n)))^e
+      sk_nu_ = nu; sk_e_ = e;
       for (int n = 2; n <= EXP_SPEC_M; n++) {
-        float b = 0.5f + 0.5f * Cos01(nu * sp_y_[n] + ph);   // argument >= 0
+        float b = 0.5f + 0.5f * Cos01(nu * sp_y_[n]);   // argument >= 0
         b = fminf(fmaxf(b, 0.f), 1.f);
         sp_comb_[n] = (b > 0.f) ? expf(e * logf(b)) : 0.f;   // b^e, general path (b = 0 -> 0)
       }
       redo = true;
     }
-    if (redo) {                                  // W = tilt comb (W(1) = 1), / sqrt(sum W^2)
+    if (redo) {                                  // W = tilt comb p (W(1) = 1), / sqrt(sum W^2)
       float sum = 1.f;
       for (int n = 2; n <= EXP_SPEC_M; n++) {
-        const float v = sp_tilt_[n] * sp_comb_[n];
+        const float v = sp_tilt_[n] * sp_comb_[n] * sp_pn_[n];
         spec_w_[n] = v;
         sum += v * v;
       }
@@ -2758,7 +2766,7 @@ class Explorer : public Module {
     s.specz = diag_spec_z_;
     s.se = diag_spec_e_;
     s.sw = diag_spec_w_;
-    s.sph = diag_spec_ph_;
+    s.sn = diag_spec_n_;
     s.addz = diag_add_z_;
     s.c3 = diag_add_c3_;
     s.bm = diag_add_bm_;
@@ -2926,14 +2934,15 @@ class Explorer : public Module {
   float spec_w_[explorer_k::EXP_SPEC_M + 1] = {};   // partial weights W(n), n = 1..M (RMS-normalised)
   float sp_tilt_[explorer_k::EXP_SPEC_M + 1] = {};  // n^-gamma
   float sp_comb_[explorer_k::EXP_SPEC_M + 1] = {};  // comb(n)
+  float sp_pn_[explorer_k::EXP_SPEC_M + 1] = {};    // partials factor p(n)
   float sp_y_[explorer_k::EXP_SPEC_M + 1] = {};     // warped position y(n) = x(n) - 1
   float sp_ln_[explorer_k::EXP_SPEC_M + 1] = {};    // ln n
   float sp_lr_[explorer_k::EXP_SPEC_M + 1] = {};    // ln((n - 1) / (M - 1)), n >= 2
-  float sk_w_ = -1.f, sk_g_ = -1.f, sk_nu_ = -1.f, sk_e_ = -1.f, sk_ph_ = -1.f;   // inputs the parts were made for
+  float sk_w_ = -1.f, sk_g_ = -1.f, sk_nu_ = -1.f, sk_e_ = -1.f, sk_pn_ = -1.f;   // inputs the parts were made for
   float sk_k1_ = -1.f, sp_e_ = 1.f;  // K1 the comb exponent e was computed for, e
   float sp_ln_e_ = 0.f;            // ln(E_MAX / E_MIN)
   int   diag_spec_z_ = -1;         // DIAG: 0 = SPECTRAL in the last Controls, -1 = not
-  float diag_spec_e_ = 0.f, diag_spec_w_ = 0.f, diag_spec_ph_ = 0.f;   // DIAG: e, w, phi at the knob
+  float diag_spec_e_ = 0.f, diag_spec_w_ = 0.f, diag_spec_n_ = 0.f;    // DIAG: e, w, N at the knob
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
   float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
   float add_rho_[2][explorer_k::EXP_ADD_STR_M + 1] = {};
