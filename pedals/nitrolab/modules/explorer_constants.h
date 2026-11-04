@@ -338,8 +338,9 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 //   SW1 MID  = SPECTRAL (2026-11-03, Odessa-style; replaces DUAL VOICE - in git history at 224f328): per band the
 //              ADDITIVE SAW series (16 exact harmonics, no FM, anti-fold edge 3800 / 400 Hz), every partial n weighted by
 //              W(n) = tilt(n) comb(n) p(n) (the same for all bands), RMS-normalised; K1 = comb shape (exponent e, continuous),
-//              K2 = comb density, K3 = tilt, K4 = warp, K5 = partials (1 -> 16, continuous fade). All smoothed knobs, no envelope /
-//              LFO. See EXP_SPEC_* below and explorer.h.
+//              K2 = comb density, K3 = tilt (bipolar, flat at noon), K4 = partial shift (every partial of a band +s f'),
+//              K5 = partials (1 -> 16, stepped, 1 ms slide). SW2 one octave lower (UP played, MID -1, DOWN -2). No
+//              envelope / LFO. See EXP_SPEC_* below and explorer.h.
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02): K1 = the 12 equal stepped zones EXP_ADD_ZONES (series SAW / ODD /
 //              OCT / SUB in model A / B, UNISON x 3, STRETCH), see EXP_ADD_* below and explorer.h.
 //              (EXP_LAB_REST_R: the 2-OP ratio slide rests at r 1 while MID / DOWN run.)
@@ -391,17 +392,19 @@ constexpr float EXP_LAB_FREE_RMAX   = 8.f;     // FREE: r at K2 CW
 constexpr float EXP_LAB_REST_R      = 1.f;     // the 2-OP ratio slide rests here while SW1 MID / DOWN run
 // SW1 MID = SPECTRAL (2026-11-03; model kLSPEC, see explorer.h FM LAB SW1 MID). Partial n = 1..EXP_SPEC_M of the
 // band's SAW series (q = v^n, no FM), weight W(n) = tilt(n) comb(n) p(n), comb(1) = p(1) = 1, W /= sqrt(sum_n W(n)^2):
-//   tilt(n) = n^-gamma, gamma = 3 -> 1 over k3 [0, 0.5], 1 -> 0 over [0.5, 1] (smoothed K3, no envelope)
-//   comb(n) = (0.5 + 0.5 cos(2 pi nu y(n)))^e, nu = EXP_SPEC_NU_MAX k2, y(n) = 15 ((n - 1) / 15)^(1 / (1 + 2 w))
-//            (= x(n) - 1; w = warp = K4), e = comb exponent (K1, continuous); comb position phi fixed 0.
-//   p(n) = clamp(N - (n - 1), 0, 1), N = 1 + 15 k5 (partials, K5: CCW fundamental only -> CW all 16).
+//   tilt(n) = n^-gamma, gamma = 3 -> 0 over k3 [0, 0.5], 0 -> -1 over [0.5, 1] (2026-11-04; smoothed K3; negative =
+//            upper partials louder)
+//   comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e, nu = EXP_SPEC_NU_MAX k2, e = comb exponent (K1, continuous); comb
+//            position phi fixed 0; warp removed 2026-11-04 (w fixed 0).
+//   p(n) = 1 for n <= N else 0, N = 1 + Quantize(k5, 16) (raw K5, 16 equal zones), each step slid EXP_DISC_SLIDE_MS.
+//   shift (K4): every partial of a band moved by delta_k = s f'_k, s = EXP_SPEC_SHIFT_MAX (2 k4 - 1) (smoothed K4).
 constexpr float EXP_SPEC_E_MIN = 0.25f;   // comb exponent e at K1 CCW ("narrow": wide passbands, narrow notches)
 constexpr float EXP_SPEC_E_MAX = 4.0f;    // ... at K1 CW ("peaky"); e = E_MIN (E_MAX / E_MIN)^k1, noon 1 (plain cosine)
 constexpr int   EXP_SPEC_M          = 16;      // partials per band (the ADDITIVE SAW count)
 constexpr float EXP_SPEC_NU_MAX     = 0.5f;    // comb density nu at K2 CW (0.5 = a notch on every second partial)
-constexpr float EXP_SPEC_WARP_K     = 2.f;     // warp exponent 1 / (1 + this w)
-constexpr float EXP_SPEC_GAMMA_MAX  = 3.f;     // tilt exponent at k3 = 0 (dull)
-constexpr float EXP_SPEC_GAMMA_MID  = 1.f;     // ... at noon (saw); 0 at k3 = 1 (flat)
+constexpr float EXP_SPEC_GAMMA_MAX  = 3.f;     // tilt exponent at k3 = 0 (dull); 0 at noon (flat)
+constexpr float EXP_SPEC_GAMMA_MIN  = -1.f;    // ... at k3 = 1 (upper partials louder, n^+1)
+constexpr float EXP_SPEC_SHIFT_MAX  = 0.5f;    // K4 partial shift s at CW (+0.5 f'), -0.5 at CCW, 0 at noon (harmonic)
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
 // harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).

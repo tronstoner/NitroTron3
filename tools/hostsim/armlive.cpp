@@ -251,8 +251,8 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(line, sizeof line, "LAB %s %s%.2f >%.2f %s%.2f fc %d%s mute %s", Explorer::AddZoneName(d.addz),
              Explorer::AddK2Name(d.addz), d.a, d.b, Explorer::AddK3Name(d.addz), d.c3, (int)(d.fc + 0.5f), env, mu);
   else if (d.specz >= 0)
-    snprintf(line, sizeof line, "LAB SPEC e%.2f w%.2f n%.2f nu%.2f ga%.2f%s mute %s", d.se, d.sw, d.sn, d.a, d.b,
-             env, mu);
+    snprintf(line, sizeof line, "LAB SPEC ga%.2f nu%.2f e%.2f s%.2f n%d oct %d%s mute %s", d.b, d.a, d.se, d.ss,
+             (int)d.sn, d.soct, env, mu);
   else if (d.labz >= 0)
     snprintf(line, sizeof line, "LAB %s r%.2f %s fc %d b%.2f u%.2f%s mute %s", Explorer::LabZoneName(d.labz), d.a,
              Explorer::LabSideName(d.lside), (int)(d.b + 0.5f), d.lb, d.lue, env, mu);
@@ -759,7 +759,7 @@ int main(int argc, char** argv) {
                  ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +
-                 ",\"se\":" + N(x.se) + ",\"sw\":" + N(x.sw) + ",\"sn\":" + N(x.sn) +
+                 ",\"se\":" + N(x.se) + ",\"ss\":" + N(x.ss) + ",\"sn\":" + N(x.sn) + ",\"soct\":" + std::to_string(x.soct) +
                  ",\"env\":" + N(x.env) + ",\"dir\":" + std::to_string(x.dir) + ",\"T\":" + N(x.T) + ",\"fce\":" + N(x.fce) +
                  ",\"lfo\":" + std::to_string(x.lfo) + ",\"lfod\":" + N(x.lfod) + ",\"lfohz\":" + N(x.lfohz) +
                  ",\"loop\":" + (x.loop ? "true" : "false") + ",\"mute\":" + (x.mute ? "true" : "false");
