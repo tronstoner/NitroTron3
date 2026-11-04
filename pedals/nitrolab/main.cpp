@@ -37,8 +37,8 @@
 //                          weights tilt x comb in the partial-number domain (RMS-normalised), K1 = comb shape
 //                          (exponent 0.25 narrow -> 1 cosine -> 4 peaky, continuous), K2 = comb density (0 none -> every
 //                          second partial), K3 = tilt (dull -> flat at noon -> upper partials louder), K4 = partial
-//                          shift (+-0.5 f', noon harmonic), K5 = partials N 1 -> 16 (stepped, 1 ms slide); SW2 one
-//                          octave lower (UP played / MID -1 / DOWN -2); no envelope / LFO. SW1 DOWN = ADDITIVE: one harmonic series per band (FM on its fundamental), K1 = 12
+//                          shift (+-0.5 f', noon harmonic), K5 = partials N 1 -> 16 (stepped, 1 ms slide);
+//                          no envelope / LFO. SW1 DOWN = ADDITIVE: one harmonic series per band (FM on its fundamental), K1 = 12
 //                          stepped zones SAW / ODD / OCT / SUB in model A (K2 harmonics, K3 index) and B (K2 index, K3
 //                          harmonics), UNI-SAW / UNI-ODD / UNI-SAW-H (K2 unison amount, K5 beat speed), STRETCH (K2
 //                          stretch); K4 pluck <-> swell on K3, K5 LFO on K2 (+-0.3; unison: beat speed). The former
@@ -228,7 +228,7 @@ int main() {
         // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
         // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb
         // fc<index fc Hz> b<feedback> (knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo .. d<knob depth> ><x swell fade> ..Hz`, MID `LAB SPEC ga<tilt gamma> nu<density>
-        // e<comb exponent> s<shift> n<partials N> oct <0|-1|-2>` (all at the knob; no ps / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
+        // e<comb exponent> s<shift> n<partials N>` (all at the knob; no ps / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
         // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
         // `u <knob> bt <beat Hz> prop|hz|off`); + the UP `ps` / `lfo` part (fce = the applied index fc; DOWN)
         const Explorer::DiagSnap& d = diag_xsnap;
@@ -266,9 +266,9 @@ int main() {
           hw.seed.PrintLine("LAB %s %s" D2F " >" D2F " %s" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::AddZoneName(d.addz), Explorer::AddK2Name(d.addz), D2V(d.a), D2V(d.b),
                             Explorer::AddK3Name(d.addz), D2V(d.c3), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.specz >= 0)                                // FM LAB MID: gamma, nu, e, shift s, partials N, SW2 octave (at the knob)
-          hw.seed.PrintLine("LAB SPEC ga" D2F " nu" D2F " e" D2F " s" D2F " n%d oct %d%s mute %d cpu %u%%",
-                            D2V(d.b), D2V(d.a), D2V(d.se), D2V(d.ss), (int)d.sn, d.soct, env, d.mute ? 1 : 0, cpu);
+        else if (d.specz >= 0)                                // FM LAB MID: gamma, nu, e, shift s, partials N (at the knob)
+          hw.seed.PrintLine("LAB SPEC ga" D2F " nu" D2F " e" D2F " s" D2F " n%d%s mute %d cpu %u%%",
+                            D2V(d.b), D2V(d.a), D2V(d.se), D2V(d.ss), (int)d.sn, env, d.mute ? 1 : 0, cpu);
         else if (d.labz >= 0)                                 // FM LAB UP: mode, ratio, K3 side, index fc, feedback, u_eff
           hw.seed.PrintLine("LAB %s r" D2F " %s fc %d b" D2F " u" D2F "%s mute %d cpu %u%%",
                             Explorer::LabZoneName(d.labz), D2V(d.a), Explorer::LabSideName(d.lside), (int)(d.b + 0.5f),

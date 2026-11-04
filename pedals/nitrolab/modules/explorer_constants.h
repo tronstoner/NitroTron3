@@ -339,8 +339,8 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 //              ADDITIVE SAW series (16 exact harmonics, no FM, anti-fold edge 3800 / 400 Hz), every partial n weighted by
 //              W(n) = tilt(n) comb(n) p(n) (the same for all bands), RMS-normalised; K1 = comb shape (exponent e, continuous),
 //              K2 = comb density, K3 = tilt (bipolar, flat at noon), K4 = partial shift (every partial of a band +s f'),
-//              K5 = partials (1 -> 16, stepped, 1 ms slide). SW2 one octave lower (UP played, MID -1, DOWN -2). No
-//              envelope / LFO. See EXP_SPEC_* below and explorer.h.
+//              K5 = partials (1 -> 16, stepped, 1 ms slide). No envelope /
+//              LFO. See EXP_SPEC_* below and explorer.h.
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02): K1 = the 12 equal stepped zones EXP_ADD_ZONES (series SAW / ODD /
 //              OCT / SUB in model A / B, UNISON x 3, STRETCH), see EXP_ADD_* below and explorer.h.
 //              (EXP_LAB_REST_R: the 2-OP ratio slide rests at r 1 while MID / DOWN run.)

@@ -154,12 +154,6 @@
 //                entry / slot start.
 //              K5 = PARTIALS N = 1 + Quantize(k5, 16) (2026-11-04, stepped, 16 equal zones on the raw K5): CCW
 //                fundamental only (sine), CW all 16; a step slides p(n) over 1 ms, no crossfade.
-//              SW2 (SPECTRAL only, 2026-11-04, one octave lower; the slot crossfade EXP_OCT_XFADE_MS as ever):
-//                UP = as played (played slot), MID = -1 oct (down slot, gain EXP_GAIN_DOWN), DOWN = -2 oct (slot kSD2:
-//                POG Down1 applied twice - ArmDown1(z), then the same half-angle step on that with its own per-band
-//                sign continuation (explorer_spec_st.s2: flips when Re < 0 and Im changes sign), f'_k = f_k / 4, gain
-//                EXP_GAIN_DOWN; starts cleared: sign +1, previous Im 0; silent bands hold the state). Other models
-//                keep +1 / played / -1; the -2 slot runs SPECTRAL only (a crossfade's non-SPECTRAL side gives 0 there).
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, item = K1 zone). One harmonic series per band built on the
 //              slot's unit phasor v = u_k (as Armitage ADD: harmonics by repeated complex multiplication), FM on the
 //              series fundamental at ratio 1, no feedback: q = b e^{j I x} (b = v, x = Im v = sin 2 pi phi; SUB: b = w,
@@ -336,7 +330,7 @@
 //                    B on the index knob, STRETCH on delta (+-0.3 knob units); UNI: BEAT SPEED (CCW 8 Hz x f'/100 Hz
 //                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: PARTIALS
 //                    N = 1 + Quantize(k5, 16) (CCW fundamental only -> CW all 16, stepped, 1 ms slide)
-//   K6 / SW2 / FS1 as SW3 MID (SW1 MID SPECTRAL: SW2 UP played / MID -1 oct / DOWN -2 oct)
+//   K6 / SW2 / FS1 as SW3 MID
 //   SW1 family       UP = 2-OP FM, MID = SPECTRAL, DOWN = ADDITIVE
 //
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
@@ -437,12 +431,9 @@ struct ExplorerAddState {
 };
 static ExplorerAddState EXP_FAST_BSS explorer_add_st;
 // FM LAB SPECTRAL state (SW3 DOWN instance only; ONE copy, D2 SRAM, 2026-11-04): K4 partial-shift phase theta (cycles,
-// [0, 1)) per slot (up / played / down / -2 oct) and band; the -2 oct slot's second Down1 sign continuation + the
-// previous Im of the first Down1 output, per band.
+// [0, 1)) per slot (up / played / down) and band.
 struct ExplorerSpecState {
-  float th[4][armbands::kArmBands];
-  float s2[armbands::kArmBands];
-  float pi2[armbands::kArmBands];
+  float th[3][armbands::kArmBands];
 };
 static ExplorerSpecState EXP_FAST_BSS explorer_spec_st;
 
@@ -474,7 +465,6 @@ class Explorer : public Module {
   static constexpr int kFactor = armbands::kArmFactor;
   enum { kUp = 0, kMid = 1, kDown = 2 };   // = cs.Switch() values
   enum { kSU = 0, kSP = 1, kSD = 2, kSlots = 3 };   // slots: up, played, down (SW2 selects one)
-  static constexpr int kSD2 = 3;                      // FM LAB SPECTRAL only: -2 oct slot (outside kSlots' arrays)
   // Global model ids (family offset + K1 zone).
   enum { kFM = 0, kXFM,                               // SW1 UP: FM ratio zones, XBAND zone
          kWT, kBIT,                                   // SW1 MID
@@ -587,11 +577,6 @@ class Explorer : public Module {
     sp_redo_ = true;
     spec_n_t_ = 1;
     sp_isr8_ = 1.f / sr8_;
-    for (int k = 0; k < kBands; k++) {           // -2 oct slot: f'_k = f_k / 4
-      fpd2_[k] = 0.25f * armbands::ArmCenterFreq(k);
-      ifpd2_[k] = 1.f / fpd2_[k];
-    }
-    sd2_on_ = false;
     sp_ln_e_ = logf(EXP_SPEC_E_MAX / EXP_SPEC_E_MIN);
     for (int m = 1; m <= EXP_ADD_K_MAX; m++) add_ln_[m] = logf((float)m);   // FM LAB ADDITIVE: m^-s = exp(-s ln m)
     for (int c = 0; c < 2; c++) { add_ks_[c] = -1; add_kh_[c] = -1.f; add_kd_[c] = -1.f; }
@@ -660,7 +645,7 @@ class Explorer : public Module {
     fol_.SetPreGain(EXP_FOLLOW_GAIN);
     fol_y_ = fol_f_ = 0.f;
     filt_off_ = false;
-    for (int i = 0; i < 4; i++) { og_[i] = og_t_[i] = 0.f; }
+    for (int i = 0; i < 3; i++) { og_[i] = og_t_[i] = 0.f; }
     og_[1] = og_t_[1] = 1.f;                     // SW2 MID = played slot
     rfmc_i_t_ = 0;
     rfmc_.Jump(EXP_FM_RATIOS[0]);
@@ -734,18 +719,10 @@ class Explorer : public Module {
       ft_t_ = 2.f * k4 - 1.f;
       filt_off_ = (fam == kUp);                                       // UP: no post filter
     }
-    if (specz >= 0) {                        // FM LAB SPECTRAL: SW2 one octave lower
-      og_t_[0] = 0.f;
-      og_t_[1] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> played slot
-      og_t_[2] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> -1 slot
-      og_t_[3] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -2 slot
-      spec_n_t_ = 1 + Quantize(k5, EXP_SPEC_M);   // K5 partials N = 1..16, raw knob, 16 equal zones
-    } else {
-      og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
-      og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
-      og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
-      og_t_[3] = 0.f;
-    }
+    og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
+    og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
+    og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
+    if (specz >= 0) spec_n_t_ = 1 + Quantize(k5, EXP_SPEC_M);   // K5 partials N = 1..16, raw knob, 16 equal zones
 
     led1.Set(1.f);
     led2.Set(mute_ ? 1.f : 0.f);
@@ -779,7 +756,7 @@ class Explorer : public Module {
         diag_spec_z_ = specz;
         diag_add_z_ = addz;
         if (labz >= 0) LabDiagParam(labz, k2, k3, k4, ldp, da, db);
-        if (specz >= 0) SpecDiagParam(k1, k2, k3, k4, k5, oct, da, db);
+        if (specz >= 0) SpecDiagParam(k1, k2, k3, k4, k5, da, db);
         if (addz >= 0) AddDiagParam(addz, k2, k3, k5, da, db);
         DiagControls(cs, led1, kv, fam, oct, model, zone, da, db, fck, lfe,
                      ps_g_, dir, 0.f, 0, ps_T_, fmf ? damp_fc_ : lfe, lsh, ldp, lhz);
@@ -817,9 +794,8 @@ class Explorer : public Module {
     float lb, lue, llfd;
     int   lside;
     int   specz;      // FM LAB SW1 MID SPECTRAL: 0 (a = density nu, b = tilt gamma, se = comb exponent e, ss = shift s,
-                      // sn = partial count N (stepped), all at the knob; soct = SW2 octave 0 / -1 / -2); else -1
+                      // sn = partial count N (stepped), all at the knob); else -1
     float se, ss, sn;
-    int   soct;
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
     float c3;
@@ -907,7 +883,7 @@ class Explorer : public Module {
       EnvUpdate();                               // envelope e -> slid v -> offsets o2_ / o3_ (consumes the onset flag)
       DampFmUpdate();                            // K3 dampener UP caps (smoothed K3 + o3 + LFO), per 8 kHz sample
       if (lab_) LabFmUpdate();                   // FM LAB 2-OP index fc / L from u_eff (smoothed K3 x g_s)
-      for (int j = 0; j < 4; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
+      for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
       rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
       rfmc_.Tick();
       {                                          // interval: knob semitones + 24 d2 v, clamped, rounded, then slid
@@ -929,7 +905,6 @@ class Explorer : public Module {
         const int mn = var_ >> 6;
         if (mn != (vfrom_ >> 6)) {                       // a new model starts cleared (items of the
           for (int o = 0; o < kSlots; o++) ResetModelState(mn, o);   // same model share its state)
-          if (mn == kLSPEC && lab_) SpecResetTheta(kSD2);
         } else if (mn == kLADD) {                        // ADDITIVE zone -> zone: the entering zone's own state fresh
           AddEnterZone(var_ & 63, vfrom_ & 63);
         }
@@ -989,8 +964,6 @@ class Explorer : public Module {
         if (g != 0.f) acc += g * ogain[j] * RunSlot(oslot[j], fading);
         else slot_on_[oslot[j]] = false;
       }
-      if (og_[3] != 0.f) acc += og_[3] * EXP_GAIN_DOWN * RunSlotD2(fading);   // FM LAB SPECTRAL -2 oct (gain = -1's)
-      else sd2_on_ = false;
       if (mfade_n_ > 0) --mfade_n_;
       if (pk_fade_n_ > 0) --pk_fade_n_;
       int_(acc * EXP_OUT_GAIN, wet + i);
@@ -1282,16 +1255,14 @@ class Explorer : public Module {
   }
 
   // --- FM LAB SPECTRAL helpers (SW1 MID, model kLSPEC; see FM LAB SW1 MID in the header) ---
-  // DIAG, all at the knob values: density nu (a), tilt gamma (b), comb exponent e, shift s, partial count N (stepped),
-  // SW2 octave (0 / -1 / -2).
-  void SpecDiagParam(float k1, float k2, float k3, float k4, float k5, int oct, float& a, float& b) {
+  // DIAG, all at the knob values: density nu (a), tilt gamma (b), comb exponent e, shift s, partial count N (stepped).
+  void SpecDiagParam(float k1, float k2, float k3, float k4, float k5, float& a, float& b) {
     using namespace explorer_k;
     a = EXP_SPEC_NU_MAX * Clamp01(k2);
     b = SpecGamma(k3);
     diag_spec_e_ = SpecExp(k1);
     diag_spec_s_ = SpecShift(k4);
     diag_spec_n_ = (float)(1 + Quantize(k5, EXP_SPEC_M));
-    diag_spec_oct_ = (oct == kUp) ? 0 : (oct == kMid) ? -1 : -2;
   }
   // Comb exponent e at k1 (0..1): E_MIN (E_MAX / E_MIN)^k1 = 0.25 16^k1 (CCW 0.25 narrow, noon 1, CW 4 peaky).
   inline float SpecExp(float k1) const {
@@ -1397,14 +1368,13 @@ class Explorer : public Module {
   }
   // FM LAB SPECTRAL: sum_k w_k a_k Re(S_k e^{j 2 pi theta_k}), S_k = SpecSeries on the slot's unit phasor (no FM),
   // theta_k (per slot / band, explorer_spec_st) advancing s f'_k / sr8 per sample (K4 shift, wrapped to [0, 1)).
-  // o = kSU / kSP / kSD / kSD2 (kSD2: f'_k = f_k / 4).
   float ShapeSpec(int o, const Params& p) {
     using namespace explorer_k;
     const float* __restrict mg  = mag_ + 1;
     const float* __restrict ur  = ur_;
     const float* __restrict ui  = ui_;
-    const float* __restrict fp  = (o == kSD2) ? fpd2_ : fp_[o];
-    const float* __restrict ifp = (o == kSD2) ? ifpd2_ : ifp_[o];
+    const float* __restrict fp  = fp_[o];
+    const float* __restrict ifp = ifp_[o];
     const float* __restrict w   = p.aw ? p.aw : spec_w_;
     float* __restrict th = explorer_spec_st.th[o];
     const float s = p.p0;
@@ -1429,42 +1399,6 @@ class Explorer : public Module {
   }
   void SpecResetTheta(int o) {
     for (int k = 0; k < kBands; k++) explorer_spec_st.th[o][k] = 0.f;
-  }
-  // -2 oct slot (FM LAB SPECTRAL, SW2 DOWN): u_k from POG Down1 applied twice - z1 = ArmDown1(z) (the band's own sign
-  // continuation), then the same half-angle step on z1 with its own sign state s2 (flips when z1's phase crosses pi:
-  // Re z1 < 0 and Im z1 changes sign, as BandShifter::Update), |z| kept, f'_k = f_k / 4. Silent bands: u = 0, state held.
-  void PrepD2() {
-    const float* __restrict mg = mag_ + 1;
-    ExplorerSpecState& S = explorer_spec_st;
-    for (int k = 0; k < kBands; k++) {
-      if (mg[k] == 0.f) { ur_[k] = ui_[k] = 0.f; continue; }
-      const float iv = inv_[k];
-      float a, b;
-      bands_[k].ArmDown1(iv, a, b);
-      if (a < 0.f && (std::signbit(b) != std::signbit(S.pi2[k]))) S.s2[k] = -S.s2[k];
-      S.pi2[k] = b;
-      const float b_sign = (b < 0.f) ? -1.f : 1.f;
-      const float xh = 0.5f * a / sqrtf(a * a + b * b);
-      const float c  = armbands::ArmFastSqrt(fmaxf(0.5f + xh, 1e-30f));
-      const float d  = b_sign * armbands::ArmFastSqrt(fmaxf(0.5f - xh, 1e-30f));
-      const float zr = S.s2[k] * (a * c + b * d);
-      const float zi = S.s2[k] * (b * c - a * d);
-      ur_[k] = zr * iv;
-      ui_[k] = zi * iv;
-    }
-  }
-  // -2 oct slot: only SPECTRAL runs here (the other side of a model crossfade contributes 0). Starts cleared: shift
-  // phase 0, sign +1, previous Im 0.
-  float RunSlotD2(bool fading) {
-    if (!sd2_on_) {
-      SpecResetTheta(kSD2);
-      for (int k = 0; k < kBands; k++) { explorer_spec_st.s2[k] = 1.f; explorer_spec_st.pi2[k] = 0.f; }
-      sd2_on_ = true;
-    }
-    PrepD2();
-    float sh = ((var_ >> 6) == kLSPEC) ? ShapeSpec(kSD2, pn_) : 0.f;
-    if (fading) sh = (1.f - mg_) * (((vfrom_ >> 6) == kLSPEC) ? ShapeSpec(kSD2, pf_) : 0.f) + mg_ * sh;
-    return sh;
   }
   // Index cap, 2OP Carson form with the carrier at c f' and the modulator at r f' (c f' + r f' (I + 1) <= L):
   // I <= (L / f' - c) / r - 1, floor 0 (ifp = 1 / f', ir = 1 / r; c = 1 = kFM's cap). With EXP_FM_ENV_INDEX_FLOOR > 0
@@ -2901,7 +2835,6 @@ class Explorer : public Module {
     s.se = diag_spec_e_;
     s.ss = diag_spec_s_;
     s.sn = diag_spec_n_;
-    s.soct = diag_spec_oct_;
     s.addz = diag_add_z_;
     s.c3 = diag_add_c3_;
     s.bm = diag_add_bm_;
@@ -3044,8 +2977,8 @@ class Explorer : public Module {
   volatile int rfmc_i_t_ = 0, ish_t_ = 0;   // snapped items: FM ratio index, interval semitones
   DSlide rfmc_, ish_;              // their slid values
   int   disc_len_ = 8;             // EXP_DISC_SLIDE_MS in 8 kHz samples
-  float og_[4] = { 0.f, 1.f, 0.f, 0.f };       // slot weights (up, played, down, -2 oct = SPECTRAL only), slid
-  volatile float og_t_[4] = { 0.f, 1.f, 0.f, 0.f };
+  float og_[3] = { 0.f, 1.f, 0.f };            // slot weights (up, played, down), slid
+  volatile float og_t_[3] = { 0.f, 1.f, 0.f };
   float oct_step_ = 0.f;
   // K4 post filter
   ExpSVF svf_[2];
@@ -3077,13 +3010,10 @@ class Explorer : public Module {
   volatile int spec_n_t_ = 1;      // K5 partials N (1..16, stepped, Controls)
   float sp_pstep_ = 0.125f;        // p(n) slide step per 8 kHz sample (1 / disc_len_)
   float sp_isr8_ = 1.f / 8000.f;   // 1 / sr8
-  float fpd2_[kBands], ifpd2_[kBands];   // -2 oct slot: f'_k = f_k / 4, 1 / f'_k
-  bool  sd2_on_ = false;           // -2 oct slot computed last sample
   float sk_k1_ = -1.f, sp_e_ = 1.f;  // K1 the comb exponent e was computed for, e
   float sp_ln_e_ = 0.f;            // ln(E_MAX / E_MIN)
   int   diag_spec_z_ = -1;         // DIAG: 0 = SPECTRAL in the last Controls, -1 = not
   float diag_spec_e_ = 0.f, diag_spec_s_ = 0.f, diag_spec_n_ = 0.f;    // DIAG: e, shift s, N at the knob
-  int   diag_spec_oct_ = 0;        // DIAG: SPECTRAL SW2 octave 0 / -1 / -2
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
   float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
   float add_rho_[2][explorer_k::EXP_ADD_STR_M + 1] = {};
