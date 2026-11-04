@@ -152,8 +152,12 @@
 //                harmonic. theta_k (cycles, per slot and band) += s f'_k / 8000 per sample, wrapped to [0, 1) (floor);
 //                held while s = 0 (a constant phase, theta 0 from a fresh start = Re S_k exactly); cleared on model
 //                entry / slot start.
-//              K5 = PARTIALS N = 1 + Quantize(k5, 16) (2026-11-04, stepped, 16 equal zones on the raw K5): CCW
-//                fundamental only (sine), CW all 16; a step slides p(n) over 1 ms, no crossfade.
+//              K5 = PARTIALS, bipolar (2026-11-04, stepped on the raw K5, split at noon: k5 >= 0.5 = COUNT, k5 < 0.5 =
+//                SOLO): COUNT N = 1 + Quantize(2 (k5 - 0.5), 16) (noon 1 = fundamental only -> CW all 16), p(n) = 1 for
+//                n <= N; SOLO s = 1 + Quantize(2 (0.5 - k5), 16) (just CCW of noon partial 1 -> full CCW partial 16),
+//                p(n) = 1 only for n = s. Every p(n) (incl. n = 1) slides over 1 ms on any step / side change, no
+//                crossfade. Comb and tilt stay applied in SOLO; RMS-normalised as COUNT (sum W^2 = 0, e.g. the comb
+//                notches the solo partial: W = 0, silent, no divide).
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, item = K1 zone). One harmonic series per band built on the
 //              slot's unit phasor v = u_k (as Armitage ADD: harmonics by repeated complex multiplication), FM on the
 //              series fundamental at ratio 1, no feedback: q = b e^{j I x} (b = v, x = Im v = sin 2 pi phi; SUB: b = w,
@@ -251,7 +255,7 @@
 //       FM LAB UP          feedback b as UP FM ratio zones (2-OP); swell side (t4 > 0): depth x g_s (fade-in)
 //       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
 //                          UNISON: no LFO (K5 = beat speed)
-//       FM LAB MID (SPEC)  none (K5 = partials N; the shared LFO runs on, unused)
+//       FM LAB MID (SPEC)  none (K5 = partials count / solo; the shared LFO runs on, unused)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
@@ -329,7 +333,7 @@
 //                    DOWN: A on h,
 //                    B on the index knob, STRETCH on delta (+-0.3 knob units); UNI: BEAT SPEED (CCW 8 Hz x f'/100 Hz
 //                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: PARTIALS
-//                    N = 1 + Quantize(k5, 16) (CCW fundamental only -> CW all 16, stepped, 1 ms slide)
+//                    bipolar: noon -> CW COUNT N 1 -> 16; just CCW of noon -> CCW SOLO partial 1 -> 16 (stepped, 1 ms slide)
 //   K6 / SW2 / FS1 as SW3 MID
 //   SW1 family       UP = 2-OP FM, MID = SPECTRAL, DOWN = ADDITIVE
 //
@@ -338,7 +342,7 @@
 // stepped items from the raw knob.
 // DIAG second half: FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb fc<index fc Hz> b<feedback> (at
 // the knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo tri|stp|off d<depth at the knob> ><x swell fade now> ..Hz`,
-// SW1 MID `LAB SPEC ga<tilt gamma> nu<density> e<comb exponent> s<shift> n<partials N> oct <0|-1|-2>` (at the knob; no ps /
+// SW1 MID `LAB SPEC ga<tilt gamma> nu<density> e<comb exponent> s<shift> n<count N> | s<solo partial> oct <0|-1|-2>` (at the knob; no ps /
 // fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
 // <knob> > <with LFO | beat Hz + prop / hz / off> <K3 name> <value at the knob> fc ..` (K2 / K3 names h / I / u / d);
 // + the UP `ps` part below (FM LAB DOWN); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
@@ -722,7 +726,7 @@ class Explorer : public Module {
     og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
     og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
     og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
-    if (specz >= 0) spec_n_t_ = 1 + Quantize(k5, EXP_SPEC_M);   // K5 partials N = 1..16, raw knob, 16 equal zones
+    if (specz >= 0) spec_n_t_ = SpecPartSel(k5);   // K5: +N count / -s solo (raw knob, 16 steps per half)
 
     led1.Set(1.f);
     led2.Set(mute_ ? 1.f : 0.f);
@@ -794,7 +798,7 @@ class Explorer : public Module {
     float lb, lue, llfd;
     int   lside;
     int   specz;      // FM LAB SW1 MID SPECTRAL: 0 (a = density nu, b = tilt gamma, se = comb exponent e, ss = shift s,
-                      // sn = partial count N (stepped), all at the knob); else -1
+                      // sn = +N count / -s solo partial (stepped), all at the knob); else -1
     float se, ss, sn;
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
@@ -1206,7 +1210,7 @@ class Explorer : public Module {
   inline float LfoO2(int m) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
-    // (FM LAB SPECTRAL: none - K5 = partials N)
+    // (FM LAB SPECTRAL: none - K5 = partials count / solo)
     if (m == kLADD) return lfo_s_ * EXP_ADD_LFO_SWING;          // FM LAB ADDITIVE: A h / B index knob / STRETCH delta
                                                                  // (Derive; not used by the UNISON zones)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
@@ -1262,7 +1266,15 @@ class Explorer : public Module {
     b = SpecGamma(k3);
     diag_spec_e_ = SpecExp(k1);
     diag_spec_s_ = SpecShift(k4);
-    diag_spec_n_ = (float)(1 + Quantize(k5, EXP_SPEC_M));
+    diag_spec_n_ = (float)SpecPartSel(k5);
+  }
+  // K5 partial selector at the raw k5 (0..1), bipolar, split at noon: k5 >= 0.5 -> COUNT +N, N = 1 + Quantize(2 (k5 -
+  // 0.5), 16) (noon 1, CW 16); k5 < 0.5 -> SOLO -s, s = 1 + Quantize(2 (0.5 - k5), 16) (just CCW of noon 1, CCW 16).
+  static inline int SpecPartSel(float k5) {
+    using namespace explorer_k;
+    k5 = Clamp01(k5);
+    if (k5 >= 0.5f) return 1 + Quantize(2.f * (k5 - 0.5f), EXP_SPEC_M);
+    return -(1 + Quantize(2.f * (0.5f - k5), EXP_SPEC_M));
   }
   // Comb exponent e at k1 (0..1): E_MIN (E_MAX / E_MIN)^k1 = 0.25 16^k1 (CCW 0.25 narrow, noon 1, CW 4 peaky).
   inline float SpecExp(float k1) const {
@@ -1287,7 +1299,8 @@ class Explorer : public Module {
   // (M - 1 table cos + the exponent; y(n) = n - 1, phi 0), partials p(n) while sliding to the stepped N, then the
   // product + RMS norm. Also p.p0 = shift s.
   //   nu = NU_MAX k2s_, gamma = SpecGamma(k3s_), e = SpecExp(k1s_), s = SpecShift(k4s_) (smoothed knobs);
-  //   p(n) -> 1 (n <= N) / 0 (n > N), N = spec_n_t_ (raw K5, stepped), slid linearly 0 <-> 1 over EXP_DISC_SLIDE_MS.
+  //   p(n) target (spec_n_t_, raw K5, stepped): COUNT +N -> 1 (n <= N) / 0; SOLO -s -> 1 (n = s) / 0; every p(n) incl.
+  //   n = 1 slid linearly 0 <-> 1 over EXP_DISC_SLIDE_MS. W(1) = p(1) (tilt(1) = comb(1) = 1). sum W^2 = 0 -> W = 0.
   void SpecWeights(Params& p) {
     using namespace explorer_k;
     const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_);
@@ -1302,9 +1315,9 @@ class Explorer : public Module {
       redo = true;
     }
     {                                            // p(n): slide toward the stepped target
-      const int N = spec_n_t_;
-      for (int n = 2; n <= EXP_SPEC_M; n++) {
-        const float t = (n <= N) ? 1.f : 0.f;
+      const int sel = spec_n_t_;
+      for (int n = 1; n <= EXP_SPEC_M; n++) {
+        const float t = (sel > 0) ? ((n <= sel) ? 1.f : 0.f) : ((n == -sel) ? 1.f : 0.f);
         const float v = sp_pn_[n];
         if (v != t) { sp_pn_[n] = Slide(v, t, sp_pstep_); redo = true; }
       }
@@ -1319,14 +1332,15 @@ class Explorer : public Module {
       redo = true;
     }
     if (redo) {                                  // W = tilt comb p (W(1) = 1), / sqrt(sum W^2)
-      float sum = 1.f;
+      const float w1 = sp_pn_[1];
+      float sum = w1 * w1;
       for (int n = 2; n <= EXP_SPEC_M; n++) {
         const float v = sp_tilt_[n] * sp_comb_[n] * sp_pn_[n];
         spec_w_[n] = v;
         sum += v * v;
       }
-      const float in = 1.f / sqrtf(sum);
-      spec_w_[1] = in;
+      const float in = (sum > 0.f) ? 1.f / sqrtf(sum) : 0.f;   // all W 0 (solo notched): silent, no divide
+      spec_w_[1] = w1 * in;
       for (int n = 2; n <= EXP_SPEC_M; n++) spec_w_[n] *= in;
     }
     p.aw = spec_w_;
@@ -3007,7 +3021,7 @@ class Explorer : public Module {
   float sp_ln_[explorer_k::EXP_SPEC_M + 1] = {};    // ln n
   float sk_g_ = -1.f, sk_nu_ = -1.f, sk_e_ = -1.f;  // inputs the parts were made for
   bool  sp_redo_ = true;           // first SpecWeights: build W
-  volatile int spec_n_t_ = 1;      // K5 partials N (1..16, stepped, Controls)
+  volatile int spec_n_t_ = 1;      // K5 partials: +N count / -s solo (1..16, stepped, Controls)
   float sp_pstep_ = 0.125f;        // p(n) slide step per 8 kHz sample (1 / disc_len_)
   float sp_isr8_ = 1.f / 8000.f;   // 1 / sr8
   float sk_k1_ = -1.f, sp_e_ = 1.f;  // K1 the comb exponent e was computed for, e
