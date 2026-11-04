@@ -39,6 +39,20 @@ C_DEFS += -DCT3_DIAG_BUILD
 endif
 BUILD_PROFILE := $(PEDAL)-$(INSTRUMENT)-diag$(DIAG)
 
+# DIAG builds only: the git short hash (+ "-dirty" when tracked files differ
+# from HEAD; untracked files are ignored) and the build time, for the BUILD line
+# a DIAG pedal prints when the host sends `?` (src/core/io/diag_link.h, read by
+# tools/diag/log.py). The hash is part of BUILD_PROFILE, so a new commit (or
+# clean<->dirty) forces the full rebuild and the line can never be stale; the
+# time is NOT (it would rebuild every call) - it is the time main.o was compiled.
+# Non-DIAG builds get neither define and keep their profile string.
+ifeq ($(DIAG),1)
+DIAG_GIT := $(strip $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit))$(shell git diff --quiet HEAD -- 2>/dev/null || echo -dirty)
+DIAG_TIME := $(shell date '+%Y-%m-%dT%H:%M')
+C_DEFS += -DDIAG_GIT_HASH='"$(DIAG_GIT)"' -DDIAG_BUILD_TIME='"$(DIAG_TIME)"'
+BUILD_PROFILE := $(BUILD_PROFILE)-$(DIAG_GIT)
+endif
+
 # NitroTron3m (PEDAL=nitrotron3m) slot-B module: `NT3M_SLOT_B=sprawl` (default,
 # NitroTron3 Mode B), `NT3M_SLOT_B=armitage` (pedals/nitrolab/modules/armitage.h)
 # or `NT3M_SLOT_B=explorer` (pedals/nitrolab/modules/explorer.h).

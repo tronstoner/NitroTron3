@@ -51,6 +51,7 @@
 
 #include "constants.h"          // pedals/nitrolab/     (-Ipedals/nitrolab)
 #include "control_surface.h"    // src/core/io          (-Isrc/core/io)
+#include "diag_link.h"          // src/core/io: DIAG `?` -> BUILD line
 #include "knob_map.h"           // src/core/util        (-Isrc/core/util)
 #include "module.h"             // pedals/nitrolab/
 
@@ -152,6 +153,7 @@ int main() {
   const bool boost = NL_CPU_BOOST && (revid == REV_ID_V);
   hw.Init(boost);
   hw.seed.StartLog(false);   // non-blocking USB serial log, available for module debugging
+  DIAG_LINK_INIT();          // DIAG builds: answer `?` with the BUILD line
   // Enable FPU flush-to-zero: denormals on the Cortex-M7 hit a slow software path
   // that spikes the audio callback (starving the UI/main loop) once many filters
   // decay toward zero. Flushing denormals to zero removes that penalty.
@@ -198,6 +200,8 @@ int main() {
     modules[g_active]->Controls(cs, led1, led2);
     led1.Update();
     led2.Update();
+
+    DIAG_LINK_POLL(hw.seed, "nitrolab");   // DIAG builds: BUILD line on `?`
 
     // DIAG build (`make PEDAL=nitrolab DIAG=1`): a CPU-load heartbeat every 2 s
     // plus armitage's "note this setting" lines (FS1 tap = `#<n>`, settled

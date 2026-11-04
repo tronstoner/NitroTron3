@@ -56,6 +56,26 @@ tasks:
       - make PEDAL=nitrolab DIAG=1
       - make PEDAL=nitrolab DIAG=1 program-dfu
 
+  # *-debug: DIAG firmware that answers `?` with its BUILD line; read it with
+  # `task log`. DIAG=1 on EVERY make call (see flash-nitrolab-diag).
+  flash-nitrolab-debug:
+    desc: Build + flash the NitroLab DIAG firmware via DFU (read with `task log`)
+    cmds:
+      - make PEDAL=nitrolab DIAG=1
+      - make PEDAL=nitrolab DIAG=1 program-dfu
+
+  flash-chronotron3-debug:
+    desc: Build + flash the ChronoTron3 DIAG firmware via DFU (read with `task log`)
+    cmds:
+      - make PEDAL=chronotron3 DIAG=1
+      - make PEDAL=chronotron3 DIAG=1 program-dfu
+
+  log:
+    desc: Live serial logger for every pedal (auto-reconnect, / filter, p pause, q quit; files in log/)
+    cmds:
+      - python3 tools/diag/log.py
+    interactive: true
+
   # NitroTron3m (prototype: NitroTron3 on the Module system). INSTRUMENT and
   # NT3M_SLOT_B go on EVERY make call, or the profile stamp wipes build/ and the
   # flash step rebuilds another profile. Guitar: `task flash-nitrotron3m INSTRUMENT=guitar`.
@@ -73,6 +93,14 @@ tasks:
     cmds:
       - make PEDAL=nitrotron3m NT3M_SLOT_B=sprawl INSTRUMENT={{.INSTRUMENT}}
       - make PEDAL=nitrotron3m NT3M_SLOT_B=sprawl INSTRUMENT={{.INSTRUMENT}} program-dfu
+
+  flash-nitrotron3m-debug:
+    desc: Build + flash the NitroTron3m DIAG firmware (slot B = sprawl) via DFU (read with `task log`; INSTRUMENT=bass|guitar)
+    vars:
+      INSTRUMENT: '{{.INSTRUMENT | default "bass"}}'
+    cmds:
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=sprawl INSTRUMENT={{.INSTRUMENT}} DIAG=1
+      - make PEDAL=nitrotron3m NT3M_SLOT_B=sprawl INSTRUMENT={{.INSTRUMENT}} DIAG=1 program-dfu
 
   flash-nitrotron3m-armitage:
     desc: Build + flash NitroTron3m with armitage in slot B via DFU (INSTRUMENT=bass|guitar, default bass)

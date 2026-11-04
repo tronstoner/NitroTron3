@@ -39,6 +39,7 @@
 
 #include "constants.h"                     // pedals/nitrotron3m (-> ../nitrotron3/constants.h)
 #include "knob_map.h"                      // src/core/util
+#include "../../src/core/io/diag_link.h"   // DIAG `?` -> BUILD line (path: host harness has no -Isrc/core/io)
 #include "../nitrotron3/preset_system.h"   // shipping preset system, unchanged
 #include "preset_controls.h"               // ControlSurface stand-in (edit buffer)
 #include "module.h"
@@ -156,6 +157,7 @@ int main() {
   const bool boost = NT3M_CPU_BOOST && (revid == REV_ID_V);
   hw.Init(boost);
   if (NT3M_DIAG) hw.seed.StartLog(false);   // non-blocking USB serial log
+  DIAG_LINK_INIT();                          // DIAG builds: answer `?` with the BUILD line
   __set_FPSCR(__get_FPSCR() | (1UL << 24));   // FPSCR.FZ = 1
   hw.SetAudioBlockSize(NT3M_BLOCK_SIZE);
   hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
@@ -215,6 +217,8 @@ int main() {
 
     // Pitch tracker: run YIN in main loop (fed by bordun / sprawl / schism).
     shared.tracker.Update();
+
+    DIAG_LINK_POLL(hw.seed, "nitrotron3m");   // DIAG builds: BUILD line on `?`
 
     // DIAG builds: CPU heartbeat (peak audio-callback load per window).
     if (NT3M_DIAG) {

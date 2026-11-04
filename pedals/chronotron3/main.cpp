@@ -13,6 +13,7 @@
 
 #include "constants.h"          // pedals/chronotron3/  (-Ipedals/chronotron3)
 #include "control_surface.h"    // src/core/io          (-Isrc/core/io)
+#include "diag_link.h"          // src/core/io: DIAG `?` -> BUILD line
 #include "knob_map.h"           // src/core/util        (-Isrc/core/util)
 #include "module.h"             // pedals/chronotron3/
 
@@ -145,6 +146,7 @@ int main() {
   const bool boost = CT3_CPU_BOOST && (revid == REV_ID_V);
   hw.Init(boost);
   hw.seed.StartLog(false);   // non-blocking USB serial log, available for module debugging
+  DIAG_LINK_INIT();          // DIAG builds: answer `?` with the BUILD line
   // Enable FPU flush-to-zero: denormals on the Cortex-M7 hit a slow software path
   // that spikes the audio callback (starving the UI/main loop) once many filters
   // decay toward zero — e.g. the per-grain band biquads in the multiband freeze.
@@ -187,6 +189,8 @@ int main() {
     modules[g_active]->Controls(cs, led1, led2);
     led1.Update();
     led2.Update();
+
+    DIAG_LINK_POLL(hw.seed, "chronotron3");   // DIAG builds: BUILD line on `?`
 
     // Sprawl diagnostics: a fault picture (taken in the ISR at the offending
     // sample) has priority; otherwise a heartbeat every 2 s. One line per tick.
