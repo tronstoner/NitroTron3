@@ -404,7 +404,7 @@ constexpr int   EXP_SPEC_M          = 16;      // partials per band (the ADDITIV
 constexpr float EXP_SPEC_NU_MAX     = 0.5f;    // comb density nu at K2 CW (0.5 = a notch on every second partial)
 constexpr float EXP_SPEC_GAMMA_MAX  = 3.f;     // tilt exponent at k3 = 0 (dull); 0 at noon (flat)
 constexpr float EXP_SPEC_GAMMA_MIN  = -1.f;    // ... at k3 = 1 (upper partials louder, n^+1)
-constexpr float EXP_SPEC_SHIFT_MAX  = 4.0f;    // K4 partial shift s at CW (+4 f'), -4 at CCW, 0 at noon (harmonic)
+constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f'), -1 at CCW, 0 at noon (harmonic)
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
 // harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).
