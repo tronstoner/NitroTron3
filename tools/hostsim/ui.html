@@ -455,7 +455,7 @@ function explorerNow(m) {
     r[1] = `nu ${fmt(m.a, 2)}`;
     r[2] = `gamma ${fmt(m.b, 2)}`;
     r[3] = `shift s ${fmt(m.ss, 2)}`;
-    r[4] = m.sn < 0 ? `solo partial ${fmt(-m.sn, 0)}` : `count N ${fmt(m.sn, 0)}`;
+    r[4] = `bank ${["FIB", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM", "OCT5", "MAJ", "DOM7", "MIN", "OCT"][m.sn] ?? "?"}`;
   } else if (m.labz >= 0) {
     const side = m.lside < 0 ? "hollow" : m.lside > 0 ? "feedback" : "sine";
     r[1] = `r ${fmt(m.a, 3)}`;

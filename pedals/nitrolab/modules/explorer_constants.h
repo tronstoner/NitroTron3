@@ -396,7 +396,10 @@ constexpr float EXP_LAB_REST_R      = 1.f;     // the 2-OP ratio slide rests her
 //            upper partials louder)
 //   comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e, nu = EXP_SPEC_NU_MAX k2, e = comb exponent (K1, continuous); comb
 //            position phi fixed 0; warp removed 2026-11-04 (w fixed 0).
-//   p(n) = 1 for n <= N else 0, N = 1 + Quantize(k5, 16) (raw K5, 16 equal zones), each step slid EXP_DISC_SLIDE_MS.
+//   BANK (K5, 2026-11-04): member i = 1..16 of bank b sits at the integer multiple m_i = EXP_SPEC_BANK[b][i] of the
+//            band frequency; tilt / comb run over the member INDEX i (n above = i), all 16 members on; bank b =
+//            Quantize(k5, EXP_SPEC_BANKS) (raw K5, 11 equal zones), a bank change = weights slid out over 1/2
+//            EXP_DISC_SLIDE_MS, bank swapped at 0, slid in over 1/2 EXP_DISC_SLIDE_MS (1 ms total, no crossfade).
 //   shift (K4): every partial of a band moved by delta_k = s f'_k, s = EXP_SPEC_SHIFT_MAX (2 k4 - 1) (smoothed K4).
 constexpr float EXP_SPEC_E_MIN = 0.25f;   // comb exponent e at K1 CCW ("narrow": wide passbands, narrow notches)
 constexpr float EXP_SPEC_E_MAX = 4.0f;    // ... at K1 CW ("peaky"); e = E_MIN (E_MAX / E_MIN)^k1, noon 1 (plain cosine)
@@ -404,6 +407,22 @@ constexpr int   EXP_SPEC_M          = 16;      // partials per band (the ADDITIV
 constexpr float EXP_SPEC_NU_MAX     = 0.5f;    // comb density nu at K2 CW (0.5 = a notch on every second partial)
 constexpr float EXP_SPEC_GAMMA_MAX  = 3.f;     // tilt exponent at k3 = 0 (dull); 0 at noon (flat)
 constexpr float EXP_SPEC_GAMMA_MIN  = -1.f;    // ... at k3 = 1 (upper partials louder, n^+1)
+constexpr int   EXP_SPEC_BANKS      = 11;      // K5 banks (equal stepped zones, CCW -> CW)
+constexpr int   EXP_SPEC_BANK_HARM  = 5;       // index of HARM 1..16 (noon; the plain series, SpecSeries path)
+// Bank multiples m_i, i = 1..16 (index 0 unused), ascending, m_1 = 1 (fundamental, no anti-fold edge).
+constexpr int   EXP_SPEC_BANK[EXP_SPEC_BANKS][EXP_SPEC_M + 1] = {
+  { 0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597 },               // FIB
+  { 0, 1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49, 53, 57, 61 },                    // STRIDE4
+  { 0, 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46 },                    // STRIDE3
+  { 0, 1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47 },                      // PRIMES
+  { 0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31 },                      // ODD
+  { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },                          // HARM (noon)
+  { 0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256 },                    // OCT5
+  { 0, 1, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96 },                      // MAJ
+  { 0, 1, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48 },                       // DOM7
+  { 0, 1, 10, 12, 15, 20, 24, 30, 40, 48, 60, 80, 96, 120, 160, 192, 240 },              // MIN
+  { 0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 },    // OCT
+};
 constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f'), -1 at CCW, 0 at noon (harmonic)
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:

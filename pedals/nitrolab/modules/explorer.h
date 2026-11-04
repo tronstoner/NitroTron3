@@ -137,7 +137,7 @@
 //                W(n) = tilt(n) comb(n) p(n), then W /= sqrt(sum_n W(n)^2) (n = 1 counts; the per-band edge is NOT renormalised)
 //                tilt(n) = n^-gamma;  comb(1) = 1 (fundamental always kept), n >= 2:
 //                comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e (comb position phi fixed 0; warp removed 2026-11-04, w = 0)
-//                p(n) = 1 for n <= N else 0 (p(1) = 1 always), each p(n) slid linearly over EXP_DISC_SLIDE_MS 1 ms.
+//                (n = member index i of the K5 bank, all 16 on; bank-change gain g after the norm, K5 below)
 //              PHASE CONVENTION: y(n) = n - 1 counts from the fundamental, so nu = 0 = no notches and nu = 0.5
 //                removes the EVEN partials (odd series).
 //              CONTROLS (2026-11-04 rework; smoothed knobs, EXP_CTRL_SMOOTH_MS, landing exactly, except K5 = raw knob
@@ -152,12 +152,14 @@
 //                harmonic. theta_k (cycles, per slot and band) += s f'_k / 8000 per sample, wrapped to [0, 1) (floor);
 //                held while s = 0 (a constant phase, theta 0 from a fresh start = Re S_k exactly); cleared on model
 //                entry / slot start.
-//              K5 = PARTIALS, bipolar (2026-11-04, stepped on the raw K5, split at noon: k5 >= 0.5 = COUNT, k5 < 0.5 =
-//                SOLO): COUNT N = 1 + Quantize(2 (k5 - 0.5), 16) (noon 1 = fundamental only -> CW all 16), p(n) = 1 for
-//                n <= N; SOLO s = 1 + Quantize(2 (0.5 - k5), 16) (just CCW of noon partial 1 -> full CCW partial 16),
-//                p(n) = 1 only for n = s. Every p(n) (incl. n = 1) slides over 1 ms on any step / side change, no
-//                crossfade. Comb and tilt stay applied in SOLO; RMS-normalised as COUNT (sum W^2 = 0, e.g. the comb
-//                notches the solo partial: W = 0, silent, no divide).
+//              K5 = BANK SELECT (2026-11-04, replaces count / solo): 11 equal stepped zones on the raw K5,
+//                b = Quantize(k5, 11), CCW -> CW: FIB STRIDE4 STRIDE3 PRIMES ODD [HARM] OCT5 MAJ DOM7 MIN OCT
+//                (EXP_SPEC_BANK; [ ] = noon). Member i = 1..16 sits at m_i f'_k (all 16 on); tilt / comb / norm run
+//                over the member INDEX i (n above = i), so K1 - K3 act the same per bank; the anti-fold edge uses the
+//                member's real shifted frequency (m_i + s) f'_k, members past the edge are skipped (not computed).
+//                Bank change: a gain g on the normalised weights slides 1 -> 0 over 0.5 ms, the bank swaps at 0, g
+//                slides 0 -> 1 over 0.5 ms (1 ms total, EXP_DISC_SLIDE_MS; no crossfade). HARM uses the plain series
+//                (SpecSeries); other banks SpecBankSeries (running power v^{m_i} times v^{2^j} squares per bit of the gap).
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, item = K1 zone). One harmonic series per band built on the
 //              slot's unit phasor v = u_k (as Armitage ADD: harmonics by repeated complex multiplication), FM on the
 //              series fundamental at ratio 1, no feedback: q = b e^{j I x} (b = v, x = Im v = sin 2 pi phi; SUB: b = w,
@@ -574,12 +576,13 @@ class Explorer : public Module {
     for (int n = 1; n <= EXP_SPEC_M; n++) {      // ln n (tilt), y(n) = n - 1 (comb; warp fixed 0)
       sp_ln_[n] = logf((float)n);
       sp_y_[n] = (float)(n - 1);
-      sp_tilt_[n] = sp_comb_[n] = spec_w_[n] = sp_pn_[n] = 0.f;
+      sp_tilt_[n] = sp_comb_[n] = spec_w_[n] = 0.f;
     }
-    spec_w_[1] = sp_tilt_[1] = sp_comb_[1] = sp_pn_[1] = 1.f;
+    spec_w_[1] = sp_tilt_[1] = sp_comb_[1] = 1.f;
     sk_g_ = sk_nu_ = sk_e_ = sk_k1_ = -1.f;      // forces every part on the first SpecWeights
     sp_redo_ = true;
-    spec_n_t_ = 1;
+    spec_bank_t_ = spec_bank_ = EXP_SPEC_BANK_HARM;   // start-up: HARM; Controls sets the K5 bank (slid 1 ms)
+    sp_bg_ = 1.f;
     sp_isr8_ = 1.f / sr8_;
     sp_ln_e_ = logf(EXP_SPEC_E_MAX / EXP_SPEC_E_MIN);
     for (int m = 1; m <= EXP_ADD_K_MAX; m++) add_ln_[m] = logf((float)m);   // FM LAB ADDITIVE: m^-s = exp(-s ln m)
@@ -598,7 +601,7 @@ class Explorer : public Module {
     mfade_n_ = 0;
     disc_len_ = (int)(EXP_DISC_SLIDE_MS * 0.001f * sr8_ + 0.5f);
     if (disc_len_ < 1) disc_len_ = 1;
-    sp_pstep_ = 1.f / (float)disc_len_;          // SPECTRAL p(n) slide: 0 <-> 1 over EXP_DISC_SLIDE_MS
+    sp_pstep_ = 2.f / (float)disc_len_;          // SPECTRAL bank gain slide: 1 -> 0 / 0 -> 1 over EXP_DISC_SLIDE_MS / 2 each
     oct_step_ = 1.f / (EXP_OCT_XFADE_MS * 0.001f * sr8_);
     var_ = var_t_ = vfrom_ = VarKey(kFM, 0);
     k1s_ = k1_t_ = 0.f;                          // smoothed K1 (FM LAB SPECTRAL comb shape only)
@@ -726,7 +729,7 @@ class Explorer : public Module {
     og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
     og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
     og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
-    if (specz >= 0) spec_n_t_ = SpecPartSel(k5);   // K5: +N count / -s solo (raw knob, 16 steps per half)
+    if (specz >= 0) spec_bank_t_ = SpecBankSel(k5);   // K5: bank (raw knob, 11 equal zones)
 
     led1.Set(1.f);
     led2.Set(mute_ ? 1.f : 0.f);
@@ -857,6 +860,12 @@ class Explorer : public Module {
   }
   // FM LAB SPECTRAL name (DIAG; no zones since 2026-11-03 continuous K1).
   static const char* SpecZoneName(int z) { return (z >= 0) ? "SPEC" : "?"; }
+  // FM LAB SPECTRAL K5 bank name (DIAG / hostsim), index 0..10.
+  static const char* SpecBankName(int b) {
+    static const char* const nm[explorer_k::EXP_SPEC_BANKS] = { "FIB", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM",
+                                                               "OCT5", "MAJ", "DOM7", "MIN", "OCT" };
+    return (b >= 0 && b < explorer_k::EXP_SPEC_BANKS) ? nm[b] : "?";
+  }
   static const char* ZoneName(int m, int z) {
     static const char* const wt[explorer_k::EXP_TB_ZONES] = { "SINE-SYNC", "TRI-FOLD", "SAW-ROUGH", "SQR-PWM",
                                                              "VOCAL", "PPG-CLASSIC", "SOFT-A", "SOFT-B",
@@ -1266,15 +1275,12 @@ class Explorer : public Module {
     b = SpecGamma(k3);
     diag_spec_e_ = SpecExp(k1);
     diag_spec_s_ = SpecShift(k4);
-    diag_spec_n_ = (float)SpecPartSel(k5);
+    diag_spec_n_ = (float)SpecBankSel(k5);
   }
-  // K5 partial selector at the raw k5 (0..1), bipolar, split at noon: k5 >= 0.5 -> COUNT +N, N = 1 + Quantize(2 (k5 -
-  // 0.5), 16) (noon 1, CW 16); k5 < 0.5 -> SOLO -s, s = 1 + Quantize(2 (0.5 - k5), 16) (just CCW of noon 1, CCW 16).
-  static inline int SpecPartSel(float k5) {
+  // K5 bank at the raw k5 (0..1): Quantize(k5, EXP_SPEC_BANKS) = 0..10 (CCW FIB .. noon HARM .. CW OCT).
+  static inline int SpecBankSel(float k5) {
     using namespace explorer_k;
-    k5 = Clamp01(k5);
-    if (k5 >= 0.5f) return 1 + Quantize(2.f * (k5 - 0.5f), EXP_SPEC_M);
-    return -(1 + Quantize(2.f * (0.5f - k5), EXP_SPEC_M));
+    return Quantize(Clamp01(k5), EXP_SPEC_BANKS);
   }
   // Comb exponent e at k1 (0..1): E_MIN (E_MAX / E_MIN)^k1 = 0.25 16^k1 (CCW 0.25 narrow, noon 1, CW 4 peaky).
   inline float SpecExp(float k1) const {
@@ -1299,8 +1305,9 @@ class Explorer : public Module {
   // (M - 1 table cos + the exponent; y(n) = n - 1, phi 0), partials p(n) while sliding to the stepped N, then the
   // product + RMS norm. Also p.p0 = shift s.
   //   nu = NU_MAX k2s_, gamma = SpecGamma(k3s_), e = SpecExp(k1s_), s = SpecShift(k4s_) (smoothed knobs);
-  //   p(n) target (spec_n_t_, raw K5, stepped): COUNT +N -> 1 (n <= N) / 0; SOLO -s -> 1 (n = s) / 0; every p(n) incl.
-  //   n = 1 slid linearly 0 <-> 1 over EXP_DISC_SLIDE_MS. W(1) = p(1) (tilt(1) = comb(1) = 1). sum W^2 = 0 -> W = 0.
+  //   n = member index i of the active bank (all 16 on). Bank change (spec_bank_t_ != spec_bank_): gain g (sp_bg_) slides
+  //   1 -> 0 over EXP_DISC_SLIDE_MS / 2, spec_bank_ = target at g = 0, then 0 -> 1 over EXP_DISC_SLIDE_MS / 2; g multiplies
+  //   the normalised W (g = 1: bit-identical to no gain). W(1) = 1 (tilt(1) = comb(1) = 1).
   void SpecWeights(Params& p) {
     using namespace explorer_k;
     const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_);
@@ -1314,13 +1321,11 @@ class Explorer : public Module {
       for (int n = 2; n <= EXP_SPEC_M; n++) sp_tilt_[n] = expf(-ga * sp_ln_[n]);
       redo = true;
     }
-    {                                            // p(n): slide toward the stepped target
-      const int sel = spec_n_t_;
-      for (int n = 1; n <= EXP_SPEC_M; n++) {
-        const float t = (sel > 0) ? ((n <= sel) ? 1.f : 0.f) : ((n == -sel) ? 1.f : 0.f);
-        const float v = sp_pn_[n];
-        if (v != t) { sp_pn_[n] = Slide(v, t, sp_pstep_); redo = true; }
-      }
+    {                                            // bank change: g out, swap at 0, g in (1 ms total)
+      const int bt = spec_bank_t_;
+      const float gt = (bt != spec_bank_) ? 0.f : 1.f;
+      if (sp_bg_ != gt) { sp_bg_ = Slide(sp_bg_, gt, sp_pstep_); redo = true; }
+      if (bt != spec_bank_ && sp_bg_ == 0.f) spec_bank_ = bt;
     }
     if (nu != sk_nu_ || e != sk_e_) {            // comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e
       sk_nu_ = nu; sk_e_ = e;
@@ -1332,14 +1337,14 @@ class Explorer : public Module {
       redo = true;
     }
     if (redo) {                                  // W = tilt comb p (W(1) = 1), / sqrt(sum W^2)
-      const float w1 = sp_pn_[1];
+      const float w1 = 1.f;
       float sum = w1 * w1;
       for (int n = 2; n <= EXP_SPEC_M; n++) {
-        const float v = sp_tilt_[n] * sp_comb_[n] * sp_pn_[n];
+        const float v = sp_tilt_[n] * sp_comb_[n];
         spec_w_[n] = v;
         sum += v * v;
       }
-      const float in = (sum > 0.f) ? 1.f / sqrtf(sum) : 0.f;   // all W 0 (solo notched): silent, no divide
+      const float in = sp_bg_ / sqrtf(sum);     // sum >= 1 (W(1) = 1); g = 1 -> 1 / sqrt(sum) exactly
       spec_w_[1] = w1 * in;
       for (int n = 2; n <= EXP_SPEC_M; n++) spec_w_[n] *= in;
     }
@@ -1380,6 +1385,44 @@ class Explorer : public Module {
     }
     outr = sr; outi = si;
   }
+  // SPECTRAL bank series (non-HARM banks): S = sum_i w_i h_i v^{m_i}, m = EXP_SPEC_BANK[b] ascending, m_1 = 1 (no edge).
+  // Edge as SpecSeries on the member's real frequency m_i f0 against Fe; the first member with m_i f0 >= Fe ends the
+  // loop (later members are higher - skipped, not computed). v^{m_i} = v^{m_{i-1}} * prod_{bits j of the gap} v^{2^j};
+  // the squares v^{2^j} are made lazily, only up to the largest gap actually reached.
+  static inline void SpecBankSeries(float qr, float qi, float f0, float Fe, const float* __restrict w,
+                                    const int* __restrict mb, float& outr, float& outi) {
+    using namespace explorer_k;
+    constexpr float ie = 1.f / EXP_HARM_FEDGE;
+    float sr = w[1] * qr, si = w[1] * qi;
+    float pr = qr, pi = qi;                      // running v^{m_i}
+    float sqr_[16], sqi_[16];                    // v^{2^j}
+    sqr_[0] = qr; sqi_[0] = qi;
+    int ns = 1;
+    for (int i = 2; i <= EXP_SPEC_M; i++) {
+      const int m = mb[i];
+      const float mf = (float)m * f0;
+      float h = (Fe - mf) * ie;
+      if (h <= 0.f) break;
+      h = fminf(h, 1.f);
+      int d = m - mb[i - 1];
+      for (int j = 0; d; j++, d >>= 1) {
+        if (j >= ns) {                           // next square v^{2^j} = (v^{2^{j-1}})^2
+          const float ar = sqr_[j - 1], ai = sqi_[j - 1];
+          sqr_[j] = ar * ar - ai * ai;
+          sqi_[j] = 2.f * ar * ai;
+          ns = j + 1;
+        }
+        if (d & 1) {
+          const float t = pr * sqr_[j] - pi * sqi_[j];
+          pi = pr * sqi_[j] + pi * sqr_[j];
+          pr = t;
+        }
+      }
+      sr += w[i] * h * pr;
+      si += w[i] * h * pi;
+    }
+    outr = sr; outi = si;
+  }
   // FM LAB SPECTRAL: sum_k w_k a_k Re(S_k e^{j 2 pi theta_k}), S_k = SpecSeries on the slot's unit phasor (no FM),
   // theta_k (per slot / band, explorer_spec_st) advancing s f'_k / sr8 per sample (K4 shift, wrapped to [0, 1)).
   float ShapeSpec(int o, const Params& p) {
@@ -1394,6 +1437,9 @@ class Explorer : public Module {
     const float s = p.p0;
     const float ds = s * sp_isr8_;
     const bool played = (o == kSP);
+    const int bk = spec_bank_;
+    const bool harm = (bk == EXP_SPEC_BANK_HARM);
+    const int* __restrict mb = EXP_SPEC_BANK[bk];
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float t0 = th[k];
@@ -1405,7 +1451,8 @@ class Explorer : public Module {
       const float a = mg[k];
       if (a == 0.f) continue;
       float Sr, Si;
-      SpecSeries(ur[k], ui[k], fp[k], ifp[k], EXP_HARM_FMAX - s * fp[k], w, EXP_SPEC_M, Sr, Si);
+      if (harm) SpecSeries(ur[k], ui[k], fp[k], ifp[k], EXP_HARM_FMAX - s * fp[k], w, EXP_SPEC_M, Sr, Si);
+      else      SpecBankSeries(ur[k], ui[k], fp[k], EXP_HARM_FMAX - s * fp[k], w, mb, Sr, Si);
       const float W = (t0 == 0.f) ? Sr : Sr * Cos01(t0) - Si * Sin01(t0);
       acc += (played ? wmid_[k] : 1.f) * a * W;
     }
@@ -3016,18 +3063,19 @@ class Explorer : public Module {
   float spec_w_[explorer_k::EXP_SPEC_M + 1] = {};   // partial weights W(n), n = 1..M (RMS-normalised)
   float sp_tilt_[explorer_k::EXP_SPEC_M + 1] = {};  // n^-gamma
   float sp_comb_[explorer_k::EXP_SPEC_M + 1] = {};  // comb(n)
-  float sp_pn_[explorer_k::EXP_SPEC_M + 1] = {};    // partials factor p(n)
   float sp_y_[explorer_k::EXP_SPEC_M + 1] = {};     // comb position y(n) = n - 1
   float sp_ln_[explorer_k::EXP_SPEC_M + 1] = {};    // ln n
   float sk_g_ = -1.f, sk_nu_ = -1.f, sk_e_ = -1.f;  // inputs the parts were made for
   bool  sp_redo_ = true;           // first SpecWeights: build W
-  volatile int spec_n_t_ = 1;      // K5 partials: +N count / -s solo (1..16, stepped, Controls)
-  float sp_pstep_ = 0.125f;        // p(n) slide step per 8 kHz sample (1 / disc_len_)
+  volatile int spec_bank_t_ = explorer_k::EXP_SPEC_BANK_HARM;   // K5 bank target (0..10, Controls)
+  int   spec_bank_ = explorer_k::EXP_SPEC_BANK_HARM;            // bank in use (swapped at g = 0)
+  float sp_bg_ = 1.f;              // bank-change gain g on the normalised W
+  float sp_pstep_ = 0.25f;         // g slide step per 8 kHz sample (2 / disc_len_)
   float sp_isr8_ = 1.f / 8000.f;   // 1 / sr8
   float sk_k1_ = -1.f, sp_e_ = 1.f;  // K1 the comb exponent e was computed for, e
   float sp_ln_e_ = 0.f;            // ln(E_MAX / E_MIN)
   int   diag_spec_z_ = -1;         // DIAG: 0 = SPECTRAL in the last Controls, -1 = not
-  float diag_spec_e_ = 0.f, diag_spec_s_ = 0.f, diag_spec_n_ = 0.f;    // DIAG: e, shift s, N at the knob
+  float diag_spec_e_ = 0.f, diag_spec_s_ = 0.f, diag_spec_n_ = 0.f;    // DIAG: e, shift s, K5 bank index at the knob
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
   float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
   float add_rho_[2][explorer_k::EXP_ADD_STR_M + 1] = {};

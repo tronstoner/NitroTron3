@@ -241,7 +241,7 @@ int main() {
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
-        else if (d.specz >= 0)                                // FM LAB MID SPECTRAL: no envelope / LFO (K4 = shift, K5 = partials)
+        else if (d.specz >= 0)                                // FM LAB MID SPECTRAL: no envelope / LFO (K4 = shift, K5 = bank)
           env[0] = 0;
         else if (d.labz >= 0)                                 // FM LAB UP: pluck <-> swell (g, side, T s), LFO depth > x fade
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " lfo %s d" D2F " >" D2F " " D2F "Hz", D2V(d.env),
@@ -266,9 +266,9 @@ int main() {
           hw.seed.PrintLine("LAB %s %s" D2F " >" D2F " %s" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::AddZoneName(d.addz), Explorer::AddK2Name(d.addz), D2V(d.a), D2V(d.b),
                             Explorer::AddK3Name(d.addz), D2V(d.c3), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.specz >= 0)                                // FM LAB MID: gamma, nu, e, shift s, count n<N> / solo s<n> (at the knob)
-          hw.seed.PrintLine("LAB SPEC ga" D2F " nu" D2F " e" D2F " s" D2F " %s%d%s mute %d cpu %u%%",
-                            D2V(d.b), D2V(d.a), D2V(d.se), D2V(d.ss), d.sn < 0.f ? "s" : "n", abs((int)d.sn), env, d.mute ? 1 : 0, cpu);
+        else if (d.specz >= 0)                                // FM LAB MID: gamma, nu, e, shift s, K5 bank (at the knob)
+          hw.seed.PrintLine("LAB SPEC ga" D2F " nu" D2F " e" D2F " s" D2F " %s%s mute %d cpu %u%%",
+                            D2V(d.b), D2V(d.a), D2V(d.se), D2V(d.ss), Explorer::SpecBankName((int)d.sn), env, d.mute ? 1 : 0, cpu);
         else if (d.labz >= 0)                                 // FM LAB UP: mode, ratio, K3 side, index fc, feedback, u_eff
           hw.seed.PrintLine("LAB %s r" D2F " %s fc %d b" D2F " u" D2F "%s mute %d cpu %u%%",
                             Explorer::LabZoneName(d.labz), D2V(d.a), Explorer::LabSideName(d.lside), (int)(d.b + 0.5f),

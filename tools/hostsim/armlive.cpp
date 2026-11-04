@@ -251,8 +251,8 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(line, sizeof line, "LAB %s %s%.2f >%.2f %s%.2f fc %d%s mute %s", Explorer::AddZoneName(d.addz),
              Explorer::AddK2Name(d.addz), d.a, d.b, Explorer::AddK3Name(d.addz), d.c3, (int)(d.fc + 0.5f), env, mu);
   else if (d.specz >= 0)
-    snprintf(line, sizeof line, "LAB SPEC ga%.2f nu%.2f e%.2f s%.2f %s%d%s mute %s", d.b, d.a, d.se, d.ss,
-             d.sn < 0.f ? "s" : "n", std::abs((int)d.sn), env, mu);
+    snprintf(line, sizeof line, "LAB SPEC ga%.2f nu%.2f e%.2f s%.2f %s%s mute %s", d.b, d.a, d.se, d.ss,
+             Explorer::SpecBankName((int)d.sn), env, mu);
   else if (d.labz >= 0)
     snprintf(line, sizeof line, "LAB %s r%.2f %s fc %d b%.2f u%.2f%s mute %s", Explorer::LabZoneName(d.labz), d.a,
              Explorer::LabSideName(d.lside), (int)(d.b + 0.5f), d.lb, d.lue, env, mu);
