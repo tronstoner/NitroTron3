@@ -1380,7 +1380,8 @@ class Explorer : public Module {
   // 48 kHz value: |in| one-pole 2.6 ms -> gate meter up at once / 40 ms fall -> one-pole tau 34.7 ms; raw input):
   //   x = ln(env) - ln(floor) (one logf, only when env > floor; else L = G = 0)
   //   L = clamp((dB(env) - FLOOR_DB) / (TOP_DB - FLOOR_DB), 0, 1), G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1)
-  //   law: t4 < 0 DECAY o = min(g_s, L) | t4 > 0 RISE o = g_s G | t4 = 0 (exact noon) o = g_s | looping o = 1
+  //   law: t4 < -PAD DECAY o = min(g_s, L) | t4 > PAD RISE o = g_s G | |t4| <= EXP_SPEC_NOON_PAD (noon pad) o = 1 (plain
+  //   K2 / K3) | looping o = 1
   //   A law change (K4 side / noon) starts a linear slide of the difference: o = law + (o_last - law_at_change) n /
   //   disc_len_, n = disc_len_ .. 1 (EXP_DISC_SLIDE_MS 1 ms; clamped [0, 1]), then o = law exactly. No other slide on o.
   inline void SpecOpenUpdate(bool run) {
@@ -1395,9 +1396,9 @@ class Explorer : public Module {
     }
     sp_L_ = L;
     const float t4 = ps_t4_;                     // smoothed t4 of this sample (PsUpdate)
-    const int side = loop_ ? 0 : (t4 < 0.f) ? -1 : (t4 > 0.f) ? 1 : 0;
-    const float gs = loop_ ? 1.f : ps_gs_;
-    const float law = (side < 0) ? ((L < gs) ? L : gs) : (side > 0) ? gs * G : gs;
+    const int side = (loop_ || fabsf(t4) <= EXP_SPEC_NOON_PAD) ? 0 : (t4 < 0.f) ? -1 : 1;
+    const float gs = ps_gs_;
+    const float law = (side < 0) ? ((L < gs) ? L : gs) : (side > 0) ? gs * G : 1.f;   // noon pad / loop: plain K2/K3
     if (!sp_orun_)              { sp_orun_ = true; sp_oside_ = side; sp_on_ = 0; }
     else if (side != sp_oside_) { sp_oside_ = side; sp_ooff_ = sp_o_ - law; sp_on_ = disc_len_; }
     float o = law;
