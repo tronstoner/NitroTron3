@@ -271,8 +271,8 @@ int main() {
                             Explorer::AddZoneName(d.addz), Explorer::AddK2Name(d.addz), D2V(d.a), D2V(d.b),
                             Explorer::AddK3Name(d.addz), D2V(d.c3), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.specz >= 0)                                // FM LAB MID: gamma, nu, e, shift s, K5 bank (at the knob)
-          hw.seed.PrintLine("LAB SPEC ga" D2F " nu" D2F " e" D2F " s" D2F " %s%s mute %d cpu %u%%",
-                            D2V(d.b), D2V(d.a), D2V(d.se), D2V(d.ss), Explorer::SpecBankName((int)d.sn), env, d.mute ? 1 : 0, cpu);
+          hw.seed.PrintLine("LAB SPEC ga" D2F " nu" D2F " e" D2F " s" D2F " bank %d/9 %s%s mute %d cpu %u%%",
+                            D2V(d.b), D2V(d.a), D2V(d.se), D2V(d.ss), (int)d.sn + 1, Explorer::SpecBankName((int)d.sn), env, d.mute ? 1 : 0, cpu);
         else if (d.labz >= 0)                                 // FM LAB UP: mode, ratio, K3 side, index fc, feedback, u_eff
           hw.seed.PrintLine("LAB %s r" D2F " %s fc %d b" D2F " u" D2F "%s mute %d cpu %u%%",
                             Explorer::LabZoneName(d.labz), D2V(d.a), Explorer::LabSideName(d.lside), (int)(d.b + 0.5f),
