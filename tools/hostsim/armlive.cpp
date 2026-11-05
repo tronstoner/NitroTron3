@@ -251,9 +251,9 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(line, sizeof line, "LAB %s %s%.2f >%.2f %s%.2f fc %d%s mute %s", Explorer::AddZoneName(d.addz),
              Explorer::AddK2Name(d.addz), d.a, d.b, Explorer::AddK3Name(d.addz), d.c3, (int)(d.fc + 0.5f), env, mu);
   else if (d.specz >= 0)
-    snprintf(line, sizeof line, "LAB SPEC bank %d/9 %s nu%.2f k2%.2f flt %s %d%s mute %s", (int)d.sn + 1,
-             Explorer::SpecBankName((int)d.sn), d.a, d.b, d.st3 == 0.f ? "off" : d.st3 > 0.f ? "lp" : "fmt",
-             d.st3 == 0.f ? 0 : (int)(d.sfc + 0.5f), env, mu);
+    snprintf(line, sizeof line, "LAB SPEC bank %d/9 %s nu%.2f k2%.2f lpf %s%s mute %s", (int)d.sn + 1,
+             Explorer::SpecBankName((int)d.sn), d.a, d.b,
+             d.slp > 0.f ? std::to_string((int)(d.slp + 0.5f)).c_str() : "off", env, mu);
   else if (d.labz >= 0)
     snprintf(line, sizeof line, "LAB %s r%.2f %s fc %d b%.2f u%.2f%s mute %s", Explorer::LabZoneName(d.labz), d.a,
              Explorer::LabSideName(d.lside), (int)(d.b + 0.5f), d.lb, d.lue, env, mu);
@@ -757,7 +757,7 @@ int main(int argc, char** argv) {
                  ",\"line\":" + json::Esc(ExplorerDiagLine(x)) +
                  ",\"labz\":" + std::to_string(x.labz) + ",\"specz\":" + std::to_string(x.specz) + ",\"addz\":" + std::to_string(x.addz) +
                  ",\"k2n\":" + json::Esc(add ? Explorer::AddK2Name(x.addz) : "") + ",\"k3n\":" + json::Esc(add ? Explorer::AddK3Name(x.addz) : "") +
-                 ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"st3\":" + N(x.st3) + ",\"sfc\":" + N(x.sfc) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
+                 ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"slp\":" + N(x.slp) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +
                  ",\"se\":" + N(x.se) + ",\"sn\":" + N(x.sn) +

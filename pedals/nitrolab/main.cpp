@@ -270,11 +270,13 @@ int main() {
           diag_link::PrintLine("LAB %s %s" D2F " >" D2F " %s" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::AddZoneName(d.addz), Explorer::AddK2Name(d.addz), D2V(d.a), D2V(d.b),
                             Explorer::AddK3Name(d.addz), D2V(d.c3), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.specz >= 0)                                // FM LAB MID: K1 bank, applied nu, K2 knob + the envelope part
-          diag_link::PrintLine("LAB SPEC bank %d/9 %s nu" D2F " k2" D2F " flt %s %d%s mute %d cpu %u%%",
-                            (int)d.sn + 1, Explorer::SpecBankName((int)d.sn), D2V(d.a), D2V(d.b),
-                            d.st3 == 0.f ? "off" : d.st3 > 0.f ? "lp" : "fmt", d.st3 == 0.f ? 0 : (int)(d.sfc + 0.5f),
-                            env, d.mute ? 1 : 0, cpu);
+        else if (d.specz >= 0) {                              // FM LAB MID: K1 bank, applied nu, K2 knob, K3 lpf + the envelope part
+          char lpf[12];
+          if (d.slp > 0.f) snprintf(lpf, sizeof lpf, "%d", (int)(d.slp + 0.5f)); else snprintf(lpf, sizeof lpf, "off");
+          diag_link::PrintLine("LAB SPEC bank %d/9 %s nu" D2F " k2" D2F " lpf %s%s mute %d cpu %u%%",
+                            (int)d.sn + 1, Explorer::SpecBankName((int)d.sn), D2V(d.a), D2V(d.b), lpf, env,
+                            d.mute ? 1 : 0, cpu);
+        }
         else if (d.labz >= 0)                                 // FM LAB UP: mode, ratio, K3 side, index fc, feedback, u_eff
           diag_link::PrintLine("LAB %s r" D2F " %s fc %d b" D2F " u" D2F "%s mute %d cpu %u%%",
                             Explorer::LabZoneName(d.labz), D2V(d.a), Explorer::LabSideName(d.lside), (int)(d.b + 0.5f),

@@ -151,13 +151,12 @@
 //                and returns to the K2 value. Comb recomputed while nu moves at most every EXP_SPEC_NU_DIV 8 samples
 //                (1 kHz) and on the sample nu stops (lands exactly).
 //              K4 = PLUCK <-> SWELL on the density (see K2).
-//              K3 = SPECTRAL FILTER (2026-11-05; SpecFilter, EXP_SPEC_FLT_*): a weight factor F per member at its real
-//                frequency m_i f'_k (per slot / band), applied AFTER the RMS norm (raw level - closing the LP gets
-//                quieter), no audio stage. t3 = 2 k3 - 1; noon (t3 = 0 exactly) = off, byte-identical. fc = 3800 (100 /
-//                3800)^|t3| Hz. CW: resonant LP (+6 dB gaussian bump at fc, 1/3 oct FWHM, -24 dB/oct above fc); CCW:
-//                the bump alone (formant) sweeping 3800 -> 100 Hz. Bump gain faded in over |t3| 0..0.1 on both sides.
-//                Factors redone while t3 moves at most every EXP_SPEC_NU_DIV samples (1 kHz) and when it stops; W x F
-//                when W changed; only slots in use.
+//              K3 = LPF (2026-11-05; SpecLpfUpdate / SpecLpf, EXP_SPEC_LPF_*): the SW1 MID tables' 2-pole lowpass type
+//                (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct; own instance sp_svf_) on the 48 kHz wet, after the
+//                DC blocker and the tables' TabFilter, before PostFilter / Saturate; no saturation. fc = 3800
+//                (100 / 3800)^k3 Hz, Q 2 (~+6 dB peak), coefficients per 8 kHz sample when fc moved. Mix m (TabFilter's
+//                slide, 1 ms): target on while SPECTRAL is the entering model and k3 > EXP_SPEC_LPF_ON; m = 0 -> not
+//                run (K3 full CCW = bit-identical to no filter). The weights stay the shared W (no per-band factors).
 //              FIXED (constants, former knob laws kept reachable): comb shape e = 0.25 16^k at k = EXP_SPEC_K_PEAK 1 ->
 //                e = 4 (peaky; b^e = exp(e ln b), b = 0 -> 0); tilt gamma = 3 (1 - 2 k) (k <= 0.5), -(2 k - 1) (k > 0.5)
 //                at k = EXP_SPEC_K_TILT 0.5 -> gamma 0 (flat); partial shift delta_k = s f'_k, s = EXP_SPEC_SHIFT_MAX
@@ -448,9 +447,6 @@ static ExplorerAddState EXP_FAST_BSS explorer_add_st;
 // [0, 1)) per slot (up / played / down) and band.
 struct ExplorerSpecState {
   float th[3][armbands::kArmBands];
-  // K3 spectral filter (2026-11-05): factor F and filtered weights W x F per slot / band / member (index 0 unused)
-  float ff[3][armbands::kArmBands][explorer_k::EXP_SPEC_M + 1];
-  float fw[3][armbands::kArmBands][explorer_k::EXP_SPEC_M + 1];
 };
 static ExplorerSpecState EXP_FAST_BSS explorer_spec_st;
 
@@ -604,6 +600,10 @@ class Explorer : public Module {
     tf_lnb_ = logf(EXP_TF_ENV_BOTTOM / EXP_TF_FMIN);
     tf_m_ = 0.f;
     for (int j = 0; j < kLadSub; j++) { tf_fcb_[j] = EXP_TF_FMAX; tf_tgb_[j] = false; }
+    sp_svf_.Set(EXP_SPEC_LPF_FHI, EXP_SPEC_LPF_Q, sr);   // SPECTRAL K3 LPF
+    sp_svf_.Reset();
+    sp_set_fc_ = sp_fc_ = EXP_SPEC_LPF_FHI; sp_m_ = 0.f;
+    for (int j = 0; j < kLadSub; j++) { sp_fcb_[j] = EXP_SPEC_LPF_FHI; sp_tgb_[j] = false; }
     BuildBitPatterns();
     {                                            // packed frame offset per zone (BuildTables sets the same values)
       int off = 0;
@@ -622,10 +622,6 @@ class Explorer : public Module {
       sp_tilt_[n] = sp_comb_[n] = spec_w_[n] = 0.f;
     }
     spec_w_[1] = sp_tilt_[1] = sp_comb_[1] = 1.f;
-    for (int b = 0; b < EXP_SPEC_BANKS; b++)     // K3 filter: log2 of the member multiples
-      for (int i = 1; i <= EXP_SPEC_M; i++) sp_l2m_[b][i] = log2f((float)EXP_SPEC_BANK[b][i]);
-    sp_flt_ = false; sf_t3_ = sf_t3_last_ = 0.f; sf_div_ = 0;
-    for (int o = 0; o < kSlots; o++) { sf_ok_[o] = false; sf_bank_[o] = -1; }
     sk_g_ = sk_nu_ = sk_e_ = sk_k1_ = -1.f;      // forces every part on the first SpecWeights
     sk_T_ = sp_nu_last_ = -1.f; sp_nu_div_ = 0;   // depth / nu recompute state
     sp_redo_ = true;
@@ -851,7 +847,7 @@ class Explorer : public Module {
     int   specz;      // FM LAB SW1 MID SPECTRAL: 0 (a = applied density nu, b = K2 knob, se = envelope depth,
                       // sn = K1 bank index; env / dir / T = the K4 pluck <-> swell); else -1
     float se, sn;     // se = K4 envelope depth (K2 units), sn = K1 bank index
-    float st3, sfc;   // K3 filter: t3 (0 = off, > 0 lp, < 0 formant), fc / formant centre (Hz)
+    float slp;        // K3 LPF fc (Hz), 0 = off
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
     float c3;
@@ -998,6 +994,7 @@ class Explorer : public Module {
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
       if (EXP_LAD_ENABLE) LadUpdate((int)(i / kFactor));   // parked SW1 MID ladder: mix target + cutoff
       else                TfUpdate((int)(i / kFactor));    // SW1 MID 2-pole LP: mix target + cutoff (this 8 kHz sample)
+      SpecLpfUpdate((int)(i / kFactor), mnew);     // FM LAB SPECTRAL K3 LPF: mix target + cutoff
 
       // Pass 1: clock all bands, magnitudes (|z'| = |z| in every slot).
       float* __restrict mg = mag_ + 1;
@@ -1033,6 +1030,7 @@ class Explorer : public Module {
     DcBlock(wet, size);
     if (EXP_LAD_ENABLE) Ladder(wet, size);       // parked SW1 MID K3 ladder lowpass (mix m; not run while m = 0)
     else                TabFilter(wet, size);    // SW1 MID K3 2-pole SVF lowpass (mix m; not run while m = 0)
+    SpecLpf(wet, size);                          // FM LAB SPECTRAL K3 2-pole SVF lowpass (mix m; not run while m = 0)
     if (EXP_POSTFILT_ENABLE) PostFilter(wet, size);   // parked K4: LP | bypass | HP
     Saturate(wet, size);
     ApplyMute(wet, size);
@@ -1409,89 +1407,9 @@ class Explorer : public Module {
       spec_w_[1] = w1 * in;
       for (int n = 2; n <= EXP_SPEC_M; n++) spec_w_[n] *= in;
     }
-    SpecFilter(redo);
     p.aw = spec_w_;
     p.top = EXP_SPEC_M;
     p.p0 = SpecShift(EXP_SPEC_K_SHIFT);
-  }
-  // K3 spectral filter (2026-11-05; EXP_SPEC_FLT_*, law in explorer_constants.h): per slot o (only slots in use), band
-  // k, member i: F = 10^(dB(log2(m_i f'_k / fc)) / 20), fw = W(i) F, after the RMS norm (raw level). t3 = 2 k3s_ - 1;
-  // t3 = 0 exactly -> sp_flt_ = false and ShapeSpec reads spec_w_ (byte-identical to no filter). F redone when t3
-  // moved (at most every EXP_SPEC_NU_DIV samples, at once when it stops) or the bank / slot use changed; fw = W F
-  // when W (wchg) or F changed. Cost per F redo and slot: 84 x 16 members, one exp2 each (fast path F = 1 below
-  // the bump, 0 past the floor / the anti-fold edge).
-  static inline float FastExp2(float x) {        // 2^x, x clamped to [-126, 126]; rel. error ~2e-7
-    x = fminf(fmaxf(x, -126.f), 126.f);
-    const float fl = floorf(x);
-    const float f = x - fl;
-    float pl = 1.8775767e-3f;
-    pl = pl * f + 8.9893397e-3f;
-    pl = pl * f + 5.5826318e-2f;
-    pl = pl * f + 2.4015361e-1f;
-    pl = pl * f + 6.9315308e-1f;
-    pl = pl * f + 9.9999994e-1f;
-    union { uint32_t u; float v; } c;
-    c.u = (uint32_t)((int)fl + 127) << 23;
-    return pl * c.v;
-  }
-  void SpecFilter(bool wchg) {
-    using namespace explorer_k;
-    float t3 = 2.f * k3s_ - 1.f;
-    if (fabsf(t3) < EXP_SPEC_FLT_DEAD) t3 = 0.f;  // the K3 smoother can stall ~1e-6 short of 0.5 (ca x diff < 1 ulp)
-    diag_spec_t3_ = t3;
-    if (t3 == 0.f) { sp_flt_ = false; sf_t3_ = 0.f; return; }
-    const bool t3_stop = (t3 == sf_t3_last_);
-    sf_t3_last_ = t3;
-    if (sf_div_ > 0) sf_div_--;
-    if (t3 != sf_t3_ && (sf_div_ == 0 || t3_stop || !sp_flt_)) {
-      sf_t3_ = t3;
-      sf_div_ = EXP_SPEC_NU_DIV;
-      for (int o = 0; o < kSlots; o++) sf_ok_[o] = false;
-    }
-    sp_flt_ = true;
-    const float at = fabsf(sf_t3_);
-    const bool lp = (sf_t3_ > 0.f);
-    const float l2max = 11.891784f;              // log2(3800) = log2(EXP_HARM_FMAX)
-    static_assert(EXP_HARM_FMAX == 3800.f, "SpecFilter: l2max");
-    const float lfc = l2max + at * (log2f(EXP_SPEC_FLT_FLO) - l2max);
-    diag_spec_fc_ = FastExp2(lfc);
-    const float fade = lp ? EXP_SPEC_FLT_LP_FADE : EXP_SPEC_FMT_FADE;
-    const float G = EXP_SPEC_FLT_PEAK_DB * ((fade > 0.f) ? fminf(at / fade, 1.f) : 1.f);
-    const float sg = EXP_SPEC_FLT_WIDTH_OCT * (1.f / 2.3548200f);
-    const float iq = -0.7213475f / (sg * sg);    // gaussian: exp(-x^2 / (2 s^2)) = 2^(iq x^2)
-    const float xb = 4.f * sg;                   // |x| > 4 sigma: bump < 3.4e-4 G dB -> treated as 0
-    const float db2 = 0.16609640f;               // dB -> log2 (1 / 20 log2 10)
-    const int* __restrict mb = EXP_SPEC_BANK[spec_bank_];
-    for (int o = 0; o < kSlots; o++) {
-      if (og_[o] == 0.f && og_t_[o] == 0.f) { sf_ok_[o] = false; continue; }   // slot not in use
-      const bool fnew = !sf_ok_[o] || sf_bank_[o] != spec_bank_;
-      if (!fnew && !wchg) continue;
-      float (*ff)[EXP_SPEC_M + 1] = explorer_spec_st.ff[o];
-      float (*fw)[EXP_SPEC_M + 1] = explorer_spec_st.fw[o];
-      if (fnew) {
-        sf_ok_[o] = true; sf_bank_[o] = spec_bank_;
-        for (int k = 0; k < kBands; k++) {
-          const float fp = fp_[o][k];
-          const float lb = log2f(fp) - lfc;
-          for (int i = 1; i <= EXP_SPEC_M; i++) {
-            const float f = (float)mb[i] * fp;
-            float F;
-            if (i > 1 && f >= EXP_HARM_FMAX) F = 0.f;   // past the anti-fold edge (h = 0, never read)
-            else {
-              const float x = lb + sp_l2m_[spec_bank_][i];
-              if (lp && x > 0.f) {
-                const float db = G * FastExp2(iq * x * x) - EXP_SPEC_FLT_SLOPE_DB * x;
-                F = (db <= EXP_SPEC_FLT_FLOOR_DB) ? 0.f : FastExp2(db * db2);
-              } else if (fabsf(x) > xb) F = 1.f;
-              else F = FastExp2(G * FastExp2(iq * x * x) * db2);
-            }
-            ff[k][i] = F;
-          }
-        }
-      }
-      for (int k = 0; k < kBands; k++)
-        for (int i = 1; i <= EXP_SPEC_M; i++) fw[k][i] = spec_w_[i] * ff[k][i];
-    }
   }
   // SPECTRAL series, analytic: S = sum_n w_n h_n v^n (complex), the SAW loop of SeriesSum with the anti-fold edge on
   // the SHIFTED partial frequency (n + s) f0: the caller passes Fe = 3800 - s f0 (s = 0: SeriesSum<kAddSaw>'s Re, bit
@@ -1689,8 +1607,6 @@ class Explorer : public Module {
     const float* __restrict ifp = ifp_[o];
     const float* __restrict w   = p.aw ? p.aw : spec_w_;
     float* __restrict th = explorer_spec_st.th[o];
-    const bool flt = sp_flt_ && w == spec_w_;    // K3 filter: per-band W x F (fw), else the shared W
-    const float (*fw)[EXP_SPEC_M + 1] = explorer_spec_st.fw[o];
     const float s = p.p0;
     const float ds = s * sp_isr8_;
     const bool played = (o == kSP);
@@ -1707,12 +1623,12 @@ class Explorer : public Module {
       const float Fe = EXP_HARM_FMAX - s * fp[k];
       float W, Sr, Si;
       if (t0 == 0.f) {
-        if (harm) SpecSeries<false>(ur[k], ui[k], fp[k], ifp[k], Fe, flt ? fw[k] : w, EXP_SPEC_M, Sr, Si);
-        else      SpecBankSeries<false, BK>(ur[k], ui[k], fp[k], ifp[k], Fe, flt ? fw[k] : w, Sr, Si);
+        if (harm) SpecSeries<false>(ur[k], ui[k], fp[k], ifp[k], Fe, w, EXP_SPEC_M, Sr, Si);
+        else      SpecBankSeries<false, BK>(ur[k], ui[k], fp[k], ifp[k], Fe, w, Sr, Si);
         W = Sr;
       } else {
-        if (harm) SpecSeries<true>(ur[k], ui[k], fp[k], ifp[k], Fe, flt ? fw[k] : w, EXP_SPEC_M, Sr, Si);
-        else      SpecBankSeries<true, BK>(ur[k], ui[k], fp[k], ifp[k], Fe, flt ? fw[k] : w, Sr, Si);
+        if (harm) SpecSeries<true>(ur[k], ui[k], fp[k], ifp[k], Fe, w, EXP_SPEC_M, Sr, Si);
+        else      SpecBankSeries<true, BK>(ur[k], ui[k], fp[k], ifp[k], Fe, w, Sr, Si);
         W = Sr * Cos01(t0) - Si * Sin01(t0);
       }
       acc += (played ? wmid_[k] : 1.f) * a * W;
@@ -2271,6 +2187,54 @@ class Explorer : public Module {
       }
     }
     tf_m_ = m;
+  }
+
+  // FM LAB SPECTRAL K3 LPF, per 8 kHz sample: target = SPECTRAL entering model and k3 > EXP_SPEC_LPF_ON; fc =
+  // FHI (FLO / FHI)^k3 (exact ends). Computed only while the target is on or m still fades; else the last fc holds.
+  inline void SpecLpfUpdate(int sub, int mnew) {
+    using namespace explorer_k;
+    if (sub >= kLadSub) sub = kLadSub - 1;
+    const bool on = lab_ && mnew == kLSPEC && k3s_ > EXP_SPEC_LPF_ON;
+    sp_tgb_[sub] = on;
+    if (!on && sp_m_ <= 0.f) { sp_fcb_[sub] = sp_set_fc_; sp_fc_ = 0.f; return; }
+    const float fc = (k3s_ >= 1.f) ? EXP_SPEC_LPF_FLO
+                                   : EXP_SPEC_LPF_FHI * expf(k3s_ * logf(EXP_SPEC_LPF_FLO / EXP_SPEC_LPF_FHI));
+    sp_fcb_[sub] = fc;
+    sp_fc_ = on ? fc : 0.f;
+  }
+  // TabFilter's structure without the tables saturation: wet = x + m (lp(x) - x), m slid by lad_step_ per 48 kHz
+  // sample toward the 8 kHz sample's target (sp_tgb_); starting from m = 0 clears the state; coefficients set once
+  // per 8 kHz sample, only when fc changed (Q fixed EXP_SPEC_LPF_Q).
+  void SpecLpf(float* wet, size_t size) {
+    using namespace explorer_k;
+    float m = sp_m_;
+    const int nsub = (int)(size / kFactor);
+    bool any = (m > 0.f);
+    for (int j = 0; j < nsub && j < kLadSub; j++) any = any || sp_tgb_[j];
+    if (!any) return;                            // off: not run (bit-identical)
+    const float st = lad_step_;
+    size_t n = 0;
+    for (int j = 0; j < nsub; j++) {
+      const int jj = (j < kLadSub) ? j : kLadSub - 1;
+      const bool tg = sp_tgb_[jj];
+      const float fc = sp_fcb_[jj];
+      if (fc != sp_set_fc_) { sp_svf_.Set(fc, EXP_SPEC_LPF_Q, sr_); sp_set_fc_ = fc; }
+      for (int q = 0; q < kFactor; q++, n++) {
+        if (tg) {
+          if (m <= 0.f) sp_svf_.Reset();
+          m += st; if (m > 1.f) m = 1.f;
+        } else if (m > 0.f) {
+          m -= st; if (m < 0.f) m = 0.f;
+        }
+        if (m > 0.f) {
+          const float x = wet[n];
+          float lp, hp;
+          sp_svf_.Process(x, lp, hp);
+          wet[n] = x + m * (lp - x);
+        }
+      }
+    }
+    sp_m_ = m;
   }
 
   // Dampener (tables: fc = tpk_fc_, the knob value only): per band of slot o, hf = min(TB_FMAX, fc) / f'_k -> the table blend lo / x (BlendPick, read with
@@ -3156,7 +3120,7 @@ class Explorer : public Module {
     s.specz = diag_spec_z_;
     s.se = diag_spec_d_;
     s.sn = diag_spec_n_;
-    s.st3 = diag_spec_t3_; s.sfc = diag_spec_fc_;
+    s.slp = sp_fc_;
     s.addz = diag_add_z_;
     s.c3 = diag_add_c3_;
     s.bm = diag_add_bm_;
@@ -3340,14 +3304,6 @@ class Explorer : public Module {
   float diag_spec_nu_ = 0.f;       // DIAG: applied density nu (written by SpecWeights)
   float sk_T_ = -1.f, sp_depth_ = 0.f;   // envelope T the depth was made for, depth (K2 knob units)
   float sp_nu_last_ = -1.f;        // nu of the previous SpecWeights call (stop detection)
-  // K3 spectral filter (SpecFilter)
-  bool  sp_flt_ = false;           // t3 != 0: ShapeSpec reads explorer_spec_st.fw
-  float sf_t3_ = 0.f, sf_t3_last_ = 0.f;   // t3 the factors were made for / of the previous call
-  int   sf_div_ = 0;               // samples until the next factor redo while t3 moves
-  bool  sf_ok_[kSlots] = {};       // slot factors valid for sf_t3_
-  int   sf_bank_[kSlots] = {};     // bank the slot factors were made for
-  float sp_l2m_[explorer_k::EXP_SPEC_BANKS][explorer_k::EXP_SPEC_M + 1] = {};   // log2 m_i per bank
-  float diag_spec_t3_ = 0.f, diag_spec_fc_ = 0.f;   // DIAG: t3, fc / formant centre (Hz)
   int   sp_nu_div_ = 0;            // samples until the next comb recompute while nu moves
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
   float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
@@ -3385,6 +3341,10 @@ class Explorer : public Module {
   bool  lad_tgb_[kLadSub];         // mix target per 8 kHz sample (true = MID table model)
   // SW1 MID K3 2-pole lowpass (TfUpdate per 8 kHz sample, TabFilter per block; m slide = lad_step_)
   float tf_set_q_ = 0.f;           // Q the SVF coefficients were last set for
+  ExpSVF sp_svf_;                  // FM LAB SPECTRAL K3 LPF (own instance, same type as tf_svf_)
+  float sp_m_ = 0.f, sp_set_fc_ = 0.f, sp_fc_ = 0.f;   // mix, fc the coefficients hold, DIAG fc (0 = off)
+  float sp_fcb_[kLadSub] = {};
+  bool  sp_tgb_[kLadSub] = {};
   ExpSVF tf_svf_;                  // one TPT SVF stage, LP output (Q EXP_TF_Q)
   float tf_m_ = 0.f;               // mix m (0 = not run; 1 = LP only)
   float tf_lnr_ = 0.f;             // ln(EXP_TF_FMAX / EXP_TF_FMIN)
