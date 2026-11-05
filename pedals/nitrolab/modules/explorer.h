@@ -1200,10 +1200,10 @@ class Explorer : public Module {
       const bool down = IsDownModel(var_ >> 6);  // SW3 MID SW1 DOWN: K4 inert (o3_ = 1, o not computed)
       TouchOpenUpdate(lab_ || !down);            // openness o (+ o_d, o_r) with the live level
       o3_ = down ? 1.f : te_o_;
-      if (lab_) {
-        // FM LAB 2-OP K5 fade-in (touch env): fade = 1 - w (1 - o_r) - 1 at / CCW of noon (w 0), the swell's openness
-        // o_r past the morph zone (w 1), continuous across it; one-pole slid (mv_a_ = EXP_ENV_FM_SLIDE_MS 1 ms, lands
-        // exactly; carried over from the g_s fade-in).
+      {
+        // K5 FM LFO fade-in (touch env; FM LAB 2-OP, and SW3 MID UP FM since 2026-11-05): fade = 1 - w (1 - o_r) - 1 at /
+        // CCW of noon (w 0), the swell's openness o_r past the morph zone (w 1), continuous across it; one-pole slid
+        // (mv_a_ = EXP_ENV_FM_SLIDE_MS 1 ms, lands exactly; carried over from the g_s fade-in).
         const float ft = 1.f - te_w_ * (1.f - te_or_);
         lab_fbf_ += mv_a_ * (ft - lab_fbf_);
         if (fabsf(ft - lab_fbf_) < EXP_CTRL_SNAP) lab_fbf_ = ft;
@@ -2206,7 +2206,7 @@ class Explorer : public Module {
     // SW3 MID only (not FM LAB): the K5 LFO also swings the FM cutoff, UPWARD ONLY on top of the touch env
     // (2026-11-05): + depth (shape + 1) / 2 in [0, depth] x EXP_LFO_FM_FC_OCT octaves; LFO off (depth 0) -> exactly 0.
     float lo = 0.f;
-    if (!loop_ && !lab_) { lo = 0.5f * (lfo_depth_ + lfo_s_); if (lo < 0.f) lo = 0.f; }
+    if (!loop_ && !lab_) { lo = 0.5f * (lfo_depth_ + lfo_s_) * lab_fbf_; if (lo < 0.f) lo = 0.f; }   // x swell fade-in
     if (k != damp_k_ || om != damp_o_ || lo != damp_l_) {
       const bool kmoved = (k != damp_k_);
       damp_k_ = k;
@@ -2704,7 +2704,7 @@ class Explorer : public Module {
     // floor 0); K5 LFO x the fade-in.
     const float L   = lab_ ? lab_L_ : hc_fold_;               // K3 dampener: min(FOLD_LIMIT_HZ, fc) (UP caps)
     const float Lk  = lab_ ? lab_L_ : hc_fold_k_;             // K3 knob alone (no envelope)
-    const float lfb = lfo_s_ * EXP_LFO_FB_SWING * (lab_ ? lab_fbf_ : 1.f);   // K5 LFO on the feedback, added AFTER the cap
+    const float lfb = lfo_s_ * EXP_LFO_FB_SWING * lab_fbf_;   // K5 LFO on the feedback (x the swell fade-in), AFTER the cap
     const int   pkf = pk_fade_n_;                             // dampener discrete pick slide running
     const float pkg = pk_g_;
     const uint8_t* __restrict wlv  = wtlv_[o];
