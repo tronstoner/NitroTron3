@@ -423,7 +423,8 @@ constexpr int   EXP_SPEC_BANK[EXP_SPEC_BANKS][EXP_SPEC_M + 1] = {
   { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },  // HARM (CW)
 };
 constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f'), -1 at CCW, 0 at noon (harmonic)
-// CONTROLS consolidation (2026-11-05): K1 = bank, K2 = density, K4 = pluck <-> swell on nu, K3 / K5 unused.
+// CONTROLS consolidation (2026-11-05): K1 = bank, K2 = density, K4 = pluck <-> swell on nu, K5 unused (K3 = filter,
+// below; EXP_SPEC_K_TILT keeps the tilt fixed flat).
 // The former knob laws stay reachable through these fixed knob positions (0..1, same laws as above):
 constexpr float EXP_SPEC_K_PEAK     = 1.0f;    // comb shape at this "k1" (1 = full CW: e = E_MAX 4, peaky)
 constexpr float EXP_SPEC_K_TILT     = 0.5f;    // tilt at this "k3" (0.5 = noon: gamma 0, flat)
@@ -438,6 +439,23 @@ constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.4f;
 // Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
 // stops (lands exactly). Exponent / bank changes recompute at once.
 constexpr int   EXP_SPEC_NU_DIV        = 8;
+// K3 = SPECTRAL FILTER (2026-11-05): a per-member weight factor F(f) at the member's real frequency f = m_i f'_k
+// (so it differs per band / slot), applied AFTER the RMS norm (raw filter level: closing the LP gets quieter).
+// t3 = 2 k3 - 1 (smoothed K3); t3 = 0 exactly = off (byte-identical to no filter). x = log2(f / fc),
+// fc = FMAX (FLT_FLO / FMAX)^|t3| (FMAX = EXP_HARM_FMAX 3800 Hz), both sides.
+//   bump(x) = G exp(-x^2 / (2 sigma^2)) dB, sigma = FLT_WIDTH_OCT / 2.3548 (WIDTH = full width at half the dB peak)
+//   CW  (t3 > 0) resonant LP: dB = bump(x) - FLT_SLOPE_DB max(x, 0);  G = FLT_PEAK_DB min(t3 / FLT_LP_FADE, 1)
+//   CCW (t3 < 0) formant:     dB = bump(x);                          G = FLT_PEAK_DB min(|t3| / FMT_FADE, 1)
+//   F = 10^(dB / 20); dB <= FLT_FLOOR_DB -> F = 0. Factors recomputed when t3 / bank moved (t3: at most every
+//   EXP_SPEC_NU_DIV samples, and on the sample it stops), W x F (per slot / band / member) when W or F changed.
+constexpr float EXP_SPEC_FLT_PEAK_DB   = 6.f;      // bump peak (dB)
+constexpr float EXP_SPEC_FLT_WIDTH_OCT = 1.f / 3.f; // bump full width at half peak (octaves, log2 f)
+constexpr float EXP_SPEC_FLT_SLOPE_DB  = 24.f;     // LP rolloff above fc (dB / octave)
+constexpr float EXP_SPEC_FLT_FLO       = 100.f;    // fc / formant centre at full CW / CCW (Hz)
+constexpr float EXP_SPEC_FMT_FADE      = 0.1f;     // CCW: bump gain fades in over |t3| 0..0.1
+constexpr float EXP_SPEC_FLT_LP_FADE   = 0.1f;     // CW: same fade for the LP bump (0 = full bump at once; see report)
+constexpr float EXP_SPEC_FLT_FLOOR_DB  = -120.f;   // below this the member weight is 0
+constexpr float EXP_SPEC_FLT_DEAD      = 1e-4f;    // |t3| below this = off (smoothed K3 stalls ~1e-6 short of noon)
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
 // harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).
