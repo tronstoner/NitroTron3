@@ -1209,6 +1209,12 @@ class Explorer : public Module {
         const float ft = lab_ ? 1.f - te_w_ * (1.f - te_or_) : te_w_ * te_or_ + (1.f - te_w_) * (1.f - te_od_);
         lab_fbf_ += mv_a_ * (ft - lab_fbf_);
         if (fabsf(ft - lab_fbf_) < EXP_CTRL_SNAP) lab_fbf_ = ft;
+        // SW3 MID UP FM feedback swing (2026-11-05): pluck side +- l x (1 - o_d), swell side DOWNWARD only
+        // -depth (shape + 1) / 2 x o_r (darker, never brighter), blended by w; x EXP_LFO_FB_SWING.
+        if (!lab_) {
+          float up = 0.5f * (lfo_depth_ + lfo_s_); if (up < 0.f) up = 0.f;
+          mid_lfb_ = EXP_LFO_FB_SWING * ((1.f - te_w_) * (1.f - te_od_) * lfo_s_ - te_w_ * te_or_ * up);
+        }
       }
       return;
     }
@@ -2207,15 +2213,15 @@ class Explorer : public Module {
     const float k = k3s_, om = o3_;
     // SW3 MID only (not FM LAB): the K5 LFO also swings the FM cutoff, UPWARD ONLY on top of the touch env
     // (2026-11-05): + depth (shape + 1) / 2 in [0, depth] x EXP_LFO_FM_FC_OCT octaves; LFO off (depth 0) -> exactly 0.
-    // SW3 MID only (2026-11-05, octaves on the FM cutoff): swell side +- EXP_LFO_FM_FC_OCT around the envelope (l),
-    // faded in with the swell (x o_r); pluck side UPWARD 0 .. EXP_LFO_FM_FC_OCT_DEC x depth, growing as the pluck
+    // SW3 MID only (2026-11-05, octaves on the FM cutoff): swell side DOWNWARD 0 .. -EXP_LFO_FM_FC_OCT x depth below
+    // the envelope, faded in with the swell (x o_r); pluck side UPWARD 0 .. EXP_LFO_FM_FC_OCT_DEC x depth, growing as the pluck
     // closes (x (1 - o_d)); blended by w.
     //   2026-11-05: the pluck side's amount also scales with the K3 cutoff's position in its range (log, 0 at
     //   DAMP_FMIN .. 1 at DAMP_FMAX = DampCurve(k3)): dark K3 -> subtle, bright K3 -> up to EXP_LFO_FM_FC_OCT_DEC.
     float lo = 0.f, ld = 0.f;                    // swell part (octaves) / pluck part before the K3 scale
     if (!loop_ && !lab_) {
       float up = 0.5f * (lfo_depth_ + lfo_s_); if (up < 0.f) up = 0.f;
-      lo = te_w_ * te_or_ * lfo_s_ * EXP_LFO_FM_FC_OCT;
+      lo = -te_w_ * te_or_ * up * EXP_LFO_FM_FC_OCT;   // swell: DOWNWARD only, 0 .. -OCT x depth (2026-11-05)
       ld = (1.f - te_w_) * up * EXP_LFO_FM_FC_OCT_DEC * (1.f - te_od_);
     }
     if (k != damp_k_ || om != damp_o_ || lo != damp_l_ || ld != damp_ld_) {
@@ -2717,7 +2723,7 @@ class Explorer : public Module {
     // floor 0); K5 LFO x the fade-in.
     const float L   = lab_ ? lab_L_ : hc_fold_;               // K3 dampener: min(FOLD_LIMIT_HZ, fc) (UP caps)
     const float Lk  = lab_ ? lab_L_ : hc_fold_k_;             // K3 knob alone (no envelope)
-    const float lfb = lfo_s_ * EXP_LFO_FB_SWING * lab_fbf_;   // K5 LFO on the feedback (x the swell fade-in), AFTER the cap
+    const float lfb = lab_ ? lfo_s_ * EXP_LFO_FB_SWING * lab_fbf_ : mid_lfb_;   // K5 LFO on the feedback, AFTER the cap
     const int   pkf = pk_fade_n_;                             // dampener discrete pick slide running
     const float pkg = pk_g_;
     const uint8_t* __restrict wlv  = wtlv_[o];
@@ -3506,6 +3512,7 @@ class Explorer : public Module {
   volatile int lab_st_t_ = 7;      // 2-OP ratio zone (K2, 0..14; HARMONIC / DISHARMONIC), Controls
   DSlide l2r_;                     // slid 2-OP ratio r
   float lab_fbf_ = 1.f;            // K5 LFO fade-in factor on b (touch env: 1 - w (1 - o_r); slid 1 ms)
+  float mid_lfb_ = 0.f;            // SW3 MID UP FM: K5 LFO feedback swing (pluck +-, swell downward; EnvUpdate)
   float lab_ue_c_ = -1.f;          // u_eff of the last LabFmUpdate (-1 = recompute)
   float lab_L_ = 4000.f;           // 2-OP caps' L = min(EXP_FOLD_LIMIT_HZ, LabFc(u_eff)) (Hz)
   int   diag_lab_z_ = -1;          // DIAG: lab UP mode of the last Controls (-1 = not the lab UP)
