@@ -428,29 +428,40 @@ constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f
 constexpr float EXP_SPEC_K_PEAK     = 1.0f;    // comb shape at this "k1" (1 = full CW: e = E_MAX 4, peaky)
 constexpr float EXP_SPEC_K_TILT     = 0.5f;    // tilt at this "k3" (0.5 = noon: gamma 0, flat)
 constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.5 = noon: s 0, harmonic, theta fast path)
-// K4 pluck <-> swell on the density (the existing PsUpdate envelope g_s, with the live level: openness o, K4 DYNAMICS
-// below): nu = NU_MAX clamp(k2 + depth (1 - o), 0, 1).
-// depth from the envelope time T in use (ps_T_): x = ln(T / T_LO) / ln(T_HI / T_LO) clamped [0, 1],
-// depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x; computed only when T changed.
+// K4 pluck <-> swell on the density and the K3 LPF (2026-11-05 MORPH, SpecEnvUpdate / SpecOpenUpdate): SPECTRAL has
+// its OWN two envelopes (PsUpdate untouched, it still drives the other models), both running all the time on the FM LAB
+// instance, both retriggered by every onset (PsUpdate's onset), PsUpdate's shapes, no LEAVE (nothing switches sides):
+//   DECAY g_d: onset -> 1, then the EXP_PS_DEC_* law / shape (2-pole) toward 0 over T_d, holds at 0.
+//   RISE  g_r: onset -> 0, then the one-pole toward 1, tau T_r / EXP_ENV_TRAVEL_TAUS, snaps at 98 %, holds at 1.
+//   Before the first onset both = 1. Each slid by EXP_PS_SLIDE_MS -> g_ds, g_rs.
+// t4 = 2 k4 - 1 (smoothed), Z = EXP_SPEC_MORPH_ZONE:
+//   T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|) for t4 < 0, DEC_SLOW for t4 >= 0
+//   T_r = RISE_FAST for t4 <= Z, RISE_FAST (RISE_SLOW / RISE_FAST)^((t4 - Z) / (1 - Z)) for t4 > Z
+//   w   = 0 for t4 <= 0, clamp(t4 / Z, 0, 1) for t4 > 0 (blend decay -> rise over noon .. ~1:00)
+// depth per side from its T, log over that side's own range: x = ln(T / FAST) / ln(SLOW / FAST) clamped [0, 1],
+// depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x (depth_d over EXP_PS_DEC_*, depth_r over EXP_PS_RISE_*), only when
+// that T changed. Openness per side (K4 DYNAMICS below): o_d = min(g_ds, L), o_r = g_rs G.
+//   nu = NU_MAX clamp(k2 + travel, 0, 1), travel = (1 - w) depth_d (1 - o_d) + w depth_r (1 - o_r)
+//   K3 LPF: o = (1 - w) o_d + w o_r (log2 fc = log2 BOT + o (log2 fc_knob - log2 BOT))
+// Exact noon = pure decay at DEC_SLOW (continuous with just CCW of noon).
 constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05: depth per side over EXP_PS_* ranges)
 constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
 constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.08f;   // K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
 constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.5f;   // K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
+constexpr float EXP_SPEC_MORPH_ZONE    = 0.2f;   // t4 units: decay -> rise blend zone CW of noon (noon -> ~1:00); T_r fast there
 // Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
 // stops (lands exactly). Exponent / bank changes recompute at once.
 constexpr int   EXP_SPEC_NU_DIV        = 8;
-// K4 DYNAMICS (2026-11-05): density nu and the K3 LPF follow an "openness" o instead of g_s alone; o combines the K4
-// pluck <-> swell value g_s with the LIVE input level, per 8 kHz sample over the whole note (never held at the onset:
-// muting the string / turning the instrument down closes it at once). env = the onset detector's slow baseline
+// K4 DYNAMICS (2026-11-05): density nu and the K3 LPF follow an "openness" instead of the envelopes alone; it combines
+// each SPECTRAL envelope (above) with the LIVE input level, per 8 kHz sample over the whole note (never held at the
+// onset: muting the string / turning the instrument down closes it at once). env = the onset detector's slow baseline
 // (explorer.h OnsetDetect on_base_: |in| one-pole EXP_ONSET_ENV_MS 2.6 ms -> gate meter, up at once / EXP_ONSET_FALL_MS
 // 40 ms fall -> baseline one-pole EXP_ONSET_SLOW_COEF, tau 34.7 ms; raw 48 kHz input, broadband, peak-ish |in| units):
 //   L = clamp((dB(env) - FLOOR_DB) / (TOP_DB - FLOOR_DB), 0, 1)
-//   DECAY side (K4 CCW):  o = min(g_s, L)
-//   RISE side (K4 CW):    o = g_s G, G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1) (soft gate: 1 while the string
-//                         rings, -> 0 only near silence)
-//   K4 exact noon:        o = g_s (no dynamics; plain K2 / K3 at rest)
-// A K4 side / noon change switches the law: o slides linearly from its last value to the new law over
-// EXP_DISC_SLIDE_MS (1 ms), else o = the law exactly (no other slide; g_s keeps its EXP_PS_SLIDE_MS slide).
+//   DECAY envelope:  o_d = min(g_ds, L)
+//   RISE envelope:   o_r = g_rs G, G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1) (soft gate: 1 while the string
+//                    rings, -> 0 only near silence)
+// blended by w (above): o = (1 - w) o_d + w o_r. No law switch, no slide on o (g_ds / g_rs keep EXP_PS_SLIDE_MS).
 constexpr float EXP_SPEC_DYN_FLOOR_DB = -60.f;  // dBFS: L = 0 and G = 0 at / below (keep low: guitar env sits far below bass)
 constexpr float EXP_SPEC_DYN_TOP_DB   = -20.f;  // dBFS: L = 1 at / above
 constexpr float EXP_SPEC_DYN_GATE_DB  = 12.f;   // dB above FLOOR_DB where the RISE side's soft gate G reaches 1

@@ -232,7 +232,7 @@ int main() {
         // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
         // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb
         // fc<index fc Hz> b<feedback> (knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo .. d<knob depth> ><x swell fade> ..Hz`, MID `LAB SPEC bank n/9 NAME nu<applied> k2<knob>
-        // g<envelope> dec|rise T<s> d<depth> L<live level> o<openness>` (no fc / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
+        // lpf .. sub .. gd<decay g> Td<s> gr<rise g> Tr<s> w<blend> tr<travel> L<live level> o<openness>` (no fc / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
         // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
         // `u <knob> bt <beat Hz> prop|hz|off`); + the UP `ps` / `lfo` part (fce = the applied index fc; DOWN)
         const Explorer::DiagSnap& d = diag_xsnap;
@@ -240,14 +240,15 @@ int main() {
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const unsigned cpu = (unsigned)(cpu_pk * 100.f + 0.5f);
         const char* zn = Explorer::ZoneName(d.model, d.zone);
-        char env[128];
+        char env[160];                                        // (160: SPECTRAL's 8 fields, worst-case int widths)
         if (d.loop)                                           // retired LOOPING variant: generic K4 / K5 envelope
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
-        else if (d.specz >= 0)                                // FM LAB MID SPECTRAL: K4 pluck <-> swell on nu (g, side, T s, depth),
-          snprintf(env, sizeof(env), " g" D2F " %s T" D2F " d" D2F " L" D2F " o" D2F,   // live level L, openness o
-                   D2V(d.env), d.dir < 0 ? "dec" : "rise", D2V(d.T), D2V(d.se), D2V(d.sL), D2V(d.so));
+        else if (d.specz >= 0)                                // FM LAB MID SPECTRAL K4 morph: decay g / T s, rise g / T s,
+          snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " tr" D2F " L" D2F " o" D2F,
+                   D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.str), D2V(d.sL), D2V(d.so));
+                                                              // blend w, density travel, live level L, openness o
         else if (d.labz >= 0)                                 // FM LAB UP: pluck <-> swell (g, side, T s), LFO depth > x fade
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " lfo %s d" D2F " >" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T),

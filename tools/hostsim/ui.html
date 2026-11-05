@@ -454,7 +454,7 @@ function explorerNow(m) {
     r[0] = `bank ${["FIB", "STRIDE7", "STRIDE6", "STRIDE5", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM"][m.sn] ?? "?"}`;
     r[1] = `k2 ${fmt(m.b, 2)} · nu ${fmt(m.a, 2)} now`;
     r[2] = m.slp > 0 ? `lpf ${hz(m.slp)}` : "lpf off";
-    r[3] = `${ps} · depth ${fmt(m.se, 2)} · L ${fmt(m.sL, 2)} o ${fmt(m.so, 2)}`;
+    r[3] = `decay g ${fmt(m.sgd, 2)} T ${fmt(m.sTd, 2)} s · rise g ${fmt(m.sgr, 2)} T ${fmt(m.sTr, 2)} s · w ${fmt(m.sw, 2)} · travel ${fmt(m.str, 2)} · L ${fmt(m.sL, 2)} o ${fmt(m.so, 2)}`;
     r[4] = m.ssub > 0 ? `sub ${fmt(m.ssub, 2)}` : "sub off";
   } else if (m.labz >= 0) {
     const side = m.lside < 0 ? "hollow" : m.lside > 0 ? "feedback" : "sine";
