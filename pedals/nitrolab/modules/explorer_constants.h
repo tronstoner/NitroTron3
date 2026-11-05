@@ -428,7 +428,8 @@ constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f
 constexpr float EXP_SPEC_K_PEAK     = 1.0f;    // comb shape at this "k1" (1 = full CW: e = E_MAX 4, peaky)
 constexpr float EXP_SPEC_K_TILT     = 0.5f;    // tilt at this "k3" (0.5 = noon: gamma 0, flat)
 constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.5 = noon: s 0, harmonic, theta fast path)
-// K4 pluck <-> swell on the density (the existing PsUpdate envelope, g_s): nu = NU_MAX clamp(k2 + depth (1 - g_s), 0, 1).
+// K4 pluck <-> swell on the density (the existing PsUpdate envelope g_s, with the live level: openness o, K4 DYNAMICS
+// below): nu = NU_MAX clamp(k2 + depth (1 - o), 0, 1).
 // depth from the envelope time T in use (ps_T_): x = ln(T / T_LO) / ln(T_HI / T_LO) clamped [0, 1],
 // depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x; computed only when T changed.
 constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05: depth per side over EXP_PS_* ranges)
@@ -438,17 +439,32 @@ constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.5f;   // K2 knob units travelled by t
 // Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
 // stops (lands exactly). Exponent / bank changes recompute at once.
 constexpr int   EXP_SPEC_NU_DIV        = 8;
+// K4 DYNAMICS (2026-11-05): density nu and the K3 LPF follow an "openness" o instead of g_s alone; o combines the K4
+// pluck <-> swell value g_s with the LIVE input level, per 8 kHz sample over the whole note (never held at the onset:
+// muting the string / turning the instrument down closes it at once). env = the onset detector's slow baseline
+// (explorer.h OnsetDetect on_base_: |in| one-pole EXP_ONSET_ENV_MS 2.6 ms -> gate meter, up at once / EXP_ONSET_FALL_MS
+// 40 ms fall -> baseline one-pole EXP_ONSET_SLOW_COEF, tau 34.7 ms; raw 48 kHz input, broadband, peak-ish |in| units):
+//   L = clamp((dB(env) - FLOOR_DB) / (TOP_DB - FLOOR_DB), 0, 1)
+//   DECAY side (K4 CCW):  o = min(g_s, L)
+//   RISE side (K4 CW):    o = g_s G, G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1) (soft gate: 1 while the string
+//                         rings, -> 0 only near silence)
+//   K4 exact noon:        o = g_s (no dynamics; plain K2 / K3 at rest)
+// A K4 side / noon change switches the law: o slides linearly from its last value to the new law over
+// EXP_DISC_SLIDE_MS (1 ms), else o = the law exactly (no other slide; g_s keeps its EXP_PS_SLIDE_MS slide).
+constexpr float EXP_SPEC_DYN_FLOOR_DB = -60.f;  // dBFS: L = 0 and G = 0 at / below (keep low: guitar env sits far below bass)
+constexpr float EXP_SPEC_DYN_TOP_DB   = -20.f;  // dBFS: L = 1 at / above
+constexpr float EXP_SPEC_DYN_GATE_DB  = 12.f;   // dB above FLOOR_DB where the RISE side's soft gate G reaches 1
 // K3 = SPECTRAL LPF (2026-11-05, replaces the per-member weight-factor filter of 7b58cbf): the SW1 MID tables' 2-pole
 // lowpass type (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct) on the 48 kHz wet while SPECTRAL is the model, no
-// saturation. fc_knob = FLO (FHI / FLO)^k3 (CCW closed, CW open, no bypass since 2026-11-05; K4 env: log2 fc = log2 BOT + g_s (log2 fc_knob - log2 BOT); smoothed K3, plain exponential; set per 8 kHz sample). k3 <= EXP_SPEC_LPF_ON:
+// saturation. fc_knob = FLO (FHI / FLO)^k3 (CCW closed, CW open, no bypass since 2026-11-05; K4 env: log2 fc = log2 BOT + o (log2 fc_knob - log2 BOT), o = the K4 DYNAMICS openness above; smoothed K3, plain exponential; set per 8 kHz sample). k3 <= EXP_SPEC_LPF_ON:
 // bypassed (mix m slides to 0 in 1 ms, then not run -> bit-identical to no filter). Q fixed: SVF LP peak
 // Q / sqrt(1 - 1 / (4 Q^2)) = 2.07 (+6.3 dB) at Q 2.
 constexpr float EXP_SPEC_LPF_FHI = 16000.f;  // 2026-11-05: 3800 -> 16000 (as tables; keeps the Q peak out of the spectrum at CW)
 // was 3800.f;   // Hz just CCW of full CW (bypass threshold)
 constexpr float EXP_SPEC_LPF_FLO = 250.f;   // 2026-11-05: 100 -> 250 (= tables, = env bottom)
-constexpr float EXP_SPEC_LPF_ENV_BOTTOM = 250.f;  // Hz the K4 envelope closes to (g_s = 0), as the tables
+constexpr float EXP_SPEC_LPF_ENV_BOTTOM = 250.f;  // Hz the K4 envelope closes to (o = 0), as the tables
 // was 100.f;    // Hz at K3 full CCW
-constexpr float EXP_SPEC_LPF_Q   = 2.f;      // resonance (~+6 dB peak)
+constexpr float EXP_SPEC_LPF_Q   = 1.f;      // resonance (~+6 dB peak)
 constexpr float EXP_SPEC_LPF_ON  = 1e-4f;    // unused since 2026-11-05 (no bypass)
 // K5 = SUB LEVEL (2026-11-05): per active band an octave-divider subharmonic at f'_k / 2 (half-angle phasor u, u^2 = v,
 // sign continued = flipped on each 2 pi wrap of the input-tracked v), sub = Re(u) x a_k x g_sub, g_sub = SUB_MAX k5

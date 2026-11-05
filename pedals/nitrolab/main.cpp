@@ -232,7 +232,7 @@ int main() {
         // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
         // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb
         // fc<index fc Hz> b<feedback> (knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo .. d<knob depth> ><x swell fade> ..Hz`, MID `LAB SPEC bank n/9 NAME nu<applied> k2<knob>
-        // g<envelope> dec|rise T<s> d<depth>` (no fc / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
+        // g<envelope> dec|rise T<s> d<depth> L<live level> o<openness>` (no fc / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
         // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
         // `u <knob> bt <beat Hz> prop|hz|off`); + the UP `ps` / `lfo` part (fce = the applied index fc; DOWN)
         const Explorer::DiagSnap& d = diag_xsnap;
@@ -245,8 +245,9 @@ int main() {
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
                    d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
-        else if (d.specz >= 0)                                // FM LAB MID SPECTRAL: K4 pluck <-> swell on nu (g, side, T s, depth)
-          snprintf(env, sizeof(env), " g" D2F " %s T" D2F " d" D2F, D2V(d.env), d.dir < 0 ? "dec" : "rise", D2V(d.T), D2V(d.se));
+        else if (d.specz >= 0)                                // FM LAB MID SPECTRAL: K4 pluck <-> swell on nu (g, side, T s, depth),
+          snprintf(env, sizeof(env), " g" D2F " %s T" D2F " d" D2F " L" D2F " o" D2F,   // live level L, openness o
+                   D2V(d.env), d.dir < 0 ? "dec" : "rise", D2V(d.T), D2V(d.se), D2V(d.sL), D2V(d.so));
         else if (d.labz >= 0)                                 // FM LAB UP: pluck <-> swell (g, side, T s), LFO depth > x fade
           snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " lfo %s d" D2F " >" D2F " " D2F "Hz", D2V(d.env),
                    d.dir < 0 ? "dec" : "rise", D2V(d.T),
