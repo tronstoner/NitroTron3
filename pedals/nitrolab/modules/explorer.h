@@ -2203,7 +2203,10 @@ class Explorer : public Module {
   void DampFmUpdate() {
     using namespace explorer_k;
     const float k = k3s_, om = o3_;
-    const float lo = loop_ ? 0.f : lfo_s_;       // SW3 MID: the K5 LFO also swings the FM cutoff (2026-10-28)
+    // SW3 MID only (not FM LAB): the K5 LFO also swings the FM cutoff, UPWARD ONLY on top of the touch env
+    // (2026-11-05): + depth (shape + 1) / 2 in [0, depth] x EXP_LFO_FM_FC_OCT octaves; LFO off (depth 0) -> exactly 0.
+    float lo = 0.f;
+    if (!loop_ && !lab_) { lo = 0.5f * (lfo_depth_ + lfo_s_); if (lo < 0.f) lo = 0.f; }
     if (k != damp_k_ || om != damp_o_ || lo != damp_l_) {
       const bool kmoved = (k != damp_k_);
       damp_k_ = k;
@@ -2212,7 +2215,7 @@ class Explorer : public Module {
       const float lk = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
       float lf = lk;
       if (loop_) lf += om * damp_lnr_;
-      else       lf = lf * om + lo * (EXP_LFO_FM_FC_OCT * 0.6931472f);   // +- octaves on top of the envelope
+      else       lf = lf * om + lo * (EXP_LFO_FM_FC_OCT * 0.6931472f);   // 0 .. + octaves on top of the envelope
       damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
       hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
       // K3 knob value alone (no envelope): the envelope's index floor uses it (MID)
