@@ -158,10 +158,10 @@
 //                the RMS-normalised weights, before the K3 LPF; raw level. K5 full CCW: skipped (bit-identical).
 //              K3 = LPF (2026-11-05; SpecLpfUpdate / SpecLpf, EXP_SPEC_LPF_*): the SW1 MID tables' 2-pole lowpass type
 //                (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct; own instance sp_svf_) on the 48 kHz wet, after the
-//                DC blocker and the tables' TabFilter, before PostFilter / Saturate; no saturation. fc = 3800
-//                (100 / 3800)^(1 - k3) Hz (CW = open/bypass, CCW = closed), Q 2 (~+6 dB peak), coefficients per 8 kHz sample when fc moved. Mix m (TabFilter's
-//                slide, 1 ms): target on while SPECTRAL is the entering model and 1 - k3 > EXP_SPEC_LPF_ON; m = 0 -> not
-//                run (K3 full CCW = bit-identical to no filter). The weights stay the shared W (no per-band factors).
+//                DC blocker and the tables' TabFilter, before PostFilter / Saturate; no saturation. fc_knob = 250
+//                (16000 / 250)^k3 Hz (CCW closed, CW open; no bypass), K4 envelope as the tables: log2 fc = log2 250 +
+//                g_s (log2 fc_knob - log2 250) (EXP_SPEC_LPF_ENV_BOTTOM), Q 2 (~+6 dB peak), coefficients per 8 kHz
+//                sample when fc moved. Mix m (TabFilter's slide, 1 ms): target on while SPECTRAL is the entering model. The weights stay the shared W (no per-band factors).
 //              FIXED (constants, former knob laws kept reachable): comb shape e = 0.25 16^k at k = EXP_SPEC_K_PEAK 1 ->
 //                e = 4 (peaky; b^e = exp(e ln b), b = 0 -> 0); tilt gamma = 3 (1 - 2 k) (k <= 0.5), -(2 k - 1) (k > 0.5)
 //                at k = EXP_SPEC_K_TILT 0.5 -> gamma 0 (flat); partial shift delta_k = s f'_k, s = EXP_SPEC_SHIFT_MAX
@@ -2220,17 +2220,18 @@ class Explorer : public Module {
     tf_m_ = m;
   }
 
-  // FM LAB SPECTRAL K3 LPF, per 8 kHz sample: c = 1 - k3 (CW = open, CCW = closed); target = SPECTRAL entering
-  // model and c > EXP_SPEC_LPF_ON; fc = FHI (FLO / FHI)^c (exact ends). Computed only while the target is on or m still fades; else the last fc holds.
+  // FM LAB SPECTRAL K3 LPF, per 8 kHz sample (2026-11-05: no bypass, K4 envelope as the SW1 MID tables): target =
+  // SPECTRAL entering model; fc_knob = FLO (FHI / FLO)^k3 (CCW closed, CW open); log2 fc = log2 BOT + g_s (log2 fc_knob
+  // - log2 BOT) with g_s the pluck <-> swell value (1 = the K3 cutoff, 0 = EXP_SPEC_LPF_ENV_BOTTOM; 1 while looping).
   inline void SpecLpfUpdate(int sub, int mnew) {
     using namespace explorer_k;
     if (sub >= kLadSub) sub = kLadSub - 1;
-    const float c = 1.f - k3s_;
-    const bool on = lab_ && mnew == kLSPEC && c > EXP_SPEC_LPF_ON;
+    const bool on = lab_ && mnew == kLSPEC;
     sp_tgb_[sub] = on;
     if (!on && sp_m_ <= 0.f) { sp_fcb_[sub] = sp_set_fc_; sp_fc_ = 0.f; return; }
-    const float fc = (c >= 1.f) ? EXP_SPEC_LPF_FLO
-                                : EXP_SPEC_LPF_FHI * expf(c * logf(EXP_SPEC_LPF_FLO / EXP_SPEC_LPF_FHI));
+    const float fk = EXP_SPEC_LPF_FLO * expf(k3s_ * logf(EXP_SPEC_LPF_FHI / EXP_SPEC_LPF_FLO));
+    const float g = loop_ ? 1.f : ps_gs_;
+    const float fc = EXP_SPEC_LPF_ENV_BOTTOM * expf(g * logf(fk / EXP_SPEC_LPF_ENV_BOTTOM));
     sp_fcb_[sub] = fc;
     sp_fc_ = on ? fc : 0.f;
   }
