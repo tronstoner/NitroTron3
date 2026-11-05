@@ -157,3 +157,33 @@ Consolidated 2026-10-03 from the agents' notes; open points settled 2026-10-07.
 - Never revert or discard work without explicit confirmation; on an
   ambiguous "revert", state target and scope first.
 - Docs are updated only when he says so.
+
+## 12. Touch env — the standard envelope model
+
+Any envelope that moves a timbre target in any module is a **touch env**
+(named 2026-11-05). Principle: the player controls the string's vibration,
+and the effect follows it over the whole note. Loudness is never measured at
+the trigger and locked ("note + velocity" thinking is out). Muting a note
+softly or turning the instrument's volume down is a playing gesture.
+
+Structure (bipolar knob, noon in the middle):
+- **CCW = pluck (decay)**, fast at full CCW → slow at noon. **CW = swell
+  (rise)**, slow at full CW.
+- Two envelopes, pluck and swell, always run and are both retriggered by
+  every onset. The knob only sets their times and a blend weight. So the same
+  knob position always gives the same result: no side state, no hysteresis.
+- **Morph zone noon → ~1:00:** the pluck fades out and the fastest swell fades
+  in. There is no jump at noon, and the dead fast-rise region gets a job.
+- **Live dynamics:** a level follower L on a dB scale acts continuously.
+  - Pluck: openness = min(envelope, L_d). L_d rises with the playing at once
+    and falls with a release proportional to the envelope time, so a mute on a
+    long pluck closes damped, not cut.
+  - Swell: openness = envelope × a soft gate on L, so only a mute or the volume
+    knob collapses it.
+- Slow envelopes travel far, fast ones short (travel depth scales with
+  envelope time). One openness drives all targets of the module.
+
+Reference implementation: NitroLab explorer, FM LAB SPECTRAL K4
+(`SpecEnvUpdate` / `SpecOpenUpdate` in `pedals/nitrolab/modules/explorer.h`).
+Values live in `explorer_constants.h` (`EXP_SPEC_DYN_*`, `EXP_SPEC_MORPH_ZONE`,
+`EXP_SPEC_ENV_DEPTH_*`).
