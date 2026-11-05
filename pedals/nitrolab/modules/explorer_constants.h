@@ -450,6 +450,8 @@ constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05:
 constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
 constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.08f;   // K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
 constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.5f;   // K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
+constexpr bool  EXP_SPEC_K2_REVERSE   = true;    // 2026-11-05 test: SPECTRAL density mirrored, nu = NU_MAX clamp(1 - (k2 + travel)):
+                                               // K2 CW = old CCW, the envelope travels the opposite way. false = original.
 constexpr float EXP_SPEC_MORPH_ZONE    = 0.2f;   // t4 units: decay -> rise blend zone CW of noon (noon -> ~1:00); T_r fast there (touch env, every K4 mode)
 // Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
 // stops (lands exactly). Exponent / bank changes recompute at once.

@@ -1544,7 +1544,9 @@ class Explorer : public Module {
   void SpecWeights(Params& p) {
     using namespace explorer_k;
     const float tr = loop_ ? 0.f : SpecTravel();   // K4 travel in K2 knob units (touch env; 0 while looping)
-    const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_ + tr);
+    // EXP_SPEC_K2_REVERSE (2026-11-05 test): the whole density mapping mirrored - knob and envelope travel flipped.
+    const float kt = k2s_ + tr;
+    const float nu = EXP_SPEC_NU_MAX * Clamp01(EXP_SPEC_K2_REVERSE ? 1.f - kt : kt);
     diag_spec_nu_ = nu;
     const float ga = SpecGamma(EXP_SPEC_K_TILT);
     if (sk_k1_ < 0.f) { sk_k1_ = EXP_SPEC_K_PEAK; sp_e_ = SpecExp(EXP_SPEC_K_PEAK); }   // e fixed (once)
