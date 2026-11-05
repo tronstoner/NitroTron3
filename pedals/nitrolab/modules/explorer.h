@@ -159,7 +159,7 @@
 //                member's real shifted frequency (m_i + s) f'_k, members past the edge are skipped (not computed).
 //                Bank change: a gain g on the normalised weights slides 1 -> 0 over 0.5 ms, the bank swaps at 0, g
 //                slides 0 -> 1 over 0.5 ms (1 ms total, EXP_DISC_SLIDE_MS; no crossfade). HARM uses the plain series
-//                (SpecSeries); other banks SpecBankSeries (running power v^{m_i} times v^{2^j} squares per bit of the gap).
+//                (SpecSeries); other banks SpecBankSeries (step power(s) once per band, one complex multiply per member).
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, item = K1 zone). One harmonic series per band built on the
 //              slot's unit phasor v = u_k (as Armitage ADD: harmonics by repeated complex multiplication), FM on the
 //              series fundamental at ratio 1, no feedback: q = b e^{j I x} (b = v, x = Im v = sin 2 pi phi; SUB: b = w,
@@ -444,6 +444,38 @@ struct ExplorerSpecState {
 static ExplorerSpecState EXP_FAST_BSS explorer_spec_st;
 
 // K4 post filter stage: TPT state-variable filter (a local copy of armitage's ArmSVF).
+// SPECTRAL bank step table (non-HARM banks, compile time per bank b): the member multiples as floats, the bank's
+// structure - constant stride D (m_i = 1 + (i - 1) D: ODD, STRIDE3..7), Fibonacci (m_i = m_{i-1} + m_{i-2}, m_0 = 1:
+// FIB) or general (PRIMES: per member the class of its gap m_i - m_{i-1} among the bank's few distinct gaps).
+struct ExpSpecBankTab {
+  float mf[explorer_k::EXP_SPEC_M + 1] = {};      // m_i as float (edge: m_i f0)
+  int   stride = 0;                                 // D > 0: constant stride from m_1 = 1
+  bool  fib = false;
+  int   ng = 0;                                     // general: distinct gaps
+  int   gap[8] = {};
+  int   cls[explorer_k::EXP_SPEC_M + 1] = {};       // general: gap class of member i (2..M)
+  constexpr ExpSpecBankTab(int b) {
+    using namespace explorer_k;
+    const int (&m)[EXP_SPEC_M + 1] = EXP_SPEC_BANK[b];
+    for (int i = 1; i <= EXP_SPEC_M; i++) mf[i] = (float)m[i];
+    const int d = m[2] - m[1];
+    bool st = (m[1] == 1);
+    for (int i = 3; i <= EXP_SPEC_M; i++) if (m[i] - m[i - 1] != d) st = false;
+    if (st) { stride = d; return; }
+    bool fb = (m[1] == 1 && m[2] == 2);
+    for (int i = 3; i <= EXP_SPEC_M; i++) if (m[i] != m[i - 1] + m[i - 2]) fb = false;
+    if (fb) { fib = true; return; }
+    for (int i = 2; i <= EXP_SPEC_M; i++) {
+      const int g = m[i] - m[i - 1];
+      int c = 0;
+      while (c < ng && gap[c] != g) c++;
+      if (c == ng) gap[ng++] = g;                   // (static_assert below: ng <= 8)
+      cls[i] = c;
+    }
+  }
+};
+template <int B> constexpr ExpSpecBankTab kExpSpecBankTab = ExpSpecBankTab(B);
+
 struct ExpSVF {
   float ic1 = 0.f, ic2 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f, k = 0.f;
   void Set(float fc, float Q, float sr) {
@@ -1388,69 +1420,139 @@ class Explorer : public Module {
     }
     outr = sr; outi = si;
   }
-  // Number of squares v^{2^j} a bank needs (bits of its largest member gap).
-  // SpecBankNsq(b, top): ... over members 2..top only (the squares made up to member top).
-  static constexpr int SpecBankNsq(int b, int top = explorer_k::EXP_SPEC_M) {
-    int g = 0;
-    for (int i = 2; i <= top; i++) {
-      const int d = explorer_k::EXP_SPEC_BANK[b][i] - explorer_k::EXP_SPEC_BANK[b][i - 1];
-      if (d > g) g = d;
+  // Complex power v^E (E constant >= 1, binary: squares + multiplies, unrolled at compile time).
+  template <int E>
+  __attribute__((always_inline)) static inline void SpecPow(float qr, float qi, float& rr, float& ri) {
+    float br = qr, bi = qi, ar = 1.f, ai = 0.f;
+    bool first = true;
+#pragma GCC unroll 8
+    for (int e = E; e; e >>= 1) {
+      if (e & 1) {
+        if (first) { ar = br; ai = bi; first = false; }
+        else { const float t = ar * br - ai * bi; ai = ar * bi + ai * br; ar = t; }
+      }
+      if (e >> 1) { const float t = br * br - bi * bi; bi = 2.f * br * bi; br = t; }
     }
-    int n = 0;
-    while (g) { n++; g >>= 1; }
-    return n;
+    rr = ar; ri = ai;
   }
   // SPECTRAL bank series (non-HARM banks): S = sum_i w_i h_i v^{m_i}, m = EXP_SPEC_BANK[b] ascending, m_1 = 1 (no edge).
   // Edge as SpecSeries on the member's real frequency m_i f0 against Fe; the first member with m_i f0 >= Fe ends the
-  // loop (later members are higher - skipped, not computed). v^{m_i} = v^{m_{i-1}} * prod_{bits j of the gap} v^{2^j}
-  // (bits ascending). CPU (2026-11-05, same operations in the same order -> bit-identical): the squares v^{2^j} are
-  // made at the member that first needs them (as before, but placed at compile time), the member loop is
-  // unrolled per bank at compile time (m_i and the gap bits are constants: no gap loop / bit tests at run time), members with m_i f0 <= Fe - FEDGE - 1 Hz skip the edge clamp
-  // (h = 1 exactly, as SafeTop), IM as SpecSeries.
+  // loop (later members are higher - skipped, not computed). CPU (2026-11-05, HARM structure; rounding differs from
+  // before, < 1e-5 of peak): the step power(s) once per band, then ONE complex multiply per member:
+  //   constant stride D (ODD, STRIDE3..7): step v^D, p_i = p_{i-1} v^D;
+  //   FIB: p_i = p_{i-1} p_{i-2} (p_0 = p_1 = v);
+  //   general (PRIMES): v^g for the bank's few distinct gaps g once, p_i = p_{i-1} v^{gap_i}.
+  // As SafeTop: members with m_i <= (Fe - FEDGE - 1 Hz) / f0 run without the edge maths (h = 1 exactly); the rest
+  // get the clamp, stopping at the first member past the edge. IM as SpecSeries.
   template <bool IM, int BK>
-  __attribute__((always_inline)) static inline void SpecBankSeries(float qr, float qi, float f0, float Fe,
+  __attribute__((always_inline)) static inline void SpecBankSeries(float qr, float qi, float f0, float if0, float Fe,
                                                                    const float* __restrict w, float& outr,
                                                                    float& outi) {
-    constexpr int NSQ = SpecBankNsq(BK);
     using namespace explorer_k;
+    constexpr ExpSpecBankTab T = ExpSpecBankTab(BK);
+    static_assert(T.ng <= 8, "SPECTRAL bank: too many distinct gaps");
+    const float* __restrict mfl = kExpSpecBankTab<BK>.mf;
     constexpr float ie = 1.f / EXP_HARM_FEDGE;
-    const float fs = Fe - (EXP_HARM_FEDGE + 1.f);   // m f0 <= fs: h >= 1.002 -> 1 exactly
+    constexpr int M = EXP_SPEC_M;
     float sr = w[1] * qr, si = IM ? w[1] * qi : 0.f;
-    float pr = qr, pi = qi;                      // running v^{m_i}
-    float sqr_[NSQ > 0 ? NSQ : 1], sqi_[NSQ > 0 ? NSQ : 1];   // v^{2^j}
-    sqr_[0] = qr; sqi_[0] = qi;
-#pragma GCC unroll 16
-    for (int i = 2; i <= EXP_SPEC_M; i++) {      // fully unrolled: m_i and the gap bits are constants
-      const float mf = (float)EXP_SPEC_BANK[BK][i] * f0;
-      float h = 1.f;
-      const bool edge = !(mf <= fs);
-      if (edge) {
-        h = (Fe - mf) * ie;
-        if (h <= 0.f) break;
-        h = fminf(h, 1.f);
-      }
-      for (int j = (i == 2 ? 1 : SpecBankNsq(BK, i - 1)); j < SpecBankNsq(BK, i); j++) {   // squares first needed here
-        const float ar = sqr_[j - 1], ai = sqi_[j - 1];     // v^{2^j} = (v^{2^{j-1}})^2
-        sqr_[j] = ar * ar - ai * ai;
-        sqi_[j] = 2.f * ar * ai;
-      }
-#pragma GCC unroll 16
-      for (int j = 0; j < NSQ; j++) {            // gap bits ascending (gap constant per member: BK compile-time)
-        if (((EXP_SPEC_BANK[BK][i] - EXP_SPEC_BANK[BK][i - 1]) >> j) & 1) {
-          const float t = pr * sqr_[j] - pi * sqi_[j];
-          pi = pr * sqi_[j] + pi * sqr_[j];
-          pr = t;
-        }
-      }
-      if (edge) {
-        sr += w[i] * h * pr;
-        if (IM) si += w[i] * h * pi;
-      } else {                                   // w h = w (h = 1)
+    // safe members: m_i <= x (h = 1 exactly; 1 Hz margin as SafeTop)
+    const float x = fminf((Fe - (EXP_HARM_FEDGE + 1.f)) * if0, mfl[M]);
+    int ms = 1;
+    if (T.stride > 0) {
+      if (x >= 1.f + (float)T.stride) ms = 1 + (int)((x - 1.f) * (1.f / (float)(T.stride > 0 ? T.stride : 1)));
+      if (ms > M) ms = M;
+    } else {                                     // largest i with m_i <= x (m ascending): 4-step binary search
+#pragma GCC unroll 4
+      for (int st = 8; st; st >>= 1)
+        if (ms + st <= M && mfl[ms + st] <= x) ms += st;
+    }
+    int i = 2;
+    if (T.stride > 0) {
+      float dr, di;
+      SpecPow<(T.stride > 0 ? T.stride : 1)>(qr, qi, dr, di);
+      float pr = qr, pi = qi;
+      for (; i <= ms; i++) {                     // h = 1 exactly
+        const float t = pr * dr - pi * di;
+        pi = pr * di + pi * dr;
+        pr = t;
         sr += w[i] * pr;
         if (IM) si += w[i] * pi;
       }
+      for (; i <= M; i++) {
+        float h = (Fe - mfl[i] * f0) * ie;
+        if (h <= 0.f) break;
+        h = fminf(h, 1.f);
+        const float t = pr * dr - pi * di;
+        pi = pr * di + pi * dr;
+        pr = t;
+        sr += w[i] * h * pr;
+        if (IM) si += w[i] * h * pi;
+      }
+    } else if (T.fib) {
+      float ar = qr, ai = qi, pr = qr, pi = qi;  // p_{i-2}, p_{i-1}
+      for (; i <= ms; i++) {
+        const float t = pr * ar - pi * ai;
+        const float u = pr * ai + pi * ar;
+        ar = pr; ai = pi; pr = t; pi = u;
+        sr += w[i] * pr;
+        if (IM) si += w[i] * pi;
+      }
+      for (; i <= M; i++) {
+        float h = (Fe - mfl[i] * f0) * ie;
+        if (h <= 0.f) break;
+        h = fminf(h, 1.f);
+        const float t = pr * ar - pi * ai;
+        const float u = pr * ai + pi * ar;
+        ar = pr; ai = pi; pr = t; pi = u;
+        sr += w[i] * h * pr;
+        if (IM) si += w[i] * h * pi;
+      }
+    } else {
+      constexpr int NG = T.ng > 0 ? T.ng : 1;
+      float gr[NG], gi[NG];
+#pragma GCC unroll 8
+      for (int c = 0; c < NG; c++) SpecPowRt(qr, qi, T.gap[c], gr[c], gi[c]);   // gaps constant after unrolling
+      const int* __restrict cl = kExpSpecBankTab<BK>.cls;
+      float pr = qr, pi = qi;
+      // safe members unrolled (the gap class per member is a constant: v^g stays in registers, no table loads)
+#pragma GCC unroll 16
+      for (int j = 2; j <= M; j++) {
+        if (j > ms) break;
+        const int c = T.cls[j];
+        const float t = pr * gr[c] - pi * gi[c];
+        pi = pr * gi[c] + pi * gr[c];
+        pr = t;
+        sr += w[j] * pr;
+        if (IM) si += w[j] * pi;
+        i = j + 1;
+      }
+      for (; i <= M; i++) {
+        float h = (Fe - mfl[i] * f0) * ie;
+        if (h <= 0.f) break;
+        h = fminf(h, 1.f);
+        const int c = cl[i];
+        const float t = pr * gr[c] - pi * gi[c];
+        pi = pr * gi[c] + pi * gr[c];
+        pr = t;
+        sr += w[i] * h * pr;
+        if (IM) si += w[i] * h * pi;
+      }
     }
     outr = sr; outi = si;
+  }
+  // v^g, g >= 1 known at compile time after unrolling (binary).
+  __attribute__((always_inline)) static inline void SpecPowRt(float qr, float qi, int g, float& rr, float& ri) {
+    float br = qr, bi = qi, ar = 1.f, ai = 0.f;
+    bool first = true;
+#pragma GCC unroll 8
+    for (int e = g; e; e >>= 1) {
+      if (e & 1) {
+        if (first) { ar = br; ai = bi; first = false; }
+        else { const float t = ar * br - ai * bi; ai = ar * bi + ai * br; ar = t; }
+      }
+      if (e >> 1) { const float t = br * br - bi * bi; bi = 2.f * br * bi; br = t; }
+    }
+    rr = ar; ri = ai;
   }
   // FM LAB SPECTRAL: sum_k w_k a_k Re(S_k e^{j 2 pi theta_k}), S_k = SpecSeries on the slot's unit phasor (no FM),
   // theta_k (per slot / band, explorer_spec_st) advancing s f'_k / sr8 per sample (K4 shift, wrapped to [0, 1)).
@@ -1495,11 +1597,11 @@ class Explorer : public Module {
       float W, Sr, Si;
       if (t0 == 0.f) {
         if (harm) SpecSeries<false>(ur[k], ui[k], fp[k], ifp[k], Fe, w, EXP_SPEC_M, Sr, Si);
-        else      SpecBankSeries<false, BK>(ur[k], ui[k], fp[k], Fe, w, Sr, Si);
+        else      SpecBankSeries<false, BK>(ur[k], ui[k], fp[k], ifp[k], Fe, w, Sr, Si);
         W = Sr;
       } else {
         if (harm) SpecSeries<true>(ur[k], ui[k], fp[k], ifp[k], Fe, w, EXP_SPEC_M, Sr, Si);
-        else      SpecBankSeries<true, BK>(ur[k], ui[k], fp[k], Fe, w, Sr, Si);
+        else      SpecBankSeries<true, BK>(ur[k], ui[k], fp[k], ifp[k], Fe, w, Sr, Si);
         W = Sr * Cos01(t0) - Si * Sin01(t0);
       }
       acc += (played ? wmid_[k] : 1.f) * a * W;
