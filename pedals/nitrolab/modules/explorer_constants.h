@@ -433,8 +433,8 @@ constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.
 // depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x; computed only when T changed.
 constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05: depth per side over EXP_PS_* ranges)
 constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
-constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.1f;    // K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
-constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.4f;    // K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
+constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.08f;   // K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
+constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.6f;    // K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
 // Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
 // stops (lands exactly). Exponent / bank changes recompute at once.
 constexpr int   EXP_SPEC_NU_DIV        = 8;
