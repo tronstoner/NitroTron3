@@ -1365,9 +1365,10 @@ class Explorer : public Module {
   //   (1 - g_s), 0, 1), depth from ps_T_ (only when T changed); comb redo while nu moves at most every EXP_SPEC_NU_DIV.)
   void SpecWeights(Params& p) {
     using namespace explorer_k;
-    if (ps_T_ != sk_T_) {                        // envelope depth from T (log-interpolated), only when T changed
-      sk_T_ = ps_T_;
-      float x = logf(ps_T_ / EXP_SPEC_ENV_T_LO) * (1.f / logf(EXP_SPEC_ENV_T_HI / EXP_SPEC_ENV_T_LO));
+    if (ps_T_ != sk_T_ || ps_rise_ != sk_rise_) {  // depth from T, log over the ACTIVE side's own range, on change
+      sk_T_ = ps_T_; sk_rise_ = ps_rise_;
+      float x = ps_rise_ ? logf(ps_T_ / EXP_PS_RISE_FAST_S) / ln_ps_rise_   // rise 0.01 .. 4 s
+                         : logf(ps_T_ / EXP_PS_DEC_FAST_S) / ln_ps_dec_;    // decay 0.45 .. 8 s
       x = Clamp01(x);
       sp_depth_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) * x;
     }
@@ -3411,6 +3412,7 @@ class Explorer : public Module {
   float ps_c_ = 0.f;               // RISE one-pole coefficient (tau = T_eff / EXP_ENV_TRAVEL_TAUS)
   float ps_dg_ = 0.f;              // DECAY linear step per 8 kHz sample (1 / (T_eff sr8))
   float ln_ps_dec_ = 0.f;          // ln(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S)
+  bool sk_rise_ = false;           // SPECTRAL depth: side of the last depth computation
   float ln_ps_rise_ = 0.f;         // ln(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S)
   // ONE-SHOT K5 LFO (LfoUpdate, loop_ = false)
   float ln_lfo_ = 0.f;             // ln(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)
