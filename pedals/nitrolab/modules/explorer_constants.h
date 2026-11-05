@@ -319,7 +319,7 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side over which the depth fades in
 constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
 constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
-constexpr float    EXP_LFO_HZ_MAX_CCW      = 80.f;     // Hz; CCW (triangle) rate at K5 full CCW (2026-10-28: 20 -> 80); CW keeps EXP_LFO_HZ_MAX
+constexpr float    EXP_LFO_HZ_MAX_CCW      = 20.f;     // Hz; CCW (triangle) rate at K5 full CCW (2026-10-28: 20 -> 80; 2026-11-05: 80 -> 20, too fast along the way); CW keeps EXP_LFO_HZ_MAX
 constexpr float    EXP_LFO_INDEX_SWING     = 0.0f;     // UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
 constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 0.0f;     // UP FM: the envelope closes the index only down to this (2026-10-28: 2 -> 0, fully closes again)
 constexpr float    EXP_LFO_FM_FC_OCT       = 1.0f;     // SW3 MID UP FM, SWELL side: the LFO swings the FM cutoff +- this many octaves
