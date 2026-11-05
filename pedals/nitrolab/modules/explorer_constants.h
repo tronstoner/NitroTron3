@@ -31,10 +31,11 @@ constexpr float EXP_HARM_FEDGE    = 400.f;    // Hz; fade width below EXP_HARM_F
 // --- SW1 UP: FM ------------------------------------------------------------------
 constexpr float EXP_FM_INDEX      = 12.f;    // rad; FM index, fixed (no index knob): ratio zones and XBAND
 // FM ratio zones: K1 steps through these modulator ratios (list order, equal zones), snapped + EXP_DISC_SLIDE_MS.
-constexpr int   EXP_FM_N_RATIOS   = 14;
-constexpr float EXP_FM_RATIOS[EXP_FM_N_RATIOS] = { 0.5f, 1.f, 1.41421356f, 1.5f, 1.61803399f, 2.f, 2.41421356f,
-                                                   2.71828183f, 3.f, 3.14159265f, 3.5f, 4.f, 5.f, 7.f };
-constexpr int   EXP_N_UP          = EXP_FM_N_RATIOS + 1;   // SW1 UP K1 zones: the ratios + XBAND (last)
+// 2026-11-05 builder list: 11 zones, noon = 2 (odd harmonics, square-like); XBAND (cross mod) dropped from K1
+// (was: 0.5 1 1.414 1.5 1.618 2 2.414 2.718 3 3.142 3.5 4 5 7 + XBAND).
+constexpr int   EXP_FM_N_RATIOS   = 11;
+constexpr float EXP_FM_RATIOS[EXP_FM_N_RATIOS] = { 0.5f, 1.f, 1.41421356f, 1.5f, 1.73f, 2.f, 2.5f, 2.73f, 3.f, 3.5f, 4.f };
+constexpr int   EXP_N_UP          = EXP_FM_N_RATIOS;       // SW1 UP K1 zones: the ratios only (XBAND unreachable, code kept)
 constexpr int   EXP_XB_PARTNER    = 12;      // XBAND zone: partner band offset n (bands up), fixed (no knob)
 // FM modulator self-feedback variant switch (builder 2026-10-23: swap back and forth by ear):
 //   true  = PUSHED (round 2, 9c48dc6): feedback 0 -> EXP_FBFM_FB_PUSHED, no anti-fold caps on feedback or index
