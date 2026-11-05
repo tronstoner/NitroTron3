@@ -141,7 +141,7 @@
 //              PHASE CONVENTION: y(n) = n - 1 counts from the fundamental, so nu = 0 = no notches and nu = 0.5
 //                removes the EVEN partials (odd series).
 //              CONTROLS (2026-11-05 consolidation; K2 / K3 / K4 smoothed, EXP_CTRL_SMOOTH_MS; K1 = raw knob zones;
-//                K5 unused, no LFO):
+//                K5 = SUB level, no LFO):
 //              K1 = BANK SELECT (below; moved from K5).
 //              K2 = DENSITY: nu = 0.5 clamp(k2 + depth (1 - g_s), 0, 1) (EXP_SPEC_NU_MAX); g_s = the K4 pluck <-> swell
 //                envelope (PsUpdate, unchanged: times, laws, onsets, LEAVE); noon / g = 1 -> plain K2. depth from the
@@ -151,6 +151,11 @@
 //                and returns to the K2 value. Comb recomputed while nu moves at most every EXP_SPEC_NU_DIV 8 samples
 //                (1 kHz) and on the sample nu stops (lands exactly).
 //              K4 = PLUCK <-> SWELL on the density (see K2).
+//              K5 = SUB LEVEL (2026-11-05, EXP_SPEC_SUB_*): per active band an octave divider at f'_k / 2 - the input-
+//                tracked v_k is halved by a half-angle phasor u (u^2 = v, sign continued, i.e. flipped on each 2 pi
+//                wrap of v; own state explorer_spec_st.ur / ui per slot, so it follows every SW2 slot's f');
+//                band out += a_k Re(u) g_sub, g_sub = SUB_MAX k5 (smoothed, linear; 1 = a member of weight 1), after
+//                the RMS-normalised weights, before the K3 LPF; raw level. K5 full CCW: skipped (bit-identical).
 //              K3 = LPF (2026-11-05; SpecLpfUpdate / SpecLpf, EXP_SPEC_LPF_*): the SW1 MID tables' 2-pole lowpass type
 //                (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct; own instance sp_svf_) on the 48 kHz wet, after the
 //                DC blocker and the tables' TabFilter, before PostFilter / Saturate; no saturation. fc = 3800
@@ -267,7 +272,7 @@
 //       FM LAB UP          feedback b as UP FM ratio zones (2-OP); swell side (t4 > 0): depth x g_s (fade-in)
 //       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
 //                          UNISON: no LFO (K5 = beat speed)
-//       FM LAB MID (SPEC)  none (K5 unused; the shared LFO runs on, unused)
+//       FM LAB MID (SPEC)  none (K5 = SUB level; the shared LFO runs on, unused)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
@@ -447,6 +452,8 @@ static ExplorerAddState EXP_FAST_BSS explorer_add_st;
 // [0, 1)) per slot (up / played / down) and band.
 struct ExplorerSpecState {
   float th[3][armbands::kArmBands];
+  float ur[3][armbands::kArmBands], ui[3][armbands::kArmBands];   // K5 SUB: previous half phasor u (0, 0 = none)
+  bool  subh[3];                                                   // K5 SUB: history present (cleared when K5 off)
 };
 static ExplorerSpecState EXP_FAST_BSS explorer_spec_st;
 
@@ -848,6 +855,7 @@ class Explorer : public Module {
                       // sn = K1 bank index; env / dir / T = the K4 pluck <-> swell); else -1
     float se, sn;     // se = K4 envelope depth (K2 units), sn = K1 bank index
     float slp;        // K3 LPF fc (Hz), 0 = off
+    float ssub;       // K5 SUB level g_sub, 0 = off
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
     float c3;
@@ -1266,7 +1274,7 @@ class Explorer : public Module {
   inline float LfoO2(int m) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
-    // (FM LAB SPECTRAL: none - K5 unused)
+    // (FM LAB SPECTRAL: none - K5 = SUB level)
     if (m == kLADD) return lfo_s_ * EXP_ADD_LFO_SWING;          // FM LAB ADDITIVE: A h / B index knob / STRETCH delta
                                                                  // (Derive; not used by the UNISON zones)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
@@ -1610,6 +1618,10 @@ class Explorer : public Module {
     const float s = p.p0;
     const float ds = s * sp_isr8_;
     const bool played = (o == kSP);
+    const bool sub = (k5s_ > EXP_SPEC_SUB_ON);    // K5 SUB; full CCW = skipped entirely (bit-identical to no sub)
+    const float gsub = EXP_SPEC_SUB_MAX * k5s_;
+    if (!sub && explorer_spec_st.subh[o]) SpecResetSub(o);   // history cleared once when it goes off
+    if (sub) explorer_spec_st.subh[o] = true;
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float t0 = th[k];
@@ -1619,7 +1631,10 @@ class Explorer : public Module {
         th[k] = t;
       }
       const float a = mg[k];
-      if (a == 0.f) continue;
+      if (a == 0.f) {
+        if (sub) explorer_spec_st.ur[o][k] = explorer_spec_st.ui[o][k] = 0.f;   // silent band: sub history cleared
+        continue;
+      }
       const float Fe = EXP_HARM_FMAX - s * fp[k];
       float W, Sr, Si;
       if (t0 == 0.f) {
@@ -1631,9 +1646,24 @@ class Explorer : public Module {
         else      SpecBankSeries<true, BK>(ur[k], ui[k], fp[k], ifp[k], Fe, w, Sr, Si);
         W = Sr * Cos01(t0) - Si * Sin01(t0);
       }
+      if (sub) {                                 // K5 SUB: octave divider u (u^2 = v), sign continued = flip per wrap of v
+        const float vr = ur[k];
+        float c = sqrtf(fmaxf(0.5f + 0.5f * vr, 0.f));
+        float sn = sqrtf(fmaxf(0.5f - 0.5f * vr, 0.f));
+        if (ui[k] < 0.f) sn = -sn;
+        float& pr = explorer_spec_st.ur[o][k];
+        float& pi = explorer_spec_st.ui[o][k];
+        if (c * pr + sn * pi < 0.f) { c = -c; sn = -sn; }
+        pr = c; pi = sn;
+        W += gsub * c;                           // Re(u) x g_sub, after the norm, before the band amplitude
+      }
       acc += (played ? wmid_[k] : 1.f) * a * W;
     }
     return acc;
+  }
+  void SpecResetSub(int o) {
+    for (int k = 0; k < kBands; k++) explorer_spec_st.ur[o][k] = explorer_spec_st.ui[o][k] = 0.f;
+    explorer_spec_st.subh[o] = false;
   }
   void SpecResetTheta(int o) {
     for (int k = 0; k < kBands; k++) explorer_spec_st.th[o][k] = 0.f;
@@ -3122,6 +3152,7 @@ class Explorer : public Module {
     s.se = diag_spec_d_;
     s.sn = diag_spec_n_;
     s.slp = sp_fc_;
+    s.ssub = (k5s_ > explorer_k::EXP_SPEC_SUB_ON) ? explorer_k::EXP_SPEC_SUB_MAX * k5s_ : 0.f;
     s.addz = diag_add_z_;
     s.c3 = diag_add_c3_;
     s.bm = diag_add_bm_;

@@ -339,7 +339,7 @@ constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW 
 //              ADDITIVE SAW series (16 exact harmonics, no FM, anti-fold edge 3800 / 400 Hz), every partial n weighted by
 //              W(n) = tilt(n) comb(n) p(n) (the same for all bands), RMS-normalised; K1 = comb shape (exponent e, continuous),
 //              K2 = comb density, K3 = 2-pole resonant LPF on the SPECTRAL wet (EXP_SPEC_LPF_*), K4 = partial shift (every partial of a band +s f'),
-//              K5 = partials (1 -> 16, stepped, 1 ms slide). No envelope /
+//              K5 = SUB level (octave divider f'/2 per band, 2026-11-05; see EXP_SPEC_SUB_*). No envelope /
 //              LFO. See EXP_SPEC_* below and explorer.h.
 //   SW1 DOWN = ADDITIVE (step 3, 2026-11-02): K1 = the 12 equal stepped zones EXP_ADD_ZONES (series SAW / ODD /
 //              OCT / SUB in model A / B, UNISON x 3, STRETCH), see EXP_ADD_* below and explorer.h.
@@ -423,7 +423,7 @@ constexpr int   EXP_SPEC_BANK[EXP_SPEC_BANKS][EXP_SPEC_M + 1] = {
   { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },  // HARM (CW)
 };
 constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f'), -1 at CCW, 0 at noon (harmonic)
-// CONTROLS consolidation (2026-11-05): K1 = bank, K2 = density, K4 = pluck <-> swell on nu, K3 = LPF (below), K5 unused.
+// CONTROLS consolidation (2026-11-05): K1 = bank, K2 = density, K4 = pluck <-> swell on nu, K3 = LPF (below), K5 = sub level (below).
 // The former knob laws stay reachable through these fixed knob positions (0..1, same laws as above):
 constexpr float EXP_SPEC_K_PEAK     = 1.0f;    // comb shape at this "k1" (1 = full CW: e = E_MAX 4, peaky)
 constexpr float EXP_SPEC_K_TILT     = 0.5f;    // tilt at this "k3" (0.5 = noon: gamma 0, flat)
@@ -447,6 +447,13 @@ constexpr float EXP_SPEC_LPF_FHI = 3800.f;   // Hz just CCW of full CW (bypass t
 constexpr float EXP_SPEC_LPF_FLO = 100.f;    // Hz at K3 full CCW
 constexpr float EXP_SPEC_LPF_Q   = 2.f;      // resonance (~+6 dB peak)
 constexpr float EXP_SPEC_LPF_ON  = 1e-4f;    // 1 - k3 above this = filter on (CW end = bypass)
+// K5 = SUB LEVEL (2026-11-05): per active band an octave-divider subharmonic at f'_k / 2 (half-angle phasor u, u^2 = v,
+// sign continued = flipped on each 2 pi wrap of the input-tracked v), sub = Re(u) x a_k x g_sub, g_sub = SUB_MAX k5
+// (smoothed K5, linear), added to the band sum after the RMS-normalised member weights (not part of the norm), before
+// the K3 LPF; raw level. Reference: SUB_MAX 1 = the sub at the level of one member with weight w = 1 (unnormalised
+// unit weight) in the same band. k5 <= SUB_ON: skipped entirely (bit-identical to no sub). Follows each SW2 slot's f'.
+constexpr float EXP_SPEC_SUB_MAX = 1.0f;
+constexpr float EXP_SPEC_SUB_ON  = 1e-4f;
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
 // harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).

@@ -273,8 +273,10 @@ int main() {
         else if (d.specz >= 0) {                              // FM LAB MID: K1 bank, applied nu, K2 knob, K3 lpf + the envelope part
           char lpf[12];
           if (d.slp > 0.f) snprintf(lpf, sizeof lpf, "%d", (int)(d.slp + 0.5f)); else snprintf(lpf, sizeof lpf, "off");
-          diag_link::PrintLine("LAB SPEC bank %d/9 %s nu" D2F " k2" D2F " lpf %s%s mute %d cpu %u%%",
-                            (int)d.sn + 1, Explorer::SpecBankName((int)d.sn), D2V(d.a), D2V(d.b), lpf, env,
+          char sub[24];
+          if (d.ssub > 0.f) snprintf(sub, sizeof sub, D2F, D2V(d.ssub)); else snprintf(sub, sizeof sub, "off");
+          diag_link::PrintLine("LAB SPEC bank %d/9 %s nu" D2F " k2" D2F " lpf %s sub %s%s mute %d cpu %u%%",
+                            (int)d.sn + 1, Explorer::SpecBankName((int)d.sn), D2V(d.a), D2V(d.b), lpf, sub, env,
                             d.mute ? 1 : 0, cpu);
         }
         else if (d.labz >= 0)                                 // FM LAB UP: mode, ratio, K3 side, index fc, feedback, u_eff
