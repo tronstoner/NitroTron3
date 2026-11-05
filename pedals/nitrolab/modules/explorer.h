@@ -1456,11 +1456,11 @@ class Explorer : public Module {
   //   L = clamp((dB(env) - FLOOR_DB) / (TOP_DB - FLOOR_DB), 0, 1), G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1)
   //   depth_d / depth_r: DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) clamp(ln(T / FAST) / ln(SLOW / FAST), 0, 1) over each
   //   side's own EXP_PS_* range, only when T_d / T_r changed.
-  //   o_d = min(g_ds, L), o_r = g_rs G; o = (1 - w) o_d + w o_r (K3 LPF), travel = (1 - w) depth_d (1 - o_d) +
+  //   L_d = L rising at once, falling with tau EXP_SPEC_DYN_REL_FRAC T_d; o_d = min(g_ds, L_d), o_r = g_rs G; o = (1 - w) o_d + w o_r (K3 LPF), travel = (1 - w) depth_d (1 - o_d) +
   //   w depth_r (1 - o_r) (density, SpecWeights). Looping: o = 1, travel = 0. No slide, no law switch.
   inline void SpecOpenUpdate(bool run) {
     using namespace explorer_k;
-    if (!run) return;
+    if (!run) { sp_Ld_init_ = true; return; }
     const float env = on_base_;
     float L = 0.f, G = 0.f;
     if (env > sp_flin_) {
@@ -1469,9 +1469,11 @@ class Explorer : public Module {
       G = x * sp_iGr_; if (G > 1.f) G = 1.f;
     }
     sp_L_ = L;
-    if (loop_) { sp_o_ = 1.f; sp_tr_ = 0.f; return; }
+    if (loop_) { sp_o_ = 1.f; sp_tr_ = 0.f; sp_Ld_init_ = true; return; }
     if (sp_Td_ != sk_Td_) {                      // depth_d: log over the decay range 0.45 .. 8 s
       sk_Td_ = sp_Td_;
+      // L_d release (2026-11-05): tau = EXP_SPEC_DYN_REL_FRAC T_d, one expf only when T_d changed
+      sp_Ld_a_ = 1.f - expf(-1.f / (EXP_SPEC_DYN_REL_FRAC * sp_Td_ * sr8_));
       sp_dd_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) *
                                         Clamp01(logf(sp_Td_ / EXP_PS_DEC_FAST_S) / ln_ps_dec_);
     }
@@ -1480,8 +1482,13 @@ class Explorer : public Module {
       sp_dr_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) *
                                         Clamp01(logf(sp_Tr_ / EXP_PS_RISE_FAST_S) / ln_ps_rise_);
     }
+    // L_d: the decay side's live level - rises with L at once, falls with tau = EXP_SPEC_DYN_REL_FRAC T_d (a mute
+    // on a long pluck closes damped, not cut; short plucks stay as fast as the follower itself).
+    if (sp_Ld_init_ || L >= sp_Ld_) { sp_Ld_ = L; sp_Ld_init_ = false; }
+    else                            sp_Ld_ += sp_Ld_a_ * (L - sp_Ld_);
+    const float Ld = sp_Ld_;
     const float gds = sp_gds_;
-    const float od = (L < gds) ? L : gds;        // decay openness
+    const float od = (Ld < gds) ? Ld : gds;      // decay openness (damped live level)
     const float orr = sp_grs_ * G;               // rise openness
     const float w = sp_w_;
     sp_o_ = (1.f - w) * od + w * orr;
@@ -3483,6 +3490,8 @@ class Explorer : public Module {
   float sp_cr_ = 0.f;              // RISE one-pole coefficient (tau T_r / EXP_ENV_TRAVEL_TAUS)
   // FM LAB SPECTRAL K4 DYNAMICS (SpecOpenUpdate, while SPECTRAL runs): openness o on the K3 LPF, travel on nu
   float sk_Td_ = -1.f, sk_Tr_ = -1.f;  // T_d / T_r the depths were made for
+  float sp_Ld_ = 0.f, sp_Ld_a_ = 1.f;  // decay side's damped live level L_d and its fall coefficient
+  bool sp_Ld_init_ = true;          // next run: L_d = L (after a pause / looping)
   float sp_dd_ = 0.f, sp_dr_ = 0.f;    // depth_d / depth_r (K2 knob units)
   volatile float sp_tr_ = 0.f;     // density travel (K2 knob units): (1 - w) depth_d (1 - o_d) + w depth_r (1 - o_r)
   volatile float sp_o_ = 1.f;      // openness o = (1 - w) o_d + w o_r (1 = the K2 / K3 value, 0 = fully moved)

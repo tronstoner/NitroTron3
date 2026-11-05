@@ -465,6 +465,8 @@ constexpr int   EXP_SPEC_NU_DIV        = 8;
 constexpr float EXP_SPEC_DYN_FLOOR_DB = -60.f;  // dBFS: L = 0 and G = 0 at / below (keep low: guitar env sits far below bass)
 constexpr float EXP_SPEC_DYN_TOP_DB   = -20.f;  // dBFS: L = 1 at / above
 constexpr float EXP_SPEC_DYN_GATE_DB  = 12.f;   // dB above FLOOR_DB where the RISE side's soft gate G reaches 1
+constexpr float EXP_SPEC_DYN_REL_FRAC = 0.05f;  // DECAY side: the live level's FALL tau = this x T_d (8 s -> 400 ms,
+                                              // 4.5 s -> 225 ms, 0.45 s -> 22 ms); rise unchanged (at once)
 // K3 = SPECTRAL LPF (2026-11-05, replaces the per-member weight-factor filter of 7b58cbf): the SW1 MID tables' 2-pole
 // lowpass type (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct) on the 48 kHz wet while SPECTRAL is the model, no
 // saturation. fc_knob = FLO (FHI / FLO)^k3 (CCW closed, CW open, no bypass since 2026-11-05; K4 env: log2 fc = log2 BOT + o (log2 fc_knob - log2 BOT), o = the K4 DYNAMICS openness above; smoothed K3, plain exponential; set per 8 kHz sample). k3 <= EXP_SPEC_LPF_ON:
