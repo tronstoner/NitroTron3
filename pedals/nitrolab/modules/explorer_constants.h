@@ -323,8 +323,8 @@ constexpr float    EXP_LFO_HZ_MAX_CCW      = 80.f;     // Hz; CCW (triangle) rat
 constexpr float    EXP_LFO_INDEX_SWING     = 0.0f;     // UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
 constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 0.0f;     // UP FM: the envelope closes the index only down to this (2026-10-28: 2 -> 0, fully closes again)
 constexpr float    EXP_LFO_FM_FC_OCT       = 1.0f;     // SW3 MID UP FM, SWELL side: the LFO swings the FM cutoff +- this many octaves
-                                                     // around the envelope (= 84ea753; no fade-in: the rise fades it in)
-constexpr float    EXP_LFO_FM_FC_OCT_DEC   = 2.5f;     // PLUCK side: upward only, 0 .. this x depth, x (1 - o_d): grows as the pluck closes
+                                                     // around the envelope, faded in with the swell (x o_r)
+constexpr float    EXP_LFO_FM_FC_OCT_DEC   = 2.0f;     // PLUCK side: upward only, 0 .. this x depth, x (1 - o_d): grows as the pluck closes
 constexpr float    EXP_LFO_FB_SWING        = 0.3f;     // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
 constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables: morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)

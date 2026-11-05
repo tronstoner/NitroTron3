@@ -1204,9 +1204,9 @@ class Explorer : public Module {
         // K5 FM LFO fade-in (touch env; FM LAB 2-OP, and SW3 MID UP FM since 2026-11-05): fade = 1 - w (1 - o_r) - 1 at /
         // CCW of noon (w 0), the swell's openness o_r past the morph zone (w 1), continuous across it; one-pole slid
         // (mv_a_ = EXP_ENV_FM_SLIDE_MS 1 ms, lands exactly; carried over from the g_s fade-in).
-        // SW3 MID UP FM (2026-11-05): swell side no fade (the rising envelope fades the LFO in by itself), pluck side
-        // the LFO grows as the pluck closes: ft = w + (1 - w) (1 - o_d).
-        const float ft = lab_ ? 1.f - te_w_ * (1.f - te_or_) : 1.f - (1.f - te_w_) * te_od_;
+        // SW3 MID UP FM (2026-11-05): swell side fades in with the swell (o_r), pluck side the LFO grows as the pluck
+        // closes (1 - o_d): ft = w o_r + (1 - w) (1 - o_d).
+        const float ft = lab_ ? 1.f - te_w_ * (1.f - te_or_) : te_w_ * te_or_ + (1.f - te_w_) * (1.f - te_od_);
         lab_fbf_ += mv_a_ * (ft - lab_fbf_);
         if (fabsf(ft - lab_fbf_) < EXP_CTRL_SNAP) lab_fbf_ = ft;
       }
@@ -2207,12 +2207,13 @@ class Explorer : public Module {
     const float k = k3s_, om = o3_;
     // SW3 MID only (not FM LAB): the K5 LFO also swings the FM cutoff, UPWARD ONLY on top of the touch env
     // (2026-11-05): + depth (shape + 1) / 2 in [0, depth] x EXP_LFO_FM_FC_OCT octaves; LFO off (depth 0) -> exactly 0.
-    // SW3 MID only (2026-11-05, octaves on the FM cutoff): swell side +- EXP_LFO_FM_FC_OCT around the envelope (l);
-    // pluck side UPWARD 0 .. EXP_LFO_FM_FC_OCT_DEC x depth, growing as the pluck closes (x (1 - o_d)); blended by w.
+    // SW3 MID only (2026-11-05, octaves on the FM cutoff): swell side +- EXP_LFO_FM_FC_OCT around the envelope (l),
+    // faded in with the swell (x o_r); pluck side UPWARD 0 .. EXP_LFO_FM_FC_OCT_DEC x depth, growing as the pluck
+    // closes (x (1 - o_d)); blended by w.
     float lo = 0.f;
     if (!loop_ && !lab_) {
       float up = 0.5f * (lfo_depth_ + lfo_s_); if (up < 0.f) up = 0.f;
-      lo = te_w_ * lfo_s_ * EXP_LFO_FM_FC_OCT + (1.f - te_w_) * up * EXP_LFO_FM_FC_OCT_DEC * (1.f - te_od_);
+      lo = te_w_ * te_or_ * lfo_s_ * EXP_LFO_FM_FC_OCT + (1.f - te_w_) * up * EXP_LFO_FM_FC_OCT_DEC * (1.f - te_od_);
     }
     if (k != damp_k_ || om != damp_o_ || lo != damp_l_) {
       const bool kmoved = (k != damp_k_);
