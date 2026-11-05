@@ -228,19 +228,19 @@ int main() {
         // explorer (either instance), second half: model (+ set), derived values (knob values, no envelope
         // offset), K3 fc (knob; SW1 UP `fc` dampener; MID `dmp` the tables' dampener fc (knob, unmodulated), `lp` the
         // 2-pole LP cutoff at the knob, `eff` the effective LP cutoff), envelope (retired LOOPING `loop`: e, K4 dir, K5 amount
-        // d + target; MID `ps`: pluck <-> swell g, side dec|rise, time T in use (s), applied fc_eff `fce` in Hz (SW1 UP
-        // only; MID: = `eff`, left out to fit 128 chars), K5 LFO shape tri|stp|off, depth, rate Hz;
-        // `ps - lfo -` on SW1 DOWN), mute, cpu. SW3 DOWN (FM LAB): UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb
-        // fc<index fc Hz> b<feedback> (knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo .. d<knob depth> ><x swell fade> ..Hz`, MID `LAB SPEC bank n/9 NAME nu<applied> k2<knob>
+        // d + target; ONE-SHOT: the K4 touch env `gd<pluck g> Td<s> gr<swell g> Tr<s> w<blend> L<live level> o<openness>`
+        // (SPECTRAL also `tr<travel>`), applied fc_eff `fce` in Hz (SW1 UP only; MID: = `eff`), K5 LFO shape tri|stp|off,
+        // depth, rate Hz; `ps - lfo -` on SW1 DOWN, K4 / K5 inert), mute, cpu. SW3 DOWN (FM LAB): UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb
+        // fc<index fc Hz> b<feedback> (knob, K4 o 1, before the caps) u<u_eff now>` + ` gd.. Td.. gr.. Tr.. w.. L.. o.. lfo .. d<knob depth> ><x fade-in now> ..Hz`, MID `LAB SPEC bank n/9 NAME nu<applied> k2<knob>
         // lpf .. sub .. gd<decay g> Td<s> gr<rise g> Tr<s> w<blend> tr<travel> L<live level> o<openness>` (no fc / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
         // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
-        // `u <knob> bt <beat Hz> prop|hz|off`); + the UP `ps` / `lfo` part (fce = the applied index fc; DOWN)
+        // `u <knob> bt <beat Hz> prop|hz|off`); + the SW1 UP touch env / `fce` / `lfo` part (fce = the applied index fc; DOWN)
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const unsigned cpu = (unsigned)(cpu_pk * 100.f + 0.5f);
         const char* zn = Explorer::ZoneName(d.model, d.zone);
-        char env[160];                                        // (160: SPECTRAL's 8 fields, worst-case int widths)
+        char env[192];                                        // (touch env 7 fields + fce + lfo, worst-case int widths)
         if (d.loop)                                           // retired LOOPING variant: generic K4 / K5 envelope
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
@@ -249,17 +249,20 @@ int main() {
           snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " tr" D2F " L" D2F " o" D2F,
                    D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.str), D2V(d.sL), D2V(d.so));
                                                               // blend w, density travel, live level L, openness o
-        else if (d.labz >= 0)                                 // FM LAB UP: pluck <-> swell (g, side, T s), LFO depth > x fade
-          snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " lfo %s d" D2F " >" D2F " " D2F "Hz", D2V(d.env),
-                   d.dir < 0 ? "dec" : "rise", D2V(d.T),
+        else if (d.labz >= 0)                                 // FM LAB UP: K4 touch env, LFO depth > x fade-in
+          snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " L" D2F " o" D2F
+                   " lfo %s d" D2F " >" D2F " " D2F "Hz",
+                   D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.llfd), D2V(d.lfohz));
-        else if (d.sw1 == 0 || d.addz >= 0)                   // SW1 UP / FM LAB DOWN: K4 pluck <-> swell (g, side, T s, fc_eff Hz)
-          snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " fce %d lfo %s d" D2F " " D2F "Hz", D2V(d.env),
-                   d.dir < 0 ? "dec" : "rise", D2V(d.T), (int)(d.fce + 0.5f),
+        else if (d.sw1 == 0 || d.addz >= 0)                   // SW1 UP / FM LAB DOWN: K4 touch env, fc_eff Hz
+          snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " L" D2F " o" D2F
+                   " fce %d lfo %s d" D2F " " D2F "Hz",
+                   D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
-        else if (d.sw1 == 1)                                  // SW3 MID / DOWN, SW1 MID: the same without fce (= eff)
-          snprintf(env, sizeof(env), " ps g" D2F " %s T" D2F " lfo %s d" D2F " " D2F "Hz", D2V(d.env),
-                   d.dir < 0 ? "dec" : "rise", D2V(d.T),
+        else if (d.sw1 == 1)                                  // SW3 MID, SW1 MID: the same without fce (= eff)
+          snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " L" D2F " o" D2F
+                   " lfo %s d" D2F " " D2F "Hz",
+                   D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
         else                                                  // SW3 MID / DOWN, SW1 DOWN: K4 / K5 inert
           snprintf(env, sizeof(env), " ps - lfo -");

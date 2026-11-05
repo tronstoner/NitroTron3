@@ -1,7 +1,7 @@
 #pragma once
 //
-// explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 pluck <-> swell on
-// the K3 fc (UP index / MID 2-pole lowpass), K5 LFO on K2 feedback / morph) and SW3 DOWN (FM LAB: the same one-shot
+// explorer — sound-exploration module on the armitage band engine.  SW3 MIDDLE (ONE-SHOT: K4 touch env (pluck <-> swell,
+// docs/DESIGN_PHILOSOPHY.md §12) on the K3 fc (UP index / MID 2-pole lowpass), K5 LFO on K2 feedback / morph) and SW3 DOWN (FM LAB: the same one-shot
 // engine with its own SW1 families - UP 2-OP FM, MID SPECTRAL, DOWN ADDITIVE, see FM LAB) on NitroLab: two instances of this class (constructor flag),
 // sharing the read-only tables. (The former SW3 DOWN LOOPING variant is retired: EXP_LOOP_ENABLE, code kept.)
 //
@@ -50,8 +50,8 @@
 //
 // K3 DAMPENER (SW1 UP and MID; DOWN: none): fc = 150 (4000 / 150)^(k3^0.5) Hz (EXP_DAMP_FMIN / FMAX, exponent
 //   EXP_DAMP_CURVE on k3 = smoothed K3 0..1; k3 = 1 -> exactly 4000, noon ~1.5 kHz). UP (FM caps): per 8 kHz sample
-//   in DampFmUpdate, when the smoothed K3 or its envelope value moved; SW3 MID: scaled by the K4 pluck <->
-//   swell g (both instances; retired LOOPING: + the K5-CW envelope octave offset), see K4 / K5. MID (tables; back 2026-10-28 late, as before
+//   in DampFmUpdate, when the smoothed K3 or its envelope value moved; SW3 MID: scaled by the K4 touch env openness
+//   o (both instances; retired LOOPING: + the K5-CW envelope octave offset), see K4 / K5. MID (tables; back 2026-10-28 late, as before
 //   the ladder): from the smoothed K3 ONLY - NOT modulated (the envelope moves the 2-pole LP instead).
 //   Every per-band harmonic ceiling on f'_k (after SW2) becomes
 //   min(ceiling, fc); each band keeps its level and fundamental, loses only harmonics above fc:
@@ -115,17 +115,18 @@
 //                [1.414] 1.618 1.732 2.236 2.414 2.718 3.142 3.606 ([ ] = noon); stepped values slide 1 ms. FREE:
 //                r = 0.125 64^k2 (EXP_LAB_FREE_RMIN / RMAX: 0.125 -> 8, noon 1) on the smoothed K2, continuous (the
 //                1 ms slide follows the target).
-//              K3 = BIPOLAR CHARACTER (LabChar): t3 = 2 k3 - 1 (smoothed, lands exactly), u = |t3|, u_eff = g_s u (K4);
+//              K3 = BIPOLAR CHARACTER (LabChar): t3 = 2 k3 - 1 (smoothed, lands exactly), u = |t3|, u_eff = o u (K4 o);
 //                PITCH-DEPENDENT index (2026-11-03, SW3 MID's approved law with k3 -> u_eff; LabFmUpdate, per 8 kHz
 //                sample): index fc = EXP_DAMP_FMIN 150 (EXP_DAMP_FMAX 4000 / 150)^(DampCurve(u_eff)) (= DampFc(u_eff),
 //                sqrt law), L = min(EXP_FOLD_LIMIT_HZ, fc); I = EXP_FM_INDEX 12 capped per band I <= (L / f' - 1) / r - 1
 //                (floor 0) on both sides; noon (u_eff 0) = L 150 Hz -> index ~0 = pure sine. CCW (t3 < 0) "hollow":
 //                b = 0. CW (t3 > 0): b = EXP_FBFM_FB_MAX 1.5 u_eff (linear from noon, with the index), capped per band
 //                b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN 4 (floor 0), the same L.
-//              K4 = pluck <-> swell ALONG K3 (PsUpdate times / laws): u_eff = g_s u - the envelope moves between the
-//                sine (g 0) and the K3 position (g 1), on whichever side K3 is.
-//              K5 = LFO on b +- EXP_LFO_FB_SWING 0.3, added after the caps, [0, 1.5]; on the swell side (t4 > 0) its
-//                depth x g_s (fade-in with the rise; factor slid 1 ms), decay side / noon full depth. No XBAND.
+//              K4 = TOUCH ENV ALONG K3 (2026-11-05, docs/DESIGN_PHILOSOPHY.md §12; TouchEnvUpdate / TouchOpenUpdate, see K4 /
+//                K5): u_eff = o u - the openness o moves between the sine (o 0) and the K3 position (o 1), on whichever
+//                side K3 is; full travel (no time-scaled depth).
+//              K5 = LFO on b +- EXP_LFO_FB_SWING 0.3, added after the caps, [0, 1.5]; depth x the touch env fade-in
+//                1 - w (1 - o_r) (1 at / CCW of noon, the swell's openness o_r past the morph zone; factor slid 1 ms). No XBAND.
 //   SW1 MID  = SPECTRAL (2026-11-03, Odessa-style; model kLSPEC; replaces DUAL VOICE, in git history at 224f328).
 //              Per band the ADDITIVE SAW machinery WITHOUT FM: v = u_k (the slot's unit phasor), partial n of
 //              S_k = sum_n W(n) h_nk v^n (analytic, Re and Im; SpecSeries), n = 1..16 (EXP_SPEC_M); band out
@@ -146,30 +147,15 @@
 //              K2 = DENSITY: nu = 0.5 clamp(k2 + travel, 0, 1) (EXP_SPEC_NU_MAX); travel = the K4 envelopes' share
 //                (K4 below); travel 0 -> plain K2. Comb recomputed while nu moves at most every EXP_SPEC_NU_DIV 8
 //                samples (1 kHz) and on the sample nu stops (lands exactly).
-//              K4 = PLUCK <-> SWELL MORPH + DYNAMICS on the density (K2) and the K3 LPF (2026-11-05; SpecEnvUpdate,
-//                SpecOpenUpdate, EXP_SPEC_MORPH_ZONE / EXP_SPEC_DYN_*). SPECTRAL's OWN two envelopes (PsUpdate is not
-//                read here; it still runs for the other models), both stepped every 8 kHz sample on the FM LAB
-//                instance (whatever SW1 model runs), both retriggered by every onset (PsUpdate's onset):
-//                  DECAY g_d: onset -> 1, then PsUpdate's decay shape (EXP_PS_DEC_2POLE 2-pole; else one-pole /
-//                    EXP_PS_DEC_LINEAR linear) toward 0 over T_d, snaps to 0 within 0.02, holds 0.
-//                  RISE g_r: onset -> 0, then the one-pole toward 1, tau T_r / EXP_ENV_TRAVEL_TAUS, snaps to 1 at 98 %,
-//                    holds 1.
-//                  Before the first onset both = 1. No LEAVE (nothing switches sides). g_ds / g_rs = each one-pole
-//                  slid (EXP_PS_SLIDE_MS 5 ms, lands exactly).
-//                t4 = 2 k4 - 1 (smoothed, lands exactly), Z = EXP_SPEC_MORPH_ZONE 0.2 (noon -> ~1:00):
-//                  T_d = 0.45 (8 / 0.45)^(1 - |t4|) s for t4 < 0, 8 s for t4 >= 0 (EXP_PS_DEC_FAST_S / SLOW_S)
-//                  T_r = 0.01 s for t4 <= Z, 0.01 (4 / 0.01)^((t4 - Z) / (1 - Z)) s for t4 > Z (EXP_PS_RISE_*)
-//                  w = 0 for t4 <= 0, clamp(t4 / Z, 0, 1) for t4 > 0 (decay -> rise blend). All continuous in t4.
+//              K4 = TOUCH ENV on the density (K2) and the K3 LPF (2026-11-05; built here as the reference implementation of
+//                docs/DESIGN_PHILOSOPHY.md §12, shared since 2026-11-05 by every K4 mode - the envelopes g_d / g_r, T_d /
+//                T_r, w, the live level L / L_d / G and o_d / o_r / o: see K4 / K5, ONE-SHOT). SPECTRAL's own part is
+//                the density TRAVEL (SpecTravel, the only K4 mode with a time-scaled depth):
 //                depth_d / depth_r from T_d / T_r, log over each side's own range: x = ln(T / FAST) / ln(SLOW / FAST)
 //                clamped [0, 1], depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x (EXP_SPEC_ENV_DEPTH_* 0.08 .. 0.5), only
 //                when that T changed.
-//                Live level env = the onset detector's slow baseline on_base_ (|in| one-pole 2.6 ms -> gate meter, up
-//                at once / 40 ms fall -> one-pole tau 34.7 ms; raw 48 kHz input, broadband); L = clamp((dB(env) + 60) /
-//                40, 0, 1) (FLOOR -60 / TOP -20 dBFS), G = clamp((dB(env) + 60) / 12, 0, 1) (GATE 12 dB).
-//                  o_d = min(g_ds, L) - the pluck, closed further by the note's own decay / a mute.
-//                  o_r = g_rs G - the swell, closed by the soft gate only near silence.
 //                  travel = (1 - w) depth_d (1 - o_d) + w depth_r (1 - o_r) (density, K2 above)
-//                  o = (1 - w) o_d + w o_r (the K3 LPF openness, K3 below). Looping: travel 0, o = 1.
+//                  o = the touch env openness (the K3 LPF, K3 below). Looping: travel 0, o = 1.
 //                Per 8 kHz sample over the whole note (never held at the onset); no law switch, no slide on o / travel.
 //                Exact noon = pure decay at 8 s (continuous with just CCW of noon).
 //              K5 = SUB LEVEL (2026-11-05, EXP_SPEC_SUB_*): per active band an octave divider at f'_k / 2 - the input-
@@ -207,7 +193,7 @@
 //              h_mk = clamp((Fe - m f0) / EXP_HARM_FEDGE 400, 0, 1), Fe = EXP_HARM_FMAX 3800 (harmonics on K2 / fixed) or
 //              min(3800, L) (harmonics on K3), f0 = the series fundamental (f'_k; SUB f'_k / 2).
 //              FM index I = EXP_ADD_FM_I_MAX 6 k^2 (k = the index knob value), per band capped with the 2OP cap at r 1:
-//              I <= L_c / f0 - 2 (floor 0; IndexCap c 1 r 1): L_c = L (K3 = index: K4 pluck <-> swell closes it) or the
+//              I <= L_c / f0 - 2 (floor 0; IndexCap c 1 r 1): L_c = L (K3 = index: the K4 touch env closes it) or the
 //              K3 knob's own L without envelope (model B). Band out W = sum_m w_m h_mk Re(q^m).
 //              SERIES  SAW m = 1..16 | ODD m = 1, 3, .., 15 (step q^2) | OCT m in {1, 2, 4, 8, 16} (repeated squaring) |
 //                      SUB components k / 2 x f' (k = 1..2 M, count g_k = clamp(2 M_eff - k + 1, 0, 1), weight k^-s;
@@ -219,8 +205,8 @@
 //                11 UNI-SAW-H  12 STRETCH
 //              model A: K2 = h (K5 LFO: h = clamp(k2 + 0.3 l, 0, 1)), K3 = index k (L = the index fc incl. K4).
 //              model B: K2 = index k = clamp(k2 + 0.3 l, 0, 1) (K5 LFO, knob units), cap at the K3 knob's L (no
-//                       envelope); K3 = h_eff = g_s k3 (K4 pluck <-> swell moves h between 0 and the K3 value),
-//                       Fe = min(3800, L) (L follows K3 and g_s as on UP).
+//                       envelope); K3 = h_eff = o k3 (the K4 touch env openness o moves h between 0 and the K3 value),
+//                       Fe = min(3800, L) (L follows K3 and o as on UP).
 //              UNISON (9 UNI-SAW, 10 UNI-ODD: h = 1, K3 = index as A; 11 UNI-SAW-H: K3 = h as B, no FM): copy 2 = the
 //                       same series on q2 = q e^{j 2 pi theta} (every harmonic m shifted by m theta, proportional);
 //                       W = (S(q) + u S(q2)) / sqrt(1 + u^2) (equal power for uncorrelated copies; at the noon offset
@@ -234,8 +220,8 @@
 //                       own phase accumulator per harmonic (p_m += rho_m d, d = the wrapped phi step; fresh: rho_m phi),
 //                       out cos(2 pi p_m + rho_m I x); h_mk on rho_m f0 (Fe 3800); delta = EXP_ADD_STR_MAX 0.05 x
 //                       clamp(k2 + 0.3 l, 0, 1) (K5 LFO), K3 = index as A. Phases: explorer_add_st (D2 SRAM).
-//              K4 = pluck <-> swell (index fc on A / UNI 9, 10 / STRETCH; h and L on B / UNI 11); K5 = the LFO above or
-//              (UNISON) beat speed.
+//              K4 = touch env (2026-11-05, docs/DESIGN_PHILOSOPHY.md §12; one openness o, full travel: index fc on A /
+//              UNI 9, 10 / STRETCH; h and L on B / UNI 11); K5 = the LFO above (no fade-in) or (UNISON) beat speed.
 //   (TWIN / DUAL / MODOUT / BELL and their lab operator state removed 2026-11-02: git history 598a4fd.)
 //
 //  SW1 DOWN — harmonics & shift (K1 = model, 3 equal zones; no dampener)
@@ -256,35 +242,46 @@
 // during a fade is picked up when that fade ends.
 //
 // K4 / K5 (constructor flag: Explorer(false) = SW3 MID, Explorer(true) = SW3 DOWN = FM LAB: both ONE-SHOT, same
-//   K4 / K5 laws; FM LAB: UP 2-OP = K4 along the K3 character (u_eff = g_s u), DOWN = the UP index law (K4 on the
-//   index fc), MID SPECTRAL: K4 pluck <-> swell morph (own decay + rise envelopes, blended) + live level on the density
-//   nu (K2) and the K3 LPF;
+//   K4 / K5 laws; FM LAB: UP 2-OP = K4 along the K3 character (u_eff = o u), DOWN = the UP index law (K4 on the
+//   index fc), MID SPECTRAL: K4 on the density nu (time-scaled travel) and the K3 LPF;
 //   EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
 //   Onset detector per 48 kHz input sample (EXP_ONSET_*, armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1
 //   (both smoothed, land exactly).
-//  ONE-SHOT (SW3 MID and FM LAB) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the index fc, SW1 MID the 2-pole
-//   LP cutoff (not the tables' dampener); SW1 DOWN: K4 inert (no model offsets; FM LAB DOWN = ADDITIVE: the index fc,
-//   and g_s on h in B / UNI-SAW-H; FM LAB MID = SPECTRAL: NOT g_s - its own decay + rise envelopes with the live level
-//   on the density nu and the K3 LPF, see FM LAB SW1 MID); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
-//     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per 8 kHz sample
-//          (DampFmUpdate).
-//     MID: LP log2 fc = log2 250 + g_s (log2 fc_f_knob - log2 250), [250, 16000] Hz, per 8 kHz sample (TfUpdate).
-//     g = 1: the K3 value, g = 0: the bottom; g_s = g one-pole slid (EXP_PS_SLIDE_MS 5 ms, lands exactly).
-//     CCW (t4 < 0)  DECAY: target 0, T = 1 s (8 / 1)^(1 - |t4|) (EXP_PS_DEC_FAST_S / SLOW_S): 1 s at the end
-//             -> 8 s at noon; each onset g = 1 (pluck: opens to the K3 value, closes to the bottom). LINEAR in g
-//             (constant speed in octaves): g -= 1 / (T sr8) per sample from wherever it is (1 -> 0 in T), clamps
-//             at 0, holds.
-//     CW / noon (t4 >= 0)  RISE: target 1, T = 0.01 s (4 / 0.01)^|t4| (EXP_PS_RISE_FAST_S / SLOW_S): 10 ms at
-//             noon -> 4 s at the end; each onset with t4 > 0 g = 0 (swell from the bottom); exact noon: onsets
-//             do nothing (g goes / stays at 1 = plain K3). g one-pole toward 1, tau = T / 3.9
-//             (EXP_ENV_TRAVEL_TAUS), snaps exactly to it within 0.02 (98 %), holds.
-//     Side / T from the smoothed t4, recomputed when it moved. K4 turns never reset g (only target and T change,
-//             at once); only onsets do. g = 1 before the first onset.
-//     LEAVE (no near-jump on a side change while the value rests): a side change clears "plucked"; an onset that
-//             resets g sets it. Unplucked, T_eff = max(T, EXP_PS_LEAVE_S 0.5 s) (e.g. decayed to the bottom, K4
-//             past noon: up to K3 over ~0.5 s, not 10 ms); plucked, T_eff = T. Same shapes (decay 2-pole
-//             EXP_PS_DEC_2POLE, rise one-pole); step / coefficient recomputed when T_eff changes.
-//   K5 LFO (LfoUpdate, per 8 kHz sample after PsUpdate; one shared LFO, free-running phase, never reset by onsets):
+//  ONE-SHOT (SW3 MID and FM LAB) — K4 = TOUCH ENV (2026-11-05; docs/DESIGN_PHILOSOPHY.md §12; replaces the shared
+//   pluck <-> swell g / g_s of PsUpdate, retired, not called). One implementation per instance (TouchEnvUpdate /
+//   TouchOpenUpdate, in EnvUpdate per 8 kHz sample), ONE openness o for every K4 target of the running model,
+//   FULL travel (target = bottom + o (K3 value - bottom), the law g_s had; no time-scaled depth except SPECTRAL's
+//   density, see FM LAB SW1 MID):
+//     SW3 MID SW1 UP (FM ratio zones / XBAND): index fc, log2 fc = log2 150 + o (log2 fc_knob - log2 150), clamped
+//          [150, 4000] Hz (DampFmUpdate, o3_ = o).
+//     SW3 MID SW1 MID (tables): 2-pole LP, ln fc = ln bot + o (ln fc_f_knob - ln bot), bot = EXP_TF_ENV_BOTTOM
+//          2^(k3 EXP_TF_ENV_BOTTOM_OCT) (TfUpdate, o3_ = o; not the tables' dampener).
+//     SW3 MID SW1 DOWN: K4 inert (o3_ = 1, o not computed while a DOWN model is current; the envelopes run on).
+//     FM LAB UP 2-OP: u_eff = o |2 k3 - 1| (LabFmUpdate / LabChar: index fc and feedback b along K3).
+//     FM LAB DOWN ADDITIVE: the index fc as SW3 MID UP (DampFmUpdate, o3_ = o; A / UNI 9, 10 / STRETCH), h_eff = o k3
+//          and L on B / UNI-SAW-H.
+//     FM LAB MID SPECTRAL: the K3 LPF (log2 fc = log2 BOT + o (log2 fc_knob - log2 BOT)) + the density travel.
+//   ENVELOPES (TouchEnvUpdate, both always running on the instance, whatever SW1 model runs; both retriggered by
+//   every onset; no side state, no LEAVE, no hysteresis: the same knob position = the same result):
+//     PLUCK g_d: onset -> 1, then the EXP_PS_DEC_2POLE 2-pole toward 0 (else one-pole / EXP_PS_DEC_LINEAR linear) over
+//       T_d, snaps to 0 within 0.02, holds 0.  SWELL g_r: onset -> 0, then the one-pole toward 1, tau T_r /
+//       EXP_ENV_TRAVEL_TAUS, snaps to 1 at 98 %, holds 1.  Before the first onset both = 1. g_ds / g_rs = each one-pole
+//       slid (EXP_PS_SLIDE_MS 5 ms, lands exactly).
+//     t4 -> (smoothed; recomputed when it moved), Z = EXP_SPEC_MORPH_ZONE 0.2 (noon -> ~1:00):
+//       T_d = 0.45 (8 / 0.45)^(1 - |t4|) s for t4 < 0, 8 s for t4 >= 0 (EXP_PS_DEC_FAST_S / SLOW_S)
+//       T_r = 0.01 s for t4 <= Z, 0.01 (4 / 0.01)^((t4 - Z) / (1 - Z)) s for t4 > Z (EXP_PS_RISE_*)
+//       w = 0 for t4 <= 0, clamp(t4 / Z, 0, 1) for t4 > 0 (pluck -> swell blend). All continuous in t4; exact noon =
+//       pure pluck at 8 s (continuous with just CCW of noon).
+//   LIVE DYNAMICS (TouchOpenUpdate): env = the onset detector's slow baseline on_base_ (|in| one-pole 2.6 ms -> gate
+//     meter, up at once / 40 ms fall -> one-pole tau 34.7 ms; raw 48 kHz input, broadband); L = clamp((dB(env) + 60) /
+//     40, 0, 1) (EXP_SPEC_DYN_FLOOR_DB -60 / TOP_DB -20 dBFS), G = clamp((dB(env) + 60) / 12, 0, 1) (GATE_DB 12 dB);
+//     L_d = L rising at once, falling with tau EXP_SPEC_DYN_REL_FRAC 0.05 T_d (8 s -> 400 ms, 0.45 s -> 22 ms).
+//       o_d = min(g_ds, L_d) - the pluck, closed further by the note's own decay / a mute (damped, not cut).
+//       o_r = g_rs G - the swell, closed by the soft gate only near silence.
+//       o = (1 - w) o_d + w o_r. Per 8 kHz sample over the whole note (never held at the onset); no slide on o.
+//     o is computed on FM LAB always and on SW3 MID while the current model is not a DOWN model; L_d restarts at L when
+//     it starts again. Looping: o = 1.
+//   K5 LFO (LfoUpdate, per 8 kHz sample before the touch env; one shared LFO, free-running phase, never reset by onsets):
 //     t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|; noon = off (applied 0 exactly -> identical to no LFO).
 //     shape: CCW triangle (bipolar +-1) | CW downward staircase EXP_LFO_STEPS +1 / 0 / -1 (100 / 50 / 0 %),
 //             equal thirds of the cycle, repeating (2026-10-28, was S&H)
@@ -293,13 +290,14 @@
 //             a side change passes through depth 0
 //     target fixed per family, +- around the knob, clamped (Derive's K2 offset o2, per model via LfoO2):
 //       UP FM ratio zones  feedback b = capped b + 0.3 l (EXP_LFO_FB_SWING), [0, EXP_FBFM_FB_MAX]; XBAND: none
-//       FM LAB UP          feedback b as UP FM ratio zones (2-OP); swell side (t4 > 0): depth x g_s (fade-in)
+//       FM LAB UP          feedback b as UP FM ratio zones (2-OP); depth x the touch env fade-in 1 - w (1 - o_r)
+//                          (1 at / CCW of noon, o_r past the morph zone; factor slid 1 ms) - the only K5 fade-in
 //       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
 //                          UNISON: no LFO (K5 = beat speed)
 //       FM LAB MID (SPEC)  none (K5 = SUB level; the shared LFO runs on, unused)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
-//     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
+//     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_ = o), K5 on feedback / morph (Derive, per sample): independent.
 //  LOOPING (RETIRED 2026-10-28: only with EXP_LOOP_ENABLE, then on SW3 DOWN instead of FM LAB) — generic K4 / K5
 //   envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
@@ -340,12 +338,13 @@
 //   K3  UP:          index: the per-band cap law (fc 150 Hz CCW -> 4 kHz CW open, k3^0.5; L = min(4000, fc) caps the
 //                    index and the feedback)
 //       MID:         dampener as UP (static: knob only, never modulated) + 2-pole SVF lowpass (12 dB/oct, Q 0.707)
-//                    250 Hz (CCW) -> 16 kHz (CW, practically open), plain exponential (noon 2 kHz); the K4 / K5
-//                    envelope moves the LP only
+//                    250 Hz (CCW) -> 16 kHz (CW, practically open), plain exponential (noon 2 kHz); the K4 touch
+//                    env moves the LP only
 //       DOWN:        per model (see MODELS)
-//   K4  pluck <-> swell on the K3 fc per onset (UP index, MID 2-pole LP; DOWN inert): CCW = pluck
-//                    (onset opens to the K3 fc, decays to the bottom 150 / 250 Hz; 0.45 s at the end -> 8 s at noon),
-//                    noon = plain K3, CW = swell (onset drops to the bottom, rises to the K3 fc; 10 ms -> 4 s)
+//   K4  touch env on the K3 fc (UP index, MID 2-pole LP; DOWN inert; docs/DESIGN_PHILOSOPHY.md §12): CCW = pluck
+//                    (each onset opens to the K3 fc, decays to the bottom; 0.45 s at the end -> 8 s at noon; a mute /
+//                    the volume closes it damped), noon -> ~1:00 = pluck morphs into the fastest swell, CW = swell
+//                    (each onset drops to the bottom, rises to the K3 fc; 10 ms at ~1:00 -> 4 s; closed near silence)
 //       (retired LOOPING: envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms)
 //   K5  LFO on K2's parameter (UP FM feedback +-0.3, MID morph +-0.15; XBAND / DOWN none): CCW triangle (up to 80 Hz) | noon off | CW
 //                    staircase 100/50/0 %; depth fades in over the first 30 % of each side, rate 0.2 Hz -> top,
@@ -367,10 +366,11 @@
 //                    noon (same caps); MID: TILT
 //                    gamma 3 (dull) -> 1 (noon, saw) -> 0 (flat); DOWN: A / UNI-SAW / UNI-ODD / STRETCH index (6 k3^2, capped
 //                    by L), B / UNI-SAW-H harmonics h (and L on their anti-fold edge)
-//   K4  pluck <-> swell per onset (as SW3 MID UP): UP along K3 (sine <-> the K3 position); DOWN on the index fc (DOWN
-//                    B / UNI-SAW-H: also h); MID: own decay / rise envelopes blended over noon .. ~1:00 on the density
-//                    nu = 0.5 clamp(k2 + travel) and the K3 LPF (see FM LAB SW1 MID)
-//   K5  UP / DOWN: LFO (shapes / rates / sync as SW3 MID): UP on b +-0.3 after the caps (swell side: depth x g_s);
+//   K4  touch env (as SW3 MID, one openness o): UP along K3 (sine <-> the K3 position); DOWN on the index fc (DOWN
+//                    B / UNI-SAW-H: also h); MID: on the density nu = 0.5 clamp(k2 + travel) (time-scaled travel) and
+//                    the K3 LPF (see FM LAB SW1 MID)
+//   K5  UP / DOWN: LFO (shapes / rates / sync as SW3 MID): UP on b +-0.3 after the caps (depth x the touch env
+//                    fade-in 1 - w (1 - o_r));
 //                    DOWN: A on h,
 //                    B on the index knob, STRETCH on delta (+-0.3 knob units); UNI: BEAT SPEED (CCW 8 Hz x f'/100 Hz
 //                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: unused (bank on K1)
@@ -378,16 +378,19 @@
 //   SW1 family       UP = 2-OP FM, MID = SPECTRAL, DOWN = ADDITIVE
 //
 // K2..K5 are one-pole smoothed per 8 kHz sample (EXP_CTRL_SMOOTH_MS); continuous derived values are computed per
-// 8 kHz sample from the smoothed knobs (+ the envelope offset; SW3 MID: the K5 LFO offset, its g acts on fc only);
+// 8 kHz sample from the smoothed knobs (+ the envelope offset; ONE-SHOT: the K5 LFO offset, the K4 touch env o acts on
+// the K4 targets only);
 // stepped items from the raw knob.
-// DIAG second half: FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb fc<index fc Hz> b<feedback> (at
-// the knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo tri|stp|off d<depth at the knob> ><x swell fade now> ..Hz`,
+// DIAG second half (touch env fields `gd<pluck g> Td<s> gr<swell g> Tr<s> w<blend> L<live level> o<openness>`, the
+// envelope state at the snapshot): FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb fc<index fc Hz>
+// b<feedback> (at the knob, K4 o 1, before the caps) u<u_eff now>` + ` gd.. Td.. gr.. Tr.. w.. L.. o.. lfo tri|stp|off
+// d<depth at the knob> ><x the fade-in now> ..Hz`,
 // SW1 MID `LAB SPEC bank <n>/9 <NAME> nu<applied density> k2<knob> lpf <Hz|off> sub <level|off> gd<decay g> Td<s>
 // gr<rise g> Tr<s> w<blend> tr<travel> L<live level> o<openness>` (no fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
 // <knob> > <with LFO | beat Hz + prop / hz / off> <K3 name> <value at the knob> fc ..` (K2 / K3 names h / I / u / d);
-// + the UP `ps` part below (FM LAB DOWN); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
-// applied fc: UP dampener, MID 2-pole LP) lfo tri|stp|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on
-// SW1 DOWN. MID WT lines: `dmp .. lp .. eff ..` = the tables' dampener fc (knob, unmodulated), the LP cutoff at the
+// + the SW3 MID UP part below (FM LAB DOWN); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID UP ` gd.. Td..
+// gr.. Tr.. w.. L.. o.. fce .. (Hz, applied fc: UP dampener / index fc) lfo tri|stp|off d.. ..Hz` (depth, rate at the
+// knob value), MID the same without fce (= eff), `ps - lfo -` on SW1 DOWN (K4 / K5 inert). MID WT lines: `dmp .. lp .. eff ..` = the tables' dampener fc (knob, unmodulated), the LP cutoff at the
 // knob, the effective LP cutoff (Hz) instead of `fc` (parked ladder: lp / eff = the ladder's).
 //
 // TABLES (SW1 MID; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*; built at Init into SDRAM,
@@ -646,7 +649,7 @@ class Explorer : public Module {
     lab_m_t_ = -1;                               // FM LAB 2-OP: no UP mode until Controls (ratio slide at rest, r 1)
     lab_st_t_ = EXP_LAB_N_STEPS / 2;
     l2r_.Jump(EXP_LAB_REST_R);
-    lab_fbf_ = 1.f;                              // K5 LFO fade-in factor (swell side: g_s)
+    lab_fbf_ = 1.f;                              // K5 LFO fade-in factor (touch env: 1 - w (1 - o_r))
     lab_ue_c_ = -1.f;                            // forces LabFmUpdate on the first sample
     lab_L_ = EXP_FOLD_LIMIT_HZ;
     for (int n = 1; n <= EXP_SPEC_M; n++) {      // ln n (tilt), y(n) = n - 1 (comb; warp fixed 0)
@@ -657,16 +660,18 @@ class Explorer : public Module {
     spec_w_[1] = sp_tilt_[1] = sp_comb_[1] = 1.f;
     sk_g_ = sk_nu_ = sk_e_ = sk_k1_ = -1.f;      // forces every part on the first SpecWeights
     sk_Td_ = sk_Tr_ = sp_nu_last_ = -1.f; sp_nu_div_ = 0;   // depth / nu recompute state
-    sp_o_ = 1.f; sp_L_ = 0.f; sp_tr_ = 0.f;      // K4 DYNAMICS: openness, live level, density travel
-    // K4 MORPH (SpecEnvUpdate): own decay / rise envelopes, both 1 before the first onset; T / w forced on the 1st sample
-    sp_gd_ = sp_gds_ = sp_xd_ = 1.f; sp_drun_ = false;
-    sp_gr_ = sp_grs_ = 1.f;
-    sp_t4_ = 2.f; sp_Td_ = sp_Tr_ = -1.f; sp_w_ = 0.f;
-    sp_cd_ = sp_dgd_ = sp_cr_ = 0.f; sp_dd_ = sp_dr_ = 0.f;
-    sp_lnfl_ = EXP_SPEC_DYN_FLOOR_DB * (logf(10.f) / 20.f);                  // dB -> ln of the linear level
-    sp_flin_ = expf(sp_lnfl_);
-    sp_iLr_ = 20.f / ((EXP_SPEC_DYN_TOP_DB - EXP_SPEC_DYN_FLOOR_DB) * logf(10.f));
-    sp_iGr_ = 20.f / (EXP_SPEC_DYN_GATE_DB * logf(10.f));
+    sp_tr_ = 0.f;                                // SPECTRAL density travel
+    // K4 TOUCH ENV (both instances). TouchOpenUpdate: openness, live level, L_d (restarts at L on the first run)
+    te_o_ = te_od_ = te_or_ = 1.f; te_L_ = 0.f; te_Ld_ = 0.f; te_Ld_init_ = true; te_LdT_ = -1.f;
+    // TouchEnvUpdate: pluck / swell envelopes, both 1 before the first onset; T / w forced on the 1st sample
+    te_gd_ = te_gds_ = te_xd_ = 1.f; te_drun_ = false;
+    te_gr_ = te_grs_ = 1.f;
+    te_t4_ = 2.f; te_Td_ = te_Tr_ = -1.f; te_w_ = 0.f;
+    te_cd_ = te_dgd_ = te_cr_ = 0.f; sp_dd_ = sp_dr_ = 0.f;
+    te_lnfl_ = EXP_SPEC_DYN_FLOOR_DB * (logf(10.f) / 20.f);                  // dB -> ln of the linear level
+    te_flin_ = expf(te_lnfl_);
+    te_iLr_ = 20.f / ((EXP_SPEC_DYN_TOP_DB - EXP_SPEC_DYN_FLOOR_DB) * logf(10.f));
+    te_iGr_ = 20.f / (EXP_SPEC_DYN_GATE_DB * logf(10.f));
     sp_redo_ = true;
     spec_bank_t_ = spec_bank_ = EXP_SPEC_BANK_HARM;   // start-up: HARM; Controls sets the K1 bank (slid 1 ms)
     sp_bg_ = 1.f;
@@ -709,10 +714,10 @@ class Explorer : public Module {
     mv_a_ = 1.f - expf(-1000.f / (EXP_ENV_FM_SLIDE_MS * sr8_));
     ps_a_ = 1.f - expf(-1000.f / (EXP_PS_SLIDE_MS * sr8_));
     o2_ = 0.f;
-    o3_ = loop_ ? 0.f : 1.f;                     // ONE-SHOT: o3_ = g_s (1 = the K3 value)
+    o3_ = loop_ ? 0.f : 1.f;                     // ONE-SHOT: o3_ = the K4 touch env openness o (1 = the K3 value)
     ln_tau_ratio_  = logf(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S);
     ln_loop_ratio_ = logf(EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S);
-    // ONE-SHOT K4 pluck <-> swell (PsUpdate): g = 1 before the first onset.
+    // RETIRED ONE-SHOT K4 pluck <-> swell (PsUpdate, not called since 2026-11-05; ps_a_ / ln_ps_* = the touch env's).
     ps_g_ = ps_gs_ = 1.f;
     ps_t4_ = 2.f;                                // forces the coefficient on the first sample
     ps_rise_ = true;
@@ -826,7 +831,7 @@ class Explorer : public Module {
       const float disc = (model == kFM) ? EXP_FM_RATIOS[rfmc_i_t_] : (float)ish_t_;
       const Params p = Derive(model, zone, k2, k3, disc, 0.f, 0.f);   // knob values (no envelope offset)
       const float t4 = 2.f * k4 - 1.f, t5 = 2.f * k5 - 1.f;
-      int dir;                                   // LOOPING: K4 direction; ONE-SHOT: side (-1 decay, +1 rise)
+      int dir;                                   // LOOPING: K4 direction; ONE-SHOT: knob side (-1 CCW pluck, +1 noon / CW)
       if (loop_) dir = (fabsf(t4) <= EXP_LOOP_PAD) ? 0 : (t4 > 0.f) ? 1 : -1;
       else       dir = (t4 < 0.f) ? -1 : 1;
       const int tgt = (t5 < 0.f) ? 2 : (t5 > 0.f) ? 3 : 0;
@@ -840,7 +845,7 @@ class Explorer : public Module {
       if (loop_)
         DiagControls(cs, led1, kv, fam, oct, model, zone, p.a, p.b, fck, lfe,
                      env_.g, dir, fabsf(t5), tgt, 0.f, 0.f, 0, 0.f, 0.f);
-      else {                                     // ONE-SHOT pluck <-> swell: g, side, T (s), fc_eff (applied, Hz)
+      else {                                     // ONE-SHOT: fc_eff (applied, Hz; the K4 touch env state: DiagControls)
         const float u5 = fabsf(t5);              // + K5 LFO at the knob value: shape, depth, rate (Hz)
         const int lsh = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
         const float ldp = (u5 >= EXP_LFO_DEPTH_FRAC) ? 1.f : u5 * (1.f / EXP_LFO_DEPTH_FRAC);
@@ -849,11 +854,11 @@ class Explorer : public Module {
         diag_lab_z_ = labz;
         diag_spec_z_ = specz;
         diag_add_z_ = addz;
-        if (labz >= 0) LabDiagParam(labz, k2, k3, k4, ldp, da, db);
+        if (labz >= 0) LabDiagParam(labz, k2, k3, ldp, da, db);
         if (specz >= 0) SpecDiagParam(k1, k2, da, db);
         if (addz >= 0) AddDiagParam(addz, k2, k3, k5, da, db);
         DiagControls(cs, led1, kv, fam, oct, model, zone, da, db, fck, lfe,
-                     ps_g_, dir, 0.f, 0, ps_T_, fmf ? damp_fc_ : lfe, lsh, ldp, lhz);
+                     0.f, dir, 0.f, 0, 0.f, fmf ? damp_fc_ : lfe, lsh, ldp, lhz);
       }
     }
   }
@@ -872,18 +877,18 @@ class Explorer : public Module {
     float lfe;        // SW1 MID: effective lowpass cutoff (Hz, incl. K4 / K5 envelope), else 0
     float dfc;        // SW1 MID: the tables' dampener fc (Hz, knob only - not modulated), else 0
     bool  loop;       // variant: false ONE-SHOT (SW3 MID, FM LAB), true retired LOOPING (EXP_LOOP_ENABLE)
-    float env;        // LOOPING: envelope e (0..1) at the snapshot (before gate / sign / slide); ONE-SHOT: g
-    int   dir;        // LOOPING K4: +1 CW up, -1 CCW down, 0 off (pad); ONE-SHOT: +1 rise (CW / noon), -1 decay
+    float env;        // LOOPING: envelope e (0..1) at the snapshot (before gate / sign / slide); ONE-SHOT: 0 (touch env: sgd ..)
+    int   dir;        // LOOPING K4: +1 CW up, -1 CCW down, 0 off (pad); ONE-SHOT: knob side +1 noon / CW, -1 CCW
     float d;          // K5 amount |2 k5 - 1|
     int   tgt;        // K5 target: 2 = K2 parameter (CCW), 3 = K3 parameter (CW), 0 = none (noon) (LOOPING only)
-    float T, fce;     // ONE-SHOT (env = g): time T (s, smoothed t4), applied fc (Hz; UP dampener, MID lowpass,
-                      // 0 on SW1 DOWN); LOOPING: 0
+    float T, fce;     // T: 0 (was the retired PsUpdate's time); fce: ONE-SHOT applied fc (Hz; UP dampener / index fc,
+                      // MID lowpass, 0 on SW1 DOWN); LOOPING: 0
     int   lfo;        // ONE-SHOT K5 LFO shape: 0 off (noon), 1 triangle (CCW), 2 staircase (CW); LOOPING: 0
     float lfod, lfohz;// ONE-SHOT K5 LFO depth (0..1) and rate (Hz) at the knob value; LOOPING: 0
     int   labz;       // FM LAB (SW3 DOWN) UP 2-OP: mode 0 HARMONIC / 1 DISHARMONIC / 2 FREE (a = ratio r at the knob, b =
-                      // index fc (Hz) at the knob (caps' L = min(4000, fc)), lb = feedback b at the knob (both K4 g = 1,
+                      // index fc (Hz) at the knob (caps' L = min(4000, fc)), lb = feedback b at the knob (both K4 o = 1,
                       // before the per-band caps), lue =
-                      // u_eff with the current g_s, llfd = K5 depth at the knob x the swell fade-in now, lside = K3 side
+                      // u_eff with the current touch env o, llfd = K5 depth at the knob x the fade-in 1 - w (1 - o_r) now, lside = K3 side
                       // -1 hollow / 0 sine / +1 feedback); -1 = not the 2-OP family
     float lb, lue, llfd;
     int   lside;
@@ -892,10 +897,10 @@ class Explorer : public Module {
     float sn;         // K1 bank index
     float slp;        // K3 LPF fc (Hz), 0 = off
     float ssub;       // K5 SUB level g_sub, 0 = off
-    float sgd, sTd;   // SPECTRAL K4 MORPH: decay envelope g_d (raw), its time T_d (s)
-    float sgr, sTr;   //   rise envelope g_r (raw), its time T_r (s)
-    float sw, str;    //   blend w (0 decay .. 1 rise), density travel (K2 knob units)
-    float sL, so;     // SPECTRAL K4 DYNAMICS: live level L (0..1), openness o (0..1, blended) at the snapshot
+    float sgd, sTd;   // K4 TOUCH ENV (every ONE-SHOT model; names kept from SPECTRAL): pluck envelope g_d (raw), its time T_d (s)
+    float sgr, sTr;   //   swell envelope g_r (raw), its time T_r (s)
+    float sw, str;    //   blend w (0 pluck .. 1 swell), SPECTRAL density travel (K2 knob units; SPECTRAL lines only)
+    float sL, so;     //   live level L (0..1), openness o (0..1, blended) at the snapshot
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
     float c3;
@@ -986,9 +991,9 @@ class Explorer : public Module {
       if (fabsf(k4_t_ - k4s_) < EXP_CTRL_SNAP) k4s_ = k4_t_;   // land exactly (noon: t4 == 0)
       k5s_ += (k5_t_ - k5s_) * ca;
       if (fabsf(k5_t_ - k5s_) < EXP_CTRL_SNAP) k5s_ = k5_t_;   // land exactly (noon: no target)
-      EnvUpdate();                               // envelope e -> slid v -> offsets o2_ / o3_ (consumes the onset flag)
+      EnvUpdate();                               // K5 LFO + K4 touch env -> o3_ = openness o (consumes the onset flag)
       DampFmUpdate();                            // K3 dampener UP caps (smoothed K3 + o3 + LFO), per 8 kHz sample
-      if (lab_) LabFmUpdate();                   // FM LAB 2-OP index fc / L from u_eff (smoothed K3 x g_s)
+      if (lab_) LabFmUpdate();                   // FM LAB 2-OP index fc / L from u_eff (smoothed K3 x touch env o)
       for (int j = 0; j < 3; j++) og_[j] = Slide(og_[j], og_t_[j], oct_step_);
       rfmc_.Set(EXP_FM_RATIOS[rfmc_i_t_], disc_len_);   // snapped items slide over EXP_DISC_SLIDE_MS
       rfmc_.Tick();
@@ -1024,7 +1029,8 @@ class Explorer : public Module {
         l2r_.Tick();
       }
       // K2 / K3 parameters: knob + envelope offset (o2_ / o3_, knob units 0..1 = the full span), per 8 kHz sample.
-      // ONE-SHOT: o3_ = g_s (UP dampener fc / MID 2-pole LP fc only: DampFmUpdate / TfUpdate) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
+      // ONE-SHOT: o3_ = the K4 touch env openness o (UP dampener fc / MID 2-pole LP fc only: DampFmUpdate / TfUpdate; FM LAB
+      // 2-OP / ADDITIVE read o in LabFmUpdate / Derive) -> no K3 model offsets (K4 inert on SW1 DOWN); the K2
       // offset is the K5 LFO's, per model (LfoO2: FM feedback / table morph, 0 elsewhere), so a model crossfade
       // gives each side its own unit. LFO off (noon): exactly 0 -> Derive identical to the knob value.
       const float d3 = loop_ ? o3_ : 0.f;
@@ -1033,7 +1039,6 @@ class Explorer : public Module {
       if (fading) pf_ = Derive(mold, vfrom_ & 63, k2s_, k3s_, DiscOf(mold), loop_ ? o2_ : LfoO2(mold), d3);
       if (mnew == kLADD) AddWeights(pn_, 0);    // ADDITIVE: series weights (cached; recomputed when h / series moved)
       if (fading && mold == kLADD) AddWeights(pf_, 1);
-      if (lab_) SpecOpenUpdate(mnew == kLSPEC || (fading && mold == kLSPEC) || sp_m_ > 0.f);   // SPECTRAL K4 openness o
       if (mnew == kLSPEC) SpecWeights(pn_);     // SPECTRAL: partial weights (one table; recomputed when an input moved)
       if (fading && mold == kLSPEC) SpecWeights(pf_);
       // ADDITIVE unison theta: advanced by the entering side; by the fading side only when the entering one has none
@@ -1176,7 +1181,12 @@ class Explorer : public Module {
   //   v_target = dir e (dir = sign(t4)); 0 at t4 == 0 (ONE-SHOT) / |t4| <= EXP_LOOP_PAD (LOOPING).
   //   mv_ = one-pole (tau EXP_ENV_FM_SLIDE_MS) toward v_target, lands exactly (EXP_CTRL_SNAP).
   //   o2_ = max(-t5, 0) mv_ (K2 parameter), o3_ = max(t5, 0) mv_ (K3 parameter); knob units (1 = full span).
-  // ONE-SHOT instance (loop_ = false): PsUpdate instead (K4 pluck <-> swell on the K3 fc: UP dampener, MID 2-pole LP), then LfoUpdate (K5).
+  // ONE-SHOT instance (loop_ = false): LfoUpdate (K5), then the K4 TOUCH ENV (docs/DESIGN_PHILOSOPHY.md §12; 2026-11-05,
+  // replaces PsUpdate): TouchEnvUpdate (pluck g_d + swell g_r, both always running on the instance, both retriggered by
+  // every onset) and TouchOpenUpdate (openness o with the live level) -> o3_ = o, the one openness every K4 target of
+  // the running model reads (UP index fc DampFmUpdate, MID 2-pole LP TfUpdate, FM LAB 2-OP u_eff, ADDITIVE index fc / h,
+  // SPECTRAL K3 LPF; SPECTRAL density travel: SpecWeights). o computed on FM LAB always (every SW1 family uses K4),
+  // on SW3 MID while the current model is not an SW1 DOWN model (there o3_ = 1, K4 inert, as before).
   inline void EnvUpdate() {
     using namespace explorer_k;
     const bool onset = on_pending_;
@@ -1185,14 +1195,18 @@ class Explorer : public Module {
     const float t4 = 2.f * k4s_ - 1.f;
     const float am = fabsf(t4);
     if (!loop_) {
-      PsUpdate(onset, t4); LfoUpdate(onset);
+      LfoUpdate(onset);                          // (PsUpdate retired 2026-11-05: not called, see there)
+      TouchEnvUpdate(onset, t4);                 // K4 touch env: pluck / swell envelopes (same onset, smoothed t4)
+      const bool down = IsDownModel(var_ >> 6);  // SW3 MID SW1 DOWN: K4 inert (o3_ = 1, o not computed)
+      TouchOpenUpdate(lab_ || !down);            // openness o (+ o_d, o_r) with the live level
+      o3_ = down ? 1.f : te_o_;
       if (lab_) {
-        // FM LAB 2-OP K5 fade-in: LFO depth x g_s on the swell side (t4 > 0), full depth on decay / noon; one-pole slid
-        // (mv_a_ = EXP_ENV_FM_SLIDE_MS 1 ms, lands exactly) so a side change mid-swell doesn't step the feedback.
-        const float ft = (t4 > 0.f) ? ps_gs_ : 1.f;
+        // FM LAB 2-OP K5 fade-in (touch env): fade = 1 - w (1 - o_r) - 1 at / CCW of noon (w 0), the swell's openness
+        // o_r past the morph zone (w 1), continuous across it; one-pole slid (mv_a_ = EXP_ENV_FM_SLIDE_MS 1 ms, lands
+        // exactly; carried over from the g_s fade-in).
+        const float ft = 1.f - te_w_ * (1.f - te_or_);
         lab_fbf_ += mv_a_ * (ft - lab_fbf_);
         if (fabsf(ft - lab_fbf_) < EXP_CTRL_SNAP) lab_fbf_ = ft;
-        SpecEnvUpdate(onset, t4);                // FM LAB SPECTRAL K4: own decay / rise envelopes (same onset, t4)
       }
       return;
     }
@@ -1211,6 +1225,9 @@ class Explorer : public Module {
     o3_ = (t5 > 0.f) ?  t5 * mv_ : 0.f;
   }
 
+  // RETIRED 2026-11-05 (not called; code kept): the former shared K4 "pluck <-> swell" g / g_s of both instances,
+  // replaced by the touch env (TouchEnvUpdate / TouchOpenUpdate, docs/DESIGN_PHILOSOPHY.md §12). Nothing reads ps_g_ /
+  // ps_gs_ any more; ps_a_ (EXP_PS_SLIDE_MS) and ln_ps_dec_ / ln_ps_rise_ are still the touch env's. As it was:
   // ONE-SHOT instance (SW3 MID): K4 "pluck <-> swell" on the K3 fc (UP dampener, MID 2-pole LP), per 8 kHz sample.
   //   Side from the smoothed t4: t4 < 0 DECAY (target 0, T = PS_DEC_FAST (PS_DEC_SLOW / PS_DEC_FAST)^(1 - |t4|)),
   //   t4 >= 0 RISE (target 1, T = PS_RISE_FAST (PS_RISE_SLOW / PS_RISE_FAST)^|t4|); side and T recomputed only
@@ -1270,7 +1287,7 @@ class Explorer : public Module {
     o3_ = IsDownModel(var_ >> 6) ? 1.f : ps_gs_;
   }
 
-  // ONE-SHOT instance (SW3 MID): K5 LFO, per 8 kHz sample (after PsUpdate). t5 = 2 k5s_ - 1, u = |t5|.
+  // ONE-SHOT instances (SW3 MID, FM LAB): K5 LFO, per 8 kHz sample (EnvUpdate, before the touch env). t5 = 2 k5s_ - 1, u = |t5|.
   //   depth = min(u / EXP_LFO_DEPTH_FRAC, 1), rate = EXP_LFO_HZ_MIN (EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)^u (recomputed
   //   only when u moved). Free-running phase lfo_ph_ in [0, 1) (never reset). Shape: t5 < 0 triangle
   //   tri = 1 - 4 |frac(ph + 0.25) - 0.5| (0 at ph = 0, rising, +-1), t5 > 0 the downward staircase EXP_LFO_STEPS
@@ -1336,7 +1353,7 @@ class Explorer : public Module {
     if (st > EXP_LAB_N_STEPS - 1) st = EXP_LAB_N_STEPS - 1;
     return (m == 0) ? EXP_LAB_HARM_R[st] : EXP_LAB_DISH_R[st];
   }
-  // FM LAB 2-OP K3 character at the smoothed / knob k3 and envelope g_s: t3 = 2 k3 - 1, u_eff = g_s |t3|,
+  // FM LAB 2-OP K3 character at the smoothed / knob k3 and the K4 touch env openness o (gs): t3 = 2 k3 - 1, u_eff = o |t3|,
   // I = EXP_FM_INDEX, b = 0 (CCW / noon) or EXP_FBFM_FB_MAX u_eff (CW); before the per-band caps at L (LabFc).
   static inline void LabChar(float k3, float gs, float& I, float& b, float& ue) {
     using namespace explorer_k;
@@ -1349,9 +1366,9 @@ class Explorer : public Module {
   // FM LAB 2-OP index fc (Hz) at u_eff: SW3 MID's law with k3 -> u_eff (DampFc); L = min(EXP_FOLD_LIMIT_HZ, this).
   static inline float LabFc(float ue) { return DampFc(ue); }
   // DIAG: FM LAB 2-OP at the knob values: a = ratio r (FREE: from the raw knob), b = index fc (Hz, K4 g = 1; the caps'
-  // L = min(EXP_FOLD_LIMIT_HZ, this)), diag_lab_b_ = feedback b (g = 1, before the caps), diag_lab_side_ (-1 hollow, 0 sine, +1 feedback side), diag_lab_ue_ = u_eff with the current
-  // g_s, diag_lab_lfd_ = the K5 depth at the knob x the fade-in factor (swell side: g_s now, else 1).
-  void LabDiagParam(int m, float k2, float k3, float k4, float lfod, float& a, float& b) {
+  // L = min(EXP_FOLD_LIMIT_HZ, this)), diag_lab_b_ = feedback b (o = 1, before the caps), diag_lab_side_ (-1 hollow, 0 sine, +1 feedback side), diag_lab_ue_ = u_eff with the current
+  // touch env openness o, diag_lab_lfd_ = the K5 depth at the knob x the fade-in factor now (1 - w (1 - o_r)).
+  void LabDiagParam(int m, float k2, float k3, float lfod, float& a, float& b) {
     using namespace explorer_k;
     a = LabRatio(m, Quantize(k2, EXP_LAB_N_STEPS), k2);
     float ue, I;
@@ -1360,8 +1377,8 @@ class Explorer : public Module {
     const float t3 = 2.f * k3 - 1.f;
     diag_lab_side_ = (t3 < 0.f) ? -1 : (t3 > 0.f) ? 1 : 0;
     float Ig, bg;
-    LabChar(k3, ps_gs_, Ig, bg, diag_lab_ue_);
-    diag_lab_lfd_ = lfod * ((2.f * k4 - 1.f > 0.f) ? ps_gs_ : 1.f);
+    LabChar(k3, te_o_, Ig, bg, diag_lab_ue_);
+    diag_lab_lfd_ = lfod * (1.f - te_w_ * (1.f - te_or_));
   }
 
   // --- FM LAB SPECTRAL helpers (SW1 MID, model kLSPEC; see FM LAB SW1 MID in the header) ---
@@ -1394,8 +1411,12 @@ class Explorer : public Module {
     using namespace explorer_k;
     return EXP_SPEC_SHIFT_MAX * (2.f * Clamp01(k4) - 1.f);
   }
-  // K4 MORPH (2026-11-05): SPECTRAL's own two envelopes, per 8 kHz sample on the FM LAB instance (EnvUpdate, after
-  // PsUpdate; whatever SW1 model runs, so entering SPECTRAL finds them current), same onset / smoothed t4 as PsUpdate.
+  // --- K4 TOUCH ENV (docs/DESIGN_PHILOSOPHY.md §12; one implementation per instance, both instances) ---
+  // Built 2026-11-05 as FM LAB SPECTRAL's K4 morph (reference implementation), shared since 2026-11-05 by every K4 mode
+  // (SW3 MID SW1 UP FM / XBAND index fc, SW1 MID tables 2-pole LP; FM LAB 2-OP u_eff, SPECTRAL, ADDITIVE index fc / h).
+  // Constants: EXP_PS_* (times, shapes, slide), EXP_SPEC_MORPH_ZONE, EXP_SPEC_DYN_* (names kept from SPECTRAL).
+  // TouchEnvUpdate: the two envelopes, per 8 kHz sample on the instance (EnvUpdate; whatever SW1 model runs, so a K4
+  // mode finds them current), one onset / smoothed t4.
   //   t4 moved -> T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|) (t4 < 0) | DEC_SLOW (t4 >= 0);
   //              T_r = RISE_FAST (t4 <= Z) | RISE_FAST (RISE_SLOW / RISE_FAST)^((t4 - Z) / (1 - Z)) (t4 > Z);
   //              w = 0 (t4 <= 0) | clamp(t4 / Z, 0, 1) (t4 > 0), Z = EXP_SPEC_MORPH_ZONE; each coefficient only when
@@ -1404,95 +1425,110 @@ class Explorer : public Module {
   //   DECAY g_d: PsUpdate's decay law (EXP_PS_DEC_LINEAR linear | EXP_PS_DEC_2POLE 2-pole | one-pole) toward 0, snaps
   //              to 0 within 0.02, holds. RISE g_r: one-pole toward 1 (tau T_r / EXP_ENV_TRAVEL_TAUS), snaps at 98 %.
   //   g_ds / g_rs = one-pole slid (ps_a_, tau EXP_PS_SLIDE_MS), land exactly. No LEAVE, no side state.
-  inline void SpecEnvUpdate(bool onset, float t4) {
+  inline void TouchEnvUpdate(bool onset, float t4) {
     using namespace explorer_k;
     constexpr float Z = EXP_SPEC_MORPH_ZONE;
-    if (t4 != sp_t4_) {
-      sp_t4_ = t4;
+    if (t4 != te_t4_) {
+      te_t4_ = t4;
       const float Td = (t4 < 0.f) ? EXP_PS_DEC_FAST_S * expf((1.f - fabsf(t4)) * ln_ps_dec_) : EXP_PS_DEC_SLOW_S;
       const float Tr = (t4 <= Z) ? EXP_PS_RISE_FAST_S
                                  : EXP_PS_RISE_FAST_S * expf((t4 - Z) * (1.f / (1.f - Z)) * ln_ps_rise_);
-      sp_w_ = (t4 <= 0.f) ? 0.f : (t4 >= Z) ? 1.f : t4 / Z;
-      if (Td != sp_Td_) {
-        sp_Td_ = Td;
-        if (EXP_PS_DEC_LINEAR)     sp_dgd_ = 1.f / (Td * sr8_);                               // linear step
-        else if (EXP_PS_DEC_2POLE) sp_cd_ = 1.f - expf(-EXP_PS_DEC_2P_TAUS / (Td * sr8_));    // per stage
-        else                       sp_cd_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (Td * sr8_));   // one-pole
+      te_w_ = (t4 <= 0.f) ? 0.f : (t4 >= Z) ? 1.f : t4 / Z;
+      if (Td != te_Td_) {
+        te_Td_ = Td;
+        if (EXP_PS_DEC_LINEAR)     te_dgd_ = 1.f / (Td * sr8_);                               // linear step
+        else if (EXP_PS_DEC_2POLE) te_cd_ = 1.f - expf(-EXP_PS_DEC_2P_TAUS / (Td * sr8_));    // per stage
+        else                       te_cd_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (Td * sr8_));   // one-pole
       }
-      if (Tr != sp_Tr_) { sp_Tr_ = Tr; sp_cr_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (Tr * sr8_)); }
+      if (Tr != te_Tr_) { te_Tr_ = Tr; te_cr_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (Tr * sr8_)); }
     }
-    if (onset) { sp_gd_ = sp_xd_ = 1.f; sp_drun_ = true; sp_gr_ = 0.f; }
-    if (sp_drun_) {                              // DECAY (PsUpdate's decay branch, own state)
+    if (onset) { te_gd_ = te_xd_ = 1.f; te_drun_ = true; te_gr_ = 0.f; }
+    if (te_drun_) {                              // DECAY (PsUpdate's decay branch, own state)
       float g;
       if (EXP_PS_DEC_LINEAR) {
-        g = sp_gd_ - sp_dgd_;
+        g = te_gd_ - te_dgd_;
         if (g < 0.f) g = 0.f;
       } else if (EXP_PS_DEC_2POLE) {
-        sp_xd_ += sp_cd_ * (0.f - sp_xd_);
-        g = sp_gd_ + sp_cd_ * (sp_xd_ - sp_gd_);
-        if (g <= 0.02f) { g = 0.f; sp_xd_ = 0.f; }
+        te_xd_ += te_cd_ * (0.f - te_xd_);
+        g = te_gd_ + te_cd_ * (te_xd_ - te_gd_);
+        if (g <= 0.02f) { g = 0.f; te_xd_ = 0.f; }
       } else {
-        g = sp_gd_ + sp_cd_ * (0.f - sp_gd_);
+        g = te_gd_ + te_cd_ * (0.f - te_gd_);
         if (g <= 0.02f) g = 0.f;
       }
-      sp_gd_ = g;
-      if (g == 0.f) sp_drun_ = false;            // holds at 0 until the next onset
+      te_gd_ = g;
+      if (g == 0.f) te_drun_ = false;            // holds at 0 until the next onset
     }
-    if (sp_gr_ != 1.f) {                         // RISE (PsUpdate's rise branch, own state)
-      float g = sp_gr_ + sp_cr_ * (1.f - sp_gr_);
+    if (te_gr_ != 1.f) {                         // RISE (PsUpdate's rise branch, own state)
+      float g = te_gr_ + te_cr_ * (1.f - te_gr_);
       if (1.f - g <= 0.02f) g = 1.f;
-      sp_gr_ = g;
+      te_gr_ = g;
     }
-    sp_gds_ += ps_a_ * (sp_gd_ - sp_gds_);
-    if (fabsf(sp_gd_ - sp_gds_) < EXP_CTRL_SNAP) sp_gds_ = sp_gd_;
-    sp_grs_ += ps_a_ * (sp_gr_ - sp_grs_);
-    if (fabsf(sp_gr_ - sp_grs_) < EXP_CTRL_SNAP) sp_grs_ = sp_gr_;
+    te_gds_ += ps_a_ * (te_gd_ - te_gds_);
+    if (fabsf(te_gd_ - te_gds_) < EXP_CTRL_SNAP) te_gds_ = te_gd_;
+    te_grs_ += ps_a_ * (te_gr_ - te_grs_);
+    if (fabsf(te_gr_ - te_grs_) < EXP_CTRL_SNAP) te_grs_ = te_gr_;
   }
-  // K4 DYNAMICS (2026-11-05): openness o and density travel, per 8 kHz sample after SpecEnvUpdate, while SPECTRAL runs
-  // (run: either side of a model crossfade, or its K3 LPF mix still fading out); not run -> nothing computed (the next
-  // run computes from the current envelopes). env = on_base_, the onset detector's slow baseline (latest 48 kHz value:
-  // |in| one-pole 2.6 ms -> gate meter up at once / 40 ms fall -> one-pole tau 34.7 ms; raw input):
+  // TouchOpenUpdate (K4 DYNAMICS, 2026-11-05): openness o, per 8 kHz sample after TouchEnvUpdate (EnvUpdate), while a
+  // K4 mode runs (run: FM LAB always; SW3 MID while the current model is not an SW1 DOWN model); not run -> nothing
+  // computed, L_d restarts at L on the next run (the envelopes run on regardless). env = on_base_, the onset detector's
+  // slow baseline (latest 48 kHz value: |in| one-pole 2.6 ms -> gate meter up at once / 40 ms fall -> one-pole tau
+  // 34.7 ms; raw input):
   //   x = ln(env) - ln(floor) (one logf, only when env > floor; else L = G = 0)
   //   L = clamp((dB(env) - FLOOR_DB) / (TOP_DB - FLOOR_DB), 0, 1), G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1)
-  //   depth_d / depth_r: DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) clamp(ln(T / FAST) / ln(SLOW / FAST), 0, 1) over each
-  //   side's own EXP_PS_* range, only when T_d / T_r changed.
-  //   L_d = L rising at once, falling with tau EXP_SPEC_DYN_REL_FRAC T_d; o_d = min(g_ds, L_d), o_r = g_rs G; o = (1 - w) o_d + w o_r (K3 LPF), travel = (1 - w) depth_d (1 - o_d) +
-  //   w depth_r (1 - o_r) (density, SpecWeights). Looping: o = 1, travel = 0. No slide, no law switch.
-  inline void SpecOpenUpdate(bool run) {
+  //   L_d = L rising at once, falling with tau EXP_SPEC_DYN_REL_FRAC T_d (coefficient only when T_d changed);
+  //   o_d = min(g_ds, L_d), o_r = g_rs G; o = (1 - w) o_d + w o_r. No slide, no law switch.
+  // Every K4 target of the running model reads the same o (o3_ / te_o_; FULL travel: target = bottom + o (K3 value -
+  // bottom), as g_s before); SPECTRAL's density travel (time-scaled depth) is SPECTRAL's own (SpecWeights, from o_d /
+  // o_r / w). Looping (retired LOOPING variant): not called; readers use o = 1.
+  inline void TouchOpenUpdate(bool run) {
     using namespace explorer_k;
-    if (!run) { sp_Ld_init_ = true; return; }
+    if (!run) { te_Ld_init_ = true; return; }
     const float env = on_base_;
     float L = 0.f, G = 0.f;
-    if (env > sp_flin_) {
-      const float x = logf(env) - sp_lnfl_;      // nepers above the floor (> 0)
-      L = x * sp_iLr_; if (L > 1.f) L = 1.f;
-      G = x * sp_iGr_; if (G > 1.f) G = 1.f;
+    if (env > te_flin_) {
+      const float x = logf(env) - te_lnfl_;      // nepers above the floor (> 0)
+      L = x * te_iLr_; if (L > 1.f) L = 1.f;
+      G = x * te_iGr_; if (G > 1.f) G = 1.f;
     }
-    sp_L_ = L;
-    if (loop_) { sp_o_ = 1.f; sp_tr_ = 0.f; sp_Ld_init_ = true; return; }
-    if (sp_Td_ != sk_Td_) {                      // depth_d: log over the decay range 0.45 .. 8 s
-      sk_Td_ = sp_Td_;
-      // L_d release (2026-11-05): tau = EXP_SPEC_DYN_REL_FRAC T_d, one expf only when T_d changed
-      sp_Ld_a_ = 1.f - expf(-1.f / (EXP_SPEC_DYN_REL_FRAC * sp_Td_ * sr8_));
-      sp_dd_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) *
-                                        Clamp01(logf(sp_Td_ / EXP_PS_DEC_FAST_S) / ln_ps_dec_);
-    }
-    if (sp_Tr_ != sk_Tr_) {                      // depth_r: log over the rise range 0.01 .. 4 s
-      sk_Tr_ = sp_Tr_;
-      sp_dr_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) *
-                                        Clamp01(logf(sp_Tr_ / EXP_PS_RISE_FAST_S) / ln_ps_rise_);
+    te_L_ = L;
+    if (te_Td_ != te_LdT_) {                     // L_d release: tau = EXP_SPEC_DYN_REL_FRAC T_d, one expf when T_d changed
+      te_LdT_ = te_Td_;
+      te_Ld_a_ = 1.f - expf(-1.f / (EXP_SPEC_DYN_REL_FRAC * te_Td_ * sr8_));
     }
     // L_d: the decay side's live level - rises with L at once, falls with tau = EXP_SPEC_DYN_REL_FRAC T_d (a mute
     // on a long pluck closes damped, not cut; short plucks stay as fast as the follower itself).
-    if (sp_Ld_init_ || L >= sp_Ld_) { sp_Ld_ = L; sp_Ld_init_ = false; }
-    else                            sp_Ld_ += sp_Ld_a_ * (L - sp_Ld_);
-    const float Ld = sp_Ld_;
-    const float gds = sp_gds_;
+    if (te_Ld_init_ || L >= te_Ld_) { te_Ld_ = L; te_Ld_init_ = false; }
+    else                            te_Ld_ += te_Ld_a_ * (L - te_Ld_);
+    const float Ld = te_Ld_;
+    const float gds = te_gds_;
     const float od = (Ld < gds) ? Ld : gds;      // decay openness (damped live level)
-    const float orr = sp_grs_ * G;               // rise openness
-    const float w = sp_w_;
-    sp_o_ = (1.f - w) * od + w * orr;
+    const float orr = te_grs_ * G;               // rise openness
+    const float w = te_w_;
+    te_od_ = od;
+    te_or_ = orr;
+    te_o_ = (1.f - w) * od + w * orr;
+  }
+  // SPECTRAL density travel (K2 knob units), per 8 kHz sample while kLSPEC runs (SpecWeights), from this sample's touch
+  // env (TouchOpenUpdate): depth_d / depth_r = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) clamp(ln(T / FAST) / ln(SLOW / FAST),
+  // 0, 1) over each side's own EXP_PS_* range (only when T_d / T_r changed); travel = (1 - w) depth_d (1 - o_d) +
+  // w depth_r (1 - o_r). SPECTRAL only (the other K4 modes travel the full range, no time-scaled depth).
+  inline float SpecTravel() {
+    using namespace explorer_k;
+    if (te_Td_ != sk_Td_) {                      // depth_d: log over the decay range 0.45 .. 8 s
+      sk_Td_ = te_Td_;
+      sp_dd_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) *
+                                        Clamp01(logf(te_Td_ / EXP_PS_DEC_FAST_S) / ln_ps_dec_);
+    }
+    if (te_Tr_ != sk_Tr_) {                      // depth_r: log over the rise range 0.01 .. 4 s
+      sk_Tr_ = te_Tr_;
+      sp_dr_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) *
+                                        Clamp01(logf(te_Tr_ / EXP_PS_RISE_FAST_S) / ln_ps_rise_);
+    }
+    const float od = te_od_, orr = te_or_;
+    const float w = te_w_;
     sp_tr_ = (1.f - w) * sp_dd_ * (1.f - od) + w * sp_dr_ * (1.f - orr);
+    return sp_tr_;
   }
   // Partial weights spec_w_[1..M] (shared by every band / slot), per 8 kHz sample while kLSPEC runs (either side of a
   // model crossfade), each part only when its inputs moved: tilt when gamma moved (M - 1 expf), comb when nu / e moved
@@ -1503,11 +1539,11 @@ class Explorer : public Module {
   //   1 -> 0 over EXP_DISC_SLIDE_MS / 2, spec_bank_ = target at g = 0, then 0 -> 1 over EXP_DISC_SLIDE_MS / 2; g multiplies
   //   the normalised W (g = 1: bit-identical to no gain). W(1) = 1 (tilt(1) = comb(1) = 1).
   //   (2026-11-05: e / gamma / s at the fixed EXP_SPEC_K_PEAK / K_TILT / K_SHIFT; nu = NU_MAX clamp(k2s_ + travel,
-  //   0, 1), travel = the K4 morph's density share (SpecOpenUpdate, this sample: both envelopes with the live level,
+  //   0, 1), travel = the K4 morph's density share (SpecTravel from this sample's touch env: both envelopes with the live level,
   //   blended by w; 0 while looping); comb redo while nu moves at most every EXP_SPEC_NU_DIV.)
   void SpecWeights(Params& p) {
     using namespace explorer_k;
-    const float tr = loop_ ? 0.f : sp_tr_;     // K4 travel in K2 knob units (0 while looping)
+    const float tr = loop_ ? 0.f : SpecTravel();   // K4 travel in K2 knob units (touch env; 0 while looping)
     const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_ + tr);
     diag_spec_nu_ = nu;
     const float ga = SpecGamma(EXP_SPEC_K_TILT);
@@ -2158,7 +2194,8 @@ class Explorer : public Module {
   //   was per audio block from the block's first o3_ -> the index stepped at 1 ms block edges), from the smoothed K3,
   //   the K3 envelope value o3_ and (ONE-SHOT) the K5 LFO lfo_s_:
   //     LOOPING:  ln(fc / DAMP_FMIN) = k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) + o3_ ln(DAMP_FMAX / DAMP_FMIN) (octave
-  //               offset); ONE-SHOT: ln(fc / DAMP_FMIN) = o3_ k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) (o3_ = g_s);
+  //               offset); ONE-SHOT: ln(fc / DAMP_FMIN) = o3_ k3^DAMP_CURVE ln(DAMP_FMAX / DAMP_FMIN) (o3_ = the K4
+  //               touch env openness o: full travel, bottom 150 Hz .. the K3 value);
   //     clamped to [0, ln(FMAX / FMIN)] (exactly DAMP_FMAX / DAMP_FMIN at the ends); hc_fold_ = min(FOLD_LIMIT_HZ, fc)
   //     is the L the UP models' caps read (ShapeK). hc_fold_k_ (K3 knob alone) is recomputed only when k3 moved.
   void DampFmUpdate() {
@@ -2185,11 +2222,11 @@ class Explorer : public Module {
     }
   }
   // FM LAB 2-OP (lab_ only) caps' L, per 8 kHz sample after EnvUpdate (nothing when u_eff did not move): u_eff =
-  //   g_s |2 k3s - 1| (LOOPING: g 1), fc = LabFc(u_eff) = SW3 MID's law with k3 -> u_eff, lab_L_ = min(FOLD_LIMIT_HZ, fc).
+  //   o |2 k3s - 1| (o = the K4 touch env openness; LOOPING: 1), fc = LabFc(u_eff) = SW3 MID's law with k3 -> u_eff, lab_L_ = min(FOLD_LIMIT_HZ, fc).
   //   No envelope floor, no LFO on L (K5 acts on b only). SW3 MID's DampFmUpdate state is not touched.
   void LabFmUpdate() {
     using namespace explorer_k;
-    float ue = (loop_ ? 1.f : ps_gs_) * fabsf(2.f * k3s_ - 1.f);
+    float ue = (loop_ ? 1.f : te_o_) * fabsf(2.f * k3s_ - 1.f);
     if (ue > 1.f) ue = 1.f;
     if (ue != lab_ue_c_) {
       lab_ue_c_ = ue;
@@ -2235,7 +2272,7 @@ class Explorer : public Module {
   }
   // Per 8 kHz sample (sub = its index in the block): ladder mix target (1 while the current model is a MID table
   // model, else 0) and cutoff, in octaves of log2(LAD_FMAX / LAD_FMIN) above LAD_FMIN (lf, clamped [0, 1]):
-  //   ONE-SHOT: lf = g_s k3 (o3_ = g_s: pluck <-> swell between LAD_FMIN and the knob value; 1 = the knob)
+  //   ONE-SHOT: lf = o k3 (o3_ = the K4 touch env openness o: between LAD_FMIN and the knob value; 1 = the knob)
   //   LOOPING:  lf = k3 + o3_ (o3_ = the K5-CW envelope offset, knob units = the full span)
   // k3 = smoothed K3. Computed only while the ladder targets on or still fades (lad_m_ > 0); else the last fc holds.
   inline void LadUpdate(int sub) {
@@ -2290,8 +2327,9 @@ class Explorer : public Module {
   }
   // Per 8 kHz sample (sub = its index in the block): 2-pole LP mix target (1 while the current model is a MID table
   // model, else 0) and cutoff, in fractions of log2(TF_FMAX / TF_FMIN) above TF_FMIN (lf, clamped [0, 1]):
-  //   ONE-SHOT: ln fc = ln ENV_BOTTOM + g_s (ln fc_knob - ln ENV_BOTTOM) (pluck <-> swell between EXP_TF_ENV_BOTTOM
-  //             150 Hz and the knob value; below the knob's own range, so a decay closes further)
+  //   ONE-SHOT: ln fc = ln ENV_BOTTOM + o (ln fc_knob - ln ENV_BOTTOM) (o3_ = the K4 touch env openness o: full travel
+  //             between the bottom EXP_TF_ENV_BOTTOM 2^(k3 EXP_TF_ENV_BOTTOM_OCT) and the knob value; below the knob's
+  //             own range, so a pluck closes further)
   //   LOOPING:  lf = k3 + o3_ (o3_ = the K5-CW envelope offset, knob units = the full span)
   // k3 = smoothed K3. Computed only while the LP targets on or still fades (tf_m_ > 0); else the last fc holds.
   inline void TfUpdate(int sub) {
@@ -2304,7 +2342,7 @@ class Explorer : public Module {
     if (loop_) {
       const float lf = k3s_ + o3_;
       fc = (lf >= 1.f) ? EXP_TF_FMAX : (lf <= 0.f) ? EXP_TF_FMIN : EXP_TF_FMIN * expf(lf * tf_lnr_);
-    } else {                                     // ONE-SHOT: g_s between EXP_TF_ENV_BOTTOM and the knob value (octaves)
+    } else {                                     // ONE-SHOT: touch env o between the bottom and the knob value (octaves)
       const float lk = (k3s_ >= 1.f) ? tf_lnr_ : (k3s_ <= 0.f) ? 0.f : k3s_ * tf_lnr_;   // ln(fc_knob / TF_FMIN)
       const float lb = tf_lnb_ + k3s_ * (EXP_TF_ENV_BOTTOM_OCT * 0.6931472f);          // bottom rises with K3
       fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb));
@@ -2357,7 +2395,7 @@ class Explorer : public Module {
 
   // FM LAB SPECTRAL K3 LPF, per 8 kHz sample (2026-11-05: no bypass, K4 envelope as the SW1 MID tables): target =
   // SPECTRAL entering model; fc_knob = FLO (FHI / FLO)^k3 (CCW closed, CW open); log2 fc = log2 BOT + o (log2 fc_knob
-  // - log2 BOT) with o the K4 openness (SpecOpenUpdate: the decay / rise envelopes with the live level, blended by w;
+  // - log2 BOT) with o the K4 openness (TouchOpenUpdate: the decay / rise envelopes with the live level, blended by w;
   // 1 = the K3 cutoff, 0 = EXP_SPEC_LPF_ENV_BOTTOM; 1 while looping).
   inline void SpecLpfUpdate(int sub, int mnew) {
     using namespace explorer_k;
@@ -2366,7 +2404,7 @@ class Explorer : public Module {
     sp_tgb_[sub] = on;
     if (!on && sp_m_ <= 0.f) { sp_fcb_[sub] = sp_set_fc_; sp_fc_ = 0.f; return; }
     const float fk = EXP_SPEC_LPF_FLO * expf(k3s_ * logf(EXP_SPEC_LPF_FHI / EXP_SPEC_LPF_FLO));
-    const float g = loop_ ? 1.f : sp_o_;       // K4 openness o
+    const float g = loop_ ? 1.f : te_o_;       // K4 openness o
     const float fc = EXP_SPEC_LPF_ENV_BOTTOM * expf(g * logf(fk / EXP_SPEC_LPF_ENV_BOTTOM));
     sp_fcb_[sub] = fc;
     sp_fc_ = on ? fc : 0.f;
@@ -2469,9 +2507,9 @@ class Explorer : public Module {
       case kFM: {                          // p0 = r, p1 = 1/r, p2 = I, p3 = feedback b
         const float r = disc;
         p.p0 = r; p.p1 = 1.f / r;
-        if (lab_) {                        // FM LAB 2-OP: K3 bipolar character x K4 g_s (LabChar); K2 = the ratio
+        if (lab_) {                        // FM LAB 2-OP: K3 bipolar character x K4 touch env o (LabChar); K2 = the ratio
           float ue;
-          LabChar(k3, loop_ ? 1.f : ps_gs_, p.p2, p.p3, ue);
+          LabChar(k3, loop_ ? 1.f : te_o_, p.p2, p.p3, ue);
         } else {
           p.p2 = EXP_FM_INDEX; p.p3 = EXP_FBFM_FB_MAX * Clamp01(k2 + o2);   // b in [0, FB_MAX]
         }
@@ -2486,7 +2524,7 @@ class Explorer : public Module {
                                            // p5 = delta, p7 = h; o2 = the K5 LFO in knob units (LfoO2)
         const ExpAddZone& Z = EXP_ADD_ZONES[(zone >= 0 && zone < EXP_ADD_N_ZONES) ? zone : 0];
         p.ser = Z.series; p.ctl = Z.ctl;
-        const float gs = loop_ ? 1.f : ps_gs_;     // K4 pluck <-> swell g_s (1 = the K3 value)
+        const float gs = loop_ ? 1.f : te_o_;      // K4 touch env openness o (1 = the K3 value)
         float h = 1.f, ki = 0.f;
         switch (Z.ctl) {
           case kAddA:    h = Clamp01(k2 + o2); ki = k3; break;
@@ -3288,10 +3326,10 @@ class Explorer : public Module {
     s.lb = diag_lab_b_; s.lue = diag_lab_ue_; s.llfd = diag_lab_lfd_; s.lside = diag_lab_side_;
     s.specz = diag_spec_z_;
     s.sn = diag_spec_n_;
-    s.sgd = sp_gd_; s.sTd = sp_Td_; s.sgr = sp_gr_; s.sTr = sp_Tr_; s.sw = sp_w_; s.str = sp_tr_;
+    s.sgd = te_gd_; s.sTd = te_Td_; s.sgr = te_gr_; s.sTr = te_Tr_; s.sw = te_w_; s.str = sp_tr_;   // touch env
     s.slp = sp_fc_;
     s.ssub = (k5s_ > explorer_k::EXP_SPEC_SUB_ON) ? explorer_k::EXP_SPEC_SUB_MAX * k5s_ : 0.f;
-    s.sL = sp_L_; s.so = sp_o_;
+    s.sL = te_L_; s.so = te_o_;
     s.addz = diag_add_z_;
     s.c3 = diag_add_c3_;
     s.bm = diag_add_bm_;
@@ -3449,7 +3487,7 @@ class Explorer : public Module {
   volatile int lab_m_t_ = -1;      // 2-OP mode (K1: 0 HARMONIC, 1 DISHARMONIC, 2 FREE; -1 = MID / DOWN, r rests), Controls
   volatile int lab_st_t_ = 7;      // 2-OP ratio zone (K2, 0..14; HARMONIC / DISHARMONIC), Controls
   DSlide l2r_;                     // slid 2-OP ratio r
-  float lab_fbf_ = 1.f;            // K5 LFO fade-in factor on b (swell side: g_s, else 1; slid 1 ms)
+  float lab_fbf_ = 1.f;            // K5 LFO fade-in factor on b (touch env: 1 - w (1 - o_r); slid 1 ms)
   float lab_ue_c_ = -1.f;          // u_eff of the last LabFmUpdate (-1 = recompute)
   float lab_L_ = 4000.f;           // 2-OP caps' L = min(EXP_FOLD_LIMIT_HZ, LabFc(u_eff)) (Hz)
   int   diag_lab_z_ = -1;          // DIAG: lab UP mode of the last Controls (-1 = not the lab UP)
@@ -3475,29 +3513,33 @@ class Explorer : public Module {
   float diag_spec_nu_ = 0.f;       // DIAG: applied density nu (written by SpecWeights)
   float sp_nu_last_ = -1.f;        // nu of the previous SpecWeights call (stop detection)
   int   sp_nu_div_ = 0;            // samples until the next comb recompute while nu moves
-  // FM LAB SPECTRAL K4 MORPH (SpecEnvUpdate, every 8 kHz sample on the FM LAB instance): own decay / rise envelopes
-  volatile float sp_gd_ = 1.f;     // DECAY g_d (onset -> 1, -> 0 over T_d, holds 0; 1 before the first onset)
-  float sp_gds_ = 1.f;             // g_d slid (EXP_PS_SLIDE_MS one-pole, ps_a_)
-  float sp_xd_ = 1.f;              // DECAY 2-pole first stage
-  bool  sp_drun_ = false;          // decay running (an onset started it, not yet at 0)
-  volatile float sp_gr_ = 1.f;     // RISE g_r (onset -> 0, -> 1 over T_r, holds 1; 1 before the first onset)
-  float sp_grs_ = 1.f;             // g_r slid (EXP_PS_SLIDE_MS one-pole, ps_a_)
-  float sp_t4_ = 2.f;              // t4 the times / w were computed for (2 = force)
-  volatile float sp_Td_ = -1.f;    // decay time T_d (s)
-  volatile float sp_Tr_ = -1.f;    // rise time T_r (s)
-  volatile float sp_w_ = 0.f;      // blend w: 0 = decay only (t4 <= 0) .. 1 = rise only (t4 >= EXP_SPEC_MORPH_ZONE)
-  float sp_cd_ = 0.f, sp_dgd_ = 0.f;   // DECAY coefficient (2-pole per stage / one-pole), linear step (EXP_PS_DEC_LINEAR)
-  float sp_cr_ = 0.f;              // RISE one-pole coefficient (tau T_r / EXP_ENV_TRAVEL_TAUS)
-  // FM LAB SPECTRAL K4 DYNAMICS (SpecOpenUpdate, while SPECTRAL runs): openness o on the K3 LPF, travel on nu
+  // SPECTRAL density travel (SpecTravel, while kLSPEC runs)
   float sk_Td_ = -1.f, sk_Tr_ = -1.f;  // T_d / T_r the depths were made for
-  float sp_Ld_ = 0.f, sp_Ld_a_ = 1.f;  // decay side's damped live level L_d and its fall coefficient
-  bool sp_Ld_init_ = true;          // next run: L_d = L (after a pause / looping)
   float sp_dd_ = 0.f, sp_dr_ = 0.f;    // depth_d / depth_r (K2 knob units)
   volatile float sp_tr_ = 0.f;     // density travel (K2 knob units): (1 - w) depth_d (1 - o_d) + w depth_r (1 - o_r)
-  volatile float sp_o_ = 1.f;      // openness o = (1 - w) o_d + w o_r (1 = the K2 / K3 value, 0 = fully moved)
-  volatile float sp_L_ = 0.f;      // live level L (0..1; DIAG)
-  float sp_flin_ = 0.f, sp_lnfl_ = 0.f;   // floor level (linear, ln) of EXP_SPEC_DYN_FLOOR_DB
-  float sp_iLr_ = 0.f, sp_iGr_ = 0.f;     // L / G per neper above the floor
+  // K4 TOUCH ENV (docs/DESIGN_PHILOSOPHY.md §12), per instance. TouchEnvUpdate (every 8 kHz sample, ONE-SHOT): the
+  // pluck / swell envelopes
+  volatile float te_gd_ = 1.f;     // DECAY g_d (onset -> 1, -> 0 over T_d, holds 0; 1 before the first onset)
+  float te_gds_ = 1.f;             // g_d slid (EXP_PS_SLIDE_MS one-pole, ps_a_)
+  float te_xd_ = 1.f;              // DECAY 2-pole first stage
+  bool  te_drun_ = false;          // decay running (an onset started it, not yet at 0)
+  volatile float te_gr_ = 1.f;     // RISE g_r (onset -> 0, -> 1 over T_r, holds 1; 1 before the first onset)
+  float te_grs_ = 1.f;             // g_r slid (EXP_PS_SLIDE_MS one-pole, ps_a_)
+  float te_t4_ = 2.f;              // t4 the times / w were computed for (2 = force)
+  volatile float te_Td_ = -1.f;    // decay time T_d (s)
+  volatile float te_Tr_ = -1.f;    // rise time T_r (s)
+  volatile float te_w_ = 0.f;      // blend w: 0 = decay only (t4 <= 0) .. 1 = rise only (t4 >= EXP_SPEC_MORPH_ZONE)
+  float te_cd_ = 0.f, te_dgd_ = 0.f;   // DECAY coefficient (2-pole per stage / one-pole), linear step (EXP_PS_DEC_LINEAR)
+  float te_cr_ = 0.f;              // RISE one-pole coefficient (tau T_r / EXP_ENV_TRAVEL_TAUS)
+  // TouchOpenUpdate (K4 DYNAMICS, while a K4 mode runs): openness o, read by every K4 target of the running model
+  float te_LdT_ = -1.f;            // T_d the L_d fall coefficient was made for
+  float te_Ld_ = 0.f, te_Ld_a_ = 1.f;  // decay side's damped live level L_d and its fall coefficient
+  bool te_Ld_init_ = true;          // next run: L_d = L (after a pause / looping)
+  float te_od_ = 1.f, te_or_ = 1.f;    // pluck openness o_d = min(g_ds, L_d), swell openness o_r = g_rs G
+  volatile float te_o_ = 1.f;      // openness o = (1 - w) o_d + w o_r (1 = the K3 value, 0 = the bottom / fully moved)
+  volatile float te_L_ = 0.f;      // live level L (0..1; DIAG)
+  float te_flin_ = 0.f, te_lnfl_ = 0.f;   // floor level (linear, ln) of EXP_SPEC_DYN_FLOOR_DB
+  float te_iLr_ = 0.f, te_iGr_ = 0.f;     // L / G per neper above the floor
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
   float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
   float add_rho_[2][explorer_k::EXP_ADD_STR_M + 1] = {};
@@ -3516,7 +3558,7 @@ class Explorer : public Module {
   float pick_fc_[kSlots] = { -1.f, -1.f, -1.f };   // tables' fc each slot's picks were made for (-1 = none)
   float tpk_k_ = -1.f;             // smoothed K3 the tables' fc was computed for
   float tpk_fc_ = 4000.f;          // tables' dampener fc (Hz): DampFc(smoothed K3), not modulated (Repick)
-  float damp_fc_ = 4000.f;         // UP fc (Hz, incl. the K3 envelope / pluck <-> swell)
+  float damp_fc_ = 4000.f;         // UP fc (Hz, incl. the K3 envelope / K4 touch env)
   float damp_lnr_ = 0.f;           // ln(DAMP_FMAX / DAMP_FMIN)
   float hc_fold_ = 4000.f;         // min(EXP_FOLD_LIMIT_HZ, fc): L of the UP caps
   float hc_fold_k_ = 4000.f;       // the same from the K3 knob alone (MID: the envelope's index floor)
@@ -3556,10 +3598,12 @@ class Explorer : public Module {
   float mv_ = 0.f;                 // applied v = dir e (gated), slid (1 ms one-pole, 8 kHz)
   float mv_a_ = 0.f;               // its coefficient (tau EXP_ENV_FM_SLIDE_MS)
   float o2_ = 0.f, o3_ = 0.f;      // LOOPING: envelope offsets on the K2 / K3 parameter (knob units, 1 = full
-                                   // span); ONE-SHOT: o2_ = 0, o3_ = g_s (fc scale, 1 = the K3 value)
+                                   // span); ONE-SHOT: o2_ = 0, o3_ = the K4 touch env openness o (fc scale, 1 = the K3
+                                   // value; 1 while an SW3 MID SW1 DOWN model runs)
   float ln_tau_ratio_ = 0.f;       // ln(EXP_ENV_TAU_FAST_S / EXP_ENV_TAU_SLOW_S)
   float ln_loop_ratio_ = 0.f;      // ln(EXP_LOOP_T_FAST_S / EXP_LOOP_T_SLOW_S)
-  // ONE-SHOT K4 pluck <-> swell (PsUpdate, loop_ = false)
+  // RETIRED ONE-SHOT K4 pluck <-> swell (PsUpdate, not called since 2026-11-05: nothing reads ps_g_ / ps_gs_ / ps_T_);
+  // ps_a_ (EXP_PS_SLIDE_MS) and ln_ps_dec_ / ln_ps_rise_ are still read by the touch env
   volatile float ps_g_ = 1.f;      // g (0 = bottom fc, 1 = the K3 value)
   float ps_gs_ = 1.f;              // g slid (EXP_PS_SLIDE_MS one-pole, coefficient ps_a_)
   float ps_a_ = 0.f;               // its coefficient (tau EXP_PS_SLIDE_MS)

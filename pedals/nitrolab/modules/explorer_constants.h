@@ -227,7 +227,7 @@ constexpr bool  EXP_LAD_ENABLE   = false;
 //   fc_lad = LAD_FMIN (LAD_FMAX / LAD_FMIN)^k3   (k3 = 0 -> 250 Hz, noon -> 1.4 kHz, k3 = 1 -> 8 kHz)
 // computed per 8 kHz sample (from the 10 ms-smoothed K3 and the 1 ms-slid envelope values), applied to the ladder
 // once per 8 kHz sample (6 x 48 kHz samples; SetCutoff only when fc changed).
-//   SW3 MID (ONE-SHOT) K4 pluck <-> swell: log2 fc = log2 LAD_FMIN + g_s (log2 fc_lad_knob - log2 LAD_FMIN).
+//   SW3 MID (ONE-SHOT) K4 touch env: log2 fc = log2 LAD_FMIN + o (log2 fc_lad_knob - log2 LAD_FMIN).
 //   SW3 DOWN (LOOPING) K5-CW target: log2 fc = log2 fc_lad_knob + d3 v log2(LAD_FMAX / LAD_FMIN), clamped
 //   [LAD_FMIN, LAD_FMAX].
 // Family change (SW1 to / from MID): wet = x + m (ladder(x) - x), m slid linearly 0 <-> 1 over LAD_XFADE_MS;
@@ -254,14 +254,14 @@ constexpr float EXP_LAD_XFADE_MS = 10.f;      // ms; linear slide of the ladder 
 // computed per 8 kHz sample (from the 10 ms-smoothed K3 and the 1 ms-slid envelope values), coefficients set once
 // per 8 kHz sample (6 x 48 kHz samples; only when fc changed) -> no zipper.
 // Modulation moves ONLY this cutoff on tables (the dampener stays on the knob):
-//   SW3 MID (ONE-SHOT) K4 pluck <-> swell: log2 fc = log2 TF_FMIN + g_s (log2 fc_f_knob - log2 TF_FMIN).
+//   SW3 MID (ONE-SHOT) K4 touch env: log2 fc = log2 bottom + o (log2 fc_f_knob - log2 bottom) (bottom: EXP_TF_ENV_BOTTOM).
 //   SW3 DOWN (LOOPING) K5-CW target: log2 fc = log2 fc_f_knob + d3 v log2(TF_FMAX / TF_FMIN), clamped
 //   [TF_FMIN, TF_FMAX].   (K5 LFO on SW3 MID stays on the morph.)
 // Family change (SW1 to / from MID): wet = x + m (lp(x) - x), m slid linearly 0 <-> 1 over EXP_LAD_XFADE_MS (10 ms);
 // SVF state cleared when it starts from m = 0; not run while m = 0 (SW1 UP / DOWN settled).
 constexpr float EXP_TF_FMIN      = 250.f;     // Hz; lowpass cutoff at K3 full CCW (envelope bottom: EXP_TF_ENV_BOTTOM)
 constexpr float EXP_TF_FMAX      = 16000.f;   // Hz; lowpass cutoff at K3 full CW (practically open)
-constexpr float EXP_TF_ENV_BOTTOM = 60.f;     // Hz; SW3 MID pluck <-> swell bottom of the tables LP (2026-10-28: 250 -> 40 -> 150;
+constexpr float EXP_TF_ENV_BOTTOM = 60.f;     // Hz; SW3 MID K4 touch env bottom of the tables LP (2026-10-28: 250 -> 40 -> 150;
                                               // the decay did not close enough); the K3 knob range stays 250 Hz..16 kHz
 constexpr float EXP_TF_ENV_BOTTOM_OCT = 2.f; // the envelope bottom rises with K3: bottom = ENV_BOTTOM 2^(k3 this) (60 Hz CCW, ~134 noon, 300 CW)
 constexpr float EXP_TF_Q         = 1.5f;      // tables LP Q (2026-10-28: wet 2-pole, = K5 at ~2:00 in the Q test; 0.707 / 0.9 / 0.5 tried)
@@ -272,22 +272,24 @@ constexpr float EXP_TF_Q_MIN     = 0.3f;      // Q at K5 full CCW (soft, veiled)
 constexpr float EXP_TF_Q_MAX     = 3.0f;      // Q at K5 full CW (clear peak); exponential, noon ~0.95
 constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28: off again by ear; static open picks)
 
-// --- SW3 MID + SW3 DOWN FM LAB (ONE-SHOT, both instances): K4 = pluck <-> swell (2026-10-28) --------------------
-// Target fixed = the K3 fc: SW1 UP the dampener fc, SW1 MID the 2-pole lowpass cutoff (EXP_TF_*; parked ladder:
-// EXP_LAD_*), NOT the tables' dampener; SW1 DOWN: K4 inert.
-// K5 = LFO (below). g in [0, 1] per 8 kHz sample: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN), clamped
-// [FMIN, FMAX] (UP: EXP_DAMP_*, 150 Hz..4 kHz; MID: EXP_TF_*, 250 Hz..16 kHz) (g = 1: the K3 value, g = 0: the bottom); g_s = g one-pole slid over
-// EXP_PS_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly).
-//   CCW (t4 < 0)  DECAY: target 0, T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|); each onset g = 1.
+// --- SW3 MID + SW3 DOWN FM LAB (ONE-SHOT, both instances): K4 = TOUCH ENV (2026-11-05, docs/DESIGN_PHILOSOPHY.md §12) -
+// (Replaces the shared pluck <-> swell g / g_s of 2026-10-28 - PsUpdate, retired, not called; its LEAVE time
+// EXP_PS_LEAVE_S is read by nothing else.) The EXP_PS_* times / shapes / slide below are the touch env's two envelopes
+// (TouchEnvUpdate); morph zone EXP_SPEC_MORPH_ZONE and the live dynamics EXP_SPEC_DYN_* (names kept from SPECTRAL, its
+// first user) are further down. One openness o per instance, FULL travel on every K4 target (SPECTRAL's density: a
+// time-scaled depth on top): target = bottom + o (K3 value - bottom):
+//   SW1 UP the dampener / index fc, log2 fc = log2 FMIN + o (log2 fc_knob - log2 FMIN) (EXP_DAMP_*, 150 Hz..4 kHz);
+//   SW1 MID the 2-pole lowpass cutoff (EXP_TF_*, bottom EXP_TF_ENV_BOTTOM; parked ladder: EXP_LAD_*), NOT the tables'
+//   dampener; SW1 DOWN: K4 inert. FM LAB: 2-OP u_eff = o u, ADDITIVE the index fc / h, SPECTRAL the K3 LPF + density.
+//   PLUCK g_d: each onset -> 1, then T_d = DEC_FAST (DEC_SLOW / DEC_FAST)^(1 - |t4|) (t4 < 0; DEC_SLOW from noon CW)
 //                 EXP_PS_DEC_2POLE: 2-pole toward 0 (two equal one-poles, tau T / EXP_PS_DEC_2P_TAUS each: g = (1 + t/tau)
 //                 e^(-t/tau), rounded start, 98 % at T, snaps within 0.02); else one-pole; EXP_PS_DEC_LINEAR: linear.
-//   CW / noon     RISE:  target 1, T_r = RISE_FAST (RISE_SLOW / RISE_FAST)^|t4|; each onset with t4 > 0: g = 0
-//                 (noon: an onset does nothing). One-pole toward 1, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly
-//                 to it within 0.02 (98 %), holds.
-// K4 turns never reset g (only the target side and T change, at once); only onsets do. g = 1 before the first onset.
-// LEAVE: a side change clears "plucked", an onset that resets g sets it; unplucked T = max(T_side, EXP_PS_LEAVE_S)
-// (no near-jump when K4 changes side while the value rests), plucked T = T_side.
-constexpr float    EXP_PS_SLIDE_MS         = 5.0f;     // ms (2026-10-28: was EXP_ENV_FM_SLIDE_MS 1 ms; clicks between short notes); one-pole tau (8 kHz) on the applied g_s, lands exactly
+//   SWELL g_r: each onset -> 0, then T_r = RISE_FAST (t4 <= MORPH_ZONE), RISE_FAST (RISE_SLOW / RISE_FAST)^((t4 - Z) /
+//                 (1 - Z)) beyond; one-pole toward 1, tau = T / EXP_ENV_TRAVEL_TAUS, snaps exactly to it within 0.02
+//                 (98 %), holds.
+// Both always running, both retriggered by every onset, 1 before the first onset; g_ds / g_rs = each one-pole slid over
+// EXP_PS_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly). No side state, no LEAVE, no hysteresis.
+constexpr float    EXP_PS_SLIDE_MS         = 5.0f;     // ms (2026-10-28: was EXP_ENV_FM_SLIDE_MS 1 ms; clicks between short notes); one-pole tau (8 kHz) on the touch env's g_d / g_r (-> g_ds / g_rs), lands exactly
 constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s (back to 0.45 with the one-pole decay; 1.0 + linear was not snappy); decay time T_d at K4 full CCW (pluck)
 constexpr bool     EXP_PS_DEC_2POLE        = true;     // decay shape D (2026-10-28): 2-pole, rounded start, still snappy (false: one-pole)
 constexpr float    EXP_PS_DEC_2P_TAUS      = 5.834f;   // per-stage taus per travel: (1 + x) e^-x = 0.02 at x = 5.834 (98 % at T)
@@ -295,7 +297,7 @@ constexpr bool     EXP_PS_DEC_LINEAR       = false;    // decay shape: false = o
 constexpr float    EXP_PS_DEC_SLOW_S       = 8.0f;     // s (2026-10-28: 60 -> 8, bass notes rarely sustain that long); decay time T_d just CCW of noon (exponential over |t4|)
 constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)
 constexpr float    EXP_PS_RISE_SLOW_S      = 4.0f;     // s (2026-10-28: 36 -> 4); rise time T_r at K4 full CW (swell)
-constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimum travel time after a K4 side change until the next onset
+constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimum travel time after a K4 side change until the next onset (retired PsUpdate only, unused)
 
 // --- SW3 MID + SW3 DOWN FM LAB (ONE-SHOT, both instances): K5 = LFO (2026-10-28; FM LAB 2-OP: on b, as UP FM) -
 // t5 = 2 k5 - 1 (smoothed, lands exactly), u = |t5|. Noon (t5 == 0) = off: no modulation (applied value exactly 0).
@@ -312,7 +314,7 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 //   UP FM ratio zones   K2 feedback b = b_knob + l EXP_LFO_FB_SWING, [0, EXP_FBFM_FB_MAX]; XBAND: no effect
 //   MID tables          K2 morph m = m_knob + l EXP_LFO_MORPH_SWING, [0, 1]   (parked BITTAB: no effect)
 //   DOWN                no effect
-// Coexists with K4 (pluck <-> swell on the K3 fc / ladder cutoff): K4 moves fc, K5 moves feedback / morph.
+// Coexists with K4 (touch env on the K3 fc / ladder cutoff): K4 moves fc, K5 moves feedback / morph.
 constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side over which the depth fades in
 constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
 constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
@@ -330,11 +332,11 @@ constexpr int      EXP_LFO_N_STEPS         = 3;   // CW: number of steps per cyc
 constexpr float    EXP_LFO_STEPS[EXP_LFO_N_STEPS] = { 1.f, 0.f, -1.f };   // CW (2026-10-28): downward staircase with 3 levels (+1 / 0 / -1)
 
 // --- SW3 DOWN = FM LAB (instance Explorer(true), 2026-10-28; own SW1 families 2026-11-02) --------------------
-// The SW3 DOWN instance = the SW3 MID one-shot engine (K4 pluck <-> swell, K5 LFO), but with its OWN SW1 families
+// The SW3 DOWN instance = the SW3 MID one-shot engine (K4 touch env, K5 LFO), but with its OWN SW1 families
 // (SW3 MID's FM / tables / harmonics & shift are NOT offered here; they stay on SW3 MID):
 //   SW1 UP   = 2-OP FM (kFM 2OP law, 2026-11-03 control model, see EXP_LAB_* below): K1 = mode HARMONIC / DISHARMONIC /
-//              FREE, K2 = ratio, K3 = bipolar character (CCW hollow index, noon sine, CW index + feedback), K4 pluck <->
-//              swell along K3, K5 LFO on b (+- EXP_LFO_FB_SWING, faded in with the swell).
+//              FREE, K2 = ratio, K3 = bipolar character (CCW hollow index, noon sine, CW index + feedback), K4 touch env
+//              along K3, K5 LFO on b (+- EXP_LFO_FB_SWING, faded in with the swell: x 1 - w (1 - o_r)).
 //   SW1 MID  = SPECTRAL (2026-11-03, Odessa-style; replaces DUAL VOICE - in git history at 224f328): per band the
 //              ADDITIVE SAW series (16 exact harmonics, no FM, anti-fold edge 3800 / 400 Hz), every partial n weighted by
 //              W(n) = tilt(n) comb(n) p(n) (the same for all bands), RMS-normalised; K1 = comb shape (exponent e, continuous),
@@ -355,14 +357,14 @@ constexpr bool EXP_LOOP_ENABLE = false;
 //   K2 = modulator ratio r: HARMONIC / DISHARMONIC = 15 equal stepped zones (EXP_LAB_HARM_R / EXP_LAB_DISH_R, noon =
 //        zone 8: r 1 / 1.414), slid 1 ms; FREE = r = EXP_LAB_FREE_RMIN (EXP_LAB_FREE_RMAX / EXP_LAB_FREE_RMIN)^k2
 //        (0.125 -> 8, noon 1) on the smoothed K2, continuous (no snapping).
-//   K3 = bipolar character, t3 = 2 k3 - 1 (smoothed), u = |t3|, u_eff = g_s u (K4 pluck <-> swell):
+//   K3 = bipolar character, t3 = 2 k3 - 1 (smoothed), u = |t3|, u_eff = o u (K4 touch env openness o):
 //        PITCH-DEPENDENT index = SW3 MID's approved law with k3 -> u_eff: index fc = EXP_DAMP_FMIN
 //        (EXP_DAMP_FMAX / EXP_DAMP_FMIN)^(u_eff^EXP_DAMP_CURVE), L = min(EXP_FOLD_LIMIT_HZ, fc); I = EXP_FM_INDEX capped
 //        per band I <= (L / f' - 1) / r - 1 (floor 0), both sides (noon: L 150 Hz -> index ~0 = pure sine);
 //        CCW (t3 < 0) "hollow": feedback b = 0;
 //        CW  (t3 > 0): b = EXP_FBFM_FB_MAX u_eff (linear from noon), capped per band b <= (L / (r f') - 1) / EXP_FBFM_FB_SPAN.
-//   K5 = LFO on b (+- EXP_LFO_FB_SWING, after the caps, [0, EXP_FBFM_FB_MAX]); on the swell side (t4 > 0) its depth
-//        x g_s (fade-in with the rise), else full depth.
+//   K5 = LFO on b (+- EXP_LFO_FB_SWING, after the caps, [0, EXP_FBFM_FB_MAX]); its depth x the K4 touch env fade-in
+//        1 - w (1 - o_r) (1 at / CCW of noon, the swell's openness o_r past the morph zone).
 constexpr int   EXP_LAB_N_MODES = 3;
 constexpr int   EXP_LAB_FREE    = 2;          // K1 mode index of FREE
 constexpr const char* EXP_LAB_MODE_NAMES[EXP_LAB_N_MODES] = { "2OP-HARM", "2OP-DISH", "2OP-FREE" };
@@ -428,9 +430,9 @@ constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f
 constexpr float EXP_SPEC_K_PEAK     = 1.0f;    // comb shape at this "k1" (1 = full CW: e = E_MAX 4, peaky)
 constexpr float EXP_SPEC_K_TILT     = 0.5f;    // tilt at this "k3" (0.5 = noon: gamma 0, flat)
 constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.5 = noon: s 0, harmonic, theta fast path)
-// K4 pluck <-> swell on the density and the K3 LPF (2026-11-05 MORPH, SpecEnvUpdate / SpecOpenUpdate): SPECTRAL has
-// its OWN two envelopes (PsUpdate untouched, it still drives the other models), both running all the time on the FM LAB
-// instance, both retriggered by every onset (PsUpdate's onset), PsUpdate's shapes, no LEAVE (nothing switches sides):
+// K4 pluck <-> swell on the density and the K3 LPF (2026-11-05 MORPH; since 2026-11-05 the shared K4 TOUCH ENV of every
+// ONE-SHOT model, TouchEnvUpdate / TouchOpenUpdate, see the EXP_PS_* block): two envelopes, both running all the time on
+// the instance, both retriggered by every onset, the EXP_PS_* shapes, no LEAVE (nothing switches sides):
 //   DECAY g_d: onset -> 1, then the EXP_PS_DEC_* law / shape (2-pole) toward 0 over T_d, holds at 0.
 //   RISE  g_r: onset -> 0, then the one-pole toward 1, tau T_r / EXP_ENV_TRAVEL_TAUS, snaps at 98 %, holds at 1.
 //   Before the first onset both = 1. Each slid by EXP_PS_SLIDE_MS -> g_ds, g_rs.
@@ -440,7 +442,7 @@ constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.
 //   w   = 0 for t4 <= 0, clamp(t4 / Z, 0, 1) for t4 > 0 (blend decay -> rise over noon .. ~1:00)
 // depth per side from its T, log over that side's own range: x = ln(T / FAST) / ln(SLOW / FAST) clamped [0, 1],
 // depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x (depth_d over EXP_PS_DEC_*, depth_r over EXP_PS_RISE_*), only when
-// that T changed. Openness per side (K4 DYNAMICS below): o_d = min(g_ds, L), o_r = g_rs G.
+// that T changed (SPECTRAL only). Openness per side (K4 DYNAMICS below): o_d = min(g_ds, L_d), o_r = g_rs G.
 //   nu = NU_MAX clamp(k2 + travel, 0, 1), travel = (1 - w) depth_d (1 - o_d) + w depth_r (1 - o_r)
 //   K3 LPF: o = (1 - w) o_d + w o_r (log2 fc = log2 BOT + o (log2 fc_knob - log2 BOT))
 // Exact noon = pure decay at DEC_SLOW (continuous with just CCW of noon).
@@ -448,17 +450,17 @@ constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05:
 constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
 constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.08f;   // K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
 constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.5f;   // K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
-constexpr float EXP_SPEC_MORPH_ZONE    = 0.2f;   // t4 units: decay -> rise blend zone CW of noon (noon -> ~1:00); T_r fast there
+constexpr float EXP_SPEC_MORPH_ZONE    = 0.2f;   // t4 units: decay -> rise blend zone CW of noon (noon -> ~1:00); T_r fast there (touch env, every K4 mode)
 // Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
 // stops (lands exactly). Exponent / bank changes recompute at once.
 constexpr int   EXP_SPEC_NU_DIV        = 8;
-// K4 DYNAMICS (2026-11-05): density nu and the K3 LPF follow an "openness" instead of the envelopes alone; it combines
-// each SPECTRAL envelope (above) with the LIVE input level, per 8 kHz sample over the whole note (never held at the
+// K4 DYNAMICS (2026-11-05; the touch env's, every K4 mode since 2026-11-05): the K4 targets follow an "openness"
+// instead of the envelopes alone; it combines each envelope (above) with the LIVE input level, per 8 kHz sample over the whole note (never held at the
 // onset: muting the string / turning the instrument down closes it at once). env = the onset detector's slow baseline
 // (explorer.h OnsetDetect on_base_: |in| one-pole EXP_ONSET_ENV_MS 2.6 ms -> gate meter, up at once / EXP_ONSET_FALL_MS
 // 40 ms fall -> baseline one-pole EXP_ONSET_SLOW_COEF, tau 34.7 ms; raw 48 kHz input, broadband, peak-ish |in| units):
 //   L = clamp((dB(env) - FLOOR_DB) / (TOP_DB - FLOOR_DB), 0, 1)
-//   DECAY envelope:  o_d = min(g_ds, L)
+//   DECAY envelope:  o_d = min(g_ds, L_d), L_d = L rising at once, falling with tau EXP_SPEC_DYN_REL_FRAC T_d
 //   RISE envelope:   o_r = g_rs G, G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1) (soft gate: 1 while the string
 //                    rings, -> 0 only near silence)
 // blended by w (above): o = (1 - w) o_d + w o_r. No law switch, no slide on o (g_ds / g_rs keep EXP_PS_SLIDE_MS).
@@ -495,7 +497,7 @@ constexpr float EXP_SPEC_SUB_ON  = 1e-4f;
 //   FM index I = EXP_ADD_FM_I_MAX k^2 (k = the index knob), capped per band with the 2OP cap at r 1: I <= L / f0 - 2.
 enum ExpAddSeries { kAddSaw = 0, kAddOdd = 1, kAddOct = 2, kAddSub = 3, kAddStr = 4 };
 enum ExpAddCtl    { kAddA = 0,     // model A: K2 = h (K5 LFO), K3 = FM index (L incl. K4)
-                    kAddB = 1,     // model B: K2 = FM index (K5 LFO, cap at the K3 knob's L), K3 = h (h_eff = g_s h)
+                    kAddB = 1,     // model B: K2 = FM index (K5 LFO, cap at the K3 knob's L), K3 = h (h_eff = o h, K4 touch env)
                     kAddUniI = 2,  // unison, h = 1, K2 = u, K3 = FM index (as A), K5 = beat speed
                     kAddUniH = 3,  // unison, K2 = u, K3 = h (as B, no FM), K5 = beat speed
                     kAddStrC = 4 };// stretch, K2 = delta (K5 LFO), K3 = FM index (as A)

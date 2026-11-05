@@ -441,7 +441,8 @@ function applyStatus(m) {
 // envelope / LFO state at the snapshot moment).
 function explorerNow(m) {
   const hz = (v) => fmt(v, 0) + " Hz";
-  const ps = `g ${fmt(m.env, 2)} ${m.dir < 0 ? "decay" : "rise"} T ${fmt(m.T, 2)} s`;
+  // K4 touch env (every ONE-SHOT model): pluck g / T, swell g / T, blend w, live level L, openness o
+  const ps = `pluck g ${fmt(m.sgd, 2)} T ${fmt(m.sTd, 2)} s · swell g ${fmt(m.sgr, 2)} T ${fmt(m.sTr, 2)} s · w ${fmt(m.sw, 2)} · L ${fmt(m.sL, 2)} o ${fmt(m.so, 2)}`;
   const lfo = m.lfo === 0 ? "LFO off" : `${m.lfo === 1 ? "triangle" : "staircase"} depth ${fmt(m.lfod, 2)} · ${fmt(m.lfohz, 2)} Hz`;
   const r = [m.zone, "", "", "", "", ""];
   if (m.addz >= 0) {
@@ -461,7 +462,7 @@ function explorerNow(m) {
     r[1] = `r ${fmt(m.a, 3)}`;
     r[2] = `${side} · index fc ${hz(m.b)} · b ${fmt(m.lb, 2)}`;
     r[3] = `${ps} · u ${fmt(m.lue, 2)} now`;
-    r[4] = m.lfo === 0 ? lfo : `${lfo} → depth ${fmt(m.llfd, 2)} with the swell fade`;
+    r[4] = m.lfo === 0 ? lfo : `${lfo} → depth ${fmt(m.llfd, 2)} with the touch env fade-in`;
   } else if (m.model === "FM") {
     r[1] = `r ${fmt(m.a, 2)} · b ${fmt(m.b, 2)}`;
     r[2] = `fc ${hz(m.fc)}`;

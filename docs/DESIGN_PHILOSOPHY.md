@@ -183,7 +183,7 @@ Structure (bipolar knob, noon in the middle):
 - Slow envelopes travel far, fast ones short (travel depth scales with
   envelope time). One openness drives all targets of the module.
 
-Reference implementation: NitroLab explorer, FM LAB SPECTRAL K4
-(`SpecEnvUpdate` / `SpecOpenUpdate` in `pedals/nitrolab/modules/explorer.h`).
+Implementation: NitroLab explorer K4 (SW3 MID FM + tables, FM LAB 2-OP / SPECTRAL / ADDITIVE)
+(`TouchEnvUpdate` / `TouchOpenUpdate`; SPECTRAL density travel `SpecTravel` in `pedals/nitrolab/modules/explorer.h`).
 Values live in `explorer_constants.h` (`EXP_SPEC_DYN_*`, `EXP_SPEC_MORPH_ZONE`,
 `EXP_SPEC_ENV_DEPTH_*`).

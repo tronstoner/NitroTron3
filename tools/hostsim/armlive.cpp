@@ -225,9 +225,10 @@ static const char* ModeName(int m) {
 // Explorer / FM LAB DIAG second half, as pedals/nitrolab/main.cpp prints it
 // (same branches and names; %.2f instead of the firmware's FLT_FMT(2) macros).
 static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
-  char env[128], line[256];
+  char env[192], line[320], te[96];
   const char* lfo = d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off";
-  const char* dir = d.dir < 0 ? "dec" : "rise";
+  // K4 touch env (every ONE-SHOT model; SPECTRAL adds tr): pluck g / T, swell g / T, blend w, live level L, openness o
+  snprintf(te, sizeof te, " gd%.2f Td%.2f gr%.2f Tr%.2f w%.2f L%.2f o%.2f", d.sgd, d.sTd, d.sgr, d.sTr, d.sw, d.sL, d.so);
   if (d.loop)
     snprintf(env, sizeof env, " loop e%.2f %s d%.2f %s", d.env, d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", d.d,
              d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
@@ -235,12 +236,11 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(env, sizeof env, " gd%.2f Td%.2f gr%.2f Tr%.2f w%.2f tr%.2f L%.2f o%.2f", d.sgd, d.sTd, d.sgr, d.sTr, d.sw,
              d.str, d.sL, d.so);
   else if (d.labz >= 0)
-    snprintf(env, sizeof env, " ps g%.2f %s T%.2f lfo %s d%.2f >%.2f %.2fHz", d.env, dir, d.T, lfo, d.lfod, d.llfd, d.lfohz);
+    snprintf(env, sizeof env, "%s lfo %s d%.2f >%.2f %.2fHz", te, lfo, d.lfod, d.llfd, d.lfohz);
   else if (d.sw1 == 0 || d.addz >= 0)
-    snprintf(env, sizeof env, " ps g%.2f %s T%.2f fce %d lfo %s d%.2f %.2fHz", d.env, dir, d.T, (int)(d.fce + 0.5f),
-             lfo, d.lfod, d.lfohz);
+    snprintf(env, sizeof env, "%s fce %d lfo %s d%.2f %.2fHz", te, (int)(d.fce + 0.5f), lfo, d.lfod, d.lfohz);
   else if (d.sw1 == 1)
-    snprintf(env, sizeof env, " ps g%.2f %s T%.2f lfo %s d%.2f %.2fHz", d.env, dir, d.T, lfo, d.lfod, d.lfohz);
+    snprintf(env, sizeof env, "%s lfo %s d%.2f %.2fHz", te, lfo, d.lfod, d.lfohz);
   else
     snprintf(env, sizeof env, " ps - lfo -");
   const char* zn = Explorer::ZoneName(d.model, d.zone);
