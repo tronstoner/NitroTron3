@@ -152,9 +152,9 @@
 //                harmonic. theta_k (cycles, per slot and band) += s f'_k / 8000 per sample, wrapped to [0, 1) (floor);
 //                held while s = 0 (a constant phase, theta 0 from a fresh start = Re S_k exactly); cleared on model
 //                entry / slot start.
-//              K5 = BANK SELECT (2026-11-04, replaces count / solo): 17 equal stepped zones on the raw K5,
-//                b = Quantize(k5, 17), CCW -> CW: FIB STRIDE7 STRIDE6 STRIDE5 STRIDE4 STRIDE3 PRIMES ODD [HARM] OCT5 MAJ-D MAJ DOM7-D DOM7 MIN-D MIN OCT
-//                (EXP_SPEC_BANK; [ ] = noon). Member i = 1..16 sits at m_i f'_k (all 16 on); tilt / comb / norm run
+//              K5 = BANK SELECT (2026-11-04, replaces count / solo): 9 equal stepped zones on the raw K5,
+//                b = Quantize(k5, 9), CCW -> CW: FIB STRIDE7 STRIDE6 STRIDE5 STRIDE4 STRIDE3 PRIMES ODD HARM
+//                (EXP_SPEC_BANK; HARM = full CW). Member i = 1..16 sits at m_i f'_k (all 16 on); tilt / comb / norm run
 //                over the member INDEX i (n above = i), so K1 - K3 act the same per bank; the anti-fold edge uses the
 //                member's real shifted frequency (m_i + s) f'_k, members past the edge are skipped (not computed).
 //                Bank change: a gain g on the normalised weights slides 1 -> 0 over 0.5 ms, the bank swaps at 0, g
@@ -729,7 +729,7 @@ class Explorer : public Module {
     og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
     og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
     og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
-    if (specz >= 0) spec_bank_t_ = SpecBankSel(k5);   // K5: bank (raw knob, 17 equal zones)
+    if (specz >= 0) spec_bank_t_ = SpecBankSel(k5);   // K5: bank (raw knob, 9 equal zones)
 
     led1.Set(1.f);
     led2.Set(mute_ ? 1.f : 0.f);
@@ -860,11 +860,10 @@ class Explorer : public Module {
   }
   // FM LAB SPECTRAL name (DIAG; no zones since 2026-11-03 continuous K1).
   static const char* SpecZoneName(int z) { return (z >= 0) ? "SPEC" : "?"; }
-  // FM LAB SPECTRAL K5 bank name (DIAG / hostsim), index 0..16.
+  // FM LAB SPECTRAL K5 bank name (DIAG / hostsim), index 0..8.
   static const char* SpecBankName(int b) {
     static const char* const nm[explorer_k::EXP_SPEC_BANKS] = {
-        "FIB", "STRIDE7", "STRIDE6", "STRIDE5", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM",
-        "OCT5", "MAJ-D", "MAJ", "DOM7-D", "DOM7", "MIN-D", "MIN", "OCT" };
+        "FIB", "STRIDE7", "STRIDE6", "STRIDE5", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM" };
     return (b >= 0 && b < explorer_k::EXP_SPEC_BANKS) ? nm[b] : "?";
   }
   static const char* ZoneName(int m, int z) {
@@ -1278,7 +1277,7 @@ class Explorer : public Module {
     diag_spec_s_ = SpecShift(k4);
     diag_spec_n_ = (float)SpecBankSel(k5);
   }
-  // K5 bank at the raw k5 (0..1): Quantize(k5, EXP_SPEC_BANKS) = 0..16 (CCW FIB .. noon HARM .. CW OCT).
+  // K5 bank at the raw k5 (0..1): Quantize(k5, EXP_SPEC_BANKS) = 0..8 (CCW FIB .. CW HARM).
   static inline int SpecBankSel(float k5) {
     using namespace explorer_k;
     return Quantize(Clamp01(k5), EXP_SPEC_BANKS);
@@ -1462,8 +1461,7 @@ class Explorer : public Module {
     switch (spec_bank_) {
 #define EXP_SPEC_CASE(B) case B: return ShapeSpecB<B>(o, p);
       EXP_SPEC_CASE(0) EXP_SPEC_CASE(1) EXP_SPEC_CASE(2) EXP_SPEC_CASE(3) EXP_SPEC_CASE(4) EXP_SPEC_CASE(5)
-      EXP_SPEC_CASE(6) EXP_SPEC_CASE(7) EXP_SPEC_CASE(8) EXP_SPEC_CASE(9) EXP_SPEC_CASE(10) EXP_SPEC_CASE(11)
-      EXP_SPEC_CASE(12) EXP_SPEC_CASE(13) EXP_SPEC_CASE(14) EXP_SPEC_CASE(15) EXP_SPEC_CASE(16)
+      EXP_SPEC_CASE(6) EXP_SPEC_CASE(7) EXP_SPEC_CASE(8)
 #undef EXP_SPEC_CASE
       default: return 0.f;
     }
@@ -1471,7 +1469,7 @@ class Explorer : public Module {
   template <int BK>
   float ShapeSpecB(int o, const Params& p) {
     using namespace explorer_k;
-    static_assert(EXP_SPEC_BANKS == 17, "ShapeSpec dispatch lists 17 banks");
+    static_assert(EXP_SPEC_BANKS == 9, "ShapeSpec dispatch lists 9 banks");
     constexpr bool harm = (BK == EXP_SPEC_BANK_HARM);
     const float* __restrict mg  = mag_ + 1;
     const float* __restrict ur  = ur_;
@@ -3117,7 +3115,7 @@ class Explorer : public Module {
   float sp_ln_[explorer_k::EXP_SPEC_M + 1] = {};    // ln n
   float sk_g_ = -1.f, sk_nu_ = -1.f, sk_e_ = -1.f;  // inputs the parts were made for
   bool  sp_redo_ = true;           // first SpecWeights: build W
-  volatile int spec_bank_t_ = explorer_k::EXP_SPEC_BANK_HARM;   // K5 bank target (0..16, Controls)
+  volatile int spec_bank_t_ = explorer_k::EXP_SPEC_BANK_HARM;   // K5 bank target (0..8, Controls)
   int   spec_bank_ = explorer_k::EXP_SPEC_BANK_HARM;            // bank in use (swapped at g = 0)
   float sp_bg_ = 1.f;              // bank-change gain g on the normalised W
   float sp_pstep_ = 0.25f;         // g slide step per 8 kHz sample (2 / disc_len_)
