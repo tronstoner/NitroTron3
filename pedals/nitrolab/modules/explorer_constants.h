@@ -440,13 +440,13 @@ constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.4f;
 constexpr int   EXP_SPEC_NU_DIV        = 8;
 // K3 = SPECTRAL LPF (2026-11-05, replaces the per-member weight-factor filter of 7b58cbf): the SW1 MID tables' 2-pole
 // lowpass type (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct) on the 48 kHz wet while SPECTRAL is the model, no
-// saturation. fc = FHI (FLO / FHI)^k3 (smoothed K3, plain exponential; set per 8 kHz sample). k3 <= EXP_SPEC_LPF_ON:
+// saturation. fc = FHI (FLO / FHI)^(1 - k3) (CW = open/bypass, CCW = closed; smoothed K3, plain exponential; set per 8 kHz sample). k3 <= EXP_SPEC_LPF_ON:
 // bypassed (mix m slides to 0 in 1 ms, then not run -> bit-identical to no filter). Q fixed: SVF LP peak
 // Q / sqrt(1 - 1 / (4 Q^2)) = 2.07 (+6.3 dB) at Q 2.
-constexpr float EXP_SPEC_LPF_FHI = 3800.f;   // Hz at k3 = 0 (just above the bypass threshold)
-constexpr float EXP_SPEC_LPF_FLO = 100.f;    // Hz at K3 full CW
+constexpr float EXP_SPEC_LPF_FHI = 3800.f;   // Hz just CCW of full CW (bypass threshold)
+constexpr float EXP_SPEC_LPF_FLO = 100.f;    // Hz at K3 full CCW
 constexpr float EXP_SPEC_LPF_Q   = 2.f;      // resonance (~+6 dB peak)
-constexpr float EXP_SPEC_LPF_ON  = 1e-4f;    // k3 above this = filter on (smoothed K3 snaps exactly to 0 at CCW)
+constexpr float EXP_SPEC_LPF_ON  = 1e-4f;    // 1 - k3 above this = filter on (CW end = bypass)
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
 // harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).

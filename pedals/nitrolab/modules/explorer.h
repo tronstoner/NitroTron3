@@ -154,8 +154,8 @@
 //              K3 = LPF (2026-11-05; SpecLpfUpdate / SpecLpf, EXP_SPEC_LPF_*): the SW1 MID tables' 2-pole lowpass type
 //                (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct; own instance sp_svf_) on the 48 kHz wet, after the
 //                DC blocker and the tables' TabFilter, before PostFilter / Saturate; no saturation. fc = 3800
-//                (100 / 3800)^k3 Hz, Q 2 (~+6 dB peak), coefficients per 8 kHz sample when fc moved. Mix m (TabFilter's
-//                slide, 1 ms): target on while SPECTRAL is the entering model and k3 > EXP_SPEC_LPF_ON; m = 0 -> not
+//                (100 / 3800)^(1 - k3) Hz (CW = open/bypass, CCW = closed), Q 2 (~+6 dB peak), coefficients per 8 kHz sample when fc moved. Mix m (TabFilter's
+//                slide, 1 ms): target on while SPECTRAL is the entering model and 1 - k3 > EXP_SPEC_LPF_ON; m = 0 -> not
 //                run (K3 full CCW = bit-identical to no filter). The weights stay the shared W (no per-band factors).
 //              FIXED (constants, former knob laws kept reachable): comb shape e = 0.25 16^k at k = EXP_SPEC_K_PEAK 1 ->
 //                e = 4 (peaky; b^e = exp(e ln b), b = 0 -> 0); tilt gamma = 3 (1 - 2 k) (k <= 0.5), -(2 k - 1) (k > 0.5)
@@ -2189,16 +2189,17 @@ class Explorer : public Module {
     tf_m_ = m;
   }
 
-  // FM LAB SPECTRAL K3 LPF, per 8 kHz sample: target = SPECTRAL entering model and k3 > EXP_SPEC_LPF_ON; fc =
-  // FHI (FLO / FHI)^k3 (exact ends). Computed only while the target is on or m still fades; else the last fc holds.
+  // FM LAB SPECTRAL K3 LPF, per 8 kHz sample: c = 1 - k3 (CW = open, CCW = closed); target = SPECTRAL entering
+  // model and c > EXP_SPEC_LPF_ON; fc = FHI (FLO / FHI)^c (exact ends). Computed only while the target is on or m still fades; else the last fc holds.
   inline void SpecLpfUpdate(int sub, int mnew) {
     using namespace explorer_k;
     if (sub >= kLadSub) sub = kLadSub - 1;
-    const bool on = lab_ && mnew == kLSPEC && k3s_ > EXP_SPEC_LPF_ON;
+    const float c = 1.f - k3s_;
+    const bool on = lab_ && mnew == kLSPEC && c > EXP_SPEC_LPF_ON;
     sp_tgb_[sub] = on;
     if (!on && sp_m_ <= 0.f) { sp_fcb_[sub] = sp_set_fc_; sp_fc_ = 0.f; return; }
-    const float fc = (k3s_ >= 1.f) ? EXP_SPEC_LPF_FLO
-                                   : EXP_SPEC_LPF_FHI * expf(k3s_ * logf(EXP_SPEC_LPF_FLO / EXP_SPEC_LPF_FHI));
+    const float fc = (c >= 1.f) ? EXP_SPEC_LPF_FLO
+                                : EXP_SPEC_LPF_FHI * expf(c * logf(EXP_SPEC_LPF_FLO / EXP_SPEC_LPF_FHI));
     sp_fcb_[sub] = fc;
     sp_fc_ = on ? fc : 0.f;
   }
