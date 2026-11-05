@@ -2210,20 +2210,25 @@ class Explorer : public Module {
     // SW3 MID only (2026-11-05, octaves on the FM cutoff): swell side +- EXP_LFO_FM_FC_OCT around the envelope (l),
     // faded in with the swell (x o_r); pluck side UPWARD 0 .. EXP_LFO_FM_FC_OCT_DEC x depth, growing as the pluck
     // closes (x (1 - o_d)); blended by w.
-    float lo = 0.f;
+    //   2026-11-05: the pluck side's amount also scales with the K3 cutoff's position in its range (log, 0 at
+    //   DAMP_FMIN .. 1 at DAMP_FMAX = DampCurve(k3)): dark K3 -> subtle, bright K3 -> up to EXP_LFO_FM_FC_OCT_DEC.
+    float lo = 0.f, ld = 0.f;                    // swell part (octaves) / pluck part before the K3 scale
     if (!loop_ && !lab_) {
       float up = 0.5f * (lfo_depth_ + lfo_s_); if (up < 0.f) up = 0.f;
-      lo = te_w_ * te_or_ * lfo_s_ * EXP_LFO_FM_FC_OCT + (1.f - te_w_) * up * EXP_LFO_FM_FC_OCT_DEC * (1.f - te_od_);
+      lo = te_w_ * te_or_ * lfo_s_ * EXP_LFO_FM_FC_OCT;
+      ld = (1.f - te_w_) * up * EXP_LFO_FM_FC_OCT_DEC * (1.f - te_od_);
     }
-    if (k != damp_k_ || om != damp_o_ || lo != damp_l_) {
+    if (k != damp_k_ || om != damp_o_ || lo != damp_l_ || ld != damp_ld_) {
       const bool kmoved = (k != damp_k_);
       damp_k_ = k;
       damp_o_ = om;
       damp_l_ = lo;
-      const float lk = (k >= 1.f) ? damp_lnr_ : DampCurve(k) * damp_lnr_;
+      damp_ld_ = ld;
+      const float kc = (k >= 1.f) ? 1.f : DampCurve(k);   // K3 position in its range (log)
+      const float lk = kc * damp_lnr_;
       float lf = lk;
       if (loop_) lf += om * damp_lnr_;
-      else       lf = lf * om + lo * 0.6931472f;   // + the LFO octaves (swell: +-, pluck: upward, see above)
+      else       lf = lf * om + (lo + ld * kc) * 0.6931472f;   // + the LFO octaves (swell: +-, pluck: upward x K3 position)
       damp_fc_ = (lf >= damp_lnr_) ? EXP_DAMP_FMAX : (lf <= 0.f) ? EXP_DAMP_FMIN : EXP_DAMP_FMIN * expf(lf);
       hc_fold_ = (damp_fc_ < EXP_FOLD_LIMIT_HZ) ? damp_fc_ : EXP_FOLD_LIMIT_HZ;
       // K3 knob value alone (no envelope): the envelope's index floor uses it (MID)
@@ -3567,6 +3572,7 @@ class Explorer : public Module {
   // K3 dampener (UP caps per 8 kHz sample, DampFmUpdate; table picks per block, DampUpdate)
   float damp_k_ = -1.f;            // smoothed K3 the ceilings / picks were computed for
   float damp_l_ = 0.f;             // K5 LFO value the FM cutoff was last computed for
+  float damp_ld_ = 0.f;            // SW3 MID FM: pluck-side LFO octaves before the K3 scale (change detect)
   float damp_o_ = 0.f;             // ... and the K3 envelope value o3_
   float pick_fc_[kSlots] = { -1.f, -1.f, -1.f };   // tables' fc each slot's picks were made for (-1 = none)
   float tpk_k_ = -1.f;             // smoothed K3 the tables' fc was computed for
