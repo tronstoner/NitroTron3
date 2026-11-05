@@ -431,7 +431,7 @@ constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.
 // K4 pluck <-> swell on the density (the existing PsUpdate envelope g_s, with the live level: openness o, K4 DYNAMICS
 // below): nu = NU_MAX clamp(k2 + depth (1 - o), 0, 1).
 // depth from the envelope time T in use (ps_T_): x = ln(T / T_LO) / ln(T_HI / T_LO) clamped [0, 1],
-// depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x; computed only when T changed (slid at a held-side switch, K4 DYNAMICS).
+// depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x; computed only when T changed.
 constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05: depth per side over EXP_PS_* ranges)
 constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
 constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.08f;   // K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
@@ -448,21 +448,12 @@ constexpr int   EXP_SPEC_NU_DIV        = 8;
 //   DECAY side (K4 CCW):  o = min(g_s, L)
 //   RISE side (K4 CW):    o = g_s G, G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1) (soft gate: 1 while the string
 //                         rings, -> 0 only near silence)
-//   No noon state (2026-11-05, noon pad removed): noon is only the border DECAY (CCW) | RISE (CW).
-// SIDE with hysteresis (SPECTRAL only): one held side s (-1 DECAY, +1 RISE), set by the sign of t4 (t4 >= 0 RISE) when
-// SPECTRAL becomes the model, then switched to DECAY only when t4 < -EXP_SPEC_NOON_HYS, to RISE only when
-// t4 > +EXP_SPEC_NOON_HYS. s drives everything side-dependent in SPECTRAL: the pluck <-> swell envelope (PsUpdate side /
-// target / T / onset reset / LEAVE) and with it the depth, and the openness law. Inside the band the held side keeps
-// its own T law at |t4| (DECAY -> ~EXP_PS_DEC_SLOW_S, RISE -> ~EXP_PS_RISE_FAST_S). Other models: PsUpdate as before.
-// A held-side switch slides o AND the travel depth linearly from their last values to the new side's values over
-// EXP_SPEC_LAW_SLIDE_MS (the comb recomputed every 8 kHz sample while it runs); else o = the law exactly (no other
-// slide; g_s keeps its EXP_PS_SLIDE_MS slide). Looping: o = 1.
+//   K4 exact noon:        o = g_s (no dynamics; plain K2 / K3 at rest)
+// A K4 side / noon change switches the law: o slides linearly from its last value to the new law over
+// EXP_DISC_SLIDE_MS (1 ms), else o = the law exactly (no other slide; g_s keeps its EXP_PS_SLIDE_MS slide).
 constexpr float EXP_SPEC_DYN_FLOOR_DB = -60.f;  // dBFS: L = 0 and G = 0 at / below (keep low: guitar env sits far below bass)
 constexpr float EXP_SPEC_DYN_TOP_DB   = -20.f;  // dBFS: L = 1 at / above
 constexpr float EXP_SPEC_DYN_GATE_DB  = 12.f;   // dB above FLOOR_DB where the RISE side's soft gate G reaches 1
-constexpr float EXP_SPEC_NOON_HYS     = 0.01f;  // |t4| (= |2 k4 - 1|) past noon needed to switch the held side (0.01 = 0.5 %
-                                                // of the knob travel; ADC jitter around noon flips nothing)
-constexpr float EXP_SPEC_LAW_SLIDE_MS = 30.f;   // ms; linear slide of o and the depth at a held-side switch
 // K3 = SPECTRAL LPF (2026-11-05, replaces the per-member weight-factor filter of 7b58cbf): the SW1 MID tables' 2-pole
 // lowpass type (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct) on the 48 kHz wet while SPECTRAL is the model, no
 // saturation. fc_knob = FLO (FHI / FLO)^k3 (CCW closed, CW open, no bypass since 2026-11-05; K4 env: log2 fc = log2 BOT + o (log2 fc_knob - log2 BOT), o = the K4 DYNAMICS openness above; smoothed K3, plain exponential; set per 8 kHz sample). k3 <= EXP_SPEC_LPF_ON:

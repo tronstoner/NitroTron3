@@ -144,14 +144,14 @@
 //                K5 = SUB level, no LFO):
 //              K1 = BANK SELECT (below; moved from K5).
 //              K2 = DENSITY: nu = 0.5 clamp(k2 + depth (1 - o), 0, 1) (EXP_SPEC_NU_MAX); o = the K4 openness (K4 below:
-//                the pluck <-> swell envelope g_s (PsUpdate: times, laws, onsets, LEAVE; side = the held side below)
-//                with the live input level); o = 1 -> plain K2. depth from the envelope time T in use (ps_T_), log over
-//                the ACTIVE side's own range: x = ln(T / FAST) / ln(SLOW / FAST) clamped [0, 1] (decay EXP_PS_DEC_*
-//                0.45..8 s, rise EXP_PS_RISE_* 0.01..4 s), depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x
-//                (EXP_SPEC_ENV_DEPTH_*), only when T or the side changed (slid at a held-side switch, K4 below).
+//                the pluck <-> swell envelope g_s (PsUpdate, unchanged: times, laws, onsets, LEAVE) with the live input
+//                level); noon / o = 1 -> plain K2. depth from the envelope time T in use (ps_T_), log over the ACTIVE
+//                side's own range: x = ln(T / FAST) / ln(SLOW / FAST) clamped [0, 1] (decay EXP_PS_DEC_* 0.45..8 s, rise
+//                EXP_PS_RISE_* 0.01..4 s), depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x (EXP_SPEC_ENV_DEPTH_*), only
+//                when T or the side changed.
 //                Pluck (CCW): onset g = 1 -> 0, nu travels up by depth; swell (CW): onset g = 0 -> 1, nu starts +depth
 //                and returns to the K2 value. Comb recomputed while nu moves at most every EXP_SPEC_NU_DIV 8 samples
-//                (1 kHz) and on the sample nu stops (lands exactly); every 8 kHz sample during a held-side slide.
+//                (1 kHz) and on the sample nu stops (lands exactly).
 //              K4 = PLUCK <-> SWELL + DYNAMICS on the density (K2) and the K3 LPF (2026-11-05, SpecOpenUpdate,
 //                EXP_SPEC_DYN_*): both follow the openness o, per 8 kHz sample over the whole note (never held at the
 //                onset: muting the string / the instrument volume closes it at once). Live level env = the onset
@@ -160,15 +160,9 @@
 //                TOP -20 dBFS), G = clamp((dB(env) + 60) / 12, 0, 1) (GATE 12 dB).
 //                DECAY (CCW): o = min(g_s, L) - the pluck envelope, closed further by the note's own decay / a mute.
 //                RISE (CW): o = g_s G - the swell, closed by the soft gate only near silence.
-//                No noon state: noon is only the border DECAY | RISE. Looping: o = 1.
-//                HELD SIDE with hysteresis (SpecSide, EXP_SPEC_NOON_HYS 0.01 = 0.5 % of the knob travel): s = sign of
-//                t4 (t4 >= 0 RISE) when SPECTRAL becomes the model, then DECAY only once t4 < -0.01, RISE only once
-//                t4 > +0.01. s is PsUpdate's side while SPECTRAL is the model (side / target / T / onset reset / LEAVE,
-//                so the depth too) and the openness law's side - ADC jitter at noon flips nothing. Inside the band the
-//                held side keeps its own T law at |t4| (DECAY ~8 s pluck, RISE ~10 ms swell).
-//                A held-side switch slides o AND the depth linearly from their last values to the new side's over
-//                EXP_SPEC_LAW_SLIDE_MS 30 ms (nu and the K3 fc move with them; the comb recomputed every 8 kHz sample
-//                while the slide runs); else o = the law exactly, the comb follows nu at most every EXP_SPEC_NU_DIV.
+//                Exact noon: o = g_s (plain K2 / K3 at rest, no dynamics). Looping: o = 1.
+//                A K4 side / noon change slides o linearly to the new law over 1 ms (EXP_DISC_SLIDE_MS); else o = the
+//                law exactly. The comb follows nu at most every EXP_SPEC_NU_DIV (1 kHz) as before.
 //              K5 = SUB LEVEL (2026-11-05, EXP_SPEC_SUB_*): per active band an octave divider at f'_k / 2 - the input-
 //                tracked v_k is halved by a half-angle phasor u (u^2 = v, sign continued, i.e. flipped on each 2 pi
 //                wrap of v; own state explorer_spec_st.ur / ui per slot, so it follows every SW2 slot's f');
@@ -275,8 +269,7 @@
 //             do nothing (g goes / stays at 1 = plain K3). g one-pole toward 1, tau = T / 3.9
 //             (EXP_ENV_TRAVEL_TAUS), snaps exactly to it within 0.02 (98 %), holds.
 //     Side / T from the smoothed t4, recomputed when it moved. K4 turns never reset g (only target and T change,
-//             at once); only onsets do. g = 1 before the first onset. FM LAB SPECTRAL: the side is the held side
-//             with hysteresis at noon instead (SpecSide, EXP_SPEC_NOON_HYS; see FM LAB SW1 MID K4).
+//             at once); only onsets do. g = 1 before the first onset.
 //     LEAVE (no near-jump on a side change while the value rests): a side change clears "plucked"; an onset that
 //             resets g sets it. Unplucked, T_eff = max(T, EXP_PS_LEAVE_S 0.5 s) (e.g. decayed to the bottom, K4
 //             past noon: up to K3 over ~0.5 s, not 10 ms); plucked, T_eff = T. Same shapes (decay 2-pole
@@ -653,10 +646,6 @@ class Explorer : public Module {
     sk_g_ = sk_nu_ = sk_e_ = sk_k1_ = -1.f;      // forces every part on the first SpecWeights
     sk_T_ = sp_nu_last_ = -1.f; sp_nu_div_ = 0;   // depth / nu recompute state
     sp_o_ = 1.f; sp_L_ = 0.f; sp_ooff_ = 0.f; sp_on_ = 0; sp_oside_ = 0; sp_orun_ = false;   // K4 DYNAMICS
-    sp_depth_ = sp_dt_ = sp_doff_ = 0.f; sp_ofast_ = false; sp_hside_ = 0;                  // depth slide, held side
-    sp_olen_ = (int)(EXP_SPEC_LAW_SLIDE_MS * 0.001f * sr8_ + 0.5f);                           // held-side slide (8 kHz)
-    if (sp_olen_ < 1) sp_olen_ = 1;
-    sp_iolen_ = 1.f / (float)sp_olen_;
     sp_lnfl_ = EXP_SPEC_DYN_FLOOR_DB * (logf(10.f) / 20.f);                  // dB -> ln of the linear level
     sp_flin_ = expf(sp_lnfl_);
     sp_iLr_ = 20.f / ((EXP_SPEC_DYN_TOP_DB - EXP_SPEC_DYN_FLOOR_DB) * logf(10.f));
@@ -1176,7 +1165,7 @@ class Explorer : public Module {
     const float t4 = 2.f * k4s_ - 1.f;
     const float am = fabsf(t4);
     if (!loop_) {
-      PsUpdate(onset, t4, SpecSide(t4)); LfoUpdate(onset);   // SpecSide: FM LAB SPECTRAL's held side, else 0 (sign of t4)
+      PsUpdate(onset, t4); LfoUpdate(onset);
       if (lab_) {
         // FM LAB 2-OP K5 fade-in: LFO depth x g_s on the swell side (t4 > 0), full depth on decay / noon; one-pole slid
         // (mv_a_ = EXP_ENV_FM_SLIDE_MS 1 ms, lands exactly) so a side change mid-swell doesn't step the feedback.
@@ -1212,17 +1201,13 @@ class Explorer : public Module {
   //   ps_gs_ = g one-pole slid (tau EXP_PS_SLIDE_MS, coefficient ps_a_), lands exactly.
   //   o3_ = ps_gs_ (DampFmUpdate UP / TfUpdate MID: log2 fc = log2 FMIN + g_s (log2 fc_knob - log2 FMIN)); 1 while SW1 DOWN runs
   //   (K4 inert there). o2_ = 0 (the K5 LFO offset goes to Derive via LfoO2).
-  //   side (2026-11-05): 0 = the side from the sign of t4 as above (every model but FM LAB SPECTRAL, unchanged); -1 / +1 =
-  //   FM LAB SPECTRAL's held side (SpecSide, hysteresis at noon): DECAY / RISE regardless of the sign of t4, T from
-  //   |t4| by that side's own law (inside the band: DECAY ~PS_DEC_SLOW, RISE ~PS_RISE_FAST); a held RISE resets g = 0
-  //   on an onset also at t4 <= 0 (no exact-noon exception: noon is only the border there).
-  inline void PsUpdate(bool onset, float t4, int side) {
+  inline void PsUpdate(bool onset, float t4) {
     using namespace explorer_k;
     bool redo = false;
-    const bool rise = side ? (side > 0) : (t4 >= 0.f);
-    if (t4 != ps_t4_ || rise != ps_rise_) {      // (side 0: rise != ps_rise_ only together with a t4 change)
+    if (t4 != ps_t4_) {
       ps_t4_ = t4;
       const float am = fabsf(t4);
+      const bool rise = (t4 >= 0.f);
       if (rise != ps_rise_) { ps_rise_ = rise; ps_plucked_ = false; }   // side changed: leave move until an onset
       ps_Ts_ = ps_rise_ ? EXP_PS_RISE_FAST_S * expf(am * ln_ps_rise_)
                         : EXP_PS_DEC_FAST_S * expf((1.f - am) * ln_ps_dec_);
@@ -1231,8 +1216,8 @@ class Explorer : public Module {
     const float tg = ps_rise_ ? 1.f : 0.f;
     if (onset) {
       if (!ps_rise_)      { ps_g_ = ps_x1_ = 1.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // DECAY: pluck
-      else if (t4 > 0.f || side > 0) { ps_g_ = 0.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // RISE: swell
-    }                                                                   // (side 0, exact noon: nothing)
+      else if (t4 > 0.f)  { ps_g_ = 0.f; if (!ps_plucked_) { ps_plucked_ = true; redo = true; } }  // RISE: swell
+    }                                                                   // (exact noon: nothing)
     if (redo) {                                  // T_eff = T_side once plucked, else max(T_side, EXP_PS_LEAVE_S)
       ps_T_ = (ps_plucked_ || ps_Ts_ >= EXP_PS_LEAVE_S) ? ps_Ts_ : EXP_PS_LEAVE_S;
       ps_c_ = 1.f - expf(-EXP_ENV_TRAVEL_TAUS / (ps_T_ * sr8_));     // RISE (and the one-pole decay): one-pole
@@ -1389,39 +1374,18 @@ class Explorer : public Module {
     using namespace explorer_k;
     return EXP_SPEC_SHIFT_MAX * (2.f * Clamp01(k4) - 1.f);
   }
-  // K4 HELD SIDE (2026-11-05), per 8 kHz sample before PsUpdate (EnvUpdate): while FM LAB SPECTRAL is the model in use
-  // (var_), one held side sp_hside_ (-1 DECAY, +1 RISE): set by the sign of t4 (t4 >= 0 RISE) on the first sample
-  // SPECTRAL is the model, then DECAY only when t4 < -EXP_SPEC_NOON_HYS, RISE only when t4 > +EXP_SPEC_NOON_HYS (else
-  // kept). Returned as PsUpdate's side, so the envelope (side / target / T / onset reset / LEAVE), the depth and the
-  // openness law (SpecOpenUpdate reads ps_rise_) all follow it. Any other model (and the SW3 MID instance): 0 (PsUpdate
-  // takes the sign of t4, unchanged), the held side forgotten.
-  inline int SpecSide(float t4) {
-    using namespace explorer_k;
-    if (!lab_ || (var_ >> 6) != kLSPEC) { sp_hside_ = 0; return 0; }
-    if (sp_hside_ == 0)                 sp_hside_ = (t4 >= 0.f) ? 1 : -1;
-    else if (t4 < -EXP_SPEC_NOON_HYS)   sp_hside_ = -1;
-    else if (t4 >  EXP_SPEC_NOON_HYS)   sp_hside_ = 1;
-    return sp_hside_;
-  }
-  // K4 DYNAMICS (2026-11-05): openness o and the applied travel depth, per 8 kHz sample after PsUpdate, while SPECTRAL
-  // runs (run: either side of a model crossfade, or its K3 LPF mix still fading out); not run -> nothing computed, the
-  // next run takes the law / depth at once (entering SPECTRAL: the model crossfade covers it). env = on_base_, the
-  // onset detector's slow baseline (latest 48 kHz value: |in| one-pole 2.6 ms -> gate meter up at once / 40 ms fall ->
-  // one-pole tau 34.7 ms; raw input):
+  // K4 DYNAMICS (2026-11-05): openness o, per 8 kHz sample after PsUpdate, while SPECTRAL runs (run: either side of
+  // a model crossfade, or its K3 LPF mix still fading out); not run -> nothing computed, the next run takes the law at
+  // once (entering SPECTRAL: the model crossfade covers it). env = on_base_, the onset detector's slow baseline (latest
+  // 48 kHz value: |in| one-pole 2.6 ms -> gate meter up at once / 40 ms fall -> one-pole tau 34.7 ms; raw input):
   //   x = ln(env) - ln(floor) (one logf, only when env > floor; else L = G = 0)
   //   L = clamp((dB(env) - FLOOR_DB) / (TOP_DB - FLOOR_DB), 0, 1), G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1)
-  //   side = PsUpdate's ps_rise_ (FM LAB SPECTRAL: the held side, SpecSide); law: DECAY o = min(g_s, L) | RISE
-  //   o = g_s G | looping o = 1 (no noon state).
-  //   depth target dt (K2 knob units) from T in use (ps_T_), log over the ACTIVE side's own range, only when T or the
-  //   side changed: x = ln(T / FAST) / ln(SLOW / FAST) clamped [0, 1] (decay EXP_PS_DEC_*, rise EXP_PS_RISE_*),
-  //   dt = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x.
-  //   A side switch starts a linear slide of both differences: o = law + (o_last - law_at_switch) n / N, depth = dt +
-  //   (depth_last - dt_at_switch) n / N, n = N .. 0 (N = sp_olen_, EXP_SPEC_LAW_SLIDE_MS 30 ms; o clamped [0, 1]; n = 0
-  //   lands on the law / dt exactly), then o = law, depth = dt. sp_ofast_ = this sample is in the slide (SpecWeights
-  //   then recomputes the comb every 8 kHz sample). No other slide on o / depth.
+  //   law: t4 < 0 DECAY o = min(g_s, L) | t4 > 0 RISE o = g_s G | t4 = 0 (exact noon) o = g_s | looping o = 1
+  //   A law change (K4 side / noon) starts a linear slide of the difference: o = law + (o_last - law_at_change) n /
+  //   disc_len_, n = disc_len_ .. 1 (EXP_DISC_SLIDE_MS 1 ms; clamped [0, 1]), then o = law exactly. No other slide on o.
   inline void SpecOpenUpdate(bool run) {
     using namespace explorer_k;
-    if (!run) { sp_orun_ = false; sp_ofast_ = false; return; }
+    if (!run) { sp_orun_ = false; return; }
     const float env = on_base_;
     float L = 0.f, G = 0.f;
     if (env > sp_flin_) {
@@ -1430,34 +1394,18 @@ class Explorer : public Module {
       G = x * sp_iGr_; if (G > 1.f) G = 1.f;
     }
     sp_L_ = L;
-    if (ps_T_ != sk_T_ || ps_rise_ != sk_rise_) {  // depth target from T, log over the ACTIVE side's own range, on change
-      sk_T_ = ps_T_; sk_rise_ = ps_rise_;
-      float x = ps_rise_ ? logf(ps_T_ / EXP_PS_RISE_FAST_S) / ln_ps_rise_   // rise 0.01 .. 4 s
-                         : logf(ps_T_ / EXP_PS_DEC_FAST_S) / ln_ps_dec_;    // decay 0.45 .. 8 s
-      x = Clamp01(x);
-      sp_dt_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) * x;
-    }
-    const int side = loop_ ? 0 : ps_rise_ ? 1 : -1;
-    const float gs = ps_gs_;
-    const float law = (side < 0) ? ((L < gs) ? L : gs) : (side > 0) ? gs * G : 1.f;   // loop: plain K2 / K3
+    const float t4 = ps_t4_;                     // smoothed t4 of this sample (PsUpdate)
+    const int side = loop_ ? 0 : (t4 < 0.f) ? -1 : (t4 > 0.f) ? 1 : 0;
+    const float gs = loop_ ? 1.f : ps_gs_;
+    const float law = (side < 0) ? ((L < gs) ? L : gs) : (side > 0) ? gs * G : gs;
     if (!sp_orun_)              { sp_orun_ = true; sp_oside_ = side; sp_on_ = 0; }
-    else if (side != sp_oside_) {
-      sp_oside_ = side;
-      sp_ooff_ = sp_o_ - law;
-      sp_doff_ = sp_depth_ - sp_dt_;
-      sp_on_ = sp_olen_ + 1;
-    }
-    float o = law, d = sp_dt_;
-    sp_ofast_ = (sp_on_ > 0);
+    else if (side != sp_oside_) { sp_oside_ = side; sp_ooff_ = sp_o_ - law; sp_on_ = disc_len_; }
+    float o = law;
     if (sp_on_ > 0) {                            // the law moves during the slide: keep o in [0, 1]
-      sp_on_--;
-      const float f = (float)sp_on_ * sp_iolen_; // 1 .. 0
-      o += sp_ooff_ * f;
+      o += sp_ooff_ * ((float)sp_on_ / (float)disc_len_); sp_on_--;
       o = (o < 0.f) ? 0.f : (o > 1.f) ? 1.f : o;
-      d += sp_doff_ * f;
     }
     sp_o_ = o;
-    sp_depth_ = d;
   }
   // Partial weights spec_w_[1..M] (shared by every band / slot), per 8 kHz sample while kLSPEC runs (either side of a
   // model crossfade), each part only when its inputs moved: tilt when gamma moved (M - 1 expf), comb when nu / e moved
@@ -1468,11 +1416,17 @@ class Explorer : public Module {
   //   1 -> 0 over EXP_DISC_SLIDE_MS / 2, spec_bank_ = target at g = 0, then 0 -> 1 over EXP_DISC_SLIDE_MS / 2; g multiplies
   //   the normalised W (g = 1: bit-identical to no gain). W(1) = 1 (tilt(1) = comb(1) = 1).
   //   (2026-11-05: e / gamma / s at the fixed EXP_SPEC_K_PEAK / K_TILT / K_SHIFT; nu = NU_MAX clamp(k2s_ + depth
-  //   (1 - o), 0, 1), o = the K4 openness and depth the applied travel depth (SpecOpenUpdate, this sample: g_s with
-  //   the live level; both slid at a held-side switch); comb redo while nu moves at most every EXP_SPEC_NU_DIV, every
-  //   8 kHz sample while the held-side slide runs (sp_ofast_).)
+  //   (1 - o), 0, 1), o = the K4 openness (SpecOpenUpdate, this sample: g_s with the live level), depth from ps_T_
+  //   (only when T changed); comb redo while nu moves at most every EXP_SPEC_NU_DIV.)
   void SpecWeights(Params& p) {
     using namespace explorer_k;
+    if (ps_T_ != sk_T_ || ps_rise_ != sk_rise_) {  // depth from T, log over the ACTIVE side's own range, on change
+      sk_T_ = ps_T_; sk_rise_ = ps_rise_;
+      float x = ps_rise_ ? logf(ps_T_ / EXP_PS_RISE_FAST_S) / ln_ps_rise_   // rise 0.01 .. 4 s
+                         : logf(ps_T_ / EXP_PS_DEC_FAST_S) / ln_ps_dec_;    // decay 0.45 .. 8 s
+      x = Clamp01(x);
+      sp_depth_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) * x;
+    }
     const float gs = loop_ ? 1.f : sp_o_;      // K4 openness o (1 while looping)
     const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_ + sp_depth_ * (1.f - gs));
     diag_spec_nu_ = nu;
@@ -1495,7 +1449,7 @@ class Explorer : public Module {
     const bool nu_stop = (nu == sp_nu_last_);   // nu stopped moving this sample: land on it now
     sp_nu_last_ = nu;
     if (sp_nu_div_ > 0) sp_nu_div_--;
-    if ((nu != sk_nu_ && (sp_nu_div_ == 0 || nu_stop || sp_ofast_)) || e != sk_e_) {   // comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e
+    if ((nu != sk_nu_ && (sp_nu_div_ == 0 || nu_stop)) || e != sk_e_) {   // comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e
       sk_nu_ = nu; sk_e_ = e;
       sp_nu_div_ = EXP_SPEC_NU_DIV;
       for (int n = 2; n <= EXP_SPEC_M; n++) {
@@ -3439,22 +3393,16 @@ class Explorer : public Module {
   int   diag_spec_z_ = -1;         // DIAG: 0 = SPECTRAL in the last Controls, -1 = not
   float diag_spec_d_ = 0.f, diag_spec_n_ = 0.f;    // DIAG: envelope depth, K1 bank index at the knob
   float diag_spec_nu_ = 0.f;       // DIAG: applied density nu (written by SpecWeights)
-  float sk_T_ = -1.f, sp_depth_ = 0.f;   // envelope T the depth target was made for, applied depth (K2 knob units)
-  float sp_dt_ = 0.f;              // depth target from T / side (SpecOpenUpdate)
+  float sk_T_ = -1.f, sp_depth_ = 0.f;   // envelope T the depth was made for, depth (K2 knob units)
   float sp_nu_last_ = -1.f;        // nu of the previous SpecWeights call (stop detection)
   int   sp_nu_div_ = 0;            // samples until the next comb recompute while nu moves
   // FM LAB SPECTRAL K4 DYNAMICS (SpecOpenUpdate): openness o on nu and the K3 LPF (g_s with the live level L)
   volatile float sp_o_ = 1.f;      // openness o (1 = the K2 / K3 value, 0 = fully moved), per 8 kHz sample
   volatile float sp_L_ = 0.f;      // live level L (0..1; DIAG)
-  float sp_ooff_ = 0.f;            // held-side slide: o_last - law at the switch (decays linearly to 0)
-  float sp_doff_ = 0.f;            // held-side slide: depth_last - depth target at the switch (decays linearly to 0)
-  int   sp_on_ = 0;                // held-side slide: samples left (N + 1 at the switch, 0 = off)
-  int   sp_olen_ = 240;            // N = EXP_SPEC_LAW_SLIDE_MS in 8 kHz samples
-  float sp_iolen_ = 1.f / 240.f;   // 1 / N
-  bool  sp_ofast_ = false;         // this 8 kHz sample is in the held-side slide (comb every sample)
-  int   sp_oside_ = 0;             // law in use: -1 DECAY min(g_s, L), +1 RISE g_s G, 0 looping (o = 1)
+  float sp_ooff_ = 0.f;            // law-change slide: o_last - law at the change (decays linearly to 0)
+  int   sp_on_ = 0;                // law-change slide: samples left
+  int   sp_oside_ = 0;             // law in use: -1 DECAY min(g_s, L), 0 noon g_s, +1 RISE g_s G
   bool  sp_orun_ = false;          // o was computed on the previous 8 kHz sample
-  int   sp_hside_ = 0;             // K4 held side while SPECTRAL is the model (-1 DECAY, +1 RISE; 0 = not held, SpecSide)
   float sp_flin_ = 0.f, sp_lnfl_ = 0.f;   // floor level (linear, ln) of EXP_SPEC_DYN_FLOOR_DB
   float sp_iLr_ = 0.f, sp_iGr_ = 0.f;     // L / G per neper above the floor
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
@@ -3523,7 +3471,7 @@ class Explorer : public Module {
   float ps_gs_ = 1.f;              // g slid (EXP_PS_SLIDE_MS one-pole, coefficient ps_a_)
   float ps_a_ = 0.f;               // its coefficient (tau EXP_PS_SLIDE_MS)
   float ps_t4_ = 2.f;              // t4 the side / T / coefficient were computed for
-  bool  ps_rise_ = true;           // side: true RISE (t4 >= 0, target 1), false DECAY (t4 < 0, target 0); SPECTRAL: held side
+  bool  ps_rise_ = true;           // side: true RISE (t4 >= 0, target 1), false DECAY (t4 < 0, target 0)
   float ps_Ts_ = 0.01f;            // travel time T_side (s) of the current side from |t4|
   volatile float ps_T_ = 0.01f;    // travel time in use T_eff (s): T_side, or max(T_side, EXP_PS_LEAVE_S) unplucked
   bool  ps_plucked_ = false;       // an onset reset g on this side (false after a side change, until the next onset)
