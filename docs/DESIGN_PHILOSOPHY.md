@@ -180,8 +180,11 @@ Structure (bipolar knob, noon in the middle):
     long pluck closes damped, not cut.
   - Swell: openness = envelope × a soft gate on L, so only a mute or the volume
     knob collapses it.
-- Slow envelopes travel far, fast ones short (travel depth scales with
-  envelope time). One openness drives all targets of the module.
+- One openness drives all targets of the module. By default each target
+  travels its full range (bottom ↔ knob value).
+- **Optional per target: time-scaled travel.** Slow envelopes travel far,
+  fast ones short (depth scales with envelope time). It is a property of the
+  target, not of the envelope. Currently only SPECTRAL density (K2) uses it.
 
 Implementation: NitroLab explorer K4 (SW3 MID FM + tables, FM LAB 2-OP / SPECTRAL / ADDITIVE)
 (`TouchEnvUpdate` / `TouchOpenUpdate`; SPECTRAL density travel `SpecTravel` in `pedals/nitrolab/modules/explorer.h`).
