@@ -227,7 +227,7 @@ int main() {
         diag_hb = now;
         const unsigned cpu = (unsigned)(g_cpu.GetMaxCpuLoad() * 1000.f + 0.5f);
         g_cpu.Reset();
-        hw.seed.PrintLine("NT3M HB t=%u cpu=%u mode=%d byp=%d", (unsigned)now, cpu,
+        diag_link::PrintLine("NT3M HB t=%u cpu=%u mode=%d byp=%d", (unsigned)now, cpu,
                           (int)g_active, preset.IsBypassed() ? 1 : 0);
       }
     }

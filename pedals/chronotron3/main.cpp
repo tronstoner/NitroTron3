@@ -58,17 +58,9 @@ using clevelandmusicco::Hothouse;
 // controls freeze while audio keeps running (found on hardware, 2026-09-29).
 // This formats into its own buffer and calls the USB transmit ONCE: if the port
 // is busy or nobody is reading, the line is dropped and counted — never waited.
-[[maybe_unused]] static uint32_t g_diag_usb_drops = 0;
-[[maybe_unused]] static void DiagLine(const char* fmt, ...) {
-  static char buf[192];
-  va_list va; va_start(va, fmt);
-  int len = vsnprintf(buf, sizeof(buf) - 2, fmt, va);
-  va_end(va);
-  if (len < 0) return;
-  if (len > (int)sizeof(buf) - 3) len = (int)sizeof(buf) - 3;
-  buf[len++] = '\r'; buf[len++] = '\n';
-  if (!daisy::LoggerImpl<daisy::LOGGER_INTERNAL>::Transmit(buf, (size_t)len)) g_diag_usb_drops++;
-}
+// Now lives in src/core/io/diag_link.h (shared by all pedals); DiagLine kept
+// as the local name.
+#define DiagLine diag_link::PrintLine
 
 // ---------------------------------------------------------------------------
 // Hardware + control surface + modules
@@ -216,32 +208,32 @@ int main() {
         const SprawlDebug& d = snap;
         switch (line) {
         case 0:
-          if (!banner) { hw.seed.PrintLine("SP DIAG online (DIAG=1 build)"); banner = true; }
-          hw.seed.PrintLine("SP %s t=%u n=%u",
+          if (!banner) { diag_link::PrintLine("SP DIAG online (DIAG=1 build)"); banner = true; }
+          diag_link::PrintLine("SP %s t=%u n=%u",
               d.stage == -1 ? "HB *** WET SILENT ***" : d.stage == 1 ? "FAULT @grain-sum" :
               d.stage == 2 ? "FAULT @wet-bus" : d.stage == 3 ? "FAULT @post-reverb" : "HB",
               (unsigned)d.t_ms, (unsigned)d.fault_count);
           break;
-        case 1: hw.seed.PrintLine("ctl k=%s %s %s %s %s sw=%d%d tap=%s", F3(d.k1), F3(d.k2), F3(d.k3), F3(d.k4), F3(d.k5), d.sw1, d.sw2, F3(d.tap)); break;
-        case 2: hw.seed.PrintLine("st  frz=%d byp=%d pan=%s snd=%s", d.frozen, d.bypassed, F3(d.panic), F3(d.send)); break;
-        case 3: hw.seed.PrintLine("prm fb=%s rv=%s k2s=%s k3m=%s gl=%s cl=%d lv=%d tex=%d hm=%d", F3(d.fb_amt), F3(d.rev_amt), F3(d.k2_scale), F3(d.k3mag), F3(d.glitch), d.cloud, d.live, d.tex, d.harmony); break;
-        case 4: hw.seed.PrintLine("rng maxr=%u base=%u glen=%u bint=%u wpos=%u", (unsigned)d.max_range, (unsigned)d.base_delay, (unsigned)d.grain_len, (unsigned)d.base_interval, (unsigned)d.wpos); break;
-        case 5: hw.seed.PrintLine("grn act=%d tmr=%d nxt=%d hold=%d ratio=%s bad=%02x", d.active_voices, d.grain_timer, d.next_voice, d.hold_ctr, F3(d.cached_ratio), d.bad_voice_mask); break;
+        case 1: diag_link::PrintLine("ctl k=%s %s %s %s %s sw=%d%d tap=%s", F3(d.k1), F3(d.k2), F3(d.k3), F3(d.k4), F3(d.k5), d.sw1, d.sw2, F3(d.tap)); break;
+        case 2: diag_link::PrintLine("st  frz=%d byp=%d pan=%s snd=%s", d.frozen, d.bypassed, F3(d.panic), F3(d.send)); break;
+        case 3: diag_link::PrintLine("prm fb=%s rv=%s k2s=%s k3m=%s gl=%s cl=%d lv=%d tex=%d hm=%d", F3(d.fb_amt), F3(d.rev_amt), F3(d.k2_scale), F3(d.k3mag), F3(d.glitch), d.cloud, d.live, d.tex, d.harmony); break;
+        case 4: diag_link::PrintLine("rng maxr=%u base=%u glen=%u bint=%u wpos=%u", (unsigned)d.max_range, (unsigned)d.base_delay, (unsigned)d.grain_len, (unsigned)d.base_interval, (unsigned)d.wpos); break;
+        case 5: diag_link::PrintLine("grn act=%d tmr=%d nxt=%d hold=%d ratio=%s bad=%02x", d.active_voices, d.grain_timer, d.next_voice, d.hold_ctr, F3(d.cached_ratio), d.bad_voice_mask); break;
         case 6: case 7: case 8: case 9: {
           const int a = (line - 6) * 2, b = a + 1;
-          hw.seed.PrintLine("v%d a%d d%u l%u r%d n%d p%s o=%s | v%d a%d d%u l%u r%d n%d p%s o=%s",
+          diag_link::PrintLine("v%d a%d d%u l%u r%d n%d p%s o=%s | v%d a%d d%u l%u r%d n%d p%s o=%s",
               a, d.v[a].active, (unsigned)d.v[a].delay, (unsigned)d.v[a].len, d.v[a].rev, d.v[a].loops, F3(d.v[a].rate), F3(d.v[a].last_out),
               b, d.v[b].active, (unsigned)d.v[b].delay, (unsigned)d.v[b].len, d.v[b].rev, d.v[b].loops, F3(d.v[b].rate), F3(d.v[b].last_out));
           break; }
-        case 10: hw.seed.PrintLine("fbk duck=%s onp=%s hp=%s,%s", F3(d.duck_env), F3(d.onplay_env), F3(d.hp0), F3(d.hp1)); break;
-        case 11: hw.seed.PrintLine("env pw=%s env=%s slow=%s", F3(d.prev_wet), F3(d.grain_env), F3(d.trans_slow)); break;
-        case 12: hw.seed.PrintLine("deg ch=%d/%d mix=%s d=%s/%s warb=%s ng=%s sg=%s", d.deg.chain, d.deg.tgt_chain, F3(d.deg.mix), F3(d.deg.d), F3(d.deg.d_tgt), F3(d.warble_int), F3(d.deg.noise_gate), F3(d.deg.noise_sgate)); break;
-        case 13: hw.seed.PrintLine("deg nz=%s env=%s fclk=%s fold=%s/%s", F3(d.deg.nz_det), F3(d.deg.env), F3(d.deg.f_clk), F3(d.deg.fold_blend), F3(d.deg.fold_drive)); break;
-        case 14: hw.seed.PrintLine("bbd hl=%d hold=%s inz=%s,%s recz=%s,%s", d.deg.hold_len, F3(d.deg.bbd_hold), F3(d.deg.in_z1), F3(d.deg.in_z2), F3(d.deg.rec_z1), F3(d.deg.rec_z2)); break;
-        case 15: hw.seed.PrintLine("bbd lossz=%s dc=%s,%s", F3(d.deg.loss_z), F3(d.deg.dc_x1), F3(d.deg.dc_y1)); break;
-        case 16: hw.seed.PrintLine("tap sx1=%s lpz=%s hp=%s,%s hb=%s,%s", F3(d.deg.sat_x1), F3(d.deg.tape_lp_z), F3(d.deg.hp_x1), F3(d.deg.hp_y1), F3(d.deg.hb_z1), F3(d.deg.hb_z2)); break;
-        case 17: hw.seed.PrintLine("tap drop=%s snag=%s", F3(d.deg.drop_g), F3(d.deg.snag)); break;
-        case 18: hw.seed.PrintLine("met in=%s grn=%s tex=%s wet=%s dec=%s rml=%s", F3(d.in_pk), F3(d.grain_pk), F3(d.tex_pk), F3(d.wet_pk), F3(d.decim_hold), F3(d.ringmod_lp)); break;
+        case 10: diag_link::PrintLine("fbk duck=%s onp=%s hp=%s,%s", F3(d.duck_env), F3(d.onplay_env), F3(d.hp0), F3(d.hp1)); break;
+        case 11: diag_link::PrintLine("env pw=%s env=%s slow=%s", F3(d.prev_wet), F3(d.grain_env), F3(d.trans_slow)); break;
+        case 12: diag_link::PrintLine("deg ch=%d/%d mix=%s d=%s/%s warb=%s ng=%s sg=%s", d.deg.chain, d.deg.tgt_chain, F3(d.deg.mix), F3(d.deg.d), F3(d.deg.d_tgt), F3(d.warble_int), F3(d.deg.noise_gate), F3(d.deg.noise_sgate)); break;
+        case 13: diag_link::PrintLine("deg nz=%s env=%s fclk=%s fold=%s/%s", F3(d.deg.nz_det), F3(d.deg.env), F3(d.deg.f_clk), F3(d.deg.fold_blend), F3(d.deg.fold_drive)); break;
+        case 14: diag_link::PrintLine("bbd hl=%d hold=%s inz=%s,%s recz=%s,%s", d.deg.hold_len, F3(d.deg.bbd_hold), F3(d.deg.in_z1), F3(d.deg.in_z2), F3(d.deg.rec_z1), F3(d.deg.rec_z2)); break;
+        case 15: diag_link::PrintLine("bbd lossz=%s dc=%s,%s", F3(d.deg.loss_z), F3(d.deg.dc_x1), F3(d.deg.dc_y1)); break;
+        case 16: diag_link::PrintLine("tap sx1=%s lpz=%s hp=%s,%s hb=%s,%s", F3(d.deg.sat_x1), F3(d.deg.tape_lp_z), F3(d.deg.hp_x1), F3(d.deg.hp_y1), F3(d.deg.hb_z1), F3(d.deg.hb_z2)); break;
+        case 17: diag_link::PrintLine("tap drop=%s snag=%s", F3(d.deg.drop_g), F3(d.deg.snag)); break;
+        case 18: diag_link::PrintLine("met in=%s grn=%s tex=%s wet=%s dec=%s rml=%s", F3(d.in_pk), F3(d.grain_pk), F3(d.tex_pk), F3(d.wet_pk), F3(d.decim_hold), F3(d.ringmod_lp)); break;
         }
         if (++line >= kSprawlDiagLines) line = -1;
       }
@@ -293,7 +285,7 @@ int main() {
         // vestige block since the last heartbeat (us; the block budget is
         // 1000); live loops, peak grains, K1 side (-1 / 0 / 1) and mix.
         DiagLine("VS HB t=%u T=%u usb=%u cpu=%u k3=%s cap=%u jumps=%u plan=%u tick=%u proc=%u live=%d gmax=%d k1=%d/%s",
-            (unsigned)now, (unsigned)vestige.DiagT(), (unsigned)g_diag_usb_drops, cpu, F3(vestige.DiagK3()),
+            (unsigned)now, (unsigned)vestige.DiagT(), (unsigned)diag_link::Drops(), cpu, F3(vestige.DiagK3()),
             (unsigned)vestige.DiagCapDrops(), (unsigned)vestige.DiagJumps(), (unsigned)vestige.TakePlanUs(),
             (unsigned)vestige.TakeTickUs(), (unsigned)vestige.TakeProcUs(), vestige.DiagLive(),
             vestige.TakeGrainMax(), vestige.DiagK1(), F3(vestige.DiagSpX()));
@@ -301,9 +293,9 @@ int main() {
         // K3 mode-1 rhythm line (prepared in Controls, debounced): its own tick.
         // Kept pending and re-sent next tick if the port was busy (a few tries).
         static int rhy_tries = 0;
-        const uint32_t drops = g_diag_usb_drops;
+        const uint32_t drops = diag_link::Drops();
         DiagLine("%s", rl);
-        if (g_diag_usb_drops == drops || ++rhy_tries >= 5) { vestige.DiagRhyDone(); rhy_tries = 0; }
+        if (diag_link::Drops() == drops || ++rhy_tries >= 5) { vestige.DiagRhyDone(); rhy_tries = 0; }
       } else {
         Vestige::GateDiag r;
         if (vestige.DiagPop(r)) {

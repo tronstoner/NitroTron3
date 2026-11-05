@@ -205,8 +205,8 @@ int main() {
 
     // DIAG build (`make PEDAL=nitrolab DIAG=1`): a CPU-load heartbeat every 2 s
     // plus armitage's "note this setting" lines (FS1 tap = `#<n>`, settled
-    // controls = `auto`). Main loop only, at most ONE print per 10 ms tick: the
-    // logger's line buffer is 128 bytes, so a setting line goes out in two
+    // controls = `auto`). Main loop only, at most ONE print per 10 ms tick (via the
+    // non-blocking diag_link print); a setting line goes out in two
     // halves on consecutive ticks (Print, then PrintLine = one terminal line).
     if (NL_DIAG) {
       const uint32_t now = System::GetNow();
@@ -216,7 +216,7 @@ int main() {
         const Armitage::DiagSnap& d = diag_snap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
-        hw.seed.PrintLine("beta" D2F " fm" D2F " filt t" D2F " env t2" D2F " e" D2F " fmenv t2" D2F " e" D2F
+        diag_link::PrintLine("beta" D2F " fm" D2F " filt t" D2F " env t2" D2F " e" D2F " fmenv t2" D2F " e" D2F
                           " fol" D2F " oct %s mute %d cpu %u%%",
                           D2V(d.beta), D2V(d.fm), D2SV(d.filt_t), D2SV(d.env_t2), D2SV(d.env_e),
                           D2SV(d.envf_t2), D2SV(d.envf_e), D2V(d.fol),
@@ -262,39 +262,39 @@ int main() {
         else                                                  // SW3 MID / DOWN, SW1 DOWN: K4 / K5 inert
           snprintf(env, sizeof(env), " ps - lfo -");
         if (d.addz >= 0 && Explorer::AddK2Name(d.addz)[0] == 'u')   // FM LAB DOWN unison: u, beat Hz + mode, K3
-          hw.seed.PrintLine("LAB %s u" D2F " bt" D2F " %s %s" D2F " fc %d%s mute %d cpu %u%%",
+          diag_link::PrintLine("LAB %s u" D2F " bt" D2F " %s %s" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::AddZoneName(d.addz), D2V(d.a), D2V(d.b),
                             d.bm == 1 ? "prop" : d.bm == 2 ? "hz" : "off", Explorer::AddK3Name(d.addz), D2V(d.c3),
                             (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.addz >= 0)                                 // FM LAB DOWN: zone, K2 knob > with LFO, K3 knob, index fc
-          hw.seed.PrintLine("LAB %s %s" D2F " >" D2F " %s" D2F " fc %d%s mute %d cpu %u%%",
+          diag_link::PrintLine("LAB %s %s" D2F " >" D2F " %s" D2F " fc %d%s mute %d cpu %u%%",
                             Explorer::AddZoneName(d.addz), Explorer::AddK2Name(d.addz), D2V(d.a), D2V(d.b),
                             Explorer::AddK3Name(d.addz), D2V(d.c3), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.specz >= 0)                                // FM LAB MID: K1 bank, applied nu, K2 knob + the envelope part
-          hw.seed.PrintLine("LAB SPEC bank %d/9 %s nu" D2F " k2" D2F " flt %s %d%s mute %d cpu %u%%",
+          diag_link::PrintLine("LAB SPEC bank %d/9 %s nu" D2F " k2" D2F " flt %s %d%s mute %d cpu %u%%",
                             (int)d.sn + 1, Explorer::SpecBankName((int)d.sn), D2V(d.a), D2V(d.b),
                             d.st3 == 0.f ? "off" : d.st3 > 0.f ? "lp" : "fmt", d.st3 == 0.f ? 0 : (int)(d.sfc + 0.5f),
                             env, d.mute ? 1 : 0, cpu);
         else if (d.labz >= 0)                                 // FM LAB UP: mode, ratio, K3 side, index fc, feedback, u_eff
-          hw.seed.PrintLine("LAB %s r" D2F " %s fc %d b" D2F " u" D2F "%s mute %d cpu %u%%",
+          diag_link::PrintLine("LAB %s r" D2F " %s fc %d b" D2F " u" D2F "%s mute %d cpu %u%%",
                             Explorer::LabZoneName(d.labz), D2V(d.a), Explorer::LabSideName(d.lside), (int)(d.b + 0.5f),
                             D2V(d.lb), D2V(d.lue), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kFM)                    // A = ratio r, B = feedback b
-          hw.seed.PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
+          diag_link::PrintLine("FM r" D2F " b" D2F " fc %d%s mute %d cpu %u%%",
                             D2V(d.a), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kXFM)                   // A = partner n, B = index I
-          hw.seed.PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
+          diag_link::PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
                             (int)(d.a + 0.5f), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kWT)                    // MID tables: zone, morph m (B), frame position (A),
-          hw.seed.PrintLine("WT/%s m" D2F " pos" D2F " dmp %d lp %d eff %d%s mute %d cpu %u%%",   // damp fc, LP fc
+          diag_link::PrintLine("WT/%s m" D2F " pos" D2F " dmp %d lp %d eff %d%s mute %d cpu %u%%",   // damp fc, LP fc
                             zn, D2V(d.b), D2V(d.a), (int)(d.dfc + 0.5f), (int)(d.fc + 0.5f),   // knob / effective
                             (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.sw1 == 1)                                  // parked bit table: A = waveform, B = K3, damp / LP fc
-          hw.seed.PrintLine("%s%s%s A" D2F " B" D2F " dmp %d lp %d eff %d%s mute %d cpu %u%%",
+          diag_link::PrintLine("%s%s%s A" D2F " B" D2F " dmp %d lp %d eff %d%s mute %d cpu %u%%",
                             Explorer::ModelName(d.model), zn[0] ? "/" : "", zn, D2SV(d.a), D2SV(d.b),
                             (int)(d.dfc + 0.5f), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);
         else                                                  // DOWN: no dampener
-          hw.seed.PrintLine("%s A" D2F " B" D2F "%s mute %d cpu %u%%",
+          diag_link::PrintLine("%s A" D2F " B" D2F "%s mute %d cpu %u%%",
                             Explorer::ModelName(d.model), D2SV(d.a), D2SV(d.b), env, d.mute ? 1 : 0, cpu);
         diag_stage = 0;
       } else if ((g_active == NL_MODE_EXPLORER && explorer.DiagTake(diag_xsnap)) ||
@@ -306,7 +306,7 @@ int main() {
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
         static const char* const oct_name[3] = { "up", "played", "down" };
-        hw.seed.Print("XP %s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s oct %s | ",
+        diag_link::Print("XP %s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s oct %s | ",
                       tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
                       sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
                       oct_name[(d.sw2 >= 0 && d.sw2 < 3) ? d.sw2 : 1]);
@@ -320,7 +320,7 @@ int main() {
         char tag[12];
         if (d.n > 0) snprintf(tag, sizeof(tag), "#%d", d.n);
         else         snprintf(tag, sizeof(tag), "auto");
-        hw.seed.Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s %s h" D2F " SW2 %s | ",
+        diag_link::Print("%s K1" D2F " K2" D2F " K3" D2F " K4" D2F " K5" D2F " SW1 %s %s h" D2F " SW2 %s | ",
                       tag, D2V(d.k[0]), D2V(d.k[1]), D2V(d.k[2]), D2V(d.k[3]), D2V(d.k[4]),
                       sw_name[(d.sw1 >= 0 && d.sw1 < 3) ? d.sw1 : 1],
                       mode_name[(d.mode >= 0 && d.mode < 5) ? d.mode : 4], D2V(d.h),
@@ -331,7 +331,7 @@ int main() {
         diag_cpu_last = g_cpu.GetMaxCpuLoad();
         const unsigned cpu = (unsigned)(diag_cpu_last * 1000.f + 0.5f);
         g_cpu.Reset();
-        hw.seed.PrintLine("NL HB t=%u cpu=%u mode=%d", (unsigned)now, cpu, g_active);
+        diag_link::PrintLine("NL HB t=%u cpu=%u mode=%d", (unsigned)now, cpu, g_active);
       }
     }
 
