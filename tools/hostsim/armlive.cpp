@@ -232,7 +232,7 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(env, sizeof env, " loop e%.2f %s d%.2f %s", d.env, d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", d.d,
              d.tgt == 2 ? "K2" : d.tgt == 3 ? "K3" : "-");
   else if (d.specz >= 0)
-    env[0] = 0;
+    snprintf(env, sizeof env, " g%.2f %s T%.2f d%.2f", d.env, dir, d.T, d.se);
   else if (d.labz >= 0)
     snprintf(env, sizeof env, " ps g%.2f %s T%.2f lfo %s d%.2f >%.2f %.2fHz", d.env, dir, d.T, lfo, d.lfod, d.llfd, d.lfohz);
   else if (d.sw1 == 0 || d.addz >= 0)
@@ -251,8 +251,8 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(line, sizeof line, "LAB %s %s%.2f >%.2f %s%.2f fc %d%s mute %s", Explorer::AddZoneName(d.addz),
              Explorer::AddK2Name(d.addz), d.a, d.b, Explorer::AddK3Name(d.addz), d.c3, (int)(d.fc + 0.5f), env, mu);
   else if (d.specz >= 0)
-    snprintf(line, sizeof line, "LAB SPEC ga%.2f nu%.2f e%.2f s%.2f bank %d/9 %s%s mute %s", d.b, d.a, d.se, d.ss, (int)d.sn + 1,
-             Explorer::SpecBankName((int)d.sn), env, mu);
+    snprintf(line, sizeof line, "LAB SPEC bank %d/9 %s nu%.2f k2%.2f%s mute %s", (int)d.sn + 1,
+             Explorer::SpecBankName((int)d.sn), d.a, d.b, env, mu);
   else if (d.labz >= 0)
     snprintf(line, sizeof line, "LAB %s r%.2f %s fc %d b%.2f u%.2f%s mute %s", Explorer::LabZoneName(d.labz), d.a,
              Explorer::LabSideName(d.lside), (int)(d.b + 0.5f), d.lb, d.lue, env, mu);
@@ -759,7 +759,7 @@ int main(int argc, char** argv) {
                  ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +
-                 ",\"se\":" + N(x.se) + ",\"ss\":" + N(x.ss) + ",\"sn\":" + N(x.sn) +
+                 ",\"se\":" + N(x.se) + ",\"sn\":" + N(x.sn) +
                  ",\"env\":" + N(x.env) + ",\"dir\":" + std::to_string(x.dir) + ",\"T\":" + N(x.T) + ",\"fce\":" + N(x.fce) +
                  ",\"lfo\":" + std::to_string(x.lfo) + ",\"lfod\":" + N(x.lfod) + ",\"lfohz\":" + N(x.lfohz) +
                  ",\"loop\":" + (x.loop ? "true" : "false") + ",\"mute\":" + (x.mute ? "true" : "false");

@@ -400,7 +400,8 @@ constexpr float EXP_LAB_REST_R      = 1.f;     // the 2-OP ratio slide rests her
 //            band frequency; tilt / comb run over the member INDEX i (n above = i), all 16 members on; bank b =
 //            Quantize(k5, EXP_SPEC_BANKS) (raw K5, 9 equal zones), a bank change = weights slid out over 1/2
 //            EXP_DISC_SLIDE_MS, bank swapped at 0, slid in over 1/2 EXP_DISC_SLIDE_MS (1 ms total, no crossfade).
-//   shift (K4): every partial of a band moved by delta_k = s f'_k, s = EXP_SPEC_SHIFT_MAX (2 k4 - 1) (smoothed K4).
+//   shift: every partial of a band moved by delta_k = s f'_k, s = EXP_SPEC_SHIFT_MAX (2 k - 1), k = EXP_SPEC_K_SHIFT
+//            (fixed since 2026-11-05; tilt / comb shape likewise fixed via EXP_SPEC_K_TILT / EXP_SPEC_K_PEAK, bank on K1).
 constexpr float EXP_SPEC_E_MIN = 0.25f;   // comb exponent e at K1 CCW ("narrow": wide passbands, narrow notches)
 constexpr float EXP_SPEC_E_MAX = 4.0f;    // ... at K1 CW ("peaky"); e = E_MIN (E_MAX / E_MIN)^k1, noon 1 (plain cosine)
 constexpr int   EXP_SPEC_M          = 16;      // partials per band (the ADDITIVE SAW count)
@@ -422,6 +423,21 @@ constexpr int   EXP_SPEC_BANK[EXP_SPEC_BANKS][EXP_SPEC_M + 1] = {
   { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },  // HARM (CW)
 };
 constexpr float EXP_SPEC_SHIFT_MAX  = 1.0f;    // K4 partial shift s at CW (+1 f'), -1 at CCW, 0 at noon (harmonic)
+// CONTROLS consolidation (2026-11-05): K1 = bank, K2 = density, K4 = pluck <-> swell on nu, K3 / K5 unused.
+// The former knob laws stay reachable through these fixed knob positions (0..1, same laws as above):
+constexpr float EXP_SPEC_K_PEAK     = 1.0f;    // comb shape at this "k1" (1 = full CW: e = E_MAX 4, peaky)
+constexpr float EXP_SPEC_K_TILT     = 0.5f;    // tilt at this "k3" (0.5 = noon: gamma 0, flat)
+constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.5 = noon: s 0, harmonic, theta fast path)
+// K4 pluck <-> swell on the density (the existing PsUpdate envelope, g_s): nu = NU_MAX clamp(k2 + depth (1 - g_s), 0, 1).
+// depth from the envelope time T in use (ps_T_): x = ln(T / T_LO) / ln(T_HI / T_LO) clamped [0, 1],
+// depth = DEPTH_MIN + (DEPTH_MAX - DEPTH_MIN) x; computed only when T changed.
+constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s
+constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
+constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.05f;   // knob units of K2
+constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.4f;
+// Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
+// stops (lands exactly). Exponent / bank changes recompute at once.
+constexpr int   EXP_SPEC_NU_DIV        = 8;
 // SW1 DOWN = ADDITIVE (step 3, 2026-11-02; model kLADD, see explorer.h FM LAB SW1 DOWN). K1 = 12 equal stepped zones
 // (1 ms model crossfade between zones), one harmonic series per band on the band's unit phasor v (Armitage ADD style:
 // harmonics by repeated complex multiplication), FM on the series fundamental (ratio 1, no feedback).

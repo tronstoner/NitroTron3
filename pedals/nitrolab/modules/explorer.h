@@ -137,25 +137,29 @@
 //                W(n) = tilt(n) comb(n) p(n), then W /= sqrt(sum_n W(n)^2) (n = 1 counts; the per-band edge is NOT renormalised)
 //                tilt(n) = n^-gamma;  comb(1) = 1 (fundamental always kept), n >= 2:
 //                comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e (comb position phi fixed 0; warp removed 2026-11-04, w = 0)
-//                (n = member index i of the K5 bank, all 16 on; bank-change gain g after the norm, K5 below)
+//                (n = member index i of the K1 bank, all 16 on; bank-change gain g after the norm, below)
 //              PHASE CONVENTION: y(n) = n - 1 counts from the fundamental, so nu = 0 = no notches and nu = 0.5
 //                removes the EVEN partials (odd series).
-//              CONTROLS (2026-11-04 rework; smoothed knobs, EXP_CTRL_SMOOTH_MS, landing exactly, except K5 = raw knob
-//                zones; no envelope, no LFO - K4 pluck <-> swell and the K5 LFO do not act on SPECTRAL):
-//              K1 = COMB SHAPE e = 0.25 16^k1 (EXP_SPEC_E_MIN / MAX, continuous): CCW 0.25 narrow notches, noon 1 plain
-//                cosine, CW 4 peaky; b^e = exp(e ln b) (b = 0 -> 0); e recomputed only when the smoothed K1 moved.
-//              K2 = DENSITY nu = 0.5 k2 (EXP_SPEC_NU_MAX).
-//              K3 = TILT, bipolar, flat at noon (2026-11-04): gamma = 3 (1 - 2 k3) (k3 <= 0.5), -(2 k3 - 1) (k3 > 0.5):
-//                3 dull -> 0 flat (noon) -> -1 upper partials louder (n^+1) (EXP_SPEC_GAMMA_MAX / MIN). RMS norm as above.
-//              K4 = PARTIAL SHIFT (2026-11-04, replaces warp): every partial of band k moved by the same Hz,
-//                delta_k = s f'_k (tracks the note), s = EXP_SPEC_SHIFT_MAX 0.5 (2 k4 - 1); noon s = 0 = exactly
-//                harmonic. theta_k (cycles, per slot and band) += s f'_k / 8000 per sample, wrapped to [0, 1) (floor);
-//                held while s = 0 (a constant phase, theta 0 from a fresh start = Re S_k exactly); cleared on model
-//                entry / slot start.
-//              K5 = BANK SELECT (2026-11-04, replaces count / solo): 9 equal stepped zones on the raw K5,
-//                b = Quantize(k5, 9), CCW -> CW: FIB STRIDE7 STRIDE6 STRIDE5 STRIDE4 STRIDE3 PRIMES ODD HARM
+//              CONTROLS (2026-11-05 consolidation; K2 / K4 smoothed, EXP_CTRL_SMOOTH_MS; K1 = raw knob zones; K3 / K5
+//                unused, no LFO):
+//              K1 = BANK SELECT (below; moved from K5).
+//              K2 = DENSITY: nu = 0.5 clamp(k2 + depth (1 - g_s), 0, 1) (EXP_SPEC_NU_MAX); g_s = the K4 pluck <-> swell
+//                envelope (PsUpdate, unchanged: times, laws, onsets, LEAVE); noon / g = 1 -> plain K2. depth from the
+//                envelope time T in use (ps_T_, decay 1..8 s / rise 0.01..4 s): x = ln(T / 0.01) / ln(8 / 0.01) clamped
+//                [0, 1], depth = 0.05 + 0.35 x (EXP_SPEC_ENV_T_LO / T_HI / DEPTH_MIN / DEPTH_MAX), only when T changed.
+//                Pluck (CCW): onset g = 1 -> 0, nu travels up by depth; swell (CW): onset g = 0 -> 1, nu starts +depth
+//                and returns to the K2 value. Comb recomputed while nu moves at most every EXP_SPEC_NU_DIV 8 samples
+//                (1 kHz) and on the sample nu stops (lands exactly).
+//              K4 = PLUCK <-> SWELL on the density (see K2).
+//              FIXED (constants, former knob laws kept reachable): comb shape e = 0.25 16^k at k = EXP_SPEC_K_PEAK 1 ->
+//                e = 4 (peaky; b^e = exp(e ln b), b = 0 -> 0); tilt gamma = 3 (1 - 2 k) (k <= 0.5), -(2 k - 1) (k > 0.5)
+//                at k = EXP_SPEC_K_TILT 0.5 -> gamma 0 (flat); partial shift delta_k = s f'_k, s = EXP_SPEC_SHIFT_MAX
+//                (2 k - 1) at k = EXP_SPEC_K_SHIFT 0.5 -> s = 0 (harmonic): theta_k += s f'_k / 8000 per sample,
+//                wrapped [0, 1), held while s = 0 (theta 0 = Re S_k exactly, the fast path); cleared on model entry.
+//              BANK SELECT (2026-11-04; on K1 since 2026-11-05): 9 equal stepped zones on the raw K1,
+//                b = Quantize(k1, 9), CCW -> CW: FIB STRIDE7 STRIDE6 STRIDE5 STRIDE4 STRIDE3 PRIMES ODD HARM
 //                (EXP_SPEC_BANK; HARM = full CW). Member i = 1..16 sits at m_i f'_k (all 16 on); tilt / comb / norm run
-//                over the member INDEX i (n above = i), so K1 - K3 act the same per bank; the anti-fold edge uses the
+//                over the member INDEX i (n above = i), so comb / tilt act the same per bank; the anti-fold edge uses the
 //                member's real shifted frequency (m_i + s) f'_k, members past the edge are skipped (not computed).
 //                Bank change: a gain g on the normalised weights slides 1 -> 0 over 0.5 ms, the bank swaps at 0, g
 //                slides 0 -> 1 over 0.5 ms (1 ms total, EXP_DISC_SLIDE_MS; no crossfade). HARM uses the plain series
@@ -221,12 +225,12 @@
 //
 // K4 / K5 (constructor flag: Explorer(false) = SW3 MID, Explorer(true) = SW3 DOWN = FM LAB: both ONE-SHOT, same
 //   K4 / K5 laws; FM LAB: UP 2-OP = K4 along the K3 character (u_eff = g_s u), DOWN = the UP index law (K4 on the
-//   index fc), MID SPECTRAL: K4 = partial shift, no envelope; EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
+//   index fc), MID SPECTRAL: K4 pluck <-> swell on the density nu (K2); EXP_LOOP_ENABLE = true: Explorer(true) = the retired LOOPING variant instead).
 //   Onset detector per 48 kHz input sample (EXP_ONSET_*, armitage's OnsetDetect), both. t4 = 2 k4 - 1, t5 = 2 k5 - 1
 //   (both smoothed, land exactly).
 //  ONE-SHOT (SW3 MID and FM LAB) — K4 PLUCK <-> SWELL, target fixed = the K3 fc: SW1 UP the index fc, SW1 MID the 2-pole
 //   LP cutoff (not the tables' dampener); SW1 DOWN: K4 inert (no model offsets; FM LAB DOWN = ADDITIVE: the index fc,
-//   and g_s on h in B / UNI-SAW-H; FM LAB MID = SPECTRAL: K4 = partial shift, not pluck <-> swell); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
+//   and g_s on h in B / UNI-SAW-H; FM LAB MID = SPECTRAL: g_s on the density nu, see FM LAB SW1 MID); K5 = LFO (below). Per 8 kHz sample (PsUpdate), g in [0, 1]:
 //     UP:  applied log2 fc = log2 150 + g_s (log2 fc_knob - log2 150), clamped [150, 4000] Hz; per 8 kHz sample
 //          (DampFmUpdate).
 //     MID: LP log2 fc = log2 250 + g_s (log2 fc_f_knob - log2 250), [250, 16000] Hz, per 8 kHz sample (TfUpdate).
@@ -257,7 +261,7 @@
 //       FM LAB UP          feedback b as UP FM ratio zones (2-OP); swell side (t4 > 0): depth x g_s (fade-in)
 //       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
 //                          UNISON: no LFO (K5 = beat speed)
-//       FM LAB MID (SPEC)  none (K5 = partials count / solo; the shared LFO runs on, unused)
+//       FM LAB MID (SPEC)  none (K5 unused; the shared LFO runs on, unused)
 //       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_), K5 on feedback / morph (Derive, per sample): independent.
@@ -329,13 +333,11 @@
 //                    gamma 3 (dull) -> 1 (noon, saw) -> 0 (flat); DOWN: A / UNI-SAW / UNI-ODD / STRETCH index (6 k3^2, capped
 //                    by L), B / UNI-SAW-H harmonics h (and L on their anti-fold edge)
 //   K4  pluck <-> swell per onset (as SW3 MID UP): UP along K3 (sine <-> the K3 position); DOWN on the index fc (DOWN
-//                    B / UNI-SAW-H: also h); MID: no envelope -
-//                    PARTIAL SHIFT s = 0.5 (2 k4 - 1) x f' (noon harmonic)
+//                    B / UNI-SAW-H: also h); MID: on the density nu = 0.5 clamp(k2 + depth (1 - g_s))
 //   K5  UP / DOWN: LFO (shapes / rates / sync as SW3 MID): UP on b +-0.3 after the caps (swell side: depth x g_s);
 //                    DOWN: A on h,
 //                    B on the index knob, STRETCH on delta (+-0.3 knob units); UNI: BEAT SPEED (CCW 8 Hz x f'/100 Hz
-//                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: PARTIALS
-//                    bipolar: noon -> CW COUNT N 1 -> 16; just CCW of noon -> CCW SOLO partial 1 -> 16 (stepped, 1 ms slide)
+//                    proportional | noon 0 | CW 8 Hz constant, 0.1 Hz just off noon, exponential). MID: unused (bank on K1)
 //   K6 / SW2 / FS1 as SW3 MID
 //   SW1 family       UP = 2-OP FM, MID = SPECTRAL, DOWN = ADDITIVE
 //
@@ -344,8 +346,7 @@
 // stepped items from the raw knob.
 // DIAG second half: FM LAB (SW3 DOWN) UP `LAB 2OP-HARM|DISH|FREE r<ratio> hol|sine|fb fc<index fc Hz> b<feedback> (at
 // the knob, K4 g 1, before the caps) u<u_eff now>` + ` ps g.. dec|rise T.. lfo tri|stp|off d<depth at the knob> ><x swell fade now> ..Hz`,
-// SW1 MID `LAB SPEC ga<tilt gamma> nu<density> e<comb exponent> s<shift> n<count N> | s<solo partial> oct <0|-1|-2>` (at the knob; no ps /
-// fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
+// SW1 MID `LAB SPEC bank <n>/9 <NAME> nu<applied density> k2<knob> g<envelope g> dec|rise T<s> d<depth>` (no fc / lfo part), SW1 DOWN `LAB ADD-<zone> <K2 name>
 // <knob> > <with LFO | beat Hz + prop / hz / off> <K3 name> <value at the knob> fc ..` (K2 / K3 names h / I / u / d);
 // + the UP `ps` part below (FM LAB DOWN); retired LOOPING `loop e.. up|down|off d.. K2|K3|-`; SW3 MID / DOWN `ps g.. dec|rise T.. (s) fce .. (Hz,
 // applied fc: UP dampener, MID 2-pole LP) lfo tri|stp|off d.. ..Hz` (depth, rate at the knob value), `ps - lfo -` on
@@ -612,8 +613,9 @@ class Explorer : public Module {
     }
     spec_w_[1] = sp_tilt_[1] = sp_comb_[1] = 1.f;
     sk_g_ = sk_nu_ = sk_e_ = sk_k1_ = -1.f;      // forces every part on the first SpecWeights
+    sk_T_ = sp_nu_last_ = -1.f; sp_nu_div_ = 0;   // depth / nu recompute state
     sp_redo_ = true;
-    spec_bank_t_ = spec_bank_ = EXP_SPEC_BANK_HARM;   // start-up: HARM; Controls sets the K5 bank (slid 1 ms)
+    spec_bank_t_ = spec_bank_ = EXP_SPEC_BANK_HARM;   // start-up: HARM; Controls sets the K1 bank (slid 1 ms)
     sp_bg_ = 1.f;
     sp_isr8_ = 1.f / sr8_;
     sp_ln_e_ = logf(EXP_SPEC_E_MAX / EXP_SPEC_E_MIN);
@@ -636,7 +638,7 @@ class Explorer : public Module {
     sp_pstep_ = 2.f / (float)disc_len_;          // SPECTRAL bank gain slide: 1 -> 0 / 0 -> 1 over EXP_DISC_SLIDE_MS / 2 each
     oct_step_ = 1.f / (EXP_OCT_XFADE_MS * 0.001f * sr8_);
     var_ = var_t_ = vfrom_ = VarKey(kFM, 0);
-    k1s_ = k1_t_ = 0.f;                          // smoothed K1 (FM LAB SPECTRAL comb shape only)
+    k1s_ = k1_t_ = 0.f;                          // smoothed K1 (unused since 2026-11-05: SPECTRAL K1 = raw bank zones)
     k2s_ = k2_t_ = 0.f;
     k3s_ = k3_t_ = 0.f;
     k4s_ = k4_t_ = 0.5f;                         // K4 noon = envelope not applied
@@ -761,7 +763,7 @@ class Explorer : public Module {
     og_t_[0] = (oct == kUp)   ? 1.f : 0.f;   // SW2 UP   -> +1 slot
     og_t_[1] = (oct == kMid)  ? 1.f : 0.f;   // SW2 MID  -> played slot
     og_t_[2] = (oct == kDown) ? 1.f : 0.f;   // SW2 DOWN -> -1 slot
-    if (specz >= 0) spec_bank_t_ = SpecBankSel(k5);   // K5: bank (raw knob, 9 equal zones)
+    if (specz >= 0) spec_bank_t_ = SpecBankSel(k1);   // K1: bank (raw knob, 9 equal zones)
 
     led1.Set(1.f);
     led2.Set(mute_ ? 1.f : 0.f);
@@ -795,7 +797,7 @@ class Explorer : public Module {
         diag_spec_z_ = specz;
         diag_add_z_ = addz;
         if (labz >= 0) LabDiagParam(labz, k2, k3, k4, ldp, da, db);
-        if (specz >= 0) SpecDiagParam(k1, k2, k3, k4, k5, da, db);
+        if (specz >= 0) SpecDiagParam(k1, k2, da, db);
         if (addz >= 0) AddDiagParam(addz, k2, k3, k5, da, db);
         DiagControls(cs, led1, kv, fam, oct, model, zone, da, db, fck, lfe,
                      ps_g_, dir, 0.f, 0, ps_T_, fmf ? damp_fc_ : lfe, lsh, ldp, lhz);
@@ -832,9 +834,9 @@ class Explorer : public Module {
                       // -1 hollow / 0 sine / +1 feedback); -1 = not the 2-OP family
     float lb, lue, llfd;
     int   lside;
-    int   specz;      // FM LAB SW1 MID SPECTRAL: 0 (a = density nu, b = tilt gamma, se = comb exponent e, ss = shift s,
-                      // sn = +N count / -s solo partial (stepped), all at the knob); else -1
-    float se, ss, sn;
+    int   specz;      // FM LAB SW1 MID SPECTRAL: 0 (a = applied density nu, b = K2 knob, se = envelope depth,
+                      // sn = K1 bank index; env / dir / T = the K4 pluck <-> swell); else -1
+    float se, sn;     // se = K4 envelope depth (K2 units), sn = K1 bank index
     int   addz;       // FM LAB SW1 DOWN ADDITIVE: zone 0..11 (a / b = K2 parameter at the knob / with the K5 LFO or, UNISON,
                       // b = beat Hz; c3 = K3 parameter at the knob; bm = beat mode 0 off, 1 prop (CCW), 2 Hz (CW)); else -1
     float c3;
@@ -892,7 +894,7 @@ class Explorer : public Module {
   }
   // FM LAB SPECTRAL name (DIAG; no zones since 2026-11-03 continuous K1).
   static const char* SpecZoneName(int z) { return (z >= 0) ? "SPEC" : "?"; }
-  // FM LAB SPECTRAL K5 bank name (DIAG / hostsim), index 0..8.
+  // FM LAB SPECTRAL K1 bank name (DIAG / hostsim), index 0..8.
   static const char* SpecBankName(int b) {
     static const char* const nm[explorer_k::EXP_SPEC_BANKS] = {
         "FIB", "STRIDE7", "STRIDE6", "STRIDE5", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM" };
@@ -1251,7 +1253,7 @@ class Explorer : public Module {
   inline float LfoO2(int m) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
-    // (FM LAB SPECTRAL: none - K5 = partials count / solo)
+    // (FM LAB SPECTRAL: none - K5 unused)
     if (m == kLADD) return lfo_s_ * EXP_ADD_LFO_SWING;          // FM LAB ADDITIVE: A h / B index knob / STRETCH delta
                                                                  // (Derive; not used by the UNISON zones)
     if (m == kWT) return EXP_TF_Q_ON_K5 ? 0.f : lfo_s_ * EXP_LFO_MORPH_SWING;   // K5 = LP Q on tables (temp)
@@ -1300,19 +1302,17 @@ class Explorer : public Module {
   }
 
   // --- FM LAB SPECTRAL helpers (SW1 MID, model kLSPEC; see FM LAB SW1 MID in the header) ---
-  // DIAG, all at the knob values: density nu (a), tilt gamma (b), comb exponent e, shift s, partial count N (stepped).
-  void SpecDiagParam(float k1, float k2, float k3, float k4, float k5, float& a, float& b) {
-    using namespace explorer_k;
-    a = EXP_SPEC_NU_MAX * Clamp01(k2);
-    b = SpecGamma(k3);
-    diag_spec_e_ = SpecExp(k1);
-    diag_spec_s_ = SpecShift(k4);
-    diag_spec_n_ = (float)SpecBankSel(k5);
+  // DIAG: a = applied density nu (last SpecWeights), b = K2 knob, se = envelope depth, sn = K1 bank index.
+  void SpecDiagParam(float k1, float k2, float& a, float& b) {
+    a = diag_spec_nu_;
+    b = Clamp01(k2);
+    diag_spec_d_ = sp_depth_;
+    diag_spec_n_ = (float)SpecBankSel(k1);
   }
-  // K5 bank at the raw k5 (0..1): Quantize(k5, EXP_SPEC_BANKS) = 0..8 (CCW FIB .. CW HARM).
-  static inline int SpecBankSel(float k5) {
+  // K1 bank at the raw k1 (0..1): Quantize(k1, EXP_SPEC_BANKS) = 0..8 (CCW FIB .. CW HARM).
+  static inline int SpecBankSel(float k1) {
     using namespace explorer_k;
-    return Quantize(Clamp01(k5), EXP_SPEC_BANKS);
+    return Quantize(Clamp01(k1), EXP_SPEC_BANKS);
   }
   // Comb exponent e at k1 (0..1): E_MIN (E_MAX / E_MIN)^k1 = 0.25 16^k1 (CCW 0.25 narrow, noon 1, CW 4 peaky).
   inline float SpecExp(float k1) const {
@@ -1336,15 +1336,25 @@ class Explorer : public Module {
   // model crossfade), each part only when its inputs moved: tilt when gamma moved (M - 1 expf), comb when nu / e moved
   // (M - 1 table cos + the exponent; y(n) = n - 1, phi 0), partials p(n) while sliding to the stepped N, then the
   // product + RMS norm. Also p.p0 = shift s.
-  //   nu = NU_MAX k2s_, gamma = SpecGamma(k3s_), e = SpecExp(k1s_), s = SpecShift(k4s_) (smoothed knobs);
+  //   nu / gamma / e / s: see the 2026-11-05 note below;
   //   n = member index i of the active bank (all 16 on). Bank change (spec_bank_t_ != spec_bank_): gain g (sp_bg_) slides
   //   1 -> 0 over EXP_DISC_SLIDE_MS / 2, spec_bank_ = target at g = 0, then 0 -> 1 over EXP_DISC_SLIDE_MS / 2; g multiplies
   //   the normalised W (g = 1: bit-identical to no gain). W(1) = 1 (tilt(1) = comb(1) = 1).
+  //   (2026-11-05: e / gamma / s at the fixed EXP_SPEC_K_PEAK / K_TILT / K_SHIFT; nu = NU_MAX clamp(k2s_ + depth
+  //   (1 - g_s), 0, 1), depth from ps_T_ (only when T changed); comb redo while nu moves at most every EXP_SPEC_NU_DIV.)
   void SpecWeights(Params& p) {
     using namespace explorer_k;
-    const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_);
-    const float ga = SpecGamma(k3s_);
-    if (k1s_ != sk_k1_) { sk_k1_ = k1s_; sp_e_ = SpecExp(k1s_); }   // e only when K1 moved
+    if (ps_T_ != sk_T_) {                        // envelope depth from T (log-interpolated), only when T changed
+      sk_T_ = ps_T_;
+      float x = logf(ps_T_ / EXP_SPEC_ENV_T_LO) * (1.f / logf(EXP_SPEC_ENV_T_HI / EXP_SPEC_ENV_T_LO));
+      x = Clamp01(x);
+      sp_depth_ = EXP_SPEC_ENV_DEPTH_MIN + (EXP_SPEC_ENV_DEPTH_MAX - EXP_SPEC_ENV_DEPTH_MIN) * x;
+    }
+    const float gs = loop_ ? 1.f : ps_gs_;
+    const float nu = EXP_SPEC_NU_MAX * Clamp01(k2s_ + sp_depth_ * (1.f - gs));
+    diag_spec_nu_ = nu;
+    const float ga = SpecGamma(EXP_SPEC_K_TILT);
+    if (sk_k1_ < 0.f) { sk_k1_ = EXP_SPEC_K_PEAK; sp_e_ = SpecExp(EXP_SPEC_K_PEAK); }   // e fixed (once)
     const float e = sp_e_;
     bool redo = sp_redo_;
     sp_redo_ = false;
@@ -1359,8 +1369,12 @@ class Explorer : public Module {
       if (sp_bg_ != gt) { sp_bg_ = Slide(sp_bg_, gt, sp_pstep_); redo = true; }
       if (bt != spec_bank_ && sp_bg_ == 0.f) spec_bank_ = bt;
     }
-    if (nu != sk_nu_ || e != sk_e_) {            // comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e
+    const bool nu_stop = (nu == sp_nu_last_);   // nu stopped moving this sample: land on it now
+    sp_nu_last_ = nu;
+    if (sp_nu_div_ > 0) sp_nu_div_--;
+    if ((nu != sk_nu_ && (sp_nu_div_ == 0 || nu_stop)) || e != sk_e_) {   // comb(n) = (0.5 + 0.5 cos(2 pi nu (n - 1)))^e
       sk_nu_ = nu; sk_e_ = e;
+      sp_nu_div_ = EXP_SPEC_NU_DIV;
       for (int n = 2; n <= EXP_SPEC_M; n++) {
         float b = 0.5f + 0.5f * Cos01(nu * sp_y_[n]);   // argument >= 0
         b = fminf(fmaxf(b, 0.f), 1.f);
@@ -1382,7 +1396,7 @@ class Explorer : public Module {
     }
     p.aw = spec_w_;
     p.top = EXP_SPEC_M;
-    p.p0 = SpecShift(k4s_);
+    p.p0 = SpecShift(EXP_SPEC_K_SHIFT);
   }
   // SPECTRAL series, analytic: S = sum_n w_n h_n v^n (complex), the SAW loop of SeriesSum with the anti-fold edge on
   // the SHIFTED partial frequency (n + s) f0: the caller passes Fe = 3800 - s f0 (s = 0: SeriesSum<kAddSaw>'s Re, bit
@@ -2234,8 +2248,8 @@ class Explorer : public Module {
         p.a = r; p.b = p.p3; break;
       }
       case kLSPEC:                         // FM LAB SPECTRAL: weights in SpecWeights (Process); a / b = nu / gamma
-        p.a = explorer_k::EXP_SPEC_NU_MAX * Clamp01(k2);
-        p.b = SpecGamma(k3);
+        p.a = explorer_k::EXP_SPEC_NU_MAX * Clamp01(k2);   // (knob; the applied nu is SpecWeights')
+        p.b = SpecGamma(explorer_k::EXP_SPEC_K_TILT);
         break;
       case kLADD: {                        // FM LAB ADDITIVE: p0 = I (before the per-band cap), p1 = u, p2 = 1 / sqrt(1 + u^2),
                                            // p3 / p4 = theta step constant / per Hz of f0 (cycles per 8 kHz sample),
@@ -3043,8 +3057,7 @@ class Explorer : public Module {
     s.labz = diag_lab_z_;
     s.lb = diag_lab_b_; s.lue = diag_lab_ue_; s.llfd = diag_lab_lfd_; s.lside = diag_lab_side_;
     s.specz = diag_spec_z_;
-    s.se = diag_spec_e_;
-    s.ss = diag_spec_s_;
+    s.se = diag_spec_d_;
     s.sn = diag_spec_n_;
     s.addz = diag_add_z_;
     s.c3 = diag_add_c3_;
@@ -3183,7 +3196,7 @@ class Explorer : public Module {
   int   zfade_len_ = 8;            // MID table zone change fade (EXP_TB_ZONE_XFADE_MS) in 8 kHz samples
   int   mfade_cur_ = 8;            // length of the running fade (mfade_len_ or zfade_len_)
   float mg_ = 1.f;                 // new-model gain during a fade
-  float k1s_ = 0.f, k2s_ = 0.f, k3s_ = 0.f;           // smoothed knobs (K1: FM LAB SPECTRAL only)
+  float k1s_ = 0.f, k2s_ = 0.f, k3s_ = 0.f;           // smoothed knobs (K1: unused)
   volatile float k1_t_ = 0.f, k2_t_ = 0.f, k3_t_ = 0.f;   // targets
   volatile int rfmc_i_t_ = 0, ish_t_ = 0;   // snapped items: FM ratio index, interval semitones
   DSlide rfmc_, ish_;              // their slid values
@@ -3217,7 +3230,7 @@ class Explorer : public Module {
   float sp_ln_[explorer_k::EXP_SPEC_M + 1] = {};    // ln n
   float sk_g_ = -1.f, sk_nu_ = -1.f, sk_e_ = -1.f;  // inputs the parts were made for
   bool  sp_redo_ = true;           // first SpecWeights: build W
-  volatile int spec_bank_t_ = explorer_k::EXP_SPEC_BANK_HARM;   // K5 bank target (0..8, Controls)
+  volatile int spec_bank_t_ = explorer_k::EXP_SPEC_BANK_HARM;   // K1 bank target (0..8, Controls)
   int   spec_bank_ = explorer_k::EXP_SPEC_BANK_HARM;            // bank in use (swapped at g = 0)
   float sp_bg_ = 1.f;              // bank-change gain g on the normalised W
   float sp_pstep_ = 0.25f;         // g slide step per 8 kHz sample (2 / disc_len_)
@@ -3225,7 +3238,11 @@ class Explorer : public Module {
   float sk_k1_ = -1.f, sp_e_ = 1.f;  // K1 the comb exponent e was computed for, e
   float sp_ln_e_ = 0.f;            // ln(E_MAX / E_MIN)
   int   diag_spec_z_ = -1;         // DIAG: 0 = SPECTRAL in the last Controls, -1 = not
-  float diag_spec_e_ = 0.f, diag_spec_s_ = 0.f, diag_spec_n_ = 0.f;    // DIAG: e, shift s, K5 bank index at the knob
+  float diag_spec_d_ = 0.f, diag_spec_n_ = 0.f;    // DIAG: envelope depth, K1 bank index at the knob
+  float diag_spec_nu_ = 0.f;       // DIAG: applied density nu (written by SpecWeights)
+  float sk_T_ = -1.f, sp_depth_ = 0.f;   // envelope T the depth was made for, depth (K2 knob units)
+  float sp_nu_last_ = -1.f;        // nu of the previous SpecWeights call (stop detection)
+  int   sp_nu_div_ = 0;            // samples until the next comb recompute while nu moves
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
   float add_w_[2][explorer_k::EXP_ADD_K_MAX + 1] = {};
   float add_rho_[2][explorer_k::EXP_ADD_STR_M + 1] = {};

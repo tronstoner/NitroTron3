@@ -451,11 +451,11 @@ function explorerNow(m) {
     r[3] = `${ps} · fc ${hz(m.fce)}`;
     r[4] = uni ? `beat ${fmt(m.b, 2)} Hz ${m.bm === 1 ? "∝ note" : m.bm === 2 ? "constant" : "off"}` : lfo;
   } else if (m.specz >= 0) {
-    r[0] = `e ${fmt(m.se, 2)}`;
-    r[1] = `nu ${fmt(m.a, 2)}`;
-    r[2] = `gamma ${fmt(m.b, 2)}`;
-    r[3] = `shift s ${fmt(m.ss, 2)}`;
-    r[4] = `bank ${["FIB", "STRIDE7", "STRIDE6", "STRIDE5", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM"][m.sn] ?? "?"}`;
+    r[0] = `bank ${["FIB", "STRIDE7", "STRIDE6", "STRIDE5", "STRIDE4", "STRIDE3", "PRIMES", "ODD", "HARM"][m.sn] ?? "?"}`;
+    r[1] = `k2 ${fmt(m.b, 2)} · nu ${fmt(m.a, 2)} now`;
+    r[2] = "unused";
+    r[3] = `${ps} · depth ${fmt(m.se, 2)}`;
+    r[4] = "unused";
   } else if (m.labz >= 0) {
     const side = m.lside < 0 ? "hollow" : m.lside > 0 ? "feedback" : "sine";
     r[1] = `r ${fmt(m.a, 3)}`;
