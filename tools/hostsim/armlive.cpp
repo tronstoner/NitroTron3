@@ -225,7 +225,7 @@ static const char* ModeName(int m) {
 // Explorer / FM LAB DIAG second half, as pedals/nitrolab/main.cpp prints it
 // (same branches and names; %.2f instead of the firmware's FLT_FMT(2) macros).
 static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
-  char env[192], line[320], te[96];
+  char env[256], line[384], te[96];
   const char* lfo = d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off";
   // K4 touch env (every ONE-SHOT model; SPECTRAL adds tr): pluck g / T, swell g / T, blend w, live level L, openness o
   snprintf(te, sizeof te, " gd%.2f Td%.2f gr%.2f Tr%.2f w%.2f L%.2f o%.2f", d.sgd, d.sTd, d.sgr, d.sTr, d.sw, d.sL, d.so);
@@ -239,6 +239,9 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(env, sizeof env, "%s lfo %s d%.2f >%.2f %.2fHz", te, lfo, d.lfod, d.llfd, d.lfohz);
   else if (d.sw1 == 0 || d.addz >= 0)
     snprintf(env, sizeof env, "%s fce %d lfo %s d%.2f %.2fHz", te, (int)(d.fce + 0.5f), lfo, d.lfod, d.lfohz);
+  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // audition bank JOURNEY: + the K5 touch env, travel5, m now
+    snprintf(env, sizeof env, "%s k5 gd%.2f Td%.2f gr%.2f Tr%.2f w%.2f o%.2f tr%.2f m%.2f", te, d.t5gd, d.t5Td, d.t5gr,
+             d.t5Tr, d.t5w, d.t5o, d.t5tr, d.tm);
   else if (d.sw1 == 1)
     snprintf(env, sizeof env, "%s lfo %s d%.2f %.2fHz", te, lfo, d.lfod, d.lfohz);
   else
@@ -263,6 +266,12 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(line, sizeof line, "FM r%.2f b%.2f fc %d%s mute %s", d.a, d.b, (int)(d.fc + 0.5f), env, mu);
   else if (d.model == Explorer::kXFM)
     snprintf(line, sizeof line, "XBAND-FM n%d I%.2f fc %d%s mute %s", (int)(d.a + 0.5f), d.b, (int)(d.fc + 0.5f), env, mu);
+  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbAnalog)   // audition bank ANALOG: Q (K2)
+    snprintf(line, sizeof line, "tab %d/%d %s %s Q%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
+             Explorer::TbKindName(d.tbk), d.tq, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+  else if (d.model == Explorer::kWT && d.tbz >= 0)          // audition bank LFO / JOURNEY: morph m at the knob, position
+    snprintf(line, sizeof line, "tab %d/%d %s %s m%.2f pos%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES,
+             zn, Explorer::TbKindName(d.tbk), d.b, d.a, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   else if (d.model == Explorer::kWT)
     snprintf(line, sizeof line, "WT/%s m%.2f pos%.2f dmp %d lp %d eff %d%s mute %s", zn, d.b, d.a, (int)(d.dfc + 0.5f),
              (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
@@ -280,6 +289,9 @@ static std::string ExplorerZone(const Explorer::DiagSnap& d) {
   if (d.specz >= 0) return Explorer::SpecZoneName(d.specz);
   if (d.labz >= 0) return Explorer::LabZoneName(d.labz);
   const char* zn = Explorer::ZoneName(d.model, d.zone);
+  if (d.tbz >= 0)                                           // audition bank: "tab n/15 NAME kind"
+    return "tab " + std::to_string(d.tbz + 1) + "/" + std::to_string(explorer_k::EXP_TB_ZONES) + " " + zn + " " +
+           Explorer::TbKindName(d.tbk);
   return std::string(Explorer::ModelName(d.model)) + (zn[0] ? std::string("/") + zn : std::string());
 }
 
@@ -761,6 +773,10 @@ int main(int argc, char** argv) {
                  ",\"k2n\":" + json::Esc(add ? Explorer::AddK2Name(x.addz) : "") + ",\"k3n\":" + json::Esc(add ? Explorer::AddK3Name(x.addz) : "") +
                  ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"slp\":" + N(x.slp) + ",\"ssub\":" + N(x.ssub) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
+                 ",\"tbz\":" + std::to_string(x.tbz) + ",\"tbk\":" + json::Esc(x.tbz >= 0 ? Explorer::TbKindName(x.tbk) : "") +
+                 ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"t5gd\":" + N(x.t5gd) + ",\"t5Td\":" + N(x.t5Td) +
+                 ",\"t5gr\":" + N(x.t5gr) + ",\"t5Tr\":" + N(x.t5Tr) + ",\"t5w\":" + N(x.t5w) + ",\"t5o\":" + N(x.t5o) +
+                 ",\"t5tr\":" + N(x.t5tr) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +
                  ",\"sn\":" + N(x.sn) + ",\"sgd\":" + N(x.sgd) + ",\"sTd\":" + N(x.sTd) + ",\"sgr\":" + N(x.sgr) +
                  ",\"sTr\":" + N(x.sTr) + ",\"sw\":" + N(x.sw) + ",\"str\":" + N(x.str) + ",\"sL\":" + N(x.sL) + ",\"so\":" + N(x.so) +

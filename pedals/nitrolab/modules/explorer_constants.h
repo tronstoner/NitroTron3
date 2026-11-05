@@ -57,28 +57,36 @@ constexpr float EXP_IS_DETUNE_CENTS = 50.f;  // interval shift: K3 detune +-this
 // --- SW1 DOWN: exact harmonics / SW1 MID: tables, bit table -------------------------
 constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number at K2 CW (linear from 1, neighbours crossfaded)
 
-// SW1 MID tables (2026-10-26, step 2): WaveMorph's 10 zones, COPIED (not shared) from wavemorph_constants.h,
-// values exact (approved, tuned there). K1 = zone (equal stepped zones, EXP_TB_ZONE_XFADE_MS crossfade on a change),
-// K2 = morph m: position (F_z - 1) m through the zone's frames, linear crossfade between the two adjacent frames.
+// SW1 MID tables. TWO BANKS, one compile switch (2026-11-06):
+//   EXP_TB_LEGACY = true  -> WaveMorph's 10 zones (2026-10-26, step 2), COPIED (not shared) from wavemorph_constants.h,
+//                            values exact (approved, tuned there) - exactly the tables of 45c2f4e (byte-identical render).
+//   EXP_TB_LEGACY = false -> the AUDITION BANK (default): 15 data-driven presets, recipes in explorer_tables.h (one place;
+//                            a new preset / journey = data, not code), kinds LFO / JOURNEY / ANALOG (K2 / K5 per kind,
+//                            see explorer.h TABLES), noise layer per preset.
+// K1 = zone / preset (equal stepped zones, EXP_TB_ZONE_XFADE_MS crossfade on a change), K2 = morph m: position
+// (F_z - 1) m through the zone's frames, linear crossfade between the two adjacent frames (ANALOG: K2 = LP Q).
 // Built at Init into SDRAM (explorer_tb, int16, packed [frame][version][sample]). See explorer.h TABLES.
-constexpr int   EXP_TB_ZONES          = 10;      // K1 equal zones on SW1 MID (= WM_ZONES)
+constexpr bool  EXP_TB_LEGACY         = false;   // true = the 10 legacy zones below; false = the audition bank (explorer_tables.h)
+constexpr int   EXP_TB_LEGACY_ZONES   = 10;      // legacy K1 equal zones on SW1 MID (= WM_ZONES)
+constexpr int   EXP_TB_BANK_N         = 15;      // audition bank: presets = K1 equal zones (EXP_TB_PRESETS, explorer_tables.h)
+constexpr int   EXP_TB_ZONES          = EXP_TB_LEGACY ? EXP_TB_LEGACY_ZONES : EXP_TB_BANK_N;   // K1 zones on SW1 MID
 constexpr int   EXP_N_MID             = EXP_TB_ZONES + (EXP_BITTAB_ENABLE ? 1 : 0);   // SW1 MID K1 zones (+ bit table last)
 constexpr int   EXP_TB_CORNERS        = 4;       // waves of the 4-wave zones 2, 6..10 (= WM_CORNERS)
 constexpr int   EXP_TB_SYNC_N         = 7;       // zone 1 sine sync: frames (= WM_SYNC_N)
 constexpr int   EXP_TB_SAWR_N         = 3;       // zone 3 saw rough: frames (= WM_SAWR_N)
 constexpr int   EXP_TB_FRAMES16       = 16;      // frames of zones 4 PWM / 5 vocal (= WM_FRAMES16)
 // Frames per zone F_z (= WM_ZONE_FRAMES).
-constexpr int   EXP_TB_ZONE_FRAMES[EXP_TB_ZONES] = { EXP_TB_SYNC_N, EXP_TB_CORNERS, EXP_TB_SAWR_N, EXP_TB_FRAMES16,
+constexpr int   EXP_TB_ZONE_FRAMES[EXP_TB_LEGACY_ZONES] = { EXP_TB_SYNC_N, EXP_TB_CORNERS, EXP_TB_SAWR_N, EXP_TB_FRAMES16,
                                                      EXP_TB_FRAMES16, EXP_TB_CORNERS, EXP_TB_CORNERS, EXP_TB_CORNERS,
                                                      EXP_TB_CORNERS, EXP_TB_CORNERS };
 // Zones 3 and 6..10: each wave scaled to the plain saw's RMS, then capped to the storage headroom (= WM_ZONE_RMS_MATCH).
-constexpr bool  EXP_TB_ZONE_RMS_MATCH[EXP_TB_ZONES] = { false, false, true, false, false, true, true, true, true, true };
+constexpr bool  EXP_TB_ZONE_RMS_MATCH[EXP_TB_LEGACY_ZONES] = { false, false, true, false, false, true, true, true, true, true };
 // Zones 1, 2, 3, 6, 10: every frame re-phased to the saw's convention (sine phase, positive; magnitudes kept),
 // then the zone's level rule again (= WM_ZONE_REPHASE).
-constexpr bool  EXP_TB_ZONE_REPHASE[EXP_TB_ZONES]   = { true, true, true, false, false, true, false, false, false, true };
-constexpr int   EXP_TB_TOTAL_FRAMES   = EXP_TB_SYNC_N + EXP_TB_SAWR_N + 6 * EXP_TB_CORNERS + 2 * EXP_TB_FRAMES16;   // packed (= WM_TOTAL_FRAMES)
-constexpr int ExpTbSumFrames(int i = 0) { return (i >= EXP_TB_ZONES) ? 0 : EXP_TB_ZONE_FRAMES[i] + ExpTbSumFrames(i + 1); }
-static_assert(ExpTbSumFrames() == EXP_TB_TOTAL_FRAMES, "EXP_TB_TOTAL_FRAMES = sum of EXP_TB_ZONE_FRAMES");
+constexpr bool  EXP_TB_ZONE_REPHASE[EXP_TB_LEGACY_ZONES]   = { true, true, true, false, false, true, false, false, false, true };
+constexpr int   EXP_TB_LEGACY_TOTAL_FRAMES = EXP_TB_SYNC_N + EXP_TB_SAWR_N + 6 * EXP_TB_CORNERS + 2 * EXP_TB_FRAMES16;   // packed (= WM_TOTAL_FRAMES)
+constexpr int ExpTbSumFrames(int i = 0) { return (i >= EXP_TB_LEGACY_ZONES) ? 0 : EXP_TB_ZONE_FRAMES[i] + ExpTbSumFrames(i + 1); }
+static_assert(ExpTbSumFrames() == EXP_TB_LEGACY_TOTAL_FRAMES, "EXP_TB_LEGACY_TOTAL_FRAMES = sum of EXP_TB_ZONE_FRAMES");
 constexpr float EXP_TB_ZONE_XFADE_MS  = 1.f;     // ms; linear crossfade old -> new zone on a K1 zone change (= WM_ZONE_XFADE_MS)
 constexpr int   EXP_TB_SIZE           = 256;     // samples per single-cycle table (power of two; harmonics 1..127) (= WM_TAB_SIZE)
 constexpr int   EXP_TB_HMAX           = EXP_TB_SIZE / 2 - 1;   // highest harmonic a table holds (= WM_HMAX)
@@ -95,7 +103,7 @@ constexpr bool  EXP_TB_BLEND          = false;   // true = continuous version bl
 constexpr float EXP_TB_I16_SCALE      = 16384.f; // int16 storage scale, default: |table| <= 2.0 (= WM_I16_SCALE)
 constexpr float EXP_TB_I16_SCALE_WIDE = 6554.f;  // zones 3 / 10: |table| <= 5.0 (= WM_I16_SCALE_WIDE)
 // Storage scale per zone; the RMS-matched waves are capped to that zone's headroom 32767 / scale (= WM_ZONE_I16_SCALE).
-constexpr float EXP_TB_ZONE_I16_SCALE[EXP_TB_ZONES] = { EXP_TB_I16_SCALE, EXP_TB_I16_SCALE, EXP_TB_I16_SCALE_WIDE,
+constexpr float EXP_TB_ZONE_I16_SCALE[EXP_TB_LEGACY_ZONES] = { EXP_TB_I16_SCALE, EXP_TB_I16_SCALE, EXP_TB_I16_SCALE_WIDE,
                                                         EXP_TB_I16_SCALE, EXP_TB_I16_SCALE, EXP_TB_I16_SCALE,
                                                         EXP_TB_I16_SCALE, EXP_TB_I16_SCALE, EXP_TB_I16_SCALE,
                                                         EXP_TB_I16_SCALE_WIDE };
@@ -154,6 +162,32 @@ constexpr float EXP_TB_CLIP_H1        = 0.3f;    // clipper: 1: H1; 2..KNEE: FLA
 constexpr float EXP_TB_CLIP_FLAT      = 0.8f;    // (= WM_CLIP_FLAT)
 constexpr int   EXP_TB_CLIP_KNEE      = 24;      // (= WM_CLIP_KNEE)
 constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n without harmonics 1 .. this (= WM_PPGFB_SKIP)
+// --- AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): recipes / stages / noise per preset in explorer_tables.h ---
+// Build (BuildBank, Init): every frame goes through the legacy pipeline (time-domain DFT or harmonic list -> peak 1 ->
+// the preset's re-phase / RMS-match / storage-cap rules -> 14 band-limited int16 versions). A frame between two key
+// stages: same generator (and list) at both stages -> the generator's PARAMETER is interpolated (a real sweep: formant
+// centre, sync ratio, PWM width, exponent, vowel); different generators -> each stage's harmonic magnitudes (RMS 1)
+// are interpolated in dB per harmonic (moving harmonic amplitudes; an absent partial grows from the floor below).
+constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spectrum: floor of the per-harmonic dB interpolation
+                                                   // (a partial absent at one stage starts / ends here; at / below it: 0)
+// Noise layer (wet only; SW3 MID SW1 MID audition bank): ONE white source (32-bit LCG, uniform x sqrt(3) = unit RMS),
+// three one-pole colour filters (unit RMS for white input: fixed gain from the coefficient), per preset one colour.
+// Level per 8 kHz sample = share(m) x the band level of the tables path: sum over the running slot's bands of
+// w_k a_k (COLOURED) or w_k a_k |W_k| (PITCH-LOCKED: the table output per band), with the same slot / SW2 / output
+// gains as the tone; 0 in silence (silent bands). Added at 48 kHz after the DC blocker, BEFORE the K3 2-pole LP (K3 /
+// K4 colour it), linear ramp between the 8 kHz level values. Not run while every level is 0.
+constexpr float    EXP_TB_NOISE_LOW_HZ  = 400.f;    // Hz; LOW colour: one-pole lowpass
+constexpr float    EXP_TB_NOISE_MID_HZ  = 1500.f;   // Hz; MID colour: one-pole lowpass
+constexpr float    EXP_TB_NOISE_HIGH_HZ = 3000.f;   // Hz; HIGH colour: one-pole highpass (white - one-pole lowpass)
+constexpr uint32_t EXP_TB_NOISE_SEED    = 0x6D2B79F5u;   // LCG start state (x = 1664525 x + 1013904223)
+// JOURNEY presets: K5 = a SECOND touch env (docs/DESIGN_PHILOSOPHY.md §12; the K4 implementation, own instance, driven
+// by t5 = 2 k5 - 1; EXP_PS_* times, EXP_SPEC_MORPH_ZONE, EXP_SPEC_DYN_* dynamics as K4) on the morph position:
+//   m = clamp(k2 + travel5, 0, 1), travel5 = (1 - w5) depth_d5 (1 - o_d5) + w5 depth_r5 (1 - o_r5) (SpecTravel's
+//   structure): pluck travels FORWARD from K2 toward the journey end, swell starts ahead and comes back to K2.
+//   TIME-SCALED travel per side: depth = MIN + (MAX - MIN) clamp(ln(T / FAST) / ln(SLOW / FAST), 0, 1) over that side's
+//   EXP_PS_* range (pluck 0.45 .. 8 s, swell 0.01 .. 4 s). Noon = the slowest pluck (8 s, full depth), as K4.
+constexpr float    EXP_TB_JENV_DEPTH_MIN = 0.12f;   // morph units; travel at the shortest times (~1-2 of the 16 stages)
+constexpr float    EXP_TB_JENV_DEPTH_MAX = 1.0f;    // morph units; travel at the longest times (the full journey)
 // Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle.
 // (PARKED, EXP_BITTAB_ENABLE.) K2 STEPS through EXP_BT_WAVES waveforms (equal zones): the 16 LFSR patterns, then SQR n = 1 .. EXP_BT_SQR_N_MAX;
 // a step = EXP_MODEL_XFADE_MS crossfade, no blend. K3 = step shape, continuous: CCW triangle (linear to the
@@ -269,8 +303,8 @@ constexpr float EXP_TF_Q         = 1.5f;      // tables LP Q (2026-10-28: wet 2-
 constexpr float EXP_TB_SAT_DRIVE = 3.0f;      // tables: drive into tanh after the LP (2026-10-28, level cheat / compression)
 constexpr float EXP_TB_SAT_TRIM  = 0.6f;      // tables: FIXED post trim after the tanh (not 1/drive: the saturation stays)
 constexpr bool  EXP_TF_Q_ON_K5   = false;     // TEMP, off: the LFO is back on K5 (2026-10-28): SW3 MID tables K5 = LP Q instead of the LFO (FM keeps the LFO)
-constexpr float EXP_TF_Q_MIN     = 0.3f;      // Q at K5 full CCW (soft, veiled)
-constexpr float EXP_TF_Q_MAX     = 3.0f;      // Q at K5 full CW (clear peak); exponential, noon ~0.95
+constexpr float EXP_TF_Q_MIN     = 0.3f;      // Q at K5 full CCW (soft, veiled); audition bank ANALOG presets: Q at K2 full CCW
+constexpr float EXP_TF_Q_MAX     = 3.0f;      // Q at K5 full CW (clear peak); exponential, noon ~0.95; ANALOG: Q at K2 full CW
 constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28: off again by ear; static open picks)
 
 // --- SW3 MID + SW3 DOWN FM LAB (ONE-SHOT, both instances): K4 = TOUCH ENV (2026-11-05, docs/DESIGN_PHILOSOPHY.md §12) -
@@ -325,8 +359,11 @@ constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 0.0f;     // UP FM: the envelope cl
 constexpr float    EXP_LFO_FM_FC_OCT       = 1.0f;     // SW3 MID UP FM, SWELL side: the LFO swings the FM cutoff +- this many octaves
                                                      // around the envelope, faded in with the swell (x o_r)
 constexpr float    EXP_LFO_FM_FC_OCT_DEC   = 2.6f;     // PLUCK side: upward only, 0 .. this x depth, x (1 - o_d): grows as the pluck closes
+                                                     // (both also the audition bank ANALOG presets' K5 LFO on the tables LP cutoff,
+                                                     // same placement - LfoFcOct; there the pluck side x k3 = the K3 position in the
+                                                     // LP's log range; fc capped at EXP_TF_FMAX)
 constexpr float    EXP_LFO_FB_SWING        = 0.3f;     // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
-constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables: morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
+constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables (legacy zones, audition bank LFO presets): morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
 // knob value), equal parts of the cycle, repeating. A square = { +1, -1 } with N 2.

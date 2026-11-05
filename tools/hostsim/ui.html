@@ -194,7 +194,7 @@ const LFO_SHAPES = "CCW triangle | noon off | CW staircase 100/50/0 %; rate 0.2 
 const XMEAN = {
   explorer: {
     up:   ["FM ratio zone (14 ratios) | XBAND at full CW", "feedback b 0 → 1.5 (XBAND: inert)", "index: per-band cap, fc 150 Hz → 4 kHz (k3^0.5)", PS_UP, "LFO on feedback ±0.3: " + LFO_SHAPES, "dry → wet"],
-    mid:  ["table zone (10, stepped, 1 ms crossfade)", "morph m 0 → 1 through the zone's frames", "dampener 150 Hz → 4 kHz (knob only) + 2-pole LP 250 Hz → 16 kHz", PS_UP.replace("the K3 fc", "the 2-pole LP cutoff"), "LFO on morph ±0.15: " + LFO_SHAPES, "dry → wet"],
+    mid:  ["audition bank, 15 presets (stepped, 1 ms crossfade): SAW PULSE (ANALOG) | PWM SYNC VOCAL (LFO) | GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN (JOURNEY) | PPG (LFO) | METAL (JOURNEY)", "LFO / JOURNEY: morph m 0 → 1 through the preset's frames (JOURNEY: where the K5 travel starts) | ANALOG: LP resonance Q 0.3 → 3", "2-pole LP 250 Hz → 16 kHz (dampener: static open)", PS_UP.replace("the K3 fc", "the 2-pole LP cutoff"), "LFO presets: LFO on morph ±0.15 | ANALOG: LFO on the LP cutoff (pluck side up × K3, swell side down) | JOURNEY: touch env on the morph (CCW pluck travels forward from K2, CW swell starts ahead and comes back; travel 0.12 → full journey with the time): " + LFO_SHAPES, "dry → wet"],
     down: ["model: HARMONICS / FREQ SHIFT / INTERVAL", "HARMONICS n 1 → 6 | FREQ SHIFT ±800 Hz (noon 0) | INTERVAL −12 → +12 st", "HARMONICS blend to the fundamental | FREQ SHIFT fixed → proportional | INTERVAL ±50 cents", "inert on SW1 DOWN", "inert on SW1 DOWN", "dry → wet"],
   },
   lab: {
@@ -473,6 +473,13 @@ function explorerNow(m) {
     r[2] = `fc ${hz(m.fc)}`;
     r[3] = `${ps} · fc ${hz(m.fce)}`;
     r[4] = lfo;
+  } else if (m.sw1 === "mid" && m.tbz >= 0) {   // audition bank: "tab n/15 NAME kind" (m.zone)
+    r[1] = m.tbk === "ANALOG" ? `LP Q ${fmt(m.tq, 2)}` : `morph ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)}`;
+    r[2] = `LP ${hz(m.fc)}`;
+    r[3] = `${ps} · LP now ${hz(m.lfe)}`;
+    r[4] = m.tbk === "JOURNEY"
+      ? `K5 touch env: pluck g ${fmt(m.t5gd, 2)} T ${fmt(m.t5Td, 2)} s · swell g ${fmt(m.t5gr, 2)} T ${fmt(m.t5Tr, 2)} s · w ${fmt(m.t5w, 2)} o ${fmt(m.t5o, 2)} · travel ${fmt(m.t5tr, 2)} → m ${fmt(m.tm, 2)}`
+      : `${lfo} ${m.tbk === "ANALOG" ? "on the LP cutoff" : "on the morph"}`;
   } else if (m.sw1 === "mid") {
     r[1] = `morph ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)}`;
     r[2] = `damp ${hz(m.dfc)} · LP ${hz(m.fc)}`;

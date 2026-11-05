@@ -235,12 +235,16 @@ int main() {
         // lpf .. sub .. gd<decay g> Td<s> gr<rise g> Tr<s> w<blend> tr<travel> L<live level> o<openness>` (no fc / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
         // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
         // `u <knob> bt <beat Hz> prop|hz|off`); + the SW1 UP touch env / `fce` / `lfo` part (fce = the applied index fc; DOWN)
+        // SW3 MID SW1 MID audition bank (EXP_TB_LEGACY = false): `tab <n>/15 <NAME> LFO|JOURNEY|ANALOG m<knob> pos<frame
+        // position>` (ANALOG: `Q<LP Q at the K2 knob>`) `lp .. eff ..` + the K4 touch env + `lfo ..` (LFO / ANALOG: the K5
+        // LFO on the morph / on the LP cutoff), JOURNEY instead of the lfo part ` k5 gd Td gr Tr w o` (the K5 touch env)
+        // ` tr<travel5> m<applied morph now>`. Legacy zones: `WT/<zone> m.. pos.. dmp .. lp .. eff ..` as before.
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
         if (diag_cpu_last > cpu_pk) cpu_pk = diag_cpu_last;
         const unsigned cpu = (unsigned)(cpu_pk * 100.f + 0.5f);
         const char* zn = Explorer::ZoneName(d.model, d.zone);
-        char env[192];                                        // (touch env 7 fields + fce + lfo, worst-case int widths)
+        char env[256];                                        // (touch env 7 fields + fce + lfo / + the K5 env, worst-case int widths)
         if (d.loop)                                           // retired LOOPING variant: generic K4 / K5 envelope
           snprintf(env, sizeof(env), " %s e" D2F " %s d" D2F " %s", "loop", D2V(d.env),
                    d.dir > 0 ? "up" : d.dir < 0 ? "down" : "off", D2V(d.d),
@@ -259,6 +263,11 @@ int main() {
                    " fce %d lfo %s d" D2F " " D2F "Hz",
                    D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
+        else if (d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // SW1 MID audition bank JOURNEY: K4 touch env, then
+          snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " L" D2F " o" D2F   // the K5 touch
+                   " k5 gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " o" D2F " tr" D2F " m" D2F,      // env (no LFO),
+                   D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so),     // travel5, m now
+                   D2V(d.t5gd), D2V(d.t5Td), D2V(d.t5gr), D2V(d.t5Tr), D2V(d.t5w), D2V(d.t5o), D2V(d.t5tr), D2V(d.tm));
         else if (d.sw1 == 1)                                  // SW3 MID, SW1 MID: the same without fce (= eff)
           snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " L" D2F " o" D2F
                    " lfo %s d" D2F " " D2F "Hz",
@@ -294,6 +303,14 @@ int main() {
         else if (d.model == Explorer::kXFM)                   // A = partner n, B = index I
           diag_link::PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
                             (int)(d.a + 0.5f), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
+        else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbAnalog)   // audition bank ANALOG:
+          diag_link::PrintLine("tab %d/%d %s %s Q" D2F " lp %d eff %d%s mute %d cpu %u%%",   // preset, kind, LP Q (K2),
+                            d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.tq),   // LP fc
+                            (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);   // knob / effective
+        else if (d.model == Explorer::kWT && d.tbz >= 0)      // audition bank LFO / JOURNEY: preset, kind, morph m at the
+          diag_link::PrintLine("tab %d/%d %s %s m" D2F " pos" D2F " lp %d eff %d%s mute %d cpu %u%%",   // knob (B), frame
+                            d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), D2V(d.a),
+                            (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);   // position (A), LP fc
         else if (d.model == Explorer::kWT)                    // MID tables: zone, morph m (B), frame position (A),
           diag_link::PrintLine("WT/%s m" D2F " pos" D2F " dmp %d lp %d eff %d%s mute %d cpu %u%%",   // damp fc, LP fc
                             zn, D2V(d.b), D2V(d.a), (int)(d.dfc + 0.5f), (int)(d.fc + 0.5f),   // knob / effective
