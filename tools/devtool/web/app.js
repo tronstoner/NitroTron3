@@ -356,7 +356,24 @@ function applyDrawer() {
   el.flashOut.hidden = lg;
   el.logTools.hidden = !lg;
   el.jump.hidden = !lg || state.stick;
+  if (typeof applyDock === "function" && drawer.dock) applyDock();
 }
+// Dock: the log panel sits at the bottom (drawer) or as a right column; the status line stays at the bottom either way.
+drawer.dock = store("devtool.drawerDock") === "right" ? "right" : "bottom";
+function applyDock() {
+  const body = document.getElementById("drawer-body"), work = document.getElementById("work");
+  const right = drawer.dock === "right";
+  if (right && body.parentElement !== work) work.appendChild(body);
+  if (!right && body.parentElement !== el.drawer) el.drawer.appendChild(body);
+  work.classList.toggle("logright", right && drawer.open);
+  el.drawer.classList.toggle("dock-right", right);
+  document.getElementById("drawer-dock").textContent = right ? "Log bottom" : "Log right";
+}
+document.getElementById("drawer-dock").addEventListener("click", () => {
+  drawer.dock = drawer.dock === "right" ? "bottom" : "right";
+  store("devtool.drawerDock", drawer.dock);
+  if (!drawer.open) setDrawer(true); else applyDock();
+});
 function setDrawer(open) {
   drawer.open = open;
   store("devtool.drawerOpen", open ? "1" : "0");

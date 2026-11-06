@@ -565,3 +565,12 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .wt-tile.play { outline: 2px solid var(--tc); background: color-mix(in srgb, var(--tc) 14%, var(--surface)); }
 .wt-tile.play .wt-cap { color: var(--fg); font-weight: 700; }
 .wt-tile.play2 { outline: 1px dashed var(--tc); }
+
+/* log docked right: a third column in the work area; the bottom drawer keeps only its status line */
+.work.logright { grid-template-columns: auto minmax(0, 1fr) minmax(320px, 34%); }
+.work > .drawer-body { display: none; }
+.work.logright > .drawer-body { display: flex; border-top: 0; border-left: 1px solid var(--line); min-height: 0; background: var(--surface); }
+.drawer-dock { flex: none; border: 1px solid var(--line); background: none; padding: 1px 9px; font-size: 12px; border-radius: 6px; color: var(--dim); }
+.drawer-dock:hover { color: var(--fg); }
+.drawer.dock-right.open { height: auto; }
+.drawer.dock-right .drawer-grip { display: none; }
