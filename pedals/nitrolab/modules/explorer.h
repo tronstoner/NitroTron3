@@ -2869,7 +2869,7 @@ class Explorer : public Module {
         if (!EXP_TB_LEGACY) {
           const float t0 = explorer_tb_tone[p.n0], b0 = explorer_tb_blow[p.n0];
           p.p2 = t0 + p.p0 * (explorer_tb_tone[p.n1] - t0);
-          p.p3 = EXP_TB_BLOW_SCALE * (b0 + p.p0 * (explorer_tb_blow[p.n1] - b0));   // x global blow scale (2026-11-06)
+          p.p3 = b0 + p.p0 * (explorer_tb_blow[p.n1] - b0);
         }
         p.a = pos; p.b = mm; break;
       }
@@ -2998,7 +2998,7 @@ class Explorer : public Module {
     ExplorerTbRt& R = explorer_tb_rt;
     float* __restrict jl = R.jl[o];
     const float jc = R.jc;
-    const float jk = bl * R.jg;                  // noise gain per unit of j (amplitude)
+    const float jk = bl * EXP_TB_BLOW_DEPTH;     // wavering depth at this blow amount (2026-11-06)
     const bool  jadv = p.adv;
     uint32_t    jx = R.rng;
     constexpr float kBlowU = 1.7320508f / 2147483648.f;   // int32 -> uniform [-1, 1) x sqrt(3) (unit RMS)
@@ -3022,7 +3022,8 @@ class Explorer : public Module {
             j += jc * ((float)(int32_t)jx * kBlowU - j);
             jl[k] = j;
           }
-          jam = (1.f - bl) + jk * j;
+          const float x = R.jg * j;              // unit-RMS noise, softly limited to (-1, 1): no peaks
+          jam = 1.f + jk * (x / (1.f + fabsf(x)));   // the tone always stays, wavers +- b DEPTH (2026-11-06)
         }
       }
       if (M == kFM) {
