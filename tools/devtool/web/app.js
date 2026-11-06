@@ -1273,11 +1273,11 @@ function buildPairBank(group, viewKey) {
   for (const g of group) {
     for (const c of g.mem) {
       const cap = h("span");
-      if (DIR_ENDS[c.pair.end]) {
+      if (DIR_ENDS[c.pair.end]) {          // knob end: the manual's direction icon + the constant's short label
         cap.appendChild(icon(DIR_ENDS[c.pair.end]));
-        cap.title = "K at " + c.pair.end_label;
-      } else cap.appendChild(document.createTextNode(c.pair.end_label));
-      if (group.length > 1) cap.appendChild(document.createTextNode(shortPairLabel(g.P.label)));
+        cap.title = "Knob at " + c.pair.end_label;
+      }
+      cap.appendChild(document.createTextNode(c.label));
       items.push({ c, cap });
     }
   }
@@ -1649,3 +1649,15 @@ renderFlash();
 fullRender();
 renderChanges();
 connect();
+
+// UI zoom (top bar A- / A+): CSS zoom on the root, 0.7 .. 2, remembered (try/catch: storage may be blocked)
+(function () {
+  var z = 1.15;
+  try { var v = parseFloat(localStorage.getItem("devtool.zoom")); if (v >= 0.7 && v <= 2) z = v; } catch (e) {}
+  function apply() { document.documentElement.style.zoom = String(z); try { localStorage.setItem("devtool.zoom", String(z)); } catch (e) {} }
+  function step(d) { z = Math.round(Math.min(2, Math.max(0.7, z + d)) * 100) / 100; apply(); }
+  var o = document.getElementById("zoom-out"), i = document.getElementById("zoom-in");
+  if (o) o.addEventListener("click", function () { step(-0.1); });
+  if (i) i.addEventListener("click", function () { step(0.1); });
+  apply();
+})();

@@ -212,6 +212,26 @@ def strip_parens(s):
     return "".join(out)
 
 
+# Short display labels (the page's row titles). The constant's comments stay the explanation (info popover);
+# a name missing here falls back to make_label(). Keep them short: what it is, not how it works.
+LABELS = {
+    "EXP_TB_LOFI_ENABLE": "Lofi on", "EXP_TB_LOFI_SUM_BITS": "Output bits", "EXP_TB_LOFI_SUM_RATE_HZ": "Output rate",
+    "EXP_TB_LOFI_TABLE_BITS": "Table bits", "EXP_TB_LOFI_TABLE_INTERP": "Table steps",
+    "EXP_TB_LOFI_K2_DISCRETE": "Stepped on Lofi", "EXP_TB_K2_DISCRETE": "Stepped on others",
+    "EXP_PS_SLIDE_MS": "Knob glide", "EXP_PS_DEC_FAST_S": "Pluck, fastest", "EXP_PS_DEC_SLOW_S": "Pluck, slowest",
+    "EXP_PS_RISE_FAST_S": "Swell, fastest", "EXP_PS_RISE_SLOW_S": "Swell, slowest",
+    "EXP_PS_DEC_2POLE": "Pluck shape: 2-pole", "EXP_PS_DEC_2P_TAUS": "2-pole steepness", "EXP_PS_DEC_LINEAR": "Pluck shape: linear",
+    "EXP_LFO_DEPTH_FRAC": "Depth fade-in", "EXP_LFO_HZ_MIN": "Slowest", "EXP_LFO_HZ_MAX": "Fastest CW",
+    "EXP_LFO_HZ_MAX_CCW": "Fastest CCW", "EXP_LFO_INDEX_SWING": "FM index swing", "EXP_LFO_FM_FC_OCT": "FM cutoff, swell side",
+    "EXP_LFO_FM_FC_OCT_DEC": "FM cutoff, pluck side", "EXP_LFO_FB_SWING": "FM feedback swing",
+    "EXP_SPEC_ENV_DEPTH_MIN": "Travel, fast env", "EXP_SPEC_ENV_DEPTH_MAX": "Travel, slow env",
+    "EXP_SPEC_MORPH_ZONE": "Noon blend zone", "EXP_SPEC_DYN_FLOOR_DB": "Level floor", "EXP_SPEC_DYN_TOP_DB": "Level top",
+    "EXP_SPEC_DYN_GATE_DB": "Swell gate", "EXP_SPEC_DYN_REL_FRAC": "Mute damping", "EXP_ENV_TRAVEL_TAUS": "Swell curve",
+}
+FIELD_LABELS = {"TIMBRE": "Timbre", "FILTER": "Filter, pluck", "FILTER_SWELL": "Filter, swell", "PITCH": "Pitch",
+                "RATE_CCW": "Rate CCW", "RATE_CW": "Rate CW", "ENV": "Source"}
+
+
 def make_label(name, note, doc, unit):
     def clean(s):
         s = strip_parens(s)
@@ -223,6 +243,11 @@ def make_label(name, note, doc, unit):
             s = m.group(2)
         return s.split(";")[0].strip().rstrip(",:")
 
+    if name in LABELS:
+        return LABELS[name]
+    fld = next((f for f in sorted(FIELD_LABELS, key=len, reverse=True) if name.startswith("EXP_TB_") and name.endswith("_" + f)), None)
+    if fld:
+        return FIELD_LABELS[fld]
     cands = [clean(note.split("\n")[0]) if note else ""]
     if doc:
         cands.append(re.split(r"(?<=[a-z0-9])\.\s", clean(doc.split("\n")[0]))[0])
