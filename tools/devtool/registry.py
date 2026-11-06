@@ -58,10 +58,13 @@ FAMILIES (per-preset tunables declared by a macro, explorer_tables.h):
   // @field <SUFFIX> <float|int|bool> <tags>  <note>     (one per field, in the
                                                          ROW_MACRO argument order)
   The LIST_MACRO's `#define` body lists `X(<index>, <NAME>)`; the table rows
-  `{ "<NAME>", ..., ROW_MACRO(v0, v1, ...) }` give the defaults. Each preset
-  NAME x field gives one constant <PREFIX><NAME>_<SUFFIX> (file / line of the
-  list entry), with c["preset"] = NAME, c["preset_index"] = index; a field's
-  @pair id becomes <NAME>_<id>.
+  `{ "<NAME>", <KIND>, ..., ROW_MACRO(v0, v1, ...) }` give the defaults. Each
+  preset NAME x field gives one constant <PREFIX><NAME>_<SUFFIX> (file / line of
+  the preset's table row: where its default is written), with c["preset"] =
+  NAME, c["preset_index"] = index; a field's @pair id becomes <NAME>_<id>.
+  `@inert <KIND> <words_with_underscores>` on a @field: on presets whose row
+  has that <KIND> token the field does nothing; c["inert"] = the words (else
+  None) and the page shows that text instead of a control.
 
 Python 3 stdlib only.
 """
@@ -85,6 +88,7 @@ FIELD_RE = re.compile(r"^@field\s+(\w+)\s+(float|int|bool)\s+(.*)$")
 DIRECTIVE_RE = re.compile(r"^@(section|at|target|view)\s+(.*)$")
 VIEWS = ("knobs", "faders")
 ROW_RE = re.compile(r'^\s*\{\s*"(\w+)".*\b(\w+)\(([^()]*)\)\s*\},?\s*(//.*)?$')
+ROW_KIND_RE = re.compile(r'^\s*\{\s*"\w+"\s*,\s*(\w+)')
 LIST_ITEM_RE = re.compile(r"^\s*X\(\s*(\d+)\s*,\s*(\w+)\s*\)\s*\\?\s*$")
 
 # TARGETS: what a constant / knob acts on. The page colours everything by it (knob-strip cards, section
@@ -203,7 +207,7 @@ def parse_tags(comment):
             break
         key, vals = m.group(1), m.group(2).split()
         # a tag takes a fixed number of values; anything after is note text
-        n = 2 if key in ("range", "pair", "states") else 1
+        n = 2 if key in ("range", "pair", "states", "inert") else 1
         tags[key] = vals[:n]
         tail = vals[n:]
         rest = (" ".join(tail) + rest[m.end():]).strip() if tail else rest[m.end():].strip()
@@ -237,7 +241,7 @@ LABELS = {
     "EXP_SPEC_MORPH_ZONE": "Noon blend zone", "EXP_SPEC_DYN_FLOOR_DB": "Level floor", "EXP_SPEC_DYN_TOP_DB": "Level top",
     "EXP_SPEC_DYN_GATE_DB": "Swell gate", "EXP_SPEC_DYN_REL_FRAC": "Mute damping", "EXP_ENV_TRAVEL_TAUS": "Swell curve",
 }
-FIELD_LABELS = {"TIMBRE": "Depth", "FILTER": "Pluck side", "FILTER_SWELL": "Swell side", "PITCH": "Vibrato depth",
+FIELD_LABELS = {"TIMBRE": "Depth", "FILTER": "Pluck side", "FILTER_SWELL": "Swell side", "RES": "Resonance", "PITCH": "Vibrato depth",
                 "RATE_CCW": "Fastest CCW", "RATE_CW": "Fastest CW", "ENV": "Driven by", "STEPPED": "Stepped",
                 "LOFI": "Lofi"}
 
@@ -347,6 +351,14 @@ def make_entry(name, ty, value, comment, ctx, rel, lineno, problems):
         else:
             problems.append("%s:%d %s: @states wants a bool and two words" % (rel, lineno, name))
     e["view"] = ctx.get("view") or "knobs"
+    iv = tags.get("inert")
+    e["inert_on"] = None          # (kind, text) of a family @field's @inert; resolved per preset by expand_family
+    if iv is not None:
+        if len(iv) == 2:
+            e["inert_on"] = (iv[0], iv[1].replace("_", " "))
+        else:
+            problems.append("%s:%d %s: @inert wants a kind token and one word (underscores = spaces)" % (rel, lineno, name))
+    e["inert"] = None
     e["preset"] = None
     e["preset_index"] = None
     return e
@@ -373,7 +385,7 @@ def parse_file(path, rel=None):
     last = None       # entry that may take note continuation lines
     fam = None        # @family: prefix, row / list macro, fields, doc, section, display, at, items, rows
     in_list = False
-    rows = {}         # (macro, NAME) -> args of `{ "<NAME>", ..., <macro>(args) },` table rows
+    rows = {}         # (macro, NAME) -> (args, kind token, line) of `{ "<NAME>", <kind>, ..., <macro>(args) },` rows
     for i, raw in enumerate(lines):
         line = raw.rstrip("\r")
         ctx = {"module": module, "section": section, "display": display, "at": at, "target": target, "view": view}
@@ -389,7 +401,8 @@ def parse_file(path, rel=None):
                 in_list = False
         rm = ROW_RE.match(line)
         if rm:
-            rows[(rm.group(2), rm.group(1))] = split_args(rm.group(3))
+            km = ROW_KIND_RE.match(line)
+            rows[(rm.group(2), rm.group(1))] = (split_args(rm.group(3)), km.group(1) if km else "", i + 1)
         m = TUNABLE_RE.match(line)
         cm = None if m else CONSTEXPR_RE.match(line)
         if m or cm:
@@ -459,6 +472,8 @@ def parse_file(path, rel=None):
     if fam is not None:
         frows = {name: args for (mac, name), args in rows.items() if mac == fam["row"]}
         entries.extend(expand_family(fam, frows, module, rel, problems))
+    for e in entries:
+        e.pop("inert_on", None)   # resolved into e["inert"] (family fields only)
     return entries, problems
 
 
@@ -468,10 +483,10 @@ def expand_family(fam, rows, module, rel, problems):
         problems.append("%s:%d @family %s: no list items / @field lines" % (rel, fam["line"], fam["prefix"]))
         return out
     doc_of = ""
-    for idx, preset, lineno in fam["items"]:
-        row = rows.get(preset)
+    for idx, preset, item_line in fam["items"]:
+        row, kind, lineno = rows.get(preset) or (None, "", item_line)
         if row is None or len(row) != len(fam["fields"]):
-            problems.append("%s:%d %s: no %s(...) row with %d values" % (rel, lineno, preset, fam["row"], len(fam["fields"])))
+            problems.append("%s:%d %s: no %s(...) row with %d values" % (rel, item_line, preset, fam["row"], len(fam["fields"])))
             continue
         for (suffix, ty, comment), value in zip(fam["fields"], row):
             name = "%s%s_%s" % (fam["prefix"], preset, suffix)
@@ -483,6 +498,8 @@ def expand_family(fam, rows, module, rel, problems):
                 e["pair"]["id"] = "%s_%s" % (preset, e["pair"]["id"])
             e["preset"] = preset
             e["preset_index"] = idx
+            if e["inert_on"] and e["inert_on"][0] == kind:
+                e["inert"] = e["inert_on"][1]
             out.append(e)
     return out
 

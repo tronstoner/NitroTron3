@@ -1413,14 +1413,27 @@ def selftest():
     for _i, pn in presets:      # per-preset LFO rate pairs (explorer_tables.h @family)
         want_pairs["%s_LFO_rate" % pn] = ["EXP_TB_%s_RATE_CCW" % pn, "EXP_TB_%s_RATE_CW" % pn]
     byn = {c["name"]: c for c in reg["constants"]}
-    check(len(presets) == 16 and len(fam) == 16 * 9
+    rows = {}                   # preset -> line of its EXP_TB_PRESETS row (the family constants' file line)
+    with open(os.path.join(REPO, "pedals/nitrolab/modules/explorer_tables.h"), encoding="utf-8") as f:
+        for n, ln in enumerate(f, 1):
+            mrow = re.match(r'^\s*\{\s*"(\w+)"\s*,\s*kTb', ln)
+            if mrow:
+                rows[mrow.group(1)] = n
+    check(len(presets) == 16 and len(fam) == 16 * 10
           and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_PWM_TIMBRE"]["default"] == 0.15
-          and byn["EXP_TB_LOFI_ENV"]["default"] is False and byn["EXP_TB_AIR_PITCH"]["default"] == 0.0
-          and byn["EXP_TB_LOFI_LOFI"]["default"] is True and byn["EXP_TB_LOFI_STEPPED"]["default"] is True
-          and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is False and byn["EXP_TB_%s_STEPPED" % pn]["default"] is False
-                  for _i, pn in presets if pn != "LOFI")
+          and byn["EXP_TB_LOFI_ENV"]["default"] is False and byn["EXP_TB_AIR_PITCH"]["default"] == 15.0
+          and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn == "AIR") for _i, pn in presets)
+          and all(byn["EXP_TB_%s_STEPPED" % pn]["default"] is (pn == "LOFI") for _i, pn in presets)
           and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
-          "registry: @family per-preset tunables (16 presets x 9 fields, defaults from the EXP_TB_MOD rows; Lofi / Stepped on LOFI only)")
+          "registry: @family per-preset tunables (16 presets x 10 fields, defaults from the EXP_TB_MOD rows; Lofi on AIR, Stepped on LOFI only)")
+    check(all(byn["EXP_TB_%s_RES" % pn]["default"] == 1.5 and byn["EXP_TB_%s_RES" % pn]["unit"] == "Q"
+              and byn["EXP_TB_%s_RES" % pn]["taper"] == "log" and byn["EXP_TB_%s_RES" % pn]["target"] == "filter"
+              and (byn["EXP_TB_%s_RES" % pn]["inert"] == "K2 sets Q on ANALOG") == (pn in ("SAW", "PULSE"))
+              for _i, pn in presets)
+          and all(c["inert"] is None for c in fam if not c["name"].endswith("_RES")),
+          "registry: RES per preset (default 1.5 Q, log, filter), @inert on the ANALOG presets only")
+    check(len(rows) == 16 and all(c["line"] == rows[c["preset"]] for c in fam),
+          "registry: family constants' line = the preset's EXP_TB_PRESETS row")
     check(all(c["why"] for c in reg["constants"] if c["range"])
           and byn["EXP_PS_DEC_FAST_S"]["below"] == "EXP_PS_DEC_SLOW_S" and byn["EXP_SPEC_DYN_FLOOR_DB"]["below"] == "EXP_SPEC_DYN_TOP_DB"
           and "Nyquist" in byn["EXP_LFO_HZ_MAX"]["why"] and byn["EXP_LFO_HZ_MAX"]["note"].startswith("Hz;"),

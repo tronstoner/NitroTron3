@@ -1247,6 +1247,19 @@ function buildToggleCell(c, viewKey) {
   return cell;
 }
 
+// a field that does nothing on this preset (registry @inert, e.g. RES on ANALOG: K2 sets the Q): its label and why,
+// no control (the constant still exists on the pedal; it is just not heard here)
+function buildInertCell(c, viewKey) {
+  const cell = h("div", "cell inert");
+  cell.dataset.target = c.target || c.section_target || "";
+  cell.dataset.name = c.name;
+  const lab = h("div", "lab", c.label);
+  lab.title = c.name;
+  cell.append(lab, h("div", "inert-why", c.inert),
+    infoButton((box) => explainInto(box, c, viewKey, c.label)));
+  return cell;
+}
+
 // vertical fader (in a bank): its own full range (and taper) over the whole track
 function buildFader(c, capNode, viewKey, wide) {
   const fd = h("div", "fd" + (wide ? " wide" : ""));
@@ -1338,7 +1351,7 @@ function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.pre
 // ---------------------------------------------------------------------------
 const PRESET_GROUPS = [
   { title: "Timbre", target: "timbre", fields: ["TIMBRE", "STEPPED"] },
-  { title: "Filter", target: "filter", fields: ["FILTER", "FILTER_SWELL"] },
+  { title: "Filter", target: "filter", fields: ["FILTER", "FILTER_SWELL", "RES"] },
   { title: "Pitch", target: "pitch", fields: ["PITCH"] },
   { title: "LFO speed", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
   { title: "Source", target: "env", fields: ["ENV"] },
@@ -1421,7 +1434,10 @@ function renderPresetBody(force) {
         box.appendChild(buildBank("", items, "", vk));
       } else {
         const row = h("div", "ctl-grid");
-        for (const c of mem) row.appendChild(c.type === "bool" ? buildToggleCell(c, vk) : buildDialCell(c, vk));
+        for (const c of mem) {
+          row.appendChild(c.inert ? buildInertCell(c, vk)
+            : c.type === "bool" ? buildToggleCell(c, vk) : buildDialCell(c, vk));
+        }
         box.appendChild(row);
       }
       body.appendChild(box);

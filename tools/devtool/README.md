@@ -61,6 +61,11 @@ from the pedal) and `terr` (a `T ERR` line).
   the next ` @tag` or a double space) says which limit - the info popover shows
   "Range: a .. b - <why>". `@below <NAME>`: an ordering the code needs (it
   divides by the difference / log ratio); devtool refuses a set that breaks it.
+  Per-preset families (`@family` / `@field`, explorer_tables.h): each constant's
+  file / line is its preset's table row (where the default is written).
+  `@inert <KIND> <words_with_underscores>` on a `@field`: on presets whose row
+  has that kind token (e.g. `kTbAnalog`) the preset editor shows the words
+  instead of a control (RES on SAW / PULSE: "K2 sets Q on ANALOG").
   Levels: `live` (heard at the next audio block), `reactivate` (after the next
   mode / zone change).
 - **Sync:** after `BUILD`, devtool sends `list`; the pedal is the truth

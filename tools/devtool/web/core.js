@@ -41,7 +41,7 @@ function parseBuildTime(s) {
 const NUM_LOCALE = "en-US";
 const UNIT_FMT = {
   Hz: { sig: 4 }, kHz: { sig: 3 }, s: { sig: 3 }, ms: { sig: 3 }, dB: { dec: 1 }, bits: { dec: 1 },
-  oct: { dec: 2 }, rad: { dec: 2 }, x: { sig: 3 }, "0..1": { dec: 3 }, b: { dec: 2 }, cents: { sig: 4 },
+  oct: { dec: 2 }, rad: { dec: 2 }, x: { sig: 3 }, "0..1": { dec: 3 }, b: { dec: 2 }, cents: { sig: 4 }, Q: { sig: 3 },
   knob: { dec: 2 },             // knob positions parsed from the pedal's state line
   "": { sig: 4 },
 };

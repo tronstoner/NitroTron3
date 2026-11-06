@@ -70,6 +70,24 @@ static inline int DiagHundredths(float x) { return (x > 0.f) ? (int)(x * 100.f +
 #define D2V(x) ' ', DiagHundredths(x) / 100, DiagHundredths(x) % 100
 // Signed variant (armitage K4 post filter t in [-1, 1]): the sign slot carries '-'.
 #define D2SV(x) ((x) < 0.f ? '-' : ' '), DiagHundredths(fabsf(x)) / 100, DiagHundredths(fabsf(x)) % 100
+// Compact positive value for wide-range fields (the audition bank LP Q, 4e-8 .. 5.5e6): 0.01 .. 99.99 as D2F
+// ("1.50"), outside that 2 significant digits with a decimal exponent ("5.5e6", "4.0e-8"); <= 0: "0". At most 6
+// characters (keeps the `tab` line inside diag_link's LINE_BUF). Integers only (no %f / %e in newlib-nano).
+static inline void DiagCompact(char* out, size_t n, float x) {
+  if (!(x > 0.f)) { snprintf(out, n, "0"); return; }
+  if (x >= 0.01f && x < 99.995f) {
+    const int h = DiagHundredths(x);
+    snprintf(out, n, "%d.%02d", h / 100, h % 100);
+    return;
+  }
+  int e = 0;
+  float m = x;
+  while (m >= 10.f) { m *= 0.1f; e++; }
+  while (m < 1.f)   { m *= 10.f; e--; }
+  int t = (int)(m * 10.f + 0.5f);                 // 2 significant digits: t = 10 .. 100
+  if (t >= 100) { t = 10; e++; }
+  snprintf(out, n, "%d.%de%d", t / 10, t % 10, e);
+}
 
 using namespace daisy;
 using clevelandmusicco::Hothouse;
@@ -237,7 +255,8 @@ int main() {
         // `u <knob> bt <beat Hz> prop|hz|off`); + the SW1 UP touch env / `fce` / `lfo` part (fce = the applied index fc; DOWN)
         // SW3 MID SW1 MID audition bank (EXP_TB_LEGACY = false): `tab <n>/16 <NAME> LFO|ANALOG|LOFI k2 <K2 knob>` then
         // LFO `pos <frame position>`, ANALOG `Q <LP Q at the K2 knob>`, LOFI `step <n>/16|morph`; then the preset's MOD
-        // `src lfo|env td <timbre depth> fd <filter depth oct> fs <filter swell oct> pd <pitch depth cents>` (src env: the
+        // `src lfo|env td <timbre depth> fd <filter depth oct> fs <filter swell oct> q <LP Q: RES,
+        // ANALOG the K2 Q; 1.50 / 5.5e6 / 4.0e-8> pd <pitch depth cents>` (src env: the
         // K4 touch env o drives the targets - m = K2 + td o, cutoff + fd o oct, pitch + pd o cents - and K5 does nothing),
         // LOFI also `sb <bits|off> sr <Hz|off> tb <bits|off> ti <i>` (each stage `off` at its bypass value /
         // EXP_TB_LOFI_ENABLE false); `lp .. eff ..` + the K4 touch env + `lfo ..` (K5 LFO shape, depth, rate at the knob
@@ -323,8 +342,10 @@ int main() {
             if (d.ttb > 0.f) snprintf(tb, sizeof tb, D2F, D2V(d.ttb)); else snprintf(tb, sizeof tb, " off");
             snprintf(lf, sizeof lf, " sb%s sr%s tb%s ti" D2F, sb, sr, tb, D2V(d.tti));
           }
-          snprintf(mod, sizeof mod, " src %s td" D2F " fd" D2F " fs" D2F " pd %d", d.tenv ? "env" : "lfo",
-                   D2V(d.ttd), D2V(d.tfd), D2V(d.tfs), (int)(d.tpd + 0.5f));
+          char qs[16];                                        // the LP Q this preset sets (RES / ANALOG K2 Q), compact
+          DiagCompact(qs, sizeof qs, d.tres);
+          snprintf(mod, sizeof mod, " src %s td" D2F " fd" D2F " fs" D2F " q %s pd %d", d.tenv ? "env" : "lfo",
+                   D2V(d.ttd), D2V(d.tfd), D2V(d.tfs), qs, (int)(d.tpd + 0.5f));
           diag_link::PrintLine("tab %d/%d %s %s k2" D2F "%s lofi %d stp %d%s%s lp %d eff %d%s mute %d cpu %u%%",
                             d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), kp,
                             d.tlf ? 1 : 0, d.tstp ? 1 : 0, lf, mod,
