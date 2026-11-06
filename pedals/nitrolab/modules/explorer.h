@@ -94,9 +94,9 @@
 //                preset's tonal gain at the position (bank; legacy: none); level_k (or the lo / hi blend) = the static
 //                open pick (hf = min(4000, fc) / f'_k, K3 dampener; + the 2-pole LP, see K3 2-POLE LOWPASS). A K1 zone
 //                change crossfades old -> new zone over EXP_TB_ZONE_XFADE_MS (each side its own morph m - its kind's K5
-//                offset - and the same per-band versions / blend). Bank kinds (K2 / K5): see TABLES. Bank BLOW (b > 0
-//                at the position): W_k x ((1 - b) + b j_k) (per-band amplitude jitter, see TABLES);
-//                b = 0 (legacy, most presets): stateless, the plain read.
+//                offset - and the same per-band versions / blend). Bank kinds (K2 / K5): see TABLES. Bank LOFI
+//                presets (GLASS RASPY BREATH AIR): W_k = W_clean + w_k (W_lofi - W_clean) (see TABLES LOFI);
+//                every other preset / legacy: the plain read.
 //   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> an 11th K1 zone on MID after the 10 table zones)
 //                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
 //                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
@@ -351,8 +351,8 @@
 //
 // CONTROL MAP SW3 MID (Explorer(false))
 //   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: audition bank preset (15,
-//                    stepped, 1 ms crossfade: SAW PULSE PWM SYNC VOCAL GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN
-//                    PPG METAL; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
+//                    stepped, 1 ms crossfade: SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL | LOFI: GLASS
+//                    RASPY BREATH AIR; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through the
 //                    zone's frames (JOURNEY: the start S of the K5 travel, live), ANALOG presets: LP resonance Q 0.3 -> 3
 //                    (EXP_TF_Q_MIN / MAX, exponential); DOWN: per model (see MODELS)
@@ -418,27 +418,29 @@
 // knob, the effective LP cutoff (Hz) instead of `fc` (parked ladder: lp / eff = the ladder's). Audition bank: `tab <n>/15
 // <NAME> LFO|ANALOG m<knob> pos<frame position>` (ANALOG `Q<at the K2 knob>`) `lp .. eff ..` + the touch env / lfo part;
 // JOURNEY `tab <n>/15 <NAME> JOURNEY lp .. eff ..` + the touch env + ` S<start = K2 knob> dir fwd|back|still rate <s for
-// the whole journey at the K5 knob; 0 = still>s pos<applied morph now> blow<applied b now>` (no lfo part).
+// the whole journey at the K5 knob; 0 = still>s pos<applied morph now>` (no lfo part). Every audition-bank line carries
+// `lofi fo+<N> b<N> interp|nn` (or `lofi off`) after the kind (TbLofiText).
 //
 // TABLES (SW1 MID; built at Init into SDRAM, int16, packed [frame][version][sample]). TWO BANKS (EXP_TB_LEGACY):
-// AUDITION BANK (default; 2026-11-06; BuildBank): 15 presets, data in explorer_tables.h (recipes, key stages, blow, level
-//   rules per preset: a new preset = data, no code), each frame through the LEGACY pipeline below (time domain -> DFT
+// AUDITION BANK (default; 2026-11-06; BuildBank): 15 presets, data in explorer_tables.h (recipes, key stages, level
+//   rules, LOFI per preset: a new preset = data, no code), each frame through the LEGACY pipeline below (time domain -> DFT
 //   or harmonic amplitudes -> peak 1 -> re-phase / RMS match + cap -> 14 band-limited versions). Frames between two key
 //   stages: same generator -> its parameter interpolated (a sweep); different generators -> per-harmonic dB
-//   interpolation of the two stages' magnitudes (EXP_TB_JOURNEY_FLOOR_DB). Per frame also a tonal gain and a blow
-//   amount b (explorer_tb_tone / explorer_tb_blow), read at the morph position (Derive, linear between the two frames).
+//   interpolation of the two stages' magnitudes (EXP_TB_JOURNEY_FLOOR_DB). Per frame also a tonal gain
+//   (explorer_tb_tone), read at the morph position (Derive, linear between the two frames).
 //   KINDS  LFO      PWM SYNC VOCAL PPG: K2 = morph, K5 = the K5 LFO on the morph (as the legacy zones)
-//          JOURNEY  GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN METAL: K2 = morph start S, K5 = K5 JOURNEY (direction +
+//          JOURNEY  WOOD REED BRASS ORGAN METAL GLASS RASPY BREATH AIR: K2 = morph start S, K5 = K5 JOURNEY (direction +
 //                   speed of the travel)
 //          ANALOG   SAW PULSE (1 frame): K2 = LP Q, K5 = the K5 LFO on the LP cutoff (TfUpdate / TabFilter)
-//   BLOW   (2026-11-06; replaces the separate noise layer; wet only, in the table read itself): b > 0 -> per SW2 slot and
-//          band k, while the band sounds, per 8 kHz sample: one LCG step (uniform x sqrt(3)) -> one-pole lowpass j_k
-//          (EXP_TB_BLOW_FC 200 Hz, explorer_tb_rt.jl) -> read phase phi_k + b DEPTH g j_k, wrapped (g = the one-pole's
-//          unit-RMS gain, 2026-11-06: AMPLITUDE jitter, no DEPTH; was phase jitter). Table harmonic h (old phase law): carrier -4.34
-//          (2 pi h b DEPTH)^2 dB, the rest a noise band around it (power kept), width ~BLOW_FC .. (2 pi h b DEPTH)^2
-//          BLOW_FC - grows with h. b = 0: the jitter is not run, the read is the plain one (bit-identical). Zone
-//          crossfade: the entering side advances the slot's jitter (the fading side only when the entering one has
-//          b = 0); both read it. Presets: GLASS 0 -> .5 -> 1, BREATH 0 -> .4 -> 1, AIR .8 -> 1; every other one 0.
+//   K1 order SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL | GLASS RASPY BREATH AIR (the LOFI presets, CW end).
+//   LOFI   (2026-11-06; replaces BLOW; wet only, in the table read itself, stateless; laws: explorer_constants.h
+//          EXP_TB_LOFI_*): per band k of a lofi preset, weight w_k (explorer_tb_rt.lw, Init, from f'_k and the preset's
+//          roll-off): w_k = 0 -> the clean read only; w_k = 1 -> the lofi read only; else W_clean + w_k (W_lofi - W_clean).
+//          Lofi read = version min(pick + fo, 13) (pick = the clean read's anti-fold / dampener version; a pick slide
+//          crossfades the lofi read's old -> new version too, as the clean one), nearest-sample (nn) or linear, frame
+//          morph linear, then rounded to 2^(bits - 1) steps of the int16 full scale (bits > 0), then x the zone scale.
+//          Lofi off (EXP_TB_LOFI_ENABLE false / all levers 0): the clean read, unchanged. EXP_TB_BLEND = true (parked):
+//          the blended read ignores lofi (clean).
 // LEGACY (EXP_TB_LEGACY = true; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*):
 // per zone F_z frames (frame 1 = the exact base wave), u = frame / (F_z - 1).
 // Each frame: defined in the time domain at EXP_TB_TD_SIZE (1024) points and analysed by DFT into harmonics 1..127
@@ -465,18 +467,20 @@
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
 // No dynamic allocation. Tables: audition bank 210 frames x 14 x 256 int16 = 1.44 MB in SDRAM (legacy: 66 frames =
 // 462 KB; explorer_tb, own array, built once, shared read-only by both instances; the second Init skips the build) +
-// 2 x 210 floats tone / blow (SDRAM); blow jitter / ANALOG-Q runtime explorer_tb_rt 1.3 KB (D2 SRAM, SW3 MID only). FM LAB ADDITIVE state: explorer_add_st,
+// 210 floats tone (SDRAM); ANALOG-Q + LOFI weights runtime explorer_tb_rt (D2 SRAM, SW3 MID only; 4 lofi presets x 3 x
+// 84 floats = 4 KB + 256 B). FM LAB ADDITIVE state: explorer_add_st,
 // 12 x 3 x 84 floats = 12 KB (one copy, the lab instance only; D2 SRAM, EXP_FAST_BSS - 2026-11-02, was SDRAM).
 // SPECTRAL has no per-band state (17-float weight table in the instance). (DUAL VOICE's explorer_dual_st, 9 KB,
 // removed 2026-11-03.)
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>             // snprintf (DIAG text: TbLofiText)
 #include "module.h"
 #include "knob_map.h"          // RemapKnob, Quantize
 #include "armitage_bands.h"    // band engine (read-only use)
 #include "explorer_constants.h"
-#include "explorer_tables.h"     // SW1 MID audition bank (EXP_TB_LEGACY = false): presets / stages / blow per preset
+#include "explorer_tables.h"     // SW1 MID audition bank (EXP_TB_LEGACY = false): presets / stages / lofi per preset
 #include "env_follower.h"      // EnvFollower (live follower on top of the FM envelope)
 #include "moog_ladder.h"       // MoogLadder (NitroTron3 Mode A's Huovilainen ladder, used as is): parked SW1 MID K3 lowpass (EXP_LAD_ENABLE)
 
@@ -509,10 +513,9 @@ static float DTCM_MEM_SECTION explorer_sin_tab[explorer_k::EXP_SIN_SIZE + 1];
 // audition bank (explorer_tables.h; scale = the preset's), EXP_TB_BANK_FRAMES frames.
 static int16_t DSY_SDRAM_BSS explorer_tb[explorer_k::EXP_TB_TOTAL_FRAMES]
                                         [explorer_k::EXP_TB_LEVELS][explorer_k::EXP_TB_SIZE];
-// Audition bank (EXP_TB_LEGACY = false): tonal gain and blow amount b per packed frame (BuildBank; linear in the stage
-// position), read per 8 kHz sample at the morph position (Derive). SDRAM; unused with the legacy bank.
+// Audition bank (EXP_TB_LEGACY = false): tonal gain per packed frame (BuildBank; linear in the stage position), read
+// per 8 kHz sample at the morph position (Derive). SDRAM; unused with the legacy bank.
 static float DSY_SDRAM_BSS explorer_tb_tone[explorer_k::EXP_TB_TOTAL_FRAMES];
-static float DSY_SDRAM_BSS explorer_tb_blow[explorer_k::EXP_TB_TOTAL_FRAMES];
 // Init-only table build scratch (SDRAM: keeps DTCM free).
 struct ExplorerTbScratch {
   float x[explorer_k::EXP_TB_TD_SIZE];                                  // time-domain frame
@@ -523,15 +526,12 @@ struct ExplorerTbScratch {
 };
 static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
 // Audition bank runtime (SW3 MID instance only - tables never run on FM LAB; D2 SRAM, EXP_FAST_BSS, NOLOAD: Init sets
-// it). BLOW: the jitter one-pole state per SW2 slot and band, the LCG, the one-pole coefficient and the unit-RMS gain x
-// amplitude jitter (ShapeK<kWT>, only while b > 0); ANALOG LP Q per 8 kHz sample (TfUpdate -> TabFilter; 0 = not ANALOG).
+// it). ANALOG LP Q per 8 kHz sample (TfUpdate -> TabFilter; 0 = not ANALOG); LOFI per-band weight w_k per lofi preset
+// (EXP_TB_LOFI_MAP slot), SW2 slot and band (Init; read-only after it, ShapeK<kWT>).
 struct ExplorerTbRt {
   static constexpr int kSub = 64;                // 8 kHz samples per block held (= Explorer::kLadSub)
   float q[kSub];                                 // ANALOG LP Q per 8 kHz sample (0 = not ANALOG: EXP_TF_Q)
-  float jl[3][armbands::kArmBands];              // BLOW: one-pole state j per slot (up / played / down) and band
-  uint32_t rng;                                  // BLOW: LCG state (one step per sounding band per 8 kHz sample, b > 0)
-  float jc;                                      // BLOW: one-pole coefficient 1 - exp(-2 pi EXP_TB_BLOW_FC / sr8)
-  float jg;                                      // BLOW: unit-RMS gain sqrt((2 - jc) / jc)
+  float lw[explorer_k::EXP_TB_LOFI_N][3][armbands::kArmBands];   // LOFI weight w_k (slot up / played / down, band)
 };
 static ExplorerTbRt EXP_FAST_BSS explorer_tb_rt;
 // explorer_sin_tab + explorer_tb are filled by the first Init; further instances (SW3 DOWN) skip the build.
@@ -756,16 +756,25 @@ class Explorer : public Module {
       else               BuildBank();
       explorer_tables_built = true;
     }
-    if (!EXP_TB_LEGACY && !lab_) {               // audition bank runtime (BLOW jitter, ANALOG Q), D2 SRAM (NOLOAD)
+    if (!EXP_TB_LEGACY && !lab_) {               // audition bank runtime (ANALOG Q, LOFI weights), D2 SRAM (NOLOAD)
       ExplorerTbRt& R = explorer_tb_rt;
-      R.jc = 1.f - expf(-6.283185307f * EXP_TB_BLOW_FC / sr8_);    // jitter one-pole (8 kHz)
-      R.jg = sqrtf((2.f - R.jc) / R.jc);                             // unit RMS for unit-RMS white: var ratio c / (2 - c)
-      for (int o = 0; o < kSlots; o++)
-        for (int k = 0; k < kBands; k++) R.jl[o][k] = 0.f;
-      R.rng = EXP_TB_BLOW_SEED;
       for (int j = 0; j < ExplorerTbRt::kSub; j++) R.q[j] = 0.f;
+      for (int s = 0; s < EXP_TB_LOFI_N; s++)    // LOFI w_k: 1 at / below F_LO, 0 at / above F_HI, log-linear between
+        for (int o = 0; o < kSlots; o++)         // (a slot without a lofi preset: 0, never read)
+          for (int k = 0; k < kBands; k++) R.lw[s][o][k] = 0.f;
+      for (int z = 0; z < EXP_TB_BANK_N; z++) {
+        const int s = EXP_TB_LOFI_MAP.slot[z];
+        if (s < 0) continue;
+        const ExpTbLofi& L = EXP_TB_PRESETS[z].lofi;
+        const float lhi = logf(L.fhi), ir = 1.f / (lhi - logf(L.flo));
+        for (int o = 0; o < kSlots; o++)
+          for (int k = 0; k < kBands; k++) {
+            const float f = fp_[o][k];
+            R.lw[s][o][k] = (f <= L.flo) ? 1.f : (f >= L.fhi) ? 0.f : (lhi - logf(f)) * ir;
+          }
+      }
     }
-    tb_aw_ = 0.f; tb_m_now_ = 0.f; tb_b_now_ = 0.f;
+    tb_aw_ = 0.f; tb_m_now_ = 0.f;
     // K5 JOURNEY (JourneyUpdate): offset 0, still; the step is computed on the first sample.
     jrn_o_ = 0.f; jrn_step_ = 0.f; jrn_t5_ = 2.f;
     lab_m_t_ = -1;                               // FM LAB 2-OP: no UP mode until Controls (ratio slide at rest, r 1)
@@ -1031,7 +1040,6 @@ class Explorer : public Module {
     float tm;         // applied morph m now (JOURNEY: S + the K5 travel offset; LFO kind: + the LFO), latest 8 kHz sample
     int   jdir;       // JOURNEY: K5 direction at the knob: +1 forward (CW), -1 backward (CCW), 0 still (noon)
     float jT;         // JOURNEY: time for the whole journey at the K5 knob's speed (s; 1 / rate), 0 = still
-    float tb;         // audition bank: applied blow amount b now (latest 8 kHz sample; 0 = none)
     bool  mute;
   };
   void Activate() override {
@@ -1116,6 +1124,18 @@ class Explorer : public Module {
   static const char* TbKindName(int k) {         // DIAG
     return (k == explorer_k::kTbJourney) ? "JOURNEY" : (k == explorer_k::kTbAnalog) ? "ANALOG" : "LFO";
   }
+  // DIAG: the LOFI mode of audition-bank preset z as `lofi fo+<N> b<N> interp|nn`, or `lofi off` (clean: the preset's
+  // levers all 0 / EXP_TB_LOFI_ENABLE false / legacy / out of range). Into buf (n bytes); returns buf.
+  static const char* TbLofiText(int z, char* buf, int n) {
+    using namespace explorer_k;
+    if (EXP_TB_LEGACY || z < 0 || z >= EXP_TB_BANK_N || EXP_TB_LOFI_MAP.slot[z] < 0) {
+      snprintf(buf, n, "lofi off");
+      return buf;
+    }
+    const ExpTbLofi& L = EXP_TB_PRESETS[z].lofi;
+    snprintf(buf, n, "lofi fo+%d b%d %s", (int)L.fo, (int)L.bits, L.nn ? "nn" : "interp");
+    return buf;
+  }
   // ANALOG LP Q at the K2 value (0..1): EXP_TF_Q_MIN (EXP_TF_Q_MAX / EXP_TF_Q_MIN)^k2 (the EXP_TF_Q_ON_K5 law, read on K2).
   static inline float TbAnalogQ(float k2) {
     using namespace explorer_k;
@@ -1187,16 +1207,14 @@ class Explorer : public Module {
       const int mnew = var_ >> 6, mold = vfrom_ >> 6;
       pn_ = Derive(mnew, var_ & 63, k2s_, k3s_, DiscOf(mnew), loop_ ? o2_ : LfoO2(mnew, var_ & 63), d3);
       if (fading) pf_ = Derive(mold, vfrom_ & 63, k2s_, k3s_, DiscOf(mold), loop_ ? o2_ : LfoO2(mold, vfrom_ & 63), d3);
-      if (mnew == kWT) { tb_m_now_ = pn_.b; tb_b_now_ = pn_.p3; }   // DIAG: the applied morph m (JOURNEY: incl. the K5
-                                                                      // travel) and blow b (bank; legacy: 0)
+      if (mnew == kWT) tb_m_now_ = pn_.b;        // DIAG: the applied morph m (JOURNEY: incl. the K5 travel)
       if (mnew == kLADD) AddWeights(pn_, 0);    // ADDITIVE: series weights (cached; recomputed when h / series moved)
       if (fading && mold == kLADD) AddWeights(pf_, 1);
       if (mnew == kLSPEC) SpecWeights(pn_);     // SPECTRAL: partial weights (one table; recomputed when an input moved)
       if (fading && mold == kLSPEC) SpecWeights(pf_);
-      // ADDITIVE unison theta / audition bank BLOW jitter: advanced by the entering side; by the fading side only when
-      // the entering one has none (BLOW: a table zone -> table zone crossfade whose entering side has b > 0)
+      // ADDITIVE unison theta: advanced by the entering side; by the fading side only when the entering one has none
       pn_.adv = true;
-      pf_.adv = !(mnew == kLADD && AddIsUni(var_ & 63)) && !(mnew == kWT && mold == kWT && pn_.p3 > 0.f);
+      pf_.adv = !(mnew == kLADD && AddIsUni(var_ & 63));
       mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_cur_ + 1) : 1.f;
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
       // audition bank ANALOG weight on the LP (K2 = Q, K5 LFO on the cutoff): 1 while an ANALOG preset runs, slid with
@@ -2854,8 +2872,8 @@ class Explorer : public Module {
       }
       case kWT: {                          // morph m = K2: n0 = packed frame below, n1 = the frame above (n0 + 1;
                                            // a 1-frame preset: n0), p0 = fraction toward n1, p1 = 1 / zone storage
-                                           // scale (WaveMorph MorphPos / Shape); audition bank: p2 = tonal gain,
-                                           // p3 = blow amount b at the position (linear between the two frames)
+                                           // scale (WaveMorph MorphPos / Shape); audition bank: p2 = tonal gain at
+                                           // the position (linear between the two frames)
         const int nf = TbFrames(zone);
         const float mm = Clamp01(k2 + o2);                // morph m in [0, 1]
         const float pos = (float)(nf - 1) * mm;
@@ -2867,9 +2885,8 @@ class Explorer : public Module {
         p.p0 = pos - (float)f0;
         p.p1 = 1.f / TbScale(zone);
         if (!EXP_TB_LEGACY) {
-          const float t0 = explorer_tb_tone[p.n0], b0 = explorer_tb_blow[p.n0];
+          const float t0 = explorer_tb_tone[p.n0];
           p.p2 = t0 + p.p0 * (explorer_tb_tone[p.n1] - t0);
-          p.p3 = b0 + p.p0 * (explorer_tb_blow[p.n1] - b0);
         }
         p.a = pos; p.b = mm; break;
       }
@@ -2885,8 +2902,7 @@ class Explorer : public Module {
     return p;
   }
 
-  // One 8 kHz sample of slot o: derive u_k, return the model's band sum sum_k w_k a_k W_k. (A zone crossfade runs the
-  // entering side first: it advances the slot's BLOW jitter when its b > 0, the fading side then reads it - p.adv.)
+  // One 8 kHz sample of slot o: derive u_k, return the model's band sum sum_k w_k a_k W_k.
   float RunSlot(int o, bool fading) {
     if (!slot_on_[o]) { ResetSlotState(o); slot_on_[o] = true; }
     Prep(o, NeedsPhaseV(var_) || (fading && NeedsPhaseV(vfrom_)));
@@ -2990,18 +3006,22 @@ class Explorer : public Module {
     const uint8_t* __restrict tlo  = tblo_[o];                // EXP_TB_BLEND: lower version, weight 1 - x
     const float*   __restrict tx   = tbx_[o];                 //               blend weight x toward lo + 1
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
-    // audition bank BLOW (tables only, b = p.p3 > 0; 0 = the plain read, nothing below runs; 2026-11-06 AMPLITUDE jitter,
-    // was phase jitter): per sounding band one LCG step -> the slot's one-pole j_k (unit RMS, narrowband at
-    // EXP_TB_BLOW_FC; only when p.adv: this side advances it); W_k x ((1 - b) + b jg j_k), jg = the unit-RMS gain ->
-    // every partial of the table becomes a noise band ~FC wide at its own pitch, level from the table (b 1: only those).
-    const float bl = (M == kWT && !EXP_TB_LEGACY) ? p.p3 : 0.f;
-    ExplorerTbRt& R = explorer_tb_rt;
-    float* __restrict jl = R.jl[o];
-    const float jc = R.jc;
-    const float jk = bl * EXP_TB_BLOW_DEPTH;     // wavering depth at this blow amount (2026-11-06)
-    const bool  jadv = p.adv;
-    uint32_t    jx = R.rng;
-    constexpr float kBlowU = 1.7320508f / 2147483648.f;   // int32 -> uniform [-1, 1) x sqrt(3) (unit RMS)
+    // audition bank LOFI (tables only; EXP_TB_LOFI_* / TABLES LOFI): the preset's levers and this slot's per-band weights
+    // w_k; nullptr = clean (every non-lofi preset, EXP_TB_LOFI_ENABLE false, legacy, the parked EXP_TB_BLEND read).
+    const float* __restrict lwp = nullptr;
+    int   lfo = 0;                               // FOLDOVER: versions brighter than the pick
+    bool  lnn = false;                           // NO INTERPOLATION
+    float lq = 0.f, lqi = 0.f;                   // BITS: step 2^(16 - bits) int16 units and its inverse (0 = off)
+    if (M == kWT && !EXP_TB_LEGACY && !EXP_TB_BLEND) {
+      const int ls = (p.zone >= 0 && p.zone < EXP_TB_BANK_N) ? EXP_TB_LOFI_MAP.slot[p.zone] : -1;
+      if (ls >= 0) {
+        const ExpTbLofi& LF = EXP_TB_PRESETS[p.zone].lofi;
+        lwp = explorer_tb_rt.lw[ls][o];
+        lfo = LF.fo;
+        lnn = LF.nn;
+        if (LF.bits > 0) { lq = (float)(1 << (16 - LF.bits)); lqi = 1.f / lq; }
+      }
+    }
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
@@ -3011,21 +3031,6 @@ class Explorer : public Module {
       }
       const float cr = ur[k], ci = ui[k];
       float W;
-      float wph = 0.f;                           // tables: read phase phi_k
-      float jam = 1.f;                           // BLOW amplitude factor (1 - b) + b jg j_k
-      if (M == kWT) {
-        wph = phs[k];
-        if (bl > 0.f) {
-          float j = jl[k];
-          if (jadv) {
-            jx = jx * 1664525u + 1013904223u;
-            j += jc * ((float)(int32_t)jx * kBlowU - j);
-            jl[k] = j;
-          }
-          const float x = R.jg * j;              // unit-RMS noise, softly limited to (-1, 1): no peaks
-          jam = 1.f + jk * (x / (1.f + fabsf(x)));   // the tone always stays, wavers +- b DEPTH (2026-11-06)
-        }
-      }
       if (M == kFM) {
         // m = sin(2 pi pm + b (m1 + m2) / 2), W = cos(2 pi phi + I m); pm at r x the band's phase.
         const float pm = AccPhase(o, k, phs[k], p.p0);
@@ -3099,7 +3104,7 @@ class Explorer : public Module {
         const float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
         W = H + p.p1 * (cr - H);
       } else if (M == kWT && EXP_TB_BLEND) {     // WaveMorph's Shape, versions lo / lo + 1 blended (x)
-        const float ph = wph;
+        const float ph = phs[k];
         const float xi = ph * (float)EXP_TB_SIZE;
         const int   i0 = (int)xi;
         const float fr = xi - (float)i0;
@@ -3120,24 +3125,45 @@ class Explorer : public Module {
         }
         W = Wv * p.p1;
       } else if (M == kWT) {                     // WaveMorph's Shape: frames n0 / n0 + 1 of the packed tables
-        const float ph = wph;
+        const float ph = phs[k];
         const int lv = wlv[k];
-        const int16_t* t0 = explorer_tb[p.n0][lv];
-        const int16_t* t1 = explorer_tb[p.n1][lv];
         const float xi = ph * (float)EXP_TB_SIZE;
         const int   i0 = (int)xi;
         const float fr = xi - (float)i0;
         const int   j0 = i0 & (EXP_TB_SIZE - 1), j1 = (i0 + 1) & (EXP_TB_SIZE - 1);
-        const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
-        const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
-        W = (v0 + p.p0 * (v1 - v0)) * p.p1;
-        if (pkf > 0 && wlvf[k] != lv) {          // dampener: version moved -> linear crossfade old -> new
-          const int16_t* u0 = explorer_tb[p.n0][wlvf[k]];
-          const int16_t* u1 = explorer_tb[p.n1][wlvf[k]];
-          const float w0 = (float)u0[j0] + fr * (float)(u0[j1] - u0[j0]);
-          const float w1 = (float)u1[j0] + fr * (float)(u1[j1] - u1[j0]);
-          const float Wf = (w0 + p.p0 * (w1 - w0)) * p.p1;
-          W = Wf + pkg * (W - Wf);
+        const float lw = (lwp != nullptr) ? lwp[k] : 0.f;   // LOFI weight w_k (0: the clean read only)
+        W = 0.f;
+        if (lw < 1.f) {                          // clean read
+          const int16_t* t0 = explorer_tb[p.n0][lv];
+          const int16_t* t1 = explorer_tb[p.n1][lv];
+          const float v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
+          const float v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
+          W = (v0 + p.p0 * (v1 - v0)) * p.p1;
+          if (pkf > 0 && wlvf[k] != lv) {        // dampener: version moved -> linear crossfade old -> new
+            const int16_t* u0 = explorer_tb[p.n0][wlvf[k]];
+            const int16_t* u1 = explorer_tb[p.n1][wlvf[k]];
+            const float w0 = (float)u0[j0] + fr * (float)(u0[j1] - u0[j0]);
+            const float w1 = (float)u1[j0] + fr * (float)(u1[j1] - u1[j0]);
+            const float Wf = (w0 + p.p0 * (w1 - w0)) * p.p1;
+            W = Wf + pkg * (W - Wf);
+          }
+        }
+        if (lw > 0.f) {                          // LOFI read: version pick + fo (clamped), nearest / linear, bits
+          const int jn = (int)(xi + 0.5f) & (EXP_TB_SIZE - 1);
+          int lvl = lv + lfo;
+          if (lvl > EXP_TB_LEVELS - 1) lvl = EXP_TB_LEVELS - 1;
+          float WL = TbLofiRead(p, lvl, lnn, jn, j0, j1, fr);
+          if (pkf > 0 && wlvf[k] != lv) {        // dampener pick slide: the lofi read's old version as well
+            int lvf = wlvf[k] + lfo;
+            if (lvf > EXP_TB_LEVELS - 1) lvf = EXP_TB_LEVELS - 1;
+            if (lvf != lvl) {
+              const float WLf = TbLofiRead(p, lvf, lnn, jn, j0, j1, fr);
+              WL = WLf + pkg * (WL - WLf);
+            }
+          }
+          if (lq > 0.f) WL = floorf(WL * lqi + 0.5f) * lq;   // BITS: nearest step of the int16 full scale
+          WL *= p.p1;
+          W = (lw >= 1.f) ? WL : W + lw * (WL - W);
         }
       } else {                                   // kBIT: step shape tri / saw / pulse (K3)
         const float ph = phs[k];
@@ -3148,12 +3174,24 @@ class Explorer : public Module {
           W = Wf + pkg * (W - Wf);
         }
       }
-      if (M == kWT) W *= jam;                    // BLOW (1 exactly when b = 0)
       acc += (played ? wmid_[k] : 1.f) * a * W;
     }
-    if (M == kWT && bl > 0.f && jadv) R.rng = jx;   // BLOW: the LCG moved on
     if (M == kWT && !EXP_TB_LEGACY) acc *= p.p2;    // audition bank: the tonal gain on the table output
     return acc;
+  }
+
+  // LOFI table read (ShapeK<kWT>): frames n0 / n1 at version lv, nearest sample jn (nn) or linear (j0 / j1 / fr), frame
+  // morph p0 linear; int16 units (unscaled).
+  static inline float TbLofiRead(const Params& p, int lv, bool nn, int jn, int j0, int j1, float fr) {
+    const int16_t* t0 = explorer_tb[p.n0][lv];
+    const int16_t* t1 = explorer_tb[p.n1][lv];
+    float v0, v1;
+    if (nn) { v0 = (float)t0[jn]; v1 = (float)t1[jn]; }
+    else {
+      v0 = (float)t0[j0] + fr * (float)(t0[j1] - t0[j0]);
+      v1 = (float)t1[j0] + fr * (float)(t1[j1] - t1[j0]);
+    }
+    return v0 + p.p0 * (v1 - v0);
   }
 
   // BITTAB band output at phase ph with S steps (pattern subsampled every 16 / S-th step).
@@ -3608,8 +3646,8 @@ class Explorer : public Module {
   }
 
   // AUDITION BANK (EXP_TB_LEGACY = false): every preset of explorer_tables.h, frame by frame through the same steps:
-  // TbBankFrame (recipe at u -> A, B, peak 1) -> the preset's re-phase / RMS-match rules -> TbStore; tonal gain / blow
-  // amount per frame into explorer_tb_tone / explorer_tb_blow. RMS target = the plain saw built as legacy (zone 3 frame 1).
+  // TbBankFrame (recipe at u -> A, B, peak 1) -> the preset's re-phase / RMS-match rules -> TbStore; tonal gain per
+  // frame into explorer_tb_tone. RMS target = the plain saw built as legacy (zone 3 frame 1).
   void BuildBank() {
     using namespace explorer_k;
     static_assert(EXP_SIN_SIZE == EXP_TB_TD_SIZE, "table build indexes explorer_sin_tab exactly (as wavemorph)");
@@ -3625,32 +3663,31 @@ class Explorer : public Module {
       tb_off_[z] = off;
       for (int f = 0; f < P.frames; f++) {
         const float u = (P.frames > 1) ? (float)f / (float)(P.frames - 1) : 0.f;
-        float tone = 1.f, bw = 0.f;
-        TbBankFrame(z, P, u, A, B, tone, bw, ckz, cki);
+        float tone = 1.f;
+        TbBankFrame(z, P, u, A, B, tone, ckz, cki);
         if (P.rephase) TbRephase(A, B, P.rms);
         if (P.rms) TbRmsMatch(A, B, P.scale, rms_saw);
         TbStore(A, B, P.scale, off + f);
         explorer_tb_tone[off + f] = tone;
-        explorer_tb_blow[off + f] = bw;
       }
       off += P.frames;
     }
   }
-  // Frame of preset P at morph position u (0..1) -> A, B (peak 1), tonal gain, blow amount. Segment i = the last stage
+  // Frame of preset P at morph position u (0..1) -> A, B (peak 1), tonal gain. Segment i = the last stage
   // with pos <= u (< the last), t = (u - pos_i) / (pos_i+1 - pos_i):
   //   one stage / t = 0 / t = 1: that stage, generated directly;
   //   same generator and list at both stages: the parameter interpolated linearly, generated directly (a sweep);
   //   else: per harmonic, the two stages' magnitudes (each normalised to RMS 1; cached per segment) interpolated in dB:
   //     a_h = exp((1 - t) ln max(m0, F) + t ln max(m1, F)), F = EXP_TB_JOURNEY_FLOOR_DB; both <= F (or the result
   //     <= F): 0; sine phase; then peak 1.
-  //   tone / blow: linear in t.
-  void TbBankFrame(int z, const explorer_k::ExpTbPreset& P, float u, float* A, float* B, float& tone, float& bw,
+  //   tone: linear in t.
+  void TbBankFrame(int z, const explorer_k::ExpTbPreset& P, float u, float* A, float* B, float& tone,
                    int& ckz, int& cki) {
     using namespace explorer_k;
     if (P.nst == 1) {
       const ExpTbStage& S = P.st[0];
       TbStageSpec(S, S.p, A, B, true);
-      tone = S.tone; bw = S.blow;
+      tone = S.tone;
       return;
     }
     int i = 0;
@@ -3659,7 +3696,6 @@ class Explorer : public Module {
     const ExpTbStage& S1 = P.st[i + 1];
     const float t = Clamp01((u - S0.pos) / (S1.pos - S0.pos));
     tone = S0.tone + t * (S1.tone - S0.tone);
-    bw = S0.blow + t * (S1.blow - S0.blow);
     if (t <= 0.f) { TbStageSpec(S0, S0.p, A, B, true); return; }
     if (t >= 1.f) { TbStageSpec(S1, S1.p, A, B, true); return; }
     if (S0.gen == S1.gen && S0.list == S1.list) { TbStageSpec(S0, S0.p + t * (S1.p - S0.p), A, B, true); return; }
@@ -3826,7 +3862,6 @@ class Explorer : public Module {
       s.jdir = (r > 0.f) ? 1 : (r < 0.f) ? -1 : 0;
       s.jT = (r != 0.f) ? 1.f / fabsf(r) : 0.f;
     }
-    s.tb = tb_b_now_;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -4071,7 +4106,6 @@ class Explorer : public Module {
   float jrn_t5_ = 2.f;             // JOURNEY K5: t5 the step was computed for (2 = force)
   float tb_aw_ = 0.f;              // ANALOG weight on the LP this 8 kHz sample (TbAnalogW; 0 = not ANALOG)
   volatile float tb_m_now_ = 0.f;  // DIAG: applied morph m of the current table side (Process)
-  volatile float tb_b_now_ = 0.f;  // DIAG: applied blow amount b of the current table side (Process; 0 = none)
   int   diag_tbz_ = -1;            // DIAG: audition bank preset of the last Controls (-1 = not the bank's tables)
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)

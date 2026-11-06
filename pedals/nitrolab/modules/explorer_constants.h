@@ -62,7 +62,7 @@ constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number
 //                            values exact (approved, tuned there) - exactly the tables of 45c2f4e (byte-identical render).
 //   EXP_TB_LEGACY = false -> the AUDITION BANK (default): 15 data-driven presets, recipes in explorer_tables.h (one place;
 //                            a new preset / journey = data, not code), kinds LFO / JOURNEY / ANALOG (K2 / K5 per kind,
-//                            see explorer.h TABLES), blow amount per frame (amplitude jitter, EXP_TB_BLOW_*).
+//                            see explorer.h TABLES), per-preset LOFI mode (EXP_TB_LOFI_*).
 // K1 = zone / preset (equal stepped zones, EXP_TB_ZONE_XFADE_MS crossfade on a change), K2 = morph m: position
 // (F_z - 1) m through the zone's frames, linear crossfade between the two adjacent frames (ANALOG: K2 = LP Q).
 // Built at Init into SDRAM (explorer_tb, int16, packed [frame][version][sample]). See explorer.h TABLES.
@@ -162,7 +162,7 @@ constexpr float EXP_TB_CLIP_H1        = 0.3f;    // clipper: 1: H1; 2..KNEE: FLA
 constexpr float EXP_TB_CLIP_FLAT      = 0.8f;    // (= WM_CLIP_FLAT)
 constexpr int   EXP_TB_CLIP_KNEE      = 24;      // (= WM_CLIP_KNEE)
 constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n without harmonics 1 .. this (= WM_PPGFB_SKIP)
-// --- AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): recipes / stages / blow per preset in explorer_tables.h ---
+// --- AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): recipes / stages / lofi per preset in explorer_tables.h ---
 // Build (BuildBank, Init): every frame goes through the legacy pipeline (time-domain DFT or harmonic list -> peak 1 ->
 // the preset's re-phase / RMS-match / storage-cap rules -> 14 band-limited int16 versions). A frame between two key
 // stages: same generator (and list) at both stages -> the generator's PARAMETER is interpolated (a real sweep: formant
@@ -170,20 +170,23 @@ constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n withou
 // are interpolated in dB per harmonic (moving harmonic amplitudes; an absent partial grows from the floor below).
 constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spectrum: floor of the per-harmonic dB interpolation
                                                    // (a partial absent at one stage starts / ends here; at / below it: 0)
-// BLOW (wet only; SW3 MID SW1 MID audition bank; 2026-11-06, replaces the separate noise layer): per-band PHASE JITTER
-// of the table read. Per SW2 slot and band k: j_k = white noise (ONE 32-bit LCG, uniform x sqrt(3) = unit RMS, one step
-// per band) -> one-pole lowpass (cutoff EXP_TB_BLOW_FC, 8 kHz) -> unit RMS (fixed gain sqrt((2 - c) / c), c = the
-// one-pole coefficient). 2026-11-06: AMPLITUDE jitter W_k x ((1 - b) + b j_k) (was phase jitter: smeared high partials into hiss), b = the blow amount at the
-// morph position (per-frame recipe value, explorer_tables.h; 0 = the plain read, bit-identical, jitter not run).
-// Table harmonic h is phase-modulated by 2 pi h b DEPTH j_k (RMS): its carrier falls to exp(-(2 pi h b DEPTH)^2 / 2)
-// = -4.34 (2 pi h b DEPTH)^2 dB, the rest of its power becomes a noise band around it - ~BLOW_FC wide while the carrier
-// holds, ~(2 pi h b DEPTH)^2 BLOW_FC once it is gone: every partial a noise band whose width grows with h (power kept).
-// DEPTH = 0.12 (2026-11-06): b = 1 = wind - every table harmonic from h 3 up has lost its carrier (h3 -22 dB, h4 -40,
-// h5 -62), h1 / h2 keep a breathy carrier (-2.5 / -10 dB), their noise bands (~1 kHz at h3) keep the surface's lowest
-// resonances. (0.35 would take h1 to -21 dB too, but then b 0.4 / 0.8 = already broadband hiss on every surface.)
-constexpr float    EXP_TB_BLOW_FC    = 100.f;   // Hz; noise one-pole cutoff = width of the noise band around every partial (2026-11-06: 200 -> 30, amplitude jitter; 30 -> 10, too rough)
-constexpr float    EXP_TB_BLOW_DEPTH = 0.3f;   // 2026-11-06: tone always stays and wavers W x (1 + b DEPTH softclip(noise)); replaces the replace-law + EXP_TB_BLOW_SCALE
-constexpr uint32_t EXP_TB_BLOW_SEED  = 0x6D2B79F5u;   // LCG start state (x = 1664525 x + 1013904223)
+// LOFI MODE (wet only; SW3 MID SW1 MID audition bank; 2026-11-06, replaces BLOW): an 80s / 90s digital-wavetable read,
+// switched PER PRESET (explorer_tables.h ExpTbLofi: foldover / bits / no-interp / roll-off; all 0 / off = the clean read)
+// and globally by EXP_TB_LOFI_ENABLE (false = every preset clean = bit-identical to the tables without lofi). Stateless:
+// no runtime state, no tables; only a per-band weight w_k per lofi preset and SW2 slot, computed once at Init.
+//   FOLDOVER fo  the lofi read takes the band-limited version fo levels BRIGHTER than the anti-fold pick (the K3 dampener's
+//                version, min(4000, fc) / f'_k), clamped to the brightest (127 harmonics): partials above the band
+//                engine's 4 kHz limit fold back inharmonically (steady aliasing, PPG style).
+//   BITS     N   the lofi read W (int16 table units, after the frame morph) rounded to the nearest of 2^(N-1) steps of
+//                the table's full scale (step 2^(16 - N) int16 units; round half up); 0 = off. The band amplitude
+//                multiplies after it, so the grain follows the signal.
+//   NO INTERP    nearest-sample read (index round(phi 256) mod 256) instead of the linear one (the frame morph stays linear).
+//   ROLL-OFF     w_k from the band's played frequency f'_k (SW2 slot: x2 / x1 / x0.5): 1 at / below F_LO, 0 at / above F_HI,
+//                log-linear in between (ln F_HI - ln f) / (ln F_HI - ln F_LO). Per band: W = W_clean + w_k (W_lofi - W_clean);
+//                w_k = 1 -> the lofi read only, w_k = 0 -> the clean read only (no extra cost); in between both reads.
+constexpr bool  EXP_TB_LOFI_ENABLE    = true;    // false = every audition-bank preset reads clean (lofi data ignored)
+constexpr float EXP_TB_LOFI_F_LO      = 400.f;   // Hz; default roll-off start (w = 1 at / below)
+constexpr float EXP_TB_LOFI_F_HI      = 2000.f;  // Hz; default roll-off end (w = 0 at / above)
 // JOURNEY presets: K5 = DIRECTION + constant SPEED of the morph travel (2026-11-06; replaces the second touch env).
 // t5 = 2 k5 - 1 (smoothed, lands exactly), a = |t5|:
 //   s = max(0, (a - ZERO_FRAC) / (1 - ZERO_FRAC)), T = T_SLOW (T_FAST / T_SLOW)^s   (time for the whole journey 0 -> 1)
