@@ -191,10 +191,10 @@ constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spect
 // The SUM stages follow the K1 zone crossfade in / out of the slot (1 ms: y = x + w (stage(x) - x), w = the slot's
 // share); the TABLE stages act inside the slot's own read (crossfaded with it).
 TUNABLE(bool, EXP_TB_LOFI_ENABLE,         true);      // @unit bool @level live  LOFI slot: false = reads clean (all four stages bypassed)
-TUNABLE(float, EXP_TB_LOFI_SUM_BITS,      24.f);      // @unit bits @range 1 24 @taper lin @level live  SUM BITS: summed wet quantiser, 24 = bypass
-TUNABLE(float, EXP_TB_LOFI_SUM_RATE_HZ,   48000.f);   // @unit Hz @range 100 48000 @taper log @level live  SUM RATE: summed wet sample-and-hold, 48000 = bypass
-TUNABLE(float, EXP_TB_LOFI_TABLE_BITS,    16.f);      // @unit bits @range 1 16 @taper lin @level live  TABLE BITS: per-band table read resolution, 16 = bypass
-TUNABLE(float, EXP_TB_LOFI_TABLE_INTERP,  0.f);       // @unit 0..1 @range 0 1 @taper lin @level live  TABLE INTERP: per-band read linear 0 (clean) .. nearest sample 1
+TUNABLE(float, EXP_TB_LOFI_SUM_BITS,      12.f);      // @unit bits @range 1 24 @taper lin @level live  SUM BITS: summed wet quantiser, 24 = bypass
+TUNABLE(float, EXP_TB_LOFI_SUM_RATE_HZ,   22050.f);   // @unit Hz @range 100 48000 @taper log @level live  SUM RATE: summed wet sample-and-hold, 48000 = bypass
+TUNABLE(float, EXP_TB_LOFI_TABLE_BITS,    6.f);      // @unit bits @range 1 16 @taper lin @level live  TABLE BITS: per-band table read resolution, 16 = bypass
+TUNABLE(float, EXP_TB_LOFI_TABLE_INTERP,  1.f);       // @unit 0..1 @range 0 1 @taper lin @level live  TABLE INTERP: per-band read linear 0 (clean) .. nearest sample 1
 // --- Wavetable K2 ---
 // K2 DISCRETE (audition bank; 2026-11-06): true = the morph position snaps to the preset's KEY STAGES (the stage
 // positions of its list in explorer_tables.h - the defined waves, not the generated in-between frames); a step slides the
