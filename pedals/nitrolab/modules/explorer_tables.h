@@ -1,7 +1,7 @@
 #pragma once
 //
 // explorer_tables.h — the SW3 MID SW1 MID AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): 16 data-driven table
-// presets, K1 = 16 equal stepped zones in this list order (EXP_TB_ZONE_XFADE_MS crossfade on a change). ONE place:
+// presets, K1 = 15 equal stepped zones in this list order (EXP_TB_ZONE_XFADE_MS crossfade on a change). ONE place:
 // a new preset / journey is a new stage list + one EXP_TB_PRESETS entry, no code. Built at Init by BuildBank
 // (explorer.h) through the legacy table pipeline; see explorer.h TABLES for the render and the K2 / K5 law per kind.
 //
@@ -148,11 +148,6 @@ constexpr ExpTbStage EXP_TB_ST_BRASS[]  = { { 0.f,  kTbgHarmonium, 0.f,  nullptr
 constexpr ExpTbStage EXP_TB_ST_RASPY[]  = { { 0.f,  kTbgSaw,  1.f,             nullptr, 0, 1.f },
                                             { .5f,  kTbgSaw,  EXP_TB_FUZZ_EXP, nullptr, 0, 1.f },
                                             { 1.f,  kTbgClip, 0.f,             nullptr, 0, 1.f } };
-// BREATH: hollow tube / flute (ghost fifths: odd h 3 / 5, h1 weak) at every stage - the same frame all along
-// (K2 / the timbre LFO travel through identical frames; filter / pitch depths are what move it).
-constexpr ExpTbStage EXP_TB_ST_BREATH[] = { { 0.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GHOST5), 1.f },
-                                            { .5f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GHOST5), 1.f },
-                                            { 1.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GHOST5), 1.f } };
 // AIR: vowel formants (the VOCAL recipe at its 110 Hz reference, p 0 a .. 1 u), drifting oo -> ah -> eh -> oo
 // (the recipe's parameter sweep: u -> a passes o / i / e, e -> u passes i / o).
 constexpr ExpTbStage EXP_TB_ST_AIR[]    = { { 0.f,       kTbgVocal, 1.f,   nullptr, 0, 1.f },
@@ -198,20 +193,19 @@ constexpr ExpTbStage EXP_TB_ST_LOFISPEC[] = {
 // silence at the narrow end) -> their frames are the legacy zone 4 / 5 frames; every other preset (AIR and LOFI SPECTRA
 // too): re-phase + RMS match to the plain saw, scale EXP_TB_I16_SCALE_WIDE (headroom 5.0, as legacy zones 3 / 10).
 constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
-  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
+  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, true) },
+  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, true) },
+  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .572f, 0.f, 20.f, 20.f, false, false, false, false, false) },
   { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
+  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, .7f, .594f, 0.f, 5.f, 10.f, false, false, false, false, true) },
   { "WOOD",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
   { "REED",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "BRASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "ORGAN",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "METAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "GLASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
+  { "BRASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.178f, 2.f, 2.f, 1.5f, 1.f, 0.f, 20.f, 20.f, true, false, false, false, false) },
+  { "ORGAN",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .245f, 20.f, 20.f, 20.f, false, false, false, false, false) },
+  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.3f, 0.f, 0.f, .7f, 0.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
+  { "METAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.203f, .39f, .74f, .7f, .71f, 15.f, 20.f, 20.f, false, false, false, false, false) },
+  { "GLASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.153f, 3.33f, 1.96f, .746f, .372f, 0.f, 20.f, 20.f, false, false, false, false, false) },
   { "RASPY",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "BREATH", kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BREATH), true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
   { "AIR",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.047f, .54f, .64f, 1.5f, 1.f, 15.f, 5.228f, 20.f, false, false, false, false, true) },
   { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.114f, 0.f, 0.f, 1.5f, 1.f, 0.f, .4552f, 20.f, false, false, false, true, false) },
 };
@@ -292,9 +286,8 @@ constexpr bool ExpTbStrEq(const char* a, const char* b) {
   X(10, METAL)                \
   X(11, GLASS)                \
   X(12, RASPY)                \
-  X(13, BREATH)               \
-  X(14, AIR)                  \
-  X(15, LOFI)
+  X(13, AIR)                  \
+  X(14, LOFI)
 #define EXP_TB_MOD_DECLARE(Z, N)                                                                      \
   static_assert(ExpTbStrEq(EXP_TB_PRESETS[Z].name, #N), "EXP_TB_PRESET_MODS: name / index mismatch"); \
   TUNABLE(float, EXP_TB_##N##_TIMBRE, EXP_TB_PRESETS[Z].mod.timbre);                                  \
@@ -311,7 +304,7 @@ constexpr bool ExpTbStrEq(const char* a, const char* b) {
   TUNABLE(bool, EXP_TB_##N##_STEPPED, EXP_TB_PRESETS[Z].mod.stepped);                                \
   TUNABLE(bool, EXP_TB_##N##_LOFI, EXP_TB_PRESETS[Z].mod.lofi);
 EXP_TB_PRESET_MODS(EXP_TB_MOD_DECLARE)
-static_assert(EXP_TB_BANK_N == 16, "EXP_TB_PRESET_MODS lists 16 presets");
+static_assert(EXP_TB_BANK_N == 15, "EXP_TB_PRESET_MODS lists 15 presets");
 // The current values of every preset's MOD tunables (explorer.h: Init, and DIAG TunableRefresh after a set).
 inline void ExpTbModRead(ExpTbMod* out) {
 #define EXP_TB_MOD_READ(Z, N)                                                                             \

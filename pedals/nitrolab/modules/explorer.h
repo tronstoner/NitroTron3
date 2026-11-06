@@ -85,7 +85,7 @@
 //                (r = 1: the former FB FM; b = 0: the former ratio FM.)
 //   XBAND        W = cos(2 pi phi_k + I sin(2 pi phi_{k+n})), n = EXP_XB_PARTNER = 12 (fixed); partner beyond
 //                the top band: 0. I = 12, cap I <= (L - f'_k) / f'_{k+n} - 1. K2 inert.
-//  SW1 MID — tables (K1 = zone: 16 equal stepped zones = the AUDITION BANK, explorer_tables.h (default); with
+//  SW1 MID — tables (K1 = zone: 15 equal stepped zones = the AUDITION BANK, explorer_tables.h (default); with
 //            EXP_TB_LEGACY = true the 10 zones of WaveMorph's tables, COPIED, exactly as 45c2f4e; see TABLES below)
 //   WAVETABLE    W = tone (lerp_frames(lerp_phase(table[f0][level_k]), table[f1][level_k]) / scale_z):
 //                morph m = K2 (smoothed) + the K5 offset of the zone's kind, position (F_z - 1) m, f0 = frame below
@@ -338,7 +338,7 @@
 // CONTROL MAP SW3 MID (Explorer(false))
 //   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: audition bank preset (16,
 //                    stepped, 1 ms crossfade: SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY
-//                    BREATH AIR | LOFI; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
+//                    AIR | LOFI; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: timbre = morph m 0..1 (smoothed, continuous) through
 //                    the preset's frames, ANALOG presets: LP resonance Q 0.3 -> 3;
 //                    stepped through the key stages with the preset's Stepped flag (EXP_TB_<NAME>_STEPPED, TbDiscMorph)
@@ -411,14 +411,14 @@
 // K5 LFO drives it, E = the K4 touch env o (e.g. `src LLE`).
 //
 // TABLES (SW1 MID; built at Init into SDRAM, int16, packed [frame][version][sample]). TWO BANKS (EXP_TB_LEGACY):
-// AUDITION BANK (default; 2026-11-06; BuildBank): 16 presets, data in explorer_tables.h (recipes, key stages, level
+// AUDITION BANK (default; 2026-11-06; BuildBank): 15 presets, data in explorer_tables.h (recipes, key stages, level
 //   rules per preset: a new preset = data, no code), each frame through the LEGACY pipeline below (time domain -> DFT
 //   or harmonic amplitudes -> peak 1 -> re-phase / RMS match + cap -> 14 band-limited versions). Frames between two key
 //   stages: same generator -> its parameter interpolated (a sweep); different generators -> per-harmonic dB
 //   interpolation of the two stages' magnitudes (EXP_TB_JOURNEY_FLOOR_DB). Per frame also a tonal gain
 //   (explorer_tb_tone), read at the morph position (Derive, linear between the two frames). A preset with share >= 0
 //   reads another preset's frames (no own build / storage).
-//   KINDS  LFO      PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY BREATH AIR: K2 = TIMBRE = morph
+//   KINDS  LFO      PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY AIR: K2 = TIMBRE = morph
 //          ANALOG   SAW PULSE (1 frame): K2 = LP Q (TfUpdate / TabFilter)
 //          LOFI     LOFI (the 31-frame LOFI SPECTRA table): K2 = morph; Lofi + Stepped flags on by default
 //          (JOURNEY - K5 = direction + speed of a morph travel - was removed 2026-11-06; its presets are LFO presets.)
@@ -452,7 +452,7 @@
 //          (stage positions, not the in-between frames; a stage between two frames reads their blend), each step a
 //          linear slide over EXP_DISC_SLIDE_MS. LFO / LOFI: the K2 base = the key stage of K2's equal zone (raw knob),
 //          the MOD timbre offset swings around it; ANALOG: none (1 frame, K2 = Q).
-//   K1 order SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY BREATH AIR | LOFI.
+//   K1 order SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY AIR | LOFI.
 //   LOFI   (2026-11-06; replaces the per-band LOFI mode of 57f7bfc and the four BITS / RATE / TABLE / TBITS presets;
 //          laws: explorer_constants.h EXP_TB_LOFI_*, the "Lofi engine": global values, run on every preset whose Lofi
 //          flag EXP_TB_<NAME>_LOFI is on - default LOFI only). All four stages together, each skipped at its bypass value:

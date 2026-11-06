@@ -72,7 +72,7 @@ constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number
 // Built at Init into SDRAM (explorer_tb, int16, packed [frame][version][sample]). See explorer.h TABLES.
 constexpr bool  EXP_TB_LEGACY         = false;   // true = the 10 legacy zones below; false = the audition bank (explorer_tables.h)
 constexpr int   EXP_TB_LEGACY_ZONES   = 10;      // legacy K1 equal zones on SW1 MID (= WM_ZONES)
-constexpr int   EXP_TB_BANK_N         = 16;      // audition bank: presets = K1 equal zones (EXP_TB_PRESETS, explorer_tables.h)
+constexpr int   EXP_TB_BANK_N         = 15;      // audition bank: presets = K1 equal zones (EXP_TB_PRESETS, explorer_tables.h)
 constexpr int   EXP_TB_ZONES          = EXP_TB_LEGACY ? EXP_TB_LEGACY_ZONES : EXP_TB_BANK_N;   // K1 zones on SW1 MID
 constexpr int   EXP_N_MID             = EXP_TB_ZONES + (EXP_BITTAB_ENABLE ? 1 : 0);   // SW1 MID K1 zones (+ bit table last)
 constexpr int   EXP_TB_CORNERS        = 4;       // waves of the 4-wave zones 2, 6..10 (= WM_CORNERS)
