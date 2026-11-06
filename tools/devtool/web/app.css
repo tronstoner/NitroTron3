@@ -2,7 +2,7 @@
    COLOUR = TARGET: --t-<id> per target of registry.py TARGETS (timbre, filter, pitch, env, lofi, select).
    An element carries `data-target="<id>"` and everything inside it uses var(--tc) (its target colour). */
 :root {
-  --cw: 132px; --ch: 182px; --dial: 88px; --fw: 104px; --fh: 200px;
+  --cw: 104px; --ch: 142px; --dial: 64px; --fw: 96px; --fh: 140px;
   --bg: #eef0ee;
   --surface: #fbfcfb;
   --surface-2: #e6e9e7;
@@ -236,7 +236,7 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
 .strip:empty { display: none; }
 .kcard {
-  position: relative; height: 104px; padding: 10px 12px 10px 14px;
+  position: relative; height: 90px; padding: 8px 10px 8px 14px;
   background: color-mix(in srgb, var(--tc) 9%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--tc) 28%, var(--line));
   border-radius: var(--r);
@@ -254,14 +254,14 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 
 /* ---- section cards ------------------------------------------------------ */
 .sections {
-  display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start;
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
 }
 .sec {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
   border-top: 3px solid var(--tc); min-width: 0;
 }
 .sec { flex: 0 1 auto; max-width: 100%; }
-.sec-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px 6px; }
+.sec-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px 2px; }
 .sec-k {
   font-weight: 800; font-size: 12px; padding: 1px 7px; border-radius: 5px;
   background: var(--tc); color: var(--surface); flex: none;
@@ -269,7 +269,7 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .sec-title { font-weight: 700; font-size: 16px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .sec-where { color: var(--dim); font-size: 13px; font-weight: 400; margin-left: 6px; }
 .sec-chg { color: var(--warn); font-size: 12px; font-weight: 600; min-width: 9ch; text-align: right; }
-.sec-body { padding: 4px 12px 10px; display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.sec-body { padding: 2px 10px 8px; display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 4px 18px; }
 .sec-body > .ctl-grid { flex: 0 1 auto; }
 .sec-msg { min-height: 18px; padding: 0 14px 8px; font-size: 12px; color: var(--bad); overflow-wrap: anywhere; }
 .ctl-grid { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
@@ -282,8 +282,8 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .cell:hover { background: color-mix(in srgb, var(--tc) 6%, transparent); }
 .cell.off { opacity: .45; }
 .cell .lab {
-  width: 100%; height: 2.5em; padding: 0 14px; font-size: 14px; font-weight: 600; line-height: 1.25; overflow: hidden; text-align: center;
-  color: var(--fg); overflow-wrap: anywhere; display: flex; align-items: flex-end; justify-content: center;
+  width: 100%; height: 2.5em; padding: 0 12px; font-size: 13px; font-weight: 600; line-height: 1.25; overflow: hidden; text-align: center;
+  color: var(--fg); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; margin-bottom: 4px;
 }
 .cell .info, .cell .rst, .fd .rst {
   position: absolute; top: 2px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
@@ -306,7 +306,7 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .dial.off .arc { stroke: var(--faint); }
 .val { display: flex; align-items: baseline; gap: 3px; margin-top: 2px; }
 .num {
-  width: 7ch; text-align: right; padding: 2px 4px; font-size: 16px; font-weight: 600;
+  width: 7ch; text-align: right; padding: 1px 3px; font-size: 14px; font-weight: 600;
   background: transparent; border: 1px solid transparent; border-radius: 4px;
 }
 .num:hover:not(:disabled) { border-color: var(--line); }
@@ -337,7 +337,7 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .cell.changed .switch .st { color: var(--warn); }
 
 /* fader bank: vertical faders side by side (a mixer row) */
-.bank { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px 6px; background: color-mix(in srgb, var(--tc) 4%, var(--surface)); }
+.bank { border: 0; padding: 0; background: none; }
 .bank-head { display: flex; align-items: baseline; gap: 10px; font-size: 14px; margin-bottom: 8px; }
 .bank-title { font-weight: 600; overflow-wrap: anywhere; }
 .bank-axis { color: var(--faint); margin-left: auto; white-space: nowrap; }
@@ -362,7 +362,7 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .fader.off { cursor: default; }
 .fader.off .f-fill { background: var(--faint); }
 .fader.off .f-cap { border-color: var(--faint); }
-.fd .cap-lab { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--fg); height: 2.6em; text-align: center; overflow: hidden; line-height: 1.2; overflow-wrap: anywhere; justify-content: center; }
+.fd .cap-lab { display: flex; align-items: center; gap: 3px; font-size: 12px; color: var(--fg); height: 2.6em; text-align: center; overflow: hidden; line-height: 1.2; overflow-wrap: anywhere; justify-content: center; }
 .fd .cap-lab svg { width: 16px; height: 16px; color: var(--fg); flex: none; }
 .fd .num { width: 7ch; text-align: center; }
 
@@ -531,8 +531,8 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .ped-chip[aria-pressed="true"] .pk { color: inherit; opacity: .8; }
 .ped-chip.now .pnow::before { content: "●"; color: var(--ok); margin-left: 6px; font-size: 10px; }
 .ped-follow { font-weight: 600; margin-right: 8px; }
-.ped-body { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
-.ped-group { border: 1px solid var(--line); border-top: 3px solid var(--tc); border-radius: 0 0 6px 6px; padding: 8px 10px 6px; }
+.ped-body { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: flex-start; }
+.ped-group { border-top: 2px solid var(--tc); padding: 4px 0 0; }
 .ped-gtitle { font-weight: 700; font-size: 14px; color: var(--tc); margin-bottom: 4px; }
 .ped-group .bank { border: 0; padding: 0; background: none; }
 .ped-group .bank-head { display: none; }

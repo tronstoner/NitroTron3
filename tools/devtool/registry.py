@@ -229,7 +229,7 @@ LABELS = {
     "EXP_TB_LOFI_TABLE_BITS": "Table bits", "EXP_TB_LOFI_TABLE_INTERP": "Table steps",
     "EXP_PS_SLIDE_MS": "Knob glide", "EXP_PS_DEC_FAST_S": "Pluck, fastest", "EXP_PS_DEC_SLOW_S": "Pluck, slowest",
     "EXP_PS_RISE_FAST_S": "Swell, fastest", "EXP_PS_RISE_SLOW_S": "Swell, slowest",
-    "EXP_PS_DEC_2POLE": "Pluck shape: 2-pole", "EXP_PS_DEC_2P_TAUS": "2-pole steepness", "EXP_PS_DEC_LINEAR": "Pluck shape: linear",
+    "EXP_PS_DEC_2POLE": "2-pole pluck", "EXP_PS_DEC_2P_TAUS": "2-pole steepness", "EXP_PS_DEC_LINEAR": "Linear pluck",
     "EXP_LFO_DEPTH_FRAC": "Depth fade-in", "EXP_LFO_HZ_MIN": "Slowest", "EXP_LFO_HZ_MAX": "Fastest CW",
     "EXP_LFO_HZ_MAX_CCW": "Fastest CCW", "EXP_LFO_INDEX_SWING": "FM index swing", "EXP_LFO_FM_FC_OCT": "FM cutoff, swell side",
     "EXP_LFO_FM_FC_OCT_DEC": "FM cutoff, pluck side", "EXP_LFO_FB_SWING": "FM feedback swing",
