@@ -15,6 +15,9 @@ Per `TUNABLE(type, NAME, value);` line:
               lines below whose comment text itself starts with `//`.
   tags        @unit <u>  @range <min> <max>  @taper lin|log  @level live|reactivate
               @pair <ID> <end>   (optional; see PAIRS below)
+              @target <id>       (optional; what the constant acts on, one of TARGETS: the page's colour;
+                                  default = the section's `// @target` directive, else none)
+              @states <off> <on> (optional, bool: the words for false / true, e.g. `@states LFO env`)
               (written first in the inline comment, before the note text)
   label       readable label from the note's first clause (parentheses and a
               leading unit like `Hz;` removed), else the doc's first sentence,
@@ -35,6 +38,9 @@ files:
   // @section <Title>     comment directive: the display section (what it does +
                           which knob, e.g. `Touch env · K4`) of the following
                           declarations, until the next `// --- ---` header
+  // @target <id>        comment directive: default target (TARGETS) of the following declarations
+  // @view faders         comment directive: the section's single number constants are shown side by side as
+                          vertical faders (a mixer row, for comparable values) instead of knobs
   // @at 2/fm,2/wt        comment directive: default places of the following
                           declarations (same scope); `<bench id>/<mode id>`
   @at 2/fm,3/2op          per-declaration tag (overrides the directive)
@@ -71,25 +77,81 @@ TAPERS = ("lin", "log")
 LABEL_MAX = 64
 FAMILY_RE = re.compile(r"^@family\s+(\w+)\s+(\w+)\s+(\w+)\s*$")
 FIELD_RE = re.compile(r"^@field\s+(\w+)\s+(float|int|bool)\s+(.*)$")
-DIRECTIVE_RE = re.compile(r"^@(section|at)\s+(.*)$")
+DIRECTIVE_RE = re.compile(r"^@(section|at|target|view)\s+(.*)$")
+VIEWS = ("knobs", "faders")
 ROW_RE = re.compile(r'^\s*\{\s*"(\w+)".*\b(\w+)\(([^()]*)\)\s*\},?\s*(//.*)?$')
 LIST_ITEM_RE = re.compile(r"^\s*X\(\s*(\d+)\s*,\s*(\w+)\s*\)\s*\\?\s*$")
 
+# TARGETS: what a constant / knob acts on. The page colours everything by it (knob-strip cards, section
+# headers, preset-grid columns, knob arcs, faders); the colours themselves are CSS variables --t-<id>
+# (web/app.css, light + dark). This list is the ONE place target ids and their legend names are defined.
+TARGETS = [
+    {"id": "timbre", "name": "Timbre"},
+    {"id": "filter", "name": "Filter"},
+    {"id": "pitch", "name": "Pitch \u00b7 LFO"},
+    {"id": "env", "name": "Touch env"},
+    {"id": "lofi", "name": "Lofi \u00b7 level"},
+    {"id": "select", "name": "Selection"},
+]
+TARGET_IDS = [t["id"] for t in TARGETS]
+
+
+def _k(k, job, kind, target, show):
+    """One knob card of a mode's knob strip. kind: uni | bipolar | steps (the manual icons);
+    target: TARGETS id ("" = unused / inert); show: the live value template (web/core.js knobShow):
+    {k} knob position, {sel} the selection (preset / ratio / bank / zone / model), {env} touch env (pluck /
+    swell time), {lfo} LFO shape + rate, {num:<tok>} the number after <tok>, {hz:<tok>} a frequency,
+    {word:<tok>} / {word2:<tok>} the first / second word after <tok>; text outside {} is kept. A
+    placeholder the state line lacks -> the knob position."""
+    return {"k": k, "job": job, "kind": kind, "target": target, "show": show}
+
+
+ENV_K4 = _k(4, "Touch env", "bipolar", "env", "{env}")
+LFO_K5 = _k(5, "LFO", "bipolar", "pitch", "{lfo}")
+
 # The ONE list of display names for the page's tree (benches = SW3 positions,
 # modes = SW1 positions). Ids are what the constants files' @at tags use.
+# knobs: the mode's knob strip (control map: the header comment of pedals/nitrolab/modules/explorer.h).
 LAYOUT = {
     "nitrolab": {
         "title": "NitroLab",
         "benches": [
             {"id": "1", "name": "Bench 1 \u00b7 Armitage", "sw3": "UP", "modes": []},
             {"id": "2", "name": "Bench 2 \u00b7 Explorer", "sw3": "MID", "modes": [
-                {"id": "fm", "name": "FM", "sw1": "UP"},
-                {"id": "wt", "name": "Wavetable", "sw1": "MID"},
-                {"id": "shift", "name": "Harmonics & Shift", "sw1": "DOWN"}]},
+                {"id": "fm", "name": "FM", "sw1": "UP", "knobs": [
+                    _k(1, "Ratio", "steps", "select", "{sel}"),
+                    _k(2, "Feedback", "uni", "timbre", "b {num:b}"),
+                    _k(3, "Index", "uni", "timbre", "{hz:fce}"),
+                    ENV_K4, LFO_K5]},
+                {"id": "wt", "name": "Wavetable", "sw1": "MID", "knobs": [
+                    _k(1, "Preset", "steps", "select", "{sel}"),
+                    _k(2, "Timbre", "uni", "timbre", "{k}"),
+                    _k(3, "Filter", "uni", "filter", "{hz:eff}"),
+                    ENV_K4, _k(5, "LFO", "bipolar", "pitch", "{lfo}")]},
+                {"id": "shift", "name": "Harmonics & Shift", "sw1": "DOWN", "knobs": [
+                    _k(1, "Model", "steps", "select", "{sel}"),
+                    _k(2, "Harmonic / shift / interval", "uni", "pitch", "{k}"),
+                    _k(3, "Blend / scale / detune", "uni", "timbre", "{k}"),
+                    _k(4, "Unused", "uni", "", ""),
+                    _k(5, "Unused", "uni", "", "")]}]},
             {"id": "3", "name": "Bench 3 \u00b7 FM Lab", "sw3": "DOWN", "modes": [
-                {"id": "2op", "name": "2-OP FM", "sw1": "UP"},
-                {"id": "spectral", "name": "Spectral", "sw1": "MID"},
-                {"id": "additive", "name": "Additive", "sw1": "DOWN"}]},
+                {"id": "2op", "name": "2-OP FM", "sw1": "UP", "knobs": [
+                    _k(1, "Ratio mode", "steps", "select", "{sel}"),
+                    _k(2, "Ratio", "steps", "timbre", "r {num:r}"),
+                    _k(3, "Character", "bipolar", "timbre", "{word2:r} {hz:fc}"),
+                    ENV_K4, LFO_K5]},
+                {"id": "spectral", "name": "Spectral", "sw1": "MID", "knobs": [
+                    _k(1, "Bank", "steps", "select", "{sel}"),
+                    _k(2, "Density", "uni", "timbre", "\u03bd {num:nu}"),
+                    _k(3, "Lowpass", "uni", "filter", "{hz:lpf}"),
+                    ENV_K4,
+                    _k(5, "Sub level", "uni", "lofi", "{num:sub}")]},
+                {"id": "additive", "name": "Additive", "sw1": "DOWN", "knobs": [
+                    _k(1, "Zone", "steps", "select", "{sel}"),
+                    _k(2, "Harmonics / index / unison", "uni", "timbre", "{k}"),
+                    _k(3, "Index / harmonics", "uni", "timbre", "{k}"),
+                    ENV_K4,
+                    _k(5, "LFO / beat speed", "bipolar", "pitch", "{k}")]}]},
         ],
     },
 }
@@ -131,7 +193,7 @@ def parse_tags(comment):
             break
         key, vals = m.group(1), m.group(2).split()
         # a tag takes a fixed number of values; anything after is note text
-        n = 2 if key in ("range", "pair") else 1
+        n = 2 if key in ("range", "pair", "states") else 1
         tags[key] = vals[:n]
         tail = vals[n:]
         rest = (" ".join(tail) + rest[m.end():]).strip() if tail else rest[m.end():].strip()
@@ -232,6 +294,20 @@ def make_entry(name, ty, value, comment, ctx, rel, lineno, problems):
     at = (tags.get("at") or [None])[0] or ctx.get("at") or ""
     e["at"] = [x.strip() for x in at.split(",") if x.strip()]
     e["display_section"] = ctx.get("display") or ctx["section"]
+    tgt = (tags.get("target") or [None])[0] or ctx.get("target") or ""
+    if tgt and tgt not in TARGET_IDS:
+        problems.append("%s:%d %s: unknown @target %s (want one of %s)" % (rel, lineno, name, tgt, "|".join(TARGET_IDS)))
+        tgt = ""
+    e["target"] = tgt
+    e["section_target"] = ctx.get("target") or ""
+    st = tags.get("states")
+    e["states"] = None
+    if st is not None:
+        if ty == "bool" and len(st) == 2:
+            e["states"] = [x.replace("_", " ") for x in st]
+        else:
+            problems.append("%s:%d %s: @states wants a bool and two words" % (rel, lineno, name))
+    e["view"] = ctx.get("view") or "knobs"
     e["preset"] = None
     e["preset_index"] = None
     return e
@@ -251,6 +327,7 @@ def parse_file(path, rel=None):
     entries, problems = [], []
     section = ""
     display, at = "", ""      # @section / @at directives (until the next `// ---` header)
+    target, view = "", ""     # @target / @view directives (same scope)
     block = []
     run_doc, run_of = "", ""
     in_run = False
@@ -260,7 +337,7 @@ def parse_file(path, rel=None):
     rows = {}         # (macro, NAME) -> args of `{ "<NAME>", ..., <macro>(args) },` table rows
     for i, raw in enumerate(lines):
         line = raw.rstrip("\r")
-        ctx = {"module": module, "section": section, "display": display, "at": at}
+        ctx = {"module": module, "section": section, "display": display, "at": at, "target": target, "view": view}
         if fam is not None:
             if re.match(r"^\s*#define\s+%s\b" % fam["list"], line):
                 in_list = True
@@ -301,12 +378,20 @@ def parse_file(path, rel=None):
             if title is not None:
                 section = title
                 display, at = "", ""
+                target, view = "", ""
                 block, in_run, last = [], False, None
                 continue
             d = DIRECTIVE_RE.match(ct.strip())
             if d:
                 if d.group(1) == "section":
                     display = d.group(2).strip()
+                elif d.group(1) == "target":
+                    target = d.group(2).strip()
+                elif d.group(1) == "view":
+                    view = d.group(2).strip()
+                    if view not in VIEWS:
+                        problems.append("%s:%d bad @view %s (want %s)" % (rel, i + 1, view, "|".join(VIEWS)))
+                        view = ""
                 else:
                     at = d.group(2).strip()
                 continue
@@ -314,7 +399,7 @@ def parse_file(path, rel=None):
             if fm:
                 fam = {"prefix": fm.group(1), "row": fm.group(2), "list": fm.group(3), "fields": [],
                        "doc": "\n".join(block), "section": section, "display": display, "at": at,
-                       "items": [], "line": i + 1}
+                       "target": target, "view": view, "items": [], "line": i + 1}
                 continue
             fd = FIELD_RE.match(ct.strip())
             if fd and fam is not None:
@@ -353,7 +438,7 @@ def expand_family(fam, rows, module, rel, problems):
             name = "%s%s_%s" % (fam["prefix"], preset, suffix)
             doc_of = doc_of or name
             ctx = {"module": module, "section": fam["section"], "display": fam["display"], "at": fam["at"],
-                   "doc": fam["doc"], "doc_of": doc_of}
+                   "target": fam["target"], "view": fam["view"], "doc": fam["doc"], "doc_of": doc_of}
             e = make_entry(name, ty, value, comment, ctx, rel, lineno, problems)
             if e["pair"]:
                 e["pair"]["id"] = "%s_%s" % (preset, e["pair"]["id"])
@@ -404,6 +489,11 @@ def build(repo, pedal, sources):
         seen.add(c["name"])
     layout = LAYOUT.get(pedal)
     lp = layout_places(layout)
+    for b in (layout or {}).get("benches", []):
+        for m in b["modes"]:
+            for k in m.get("knobs", []):
+                if k["target"] and k["target"] not in TARGET_IDS:
+                    problems.append("LAYOUT[%s] %s/%s K%d: unknown target %s" % (pedal, b["id"], m["id"], k["k"], k["target"]))
     for c in consts:
         places = []
         for a in c.pop("at", []):
@@ -422,7 +512,7 @@ def build(repo, pedal, sources):
         c["places"] = places
     return {"pedal": pedal, "files": [os.path.relpath(p, repo) for p in files],
             "constants": consts, "pairs": build_pairs(consts, problems), "problems": problems,
-            "layout": layout}
+            "layout": layout, "targets": TARGETS}
 
 
 def build_pairs(consts, problems):

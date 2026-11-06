@@ -177,6 +177,8 @@ constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spect
 // --- LOFI slot (K1 16) ---
 // @section LOFI preset · K1 16
 // @at 2/wt
+// @target lofi
+// @view faders
 // One LOFI preset (wet only; SW3 MID SW1 MID audition bank, the last K1 zone; 2026-11-06, replaces the four presets LOFI
 // BITS / RATE / TABLE / TBITS and their K5 laws) on the LOFI SPECTRA table (explorer_tables.h). K2 = static morph
 // position (stepped through the 16 key stages with EXP_TB_LOFI_K2_DISCRETE), K5 = no job with its default MOD (all depths
@@ -202,6 +204,7 @@ TUNABLE(float, EXP_TB_LOFI_TABLE_INTERP,  1.f);       // @unit 0..1 @range 0 1 @
 // --- Wavetable K2 ---
 // @section Timbre · K2
 // @at 2/wt
+// @target timbre
 // K2 DISCRETE (audition bank; 2026-11-06): true = the morph position snaps to the preset's KEY STAGES (the stage
 // positions of its list in explorer_tables.h - the defined waves, not the generated in-between frames); a step slides the
 // morph linearly from the old to the new stage over EXP_DISC_SLIDE_MS (1 ms; no blend held). Per kind (explorer.h
@@ -349,6 +352,7 @@ constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28
 // EXP_PS_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly). No side state, no LEAVE, no hysteresis.
 // @section Touch env · K4
 // @at 2/fm,2/wt,3/2op,3/spectral,3/additive
+// @target env
 TUNABLE(float, EXP_PS_SLIDE_MS,         5.0f);     // @unit ms @range 0.5 20 @taper log @level live  ms (2026-10-28: was EXP_ENV_FM_SLIDE_MS 1 ms; clicks between short notes); one-pole tau (8 kHz) on the touch env's g_d / g_r (-> g_ds / g_rs), lands exactly
 TUNABLE(float, EXP_PS_DEC_FAST_S,       0.45f);    // @unit s @range 0.1 1.8 @taper log @level live @pair Pluck_decay_time ccw  s (back to 0.45 with the one-pole decay; 1.0 + linear was not snappy); decay time T_d at K4 full CCW (pluck)
 TUNABLE(bool, EXP_PS_DEC_2POLE,        true);     // @unit bool @level live  decay shape D (2026-10-28): 2-pole, rounded start, still snappy (false: one-pole)
@@ -377,18 +381,19 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 //   DOWN                no effect
 // Coexists with K4 (touch env on the K3 fc / ladder cutoff): K4 moves fc, K5 moves feedback / morph.
 // @section LFO · K5
+// @target pitch
 TUNABLE(float, EXP_LFO_DEPTH_FRAC,      0.3f);     // @unit 0..1 @range 0.01 1 @taper lin @level live @at 2/fm,2/wt,3/2op,3/additive  share of each K5 side over which the depth fades in
 TUNABLE(float, EXP_LFO_HZ_MIN,          0.2f);     // @unit Hz @range 0.05 0.8 @taper log @level live @pair LFO_rate noon @at 2/fm,2/wt,3/2op,3/additive  Hz; LFO rate at u = 0 (just off noon)
 TUNABLE(float, EXP_LFO_HZ_MAX,          20.f);     // @unit Hz @range 5 80 @taper log @level live @pair LFO_rate cw @at 2/fm,3/2op,3/additive  Hz; LFO rate at u = 1 (K5 at either end)
 TUNABLE(float, EXP_LFO_HZ_MAX_CCW,      20.f);     // @unit Hz @range 5 80 @taper log @level live @pair LFO_rate ccw @at 2/fm,3/2op,3/additive  Hz; CCW (triangle) rate at K5 full CCW (2026-10-28: 20 -> 80; 2026-11-05: 80 -> 20, too fast along the way); CW keeps EXP_LFO_HZ_MAX
-TUNABLE(float, EXP_LFO_INDEX_SWING,     0.0f);     // @unit rad @range 0 6 @taper lin @level live @at 2/fm,3/2op  UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
+TUNABLE(float, EXP_LFO_INDEX_SWING,     0.0f);     // @unit rad @range 0 6 @taper lin @level live @target timbre @at 2/fm,3/2op  UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
 constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 0.0f;     // UP FM: the envelope closes the index only down to this (2026-10-28: 2 -> 0, fully closes again)
-TUNABLE(float, EXP_LFO_FM_FC_OCT,       1.0f);     // @unit oct @range 0 4 @taper lin @level live @at 2/fm  SW3 MID UP FM, SWELL side: the LFO swings the FM cutoff +- this many octaves
+TUNABLE(float, EXP_LFO_FM_FC_OCT,       1.0f);     // @unit oct @range 0 4 @taper lin @level live @target timbre @at 2/fm  SW3 MID UP FM, SWELL side: the LFO swings the FM cutoff +- this many octaves
                                                      // around the envelope, faded in with the swell (x o_r)
-TUNABLE(float, EXP_LFO_FM_FC_OCT_DEC,   2.6f);     // @unit oct @range 0 6 @taper lin @level live @at 2/fm  PLUCK side: upward only, 0 .. this x depth, x (1 - o_d): grows as the pluck closes
+TUNABLE(float, EXP_LFO_FM_FC_OCT_DEC,   2.6f);     // @unit oct @range 0 6 @taper lin @level live @target timbre @at 2/fm  PLUCK side: upward only, 0 .. this x depth, x (1 - o_d): grows as the pluck closes
                                                      // (the audition bank presets use the same placement - LfoFcOct - with their own
                                                      // MOD filter / filter swell depths, explorer_tables.h Presets)
-TUNABLE(float, EXP_LFO_FB_SWING,        0.3f);     // @unit b @range 0 1.5 @taper lin @level live @at 2/fm,3/2op  UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
+TUNABLE(float, EXP_LFO_FB_SWING,        0.3f);     // @unit b @range 0 1.5 @taper lin @level live @target timbre @at 2/fm,3/2op  UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
 constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables, LEGACY zones only (EXP_TB_LEGACY): morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far); the audition bank uses each preset's MOD timbre (explorer_tables.h Presets)
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
@@ -515,6 +520,7 @@ constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05:
 constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
 // @section Touch env · K4
 // @at 2/fm,2/wt,3/2op,3/spectral,3/additive
+// @target env
 TUNABLE(float, EXP_SPEC_ENV_DEPTH_MIN, 0.08f);   // @unit 0..1 @range 0 1 @taper lin @level live @pair Density_travel_by_env_time fast @at 3/spectral  K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
 TUNABLE(float, EXP_SPEC_ENV_DEPTH_MAX, 0.5f);   // @unit 0..1 @range 0 1 @taper lin @level live @pair Density_travel_by_env_time slow @at 3/spectral  K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
 constexpr bool  EXP_SPEC_K2_REVERSE   = true;    // 2026-11-05 test: SPECTRAL density mirrored, nu = NU_MAX clamp(1 - (k2 + travel)):
@@ -628,6 +634,7 @@ constexpr float    EXP_ENV_TAU_SLOW_S      = 4.0f;     // s; time law just off n
 constexpr float    EXP_ENV_TAU_FAST_S      = 0.05f;    // s; at the knob ends (= ARM_ENV_TAU_FAST_S)
 // @section Touch env · K4
 // @at 2/fm,2/wt,3/2op,3/spectral,3/additive
+// @target env
 TUNABLE(float, EXP_ENV_TRAVEL_TAUS,     3.9f);     // @unit x @range 1 8 @taper lin @level live  one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
 constexpr float    EXP_ENV_FM_TIME_RATIO   = 3.0f;     // T = this x the time law (= ARM_ENV_FM_TIME_RATIO)
 constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // rise travel time / T (= ARM_ENV_FM_DECAY_RATIO)

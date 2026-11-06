@@ -7,103 +7,106 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<div id="icon-sprite" hidden></div>
+
 <header class="topbar">
-  <div class="conn" id="conn" title="">
+  <div class="conn" id="conn">
     <span class="dot" id="conn-dot"></span>
-    <span class="conn-text" id="conn-text">connecting to devtool…</span>
+    <span class="conn-pedal" id="b-pedal">–</span>
+    <span class="conn-hash" id="b-hash">–</span>
+    <span class="conn-text" id="conn-text">connecting…</span>
   </div>
-  <dl class="build" id="build">
-    <div class="b-pedal"><dt>Pedal</dt><dd id="b-pedal">–</dd></div>
-    <div class="b-hash"><dt>Firmware</dt><dd id="b-hash">–</dd></div>
-    <div class="b-time"><dt>Built</dt><dd id="b-time">–</dd></div>
-  </dl>
-  <div class="slot" id="slot" title="The pedal's current selection, from its latest explorer state line">
-    <span class="slot-k">Slot</span>
-    <span class="slot-v" id="slot-v">–</span>
-    <span class="slot-x" id="slot-x"></span>
+  <div class="where" id="where" title="The pedal's current place, from its latest state line">
+    <span class="where-bench" id="where-bench">–</span>
+    <span class="where-sep" aria-hidden="true">›</span>
+    <span class="where-mode" id="where-mode">–</span>
+    <span class="where-sep" aria-hidden="true">›</span>
+    <span class="where-k1" id="where-k1">–</span>
   </div>
-  <p class="note" id="b-note"></p>
   <div class="top-actions">
-    <button id="changes-btn" type="button" aria-expanded="false" aria-controls="changes-panel" title="Constants that differ from the compiled defaults">
-      Changes <span class="count-badge" id="changes-count">0</span>
+    <button id="changes-btn" class="changes-btn" type="button" aria-expanded="false" aria-controls="changes-pop"
+            title="Constants that differ from the compiled defaults">
+      <span class="changes-n" id="changes-count">0</span> <span id="changes-word">changes</span>
     </button>
-    <div class="flash-ctl">
-      <label class="visually-hidden" for="flash-pedal">Pedal to flash</label>
-      <select id="flash-pedal"></select>
-      <button id="flash-btn" class="primary" type="button">Flash</button>
-    </div>
+    <label class="visually-hidden" for="flash-pedal">Pedal to flash</label>
+    <select id="flash-pedal"></select>
+    <button id="flash-btn" class="primary" type="button">Flash</button>
   </div>
 </header>
 
-<details class="flash-panel" id="flash-panel">
-  <summary>
-    <span class="flash-badge" id="flash-badge">idle</span>
-    <span class="flash-msg" id="flash-msg"></span>
-    <span class="flash-last" id="flash-last"></span>
-    <span class="flash-time" id="flash-time"></span>
-  </summary>
-  <pre class="flash-out" id="flash-out"></pre>
-</details>
-
-<section class="changes-panel" id="changes-panel" hidden aria-label="Changes">
+<section class="changes-pop" id="changes-pop" hidden aria-label="Changes">
   <div class="changes-head">
     <h2>Changes <span class="dim" id="changes-sub"></span></h2>
     <button id="reset-all-btn" type="button" class="danger-quiet">Reset all</button>
   </div>
   <ul class="changes-list" id="changes-list"></ul>
   <label class="note-label" for="note">What I heard</label>
-  <textarea id="note" rows="2" placeholder="Notes for the agent: what changed in the sound, what to keep…" spellcheck="true"></textarea>
-  <p class="changes-foot dim" id="changes-foot">Written to tune/changes.json on every change. The agent applies it to the constants files.</p>
+  <textarea id="note" rows="3" placeholder="What changed in the sound, what to keep…" spellcheck="true"></textarea>
+  <p class="changes-foot dim">Written to tune/changes.json on every change. The agent applies it to the constants files.</p>
 </section>
 
-<div class="panes" id="panes">
-  <aside class="pane pane-tree" id="sidebar" aria-label="Constants">
-    <div class="side-search">
+<div class="banner" id="banner" hidden>
+  <span class="banner-text" id="banner-text"></span>
+  <button class="banner-btn" id="guard-btn" type="button" hidden>Allow changes anyway</button>
+</div>
+
+<div class="work" id="work">
+  <nav class="nav" id="nav" aria-label="Modes">
+    <div class="nav-search">
       <label class="visually-hidden" for="search">Search constants</label>
-      <input id="search" type="search" placeholder="Search name, label, explanation" spellcheck="false" autocomplete="off">
+      <input id="search" type="search" placeholder="Search" spellcheck="false" autocomplete="off">
     </div>
-    <nav class="tree" id="tree" aria-label="Sections"></nav>
-  </aside>
+    <div class="nav-tree" id="nav-tree"></div>
+  </nav>
 
-  <div class="splitter" id="split-tree" role="separator" aria-orientation="vertical" tabindex="0"
-       aria-label="Resize the sections pane" aria-controls="sidebar"></div>
-
-  <main class="pane pane-values" aria-label="Values">
-    <div class="values-head">
-      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Sections</button>
-      <div class="sec-head" id="sec-head"></div>
+  <main class="view" id="view" aria-label="Constants">
+    <div class="view-head">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav">Modes</button>
+      <div class="view-title" id="view-title"></div>
+      <ul class="legend" id="legend" aria-label="Colour = what it acts on"></ul>
     </div>
-    <div class="strip" id="strip">
-      <span class="strip-state" id="tun-state"></span>
-      <span class="strip-guard" id="guard"></span>
-      <button class="strip-btn" id="guard-btn" type="button">Allow changes anyway</button>
-    </div>
-    <div class="view-const" id="view-const">
-      <div class="rows" id="rows"></div>
-    </div>
+    <div class="strip" id="strip"></div>
+    <div class="sections" id="sections"></div>
   </main>
+</div>
 
-  <div class="splitter" id="split-log" role="separator" aria-orientation="vertical" tabindex="0"
-       aria-label="Resize the log pane" aria-controls="view-log"></div>
-
-  <section class="pane pane-log" id="view-log" aria-label="Log">
-    <div class="toolbar">
-      <div class="filter">
+<section class="drawer" id="drawer" aria-label="Log and flash output">
+  <div class="drawer-grip" id="drawer-grip" role="separator" aria-orientation="horizontal" tabindex="0"
+       aria-label="Resize the log drawer" title="Drag to resize, click to open / close"></div>
+  <div class="drawer-line" id="drawer-line">
+    <button class="drawer-toggle" id="drawer-toggle" type="button" aria-expanded="false" aria-controls="drawer-body">
+      <span class="tw" aria-hidden="true"></span><span>Log</span>
+    </button>
+    <span class="drawer-last" id="drawer-last"></span>
+    <span class="flash-state" id="flash-state">
+      <span class="flash-badge" id="flash-badge">idle</span>
+      <span class="flash-msg" id="flash-msg"></span>
+    </span>
+  </div>
+  <div class="drawer-body" id="drawer-body">
+    <div class="drawer-tools">
+      <div class="tabs" role="tablist">
+        <button class="tab" id="tab-log" role="tab" type="button" aria-selected="true" aria-controls="log">Log</button>
+        <button class="tab" id="tab-flash" role="tab" type="button" aria-selected="false" aria-controls="flash-out">Flash output</button>
+      </div>
+      <div class="filter" id="log-tools">
         <label class="visually-hidden" for="filter">Filter</label>
         <input id="filter" type="search" placeholder="Filter (regex, case-insensitive)" spellcheck="false" autocomplete="off">
         <span class="filter-mode" id="filter-mode"></span>
-      </div>
-      <div class="tools">
         <span class="count" id="count">0 lines</span>
         <button id="pause-btn" type="button" aria-pressed="false">Pause</button>
         <button id="clear-btn" type="button">Clear view</button>
       </div>
     </div>
-    <div class="log" id="log" tabindex="0" aria-live="off"></div>
+    <div class="log" id="log" tabindex="0" role="tabpanel" aria-labelledby="tab-log"></div>
+    <pre class="flash-out" id="flash-out" role="tabpanel" aria-labelledby="tab-flash" hidden></pre>
     <button class="jump" id="jump" type="button" hidden>Jump to latest</button>
-  </section>
-</div>
+  </div>
+</section>
 
+<div class="pop" id="pop" role="dialog" hidden></div>
+
+<script src="core.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

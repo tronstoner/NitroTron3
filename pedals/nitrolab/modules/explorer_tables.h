@@ -242,13 +242,13 @@ TUNABLE_CONSTEXPR_FN bool ExpTbLofiOn(int z) {   // (inline in DIAG builds: EXP_
 // TABLES MOD. tools/devtool/registry.py reads the @family / @field lines and the EXP_TB_MOD rows (field order = the
 // EXP_TB_MOD arguments) and shows one panel per preset.
 // @family EXP_TB_ EXP_TB_MOD EXP_TB_PRESET_MODS
-// @field TIMBRE float @unit 0..1 @range 0 1 @taper lin @level live  Timbre depth: morph swing at full LFO depth (+-) / x o (env)
-// @field FILTER float @unit oct @range 0 6 @taper lin @level live  Filter depth: LP cutoff, pluck side upward (LFO) / + this x o (env)
-// @field FILTER_SWELL float @unit oct @range 0 4 @taper lin @level live  Filter depth, swell side: LP cutoff downward (LFO only)
-// @field PITCH float @unit cents @range 0 1200 @taper lin @level live  Pitch depth: vibrato +- this x l cents / + this x o (env)
-// @field RATE_CCW float @unit Hz @range 5 80 @taper log @level live @pair LFO_rate ccw  LFO rate at K5 full CCW (triangle)
-// @field RATE_CW float @unit Hz @range 5 80 @taper log @level live @pair LFO_rate cw  LFO rate at K5 full CW (steps)
-// @field ENV bool @unit bool @level live  Source ENV: the K4 touch env drives the targets instead of the K5 LFO
+// @field TIMBRE float @unit 0..1 @range 0 1 @taper lin @level live @target timbre  Timbre depth: morph swing at full LFO depth (+-) / x o (env)
+// @field FILTER float @unit oct @range 0 6 @taper lin @level live @target filter  Filter depth: LP cutoff, pluck side upward (LFO) / + this x o (env)
+// @field FILTER_SWELL float @unit oct @range 0 4 @taper lin @level live @target filter  Filter depth, swell side: LP cutoff downward (LFO only)
+// @field PITCH float @unit cents @range 0 1200 @taper lin @level live @target pitch  Pitch depth: vibrato +- this x l cents / + this x o (env)
+// @field RATE_CCW float @unit Hz @range 5 80 @taper log @level live @target pitch @pair LFO_rate ccw  LFO rate at K5 full CCW (triangle)
+// @field RATE_CW float @unit Hz @range 5 80 @taper log @level live @target pitch @pair LFO_rate cw  LFO rate at K5 full CW (steps)
+// @field ENV bool @unit bool @level live @target env @states LFO env  Source ENV: the K4 touch env drives the targets instead of the K5 LFO
 constexpr bool ExpTbStrEq(const char* a, const char* b) {
   return (*a != *b) ? false : (*a == 0) ? true : ExpTbStrEq(a + 1, b + 1);
 }

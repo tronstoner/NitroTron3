@@ -1,119 +1,25 @@
-// Pedal devtool page (steps 1 + 2): connection + build info, flash, live log,
-// live constants (tree, rows, pair rows, changes panel). Three panes: tree |
-// values | log (always visible), draggable splitters; the pedal's current K1
-// slot in the top bar.
-// No build step, no external assets. Talks to tools/devtool/devtool.py.
+// Pedal devtool page: top bar (connection, the pedal's place, changes, flash), left nav (benches -> modes),
+// main view per mode (knob strip, section cards with rotary knobs / fader banks / toggles, the preset grid),
+// bottom drawer (log + flash output). Formatting, taper and state-line parsing live in core.js.
+// No build step, no external assets. Talks to tools/devtool/devtool.py (HTTP + SSE).
 "use strict";
 
-// ---------------------------------------------------------------------------
-// Time formatting: the ONE place timestamps become text. Local time only.
-// Change a pattern here and every view follows.
-//   tokens: YYYY MM DD HH mm ss SSS
-// ---------------------------------------------------------------------------
-const TIME_FORMATS = {
-  clock: "HH:mm:ss.SSS",        // log lines, separators, flash output, status times
-  build: "YYYY-MM-DD HH:mm",    // firmware build time (minute resolution on the pedal)
-};
-
-function fmtTime(value, pattern = TIME_FORMATS.clock) {
-  if (value === null || value === undefined || value === "") return "–";
-  const d = value instanceof Date ? value : new Date(value);
-  if (isNaN(d.getTime())) return "–";
-  const p = (n, w = 2) => String(n).padStart(w, "0");
-  const tok = {
-    YYYY: String(d.getFullYear()), MM: p(d.getMonth() + 1), DD: p(d.getDate()),
-    HH: p(d.getHours()), mm: p(d.getMinutes()), ss: p(d.getSeconds()), SSS: p(d.getMilliseconds(), 3),
-  };
-  return pattern.replace(/YYYY|SSS|MM|DD|HH|mm|ss/g, (k) => tok[k]);
-}
-
-// ---------------------------------------------------------------------------
-// Number formatting: the ONE place constant values become text (rows, number
-// fields, defaults, changes panel, slider snapping). Unit-aware precision; the
-// locale is a parameter (en-US default: "." decimals, which the number fields
-// parse back). `sig` = significant digits, `dec` = fixed decimals. A value that
-// the unit's precision would misstate (a default like 5.834 at 3 digits) gets
-// the extra digits it needs (up to 7 significant), so nothing shown is rounded
-// away; slider values are snapped to the unit's precision (snapNum).
-// ---------------------------------------------------------------------------
-const NUM_LOCALE = "en-US";
-const UNIT_FMT = {
-  Hz: { sig: 4 }, s: { sig: 3 }, ms: { sig: 3 }, dB: { dec: 1 }, bits: { dec: 1 },
-  oct: { dec: 2 }, rad: { dec: 2 }, x: { sig: 3 }, "0..1": { dec: 3 }, b: { dec: 2 },
-  knob: { dec: 2 },             // knob positions parsed from the pedal's state line (top bar)
-  "": { sig: 4 },
-};
-const numFormatters = new Map();
-function numFormatter(unit, type, grouping, extra) {
-  const key = unit + "|" + type + "|" + grouping + "|" + extra;
-  let f = numFormatters.get(key);
-  if (!f) {
-    const u = type === "int" ? { dec: 0 } : (UNIT_FMT[unit] || UNIT_FMT[""]);
-    const o = { useGrouping: grouping };
-    if (u.sig !== undefined) o.maximumSignificantDigits = u.sig + extra;
-    else { o.minimumFractionDigits = u.dec; o.maximumFractionDigits = u.dec + extra; }
-    f = new Intl.NumberFormat(NUM_LOCALE, o);
-    numFormatters.set(key, f);
-  }
-  return f;
-}
-// display: fmtNum(v, unit, type); plain (number fields): fmtNum(v, unit, type, true)
-function fmtNum(value, unit = "", type = "float", plain = false) {
-  if (value === null || value === undefined || value === "") return "–";
-  if (type === "bool") return value ? "on" : "off";
-  const v = Number(value);
-  if (!isFinite(v)) return "–";
-  for (let extra = 0; extra < 5; extra++) {        // extra digits only if the value needs them
-    const t = numFormatter(unit, type, false, extra).format(v);
-    if (type === "int" || Math.fround(Number(t)) === Math.fround(v) || extra === 4)
-      return plain ? t : numFormatter(unit, type, true, extra).format(v);
-  }
-  return String(v);
-}
-// "1,234.5 Hz" style: value + unit
-function fmtWithUnit(value, unit, type) {
-  const t = fmtNum(value, unit, type);
-  return type === "bool" || !unit || unit === "0..1" || unit === "bool" ? t : t + " " + unit;
-}
-// The value a control actually sends = what the formatter shows (so pedal == display).
-function snapNum(v, unit, type) {
-  const t = numFormatter(unit, type, false, 0).format(v);
-  const n = Number(t);
-  return isFinite(n) ? n : v;
-}
-// Parse a typed number (the locale's decimal separator or ".").
-function parseNum(text) {
-  const dec = (1.5).toLocaleString(NUM_LOCALE).charAt(1);
-  let t = String(text).trim().replace(/\s/g, "");
-  if (dec !== ".") t = t.split(dec).join(".");
-  if (!/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(t)) return NaN;
-  return Number(t);
-}
-
-// The pedal sends its build time as local wall-clock "YYYY-MM-DDTHH:MM" (no zone).
-function parseBuildTime(s) {
-  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(s || "");
-  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null;
-}
-
-// ---------------------------------------------------------------------------
 const MAX_LINES = 20000;
 const $ = (id) => document.getElementById(id);
 const el = {
-  dot: $("conn-dot"), connText: $("conn-text"), conn: $("conn"),
-  pedal: $("b-pedal"), hash: $("b-hash"), time: $("b-time"), note: $("b-note"),
-  flashPedal: $("flash-pedal"), flashBtn: $("flash-btn"),
-  flashPanel: $("flash-panel"), flashBadge: $("flash-badge"), flashMsg: $("flash-msg"),
-  flashTime: $("flash-time"), flashOut: $("flash-out"), flashLast: $("flash-last"),
-  filter: $("filter"), filterMode: $("filter-mode"), count: $("count"),
-  pauseBtn: $("pause-btn"), clearBtn: $("clear-btn"), log: $("log"), jump: $("jump"),
-  changesBtn: $("changes-btn"), changesCount: $("changes-count"), changesPanel: $("changes-panel"),
-  changesList: $("changes-list"), changesSub: $("changes-sub"), resetAll: $("reset-all-btn"),
-  note: $("note"), sidebar: $("sidebar"), search: $("search"), tree: $("tree"),
-  navToggle: $("nav-toggle"), viewConst: $("view-const"), viewLog: $("view-log"),
-  tunState: $("tun-state"), guard: $("guard"), guardBtn: $("guard-btn"),
-  secHead: $("sec-head"), rows: $("rows"), slotV: $("slot-v"), slotX: $("slot-x"),
-  panes: $("panes"), splitTree: $("split-tree"), splitLog: $("split-log"),
+  dot: $("conn-dot"), connText: $("conn-text"), pedal: $("b-pedal"), hash: $("b-hash"), conn: $("conn"),
+  where: $("where"), whereBench: $("where-bench"), whereMode: $("where-mode"), whereK1: $("where-k1"),
+  flashPedal: $("flash-pedal"), flashBtn: $("flash-btn"), flashBadge: $("flash-badge"), flashMsg: $("flash-msg"),
+  flashOut: $("flash-out"), filter: $("filter"), filterMode: $("filter-mode"), count: $("count"),
+  pauseBtn: $("pause-btn"), clearBtn: $("clear-btn"), log: $("log"), jump: $("jump"), logTools: $("log-tools"),
+  changesBtn: $("changes-btn"), changesCount: $("changes-count"), changesWord: $("changes-word"),
+  changesPop: $("changes-pop"), changesList: $("changes-list"), changesSub: $("changes-sub"),
+  resetAll: $("reset-all-btn"), note: $("note"),
+  banner: $("banner"), bannerText: $("banner-text"), guardBtn: $("guard-btn"),
+  nav: $("nav"), navTree: $("nav-tree"), navToggle: $("nav-toggle"), search: $("search"),
+  view: $("view"), viewTitle: $("view-title"), legend: $("legend"), strip: $("strip"), sections: $("sections"),
+  drawer: $("drawer"), drawerGrip: $("drawer-grip"), drawerToggle: $("drawer-toggle"), drawerLast: $("drawer-last"),
+  tabLog: $("tab-log"), tabFlash: $("tab-flash"), pop: $("pop"), sprite: $("icon-sprite"),
 };
 
 const state = {
@@ -125,11 +31,12 @@ const state = {
   userPicked: false,      // the user chose a pedal in the selector: keep it
   lines: [],              // {kind: "line"|"sep", t, text|what, el}
   paused: false,
-  pausedAt: 0,            // lines.length when paused
-  clearedAt: 0,           // "Clear view": hide lines up to this server time
-  stick: true,            // auto-scroll while the view is at the bottom
+  pausedAt: 0,
+  clearedAt: 0,
+  stick: true,
   filter: { text: "", rx: null, isRegex: true },
-  active: null,           // the pedal's current place from its state lines: {bench, sw1, preset}
+  st: null,               // the latest parsed state line (core.js parseState) + its time
+  active: null,           // {bench, sw1, preset} from the state lines
 };
 
 function store(key, val) {
@@ -139,50 +46,75 @@ function store(key, val) {
   } catch (e) { /* storage blocked: fine */ }
   return null;
 }
+function h(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = text;
+  return e;
+}
 
 // ---------------------------------------------------------------------------
-// Status / build
+// Icons: the manual's knob icons (docs/gen_icons.py --tool -> icons/icons.svg), inlined once as <symbol>s.
+// Two small UI glyphs (reset, info) are drawn here.
+// ---------------------------------------------------------------------------
+const SVGNS = "http://www.w3.org/2000/svg";
+function icon(name, cls) {
+  const s = document.createElementNS(SVGNS, "svg");
+  s.setAttribute("class", "ic" + (cls ? " " + cls : ""));
+  s.setAttribute("aria-hidden", "true");
+  const u = document.createElementNS(SVGNS, "use");
+  u.setAttribute("href", "#ic-" + name);
+  s.appendChild(u);
+  return s;
+}
+function glyph(kind) {
+  const s = document.createElementNS(SVGNS, "svg");
+  s.setAttribute("viewBox", "0 0 16 16");
+  s.setAttribute("aria-hidden", "true");
+  s.innerHTML = kind === "reset"
+    ? '<path d="M3.2 8a4.8 4.8 0 1 0 1.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M3 1.8v3.6h3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'
+    : '<circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="7.2" y="7" width="1.6" height="4.6" rx=".8" fill="currentColor"/><circle cx="8" cy="4.8" r="1" fill="currentColor"/>';
+  return s;
+}
+fetch("icons/icons.svg", { cache: "no-store" }).then((r) => (r.ok ? r.text() : "")).then((t) => {
+  el.sprite.innerHTML = t;
+}).catch(() => {});
+
+// ---------------------------------------------------------------------------
+// Status / build (top bar)
 // ---------------------------------------------------------------------------
 function renderStatus() {
   const s = state.status;
   let dot = "", text;
   if (!state.online) { dot = "bad"; text = "devtool offline - reconnecting…"; }
   else if (!s || !s.connected) { dot = ""; text = "waiting for pedal"; }
-  else if (s.build_state === "ok") { dot = "ok"; text = "connected"; }
-  else if (s.build_state === "asking") { dot = "warn"; text = "connected - asking for build…"; }
-  else { dot = "warn"; text = "connected - no build answer (non-DIAG firmware?)"; }
+  else if (s.build_state === "ok") { dot = "ok"; text = ""; }
+  else if (s.build_state === "asking") { dot = "warn"; text = "asking for build…"; }
+  else { dot = "warn"; text = "no build answer (non-DIAG firmware?)"; }
   el.dot.className = "dot " + dot;
   el.connText.textContent = text;
-  el.conn.title = s && s.dev ? s.dev + (s.log_file ? "  ->  " + s.log_file : "") : "";
-
   const b = s && s.connected ? s.build : null;
-  el.pedal.textContent = b ? b.pedal : "–";
-  el.hash.textContent = b ? b.hash : "–";
-  if (b && b.dirty) {
-    const d = document.createElement("span");
-    d.className = "dirty";
-    d.textContent = "dirty";
-    el.hash.appendChild(d);
-  }
+  el.pedal.textContent = b ? b.pedal : "no pedal";
+  el.hash.textContent = b ? b.hash : "";
+  if (b && b.dirty) el.hash.appendChild(h("span", "dirty", "dirty"));
   const bt = b ? parseBuildTime(b.time) : null;
-  el.time.textContent = b ? (bt ? fmtTime(bt, TIME_FORMATS.build) : b.time) : "–";
-  const note = s && s.connected && s.note ? s.note : "";
-  el.note.textContent = note;          // (a fixed slot in the top bar: empty, never removed)
-  el.note.title = note;
-
+  el.conn.title = (b ? "Firmware " + b.hash + (b.dirty ? " (dirty)" : "") + ", built " +
+    (bt ? fmtTime(bt, TIME_FORMATS.build) : b.time) + "\n" : "") +
+    (s && s.dev ? s.dev + (s.log_file ? "  ->  " + s.log_file : "") : "") +
+    (s && s.connected && s.note ? "\n" + s.note : "");
   if (!state.userPicked && !state.flash.active) {
-    const want = b && state.pedals.includes(b.pedal) ? b.pedal : state.defaultPedal;
-    el.flashPedal.value = want;
+    el.flashPedal.value = b && state.pedals.includes(b.pedal) ? b.pedal : state.defaultPedal;
   }
   renderFlashControls();
+  renderBanner();
 }
 
 function fillPedals() {
   const cur = el.flashPedal.value;
   el.flashPedal.textContent = "";
   for (const p of state.pedals) {
-    const o = document.createElement("option");
-    o.value = p; o.textContent = p;
+    const o = h("option", "", p);
+    o.value = p;
     el.flashPedal.appendChild(o);
   }
   el.flashPedal.value = state.pedals.includes(cur) ? cur : state.defaultPedal;
@@ -200,12 +132,13 @@ async function loadMeta() {
 }
 
 // ---------------------------------------------------------------------------
-// Flash
+// Flash: status in the drawer line (never opens anything by itself), output in the drawer's Flash tab.
 // ---------------------------------------------------------------------------
 const FLASH_LABEL = {
   idle: "idle", building: "building", "entering-dfu": "entering DFU",
   gesture: "footswitches", programming: "programming", done: "done", failed: "failed",
 };
+let flashLast = "";
 
 function renderFlashControls() {
   const busy = !!state.flash.active;
@@ -217,69 +150,54 @@ function renderFlashControls() {
 function renderFlash() {
   const f = state.flash;
   const st = f.state || "idle";
-  if (st !== "idle") el.flashPanel.hidden = false;
-  el.flashBadge.textContent = FLASH_LABEL[st] || st;
+  el.flashBadge.textContent = "flash: " + (FLASH_LABEL[st] || st);
   el.flashBadge.className = "flash-badge " + (
     st === "done" ? "ok" : st === "failed" ? "bad" : st === "gesture" ? "attn" : f.active ? "run" : "");
-  el.flashMsg.textContent = f.message ? (f.pedal ? f.pedal + ": " : "") + f.message : "";
+  const msg = f.message ? (f.pedal ? f.pedal + ": " : "") + f.message : "";
+  // while running, the latest output line (progress) follows the message
+  el.flashMsg.textContent = f.active && flashLast ? (msg ? msg + "  ·  " : "") + flashLast : msg;
   el.flashMsg.className = "flash-msg" + (st === "gesture" ? " attn" : "");
-  el.flashMsg.title = el.flashMsg.textContent;
-  el.flashTime.textContent = f.t ? fmtTime(f.t) : "";
+  el.flashMsg.title = el.flashMsg.textContent + (f.t ? "\n" + fmtTime(f.t) : "");
   renderFlashControls();
 }
 
 function onFlash(f) {
   const prev = state.flash.state;
   state.flash = f && f.state ? f : { active: false, state: "idle" };
-  if (state.flash.state === "building" && prev !== "building") {
-    el.flashOut.textContent = "";        // never auto-expands: the summary shows the latest line
-    el.flashLast.textContent = "";
-  }
+  if (state.flash.state === "building" && prev !== "building") { el.flashOut.textContent = ""; flashLast = ""; }
   renderFlash();
 }
 
 function onFlashOut(d) {
-  const atBottom = el.flashOut.scrollTop + el.flashOut.clientHeight >= el.flashOut.scrollHeight - 4;
+  const out = el.flashOut;
+  const atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 4;
   // '\r' progress lines (dfu-util): replace the last line, as a terminal does
-  if (d.replace && el.flashOut.lastChild) el.flashOut.removeChild(el.flashOut.lastChild);
-  const line = document.createElement("div");
-  if (d.stream === "info") line.className = "info";
-  const ts = document.createElement("span");
-  ts.className = "ts";
-  ts.textContent = fmtTime(d.t);
-  line.appendChild(ts);
+  if (d.replace && out.lastChild) out.removeChild(out.lastChild);
+  const line = h("div", d.stream === "info" ? "info" : "");
+  line.appendChild(h("span", "ts", fmtTime(d.t)));
   line.appendChild(document.createTextNode(d.text));
-  el.flashOut.appendChild(line);
-  while (el.flashOut.childNodes.length > 4000) el.flashOut.removeChild(el.flashOut.firstChild);
-  if (atBottom) el.flashOut.scrollTop = el.flashOut.scrollHeight;
-  el.flashLast.textContent = d.text;     // latest output line, visible while collapsed
-  el.flashLast.title = d.text;
+  out.appendChild(line);
+  while (out.childNodes.length > 4000) out.removeChild(out.firstChild);
+  if (atBottom) out.scrollTop = out.scrollHeight;
+  flashLast = d.text;
+  renderFlash();
 }
 
 async function startFlash() {
   const pedal = el.flashPedal.value;
   el.flashBtn.disabled = true;
-  try {
-    const r = await fetch("/api/flash", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pedal }),
-    });
-    const js = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      el.flashPanel.hidden = false;
-      el.flashMsg.textContent = "not started: " + (js.message || r.status);
-      el.flashMsg.className = "flash-msg attn";
-    }
-  } catch (e) {
-    el.flashPanel.hidden = false;
-    el.flashMsg.textContent = "not started: devtool unreachable";
+  const res = await post("/api/flash", { pedal });
+  if (!res.ok) {
+    el.flashMsg.textContent = "not started: " + res.message;
     el.flashMsg.className = "flash-msg attn";
   }
   renderFlashControls();
 }
+el.flashPedal.addEventListener("change", () => { state.userPicked = true; });
+el.flashBtn.addEventListener("click", startFlash);
 
 // ---------------------------------------------------------------------------
-// Log
+// Log (drawer)
 // ---------------------------------------------------------------------------
 function setFilter(text) {
   const f = { text, rx: null, isRegex: true };
@@ -290,15 +208,12 @@ function setFilter(text) {
   el.filterMode.textContent = !text ? "" : f.isRegex ? "regex" : "substring";
   el.filterMode.className = "filter-mode" + (text && !f.isRegex ? " sub" : "");
 }
-
 function matches(text) {
   const f = state.filter;
   if (!f.text) return true;
   if (f.rx) { f.rx.lastIndex = 0; return f.rx.test(text); }
   return text.toLowerCase().includes(f.text.toLowerCase());
 }
-
-// Text with the filter's matches wrapped in <mark>.
 function highlighted(text) {
   const frag = document.createDocumentFragment();
   const f = state.filter;
@@ -318,55 +233,33 @@ function highlighted(text) {
   let pos = 0;
   for (const [a, b] of spans) {
     if (a > pos) frag.appendChild(document.createTextNode(text.slice(pos, a)));
-    const mk = document.createElement("mark");
-    mk.textContent = text.slice(a, b);
-    frag.appendChild(mk);
+    frag.appendChild(h("mark", "", text.slice(a, b)));
     pos = b;
   }
   if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
   return frag;
 }
-
 function makeRow(l) {
-  const row = document.createElement("div");
-  const ts = document.createElement("span");
-  ts.className = "ts";
-  ts.textContent = fmtTime(l.t);
-  const tx = document.createElement("span");
-  tx.className = "tx";
-  if (l.kind === "sep") {
-    row.className = "row sep";
-    tx.textContent = l.what === "gone" ? "pedal gone" : "pedal back";
-  } else {
-    row.className = "row";
-    tx.appendChild(highlighted(l.text));
-  }
-  row.appendChild(ts);
+  const row = h("div", l.kind === "sep" ? "row sep" : "row");
+  row.appendChild(h("span", "ts", fmtTime(l.t)));
+  const tx = h("span", "tx");
+  if (l.kind === "sep") tx.textContent = l.what === "gone" ? "pedal gone" : "pedal back";
+  else tx.appendChild(highlighted(l.text));
   row.appendChild(tx);
   return row;
 }
-
-function visible(l) {
-  return l.t > state.clearedAt && (l.kind === "sep" || matches(l.text));
-}
-
+function visible(l) { return l.t > state.clearedAt && (l.kind === "sep" || matches(l.text)); }
 function renderCount() {
   const total = state.lines.filter((l) => l.kind === "line" && l.t > state.clearedAt).length;
   let s = total + (total === 1 ? " line" : " lines");
   if (state.paused) s += " - paused, " + (state.lines.length - state.pausedAt) + " new";
   el.count.textContent = s;
 }
-
 function renderEmpty() {
   if (el.log.querySelector(".row")) return;
-  if (!el.log.querySelector(".empty")) {
-    const e = document.createElement("div");
-    e.className = "empty";
-    e.textContent = state.lines.length ? "No lines match the filter." : "No log lines yet.";
-    el.log.appendChild(e);
-  }
+  if (!el.log.querySelector(".empty"))
+    el.log.appendChild(h("div", "empty", state.lines.length ? "No lines match the filter." : "No log lines yet."));
 }
-
 function fullRender() {
   el.log.textContent = "";
   const frag = document.createDocumentFragment();
@@ -379,15 +272,17 @@ function fullRender() {
   el.log.appendChild(frag);
   renderEmpty();
   renderCount();
-  if (state.stick) scrollToBottom();
+  if (state.stick) el.log.scrollTop = el.log.scrollHeight;
 }
-
-function scrollToBottom() {
-  el.log.scrollTop = el.log.scrollHeight;
+function renderLastLine(l) {
+  el.drawerLast.textContent = "";
+  if (!l) return;
+  el.drawerLast.appendChild(h("span", "ts", fmtTime(l.t)));
+  el.drawerLast.appendChild(document.createTextNode(l.kind === "sep" ? (l.what === "gone" ? "pedal gone" : "pedal back") : l.text));
+  el.drawerLast.title = l.kind === "sep" ? "" : l.text;
 }
-
 function addLine(l) {
-  if (l.kind === "line") onSlotLine(l.text, l.t);
+  if (l.kind === "line") onStateLine(l.text, l.t);
   state.lines.push(l);
   if (state.lines.length > MAX_LINES) {
     const old = state.lines.shift();
@@ -399,18 +294,17 @@ function addLine(l) {
     if (e) e.remove();
     l.el = makeRow(l);
     el.log.appendChild(l.el);
-    if (state.stick) scrollToBottom();
+    if (state.stick) el.log.scrollTop = el.log.scrollHeight;
   }
-  scheduleCount();
+  scheduleLogPaint(l);
 }
-
-let countPending = false;
-function scheduleCount() {
-  if (countPending) return;
-  countPending = true;
-  requestAnimationFrame(() => { countPending = false; renderCount(); });
+let logPaintPending = false, logPaintLine = null;
+function scheduleLogPaint(l) {
+  logPaintLine = l;
+  if (logPaintPending) return;
+  logPaintPending = true;
+  requestAnimationFrame(() => { logPaintPending = false; renderCount(); renderLastLine(logPaintLine); });
 }
-
 function setPaused(p) {
   state.paused = p;
   if (p) state.pausedAt = state.lines.length;
@@ -418,12 +312,11 @@ function setPaused(p) {
   el.pauseBtn.setAttribute("aria-pressed", String(p));
   fullRender();
 }
-
 el.log.addEventListener("scroll", () => {
   state.stick = el.log.scrollTop + el.log.clientHeight >= el.log.scrollHeight - 4;
-  el.jump.hidden = state.stick;
+  el.jump.hidden = state.stick || el.log.hidden;
 });
-el.jump.addEventListener("click", () => { state.stick = true; el.jump.hidden = true; scrollToBottom(); });
+el.jump.addEventListener("click", () => { state.stick = true; el.jump.hidden = true; el.log.scrollTop = el.log.scrollHeight; });
 el.pauseBtn.addEventListener("click", () => setPaused(!state.paused));
 el.clearBtn.addEventListener("click", () => {
   const last = state.lines[state.lines.length - 1];
@@ -436,949 +329,1229 @@ el.clearBtn.addEventListener("click", () => {
 let filterTimer = 0;
 el.filter.addEventListener("input", () => {
   clearTimeout(filterTimer);
-  filterTimer = setTimeout(() => {
-    setFilter(el.filter.value);
-    store("devtool.filter", el.filter.value);
-    fullRender();
-  }, 120);
+  filterTimer = setTimeout(() => { setFilter(el.filter.value); store("devtool.filter", el.filter.value); fullRender(); }, 120);
 });
 el.filter.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { el.filter.value = ""; el.filter.dispatchEvent(new Event("input")); }
 });
-el.flashPedal.addEventListener("change", () => { state.userPicked = true; });
-el.flashBtn.addEventListener("click", startFlash);
+
+// --- drawer: one line collapsed; open to a remembered, draggable height; Log / Flash output tabs ---
+const DRAWER_MIN = 120;
+const drawer = {
+  open: store("devtool.drawerOpen") === "1",
+  h: Number(store("devtool.drawerH")) || 300,
+  tab: store("devtool.drawerTab") === "flash" ? "flash" : "log",
+};
+function drawerMax() { return Math.max(DRAWER_MIN, window.innerHeight - 200); }
+function applyDrawer() {
+  drawer.h = Math.max(DRAWER_MIN, Math.min(drawer.h, drawerMax()));
+  el.drawer.classList.toggle("open", drawer.open);
+  el.drawer.style.setProperty("--drawer-h", Math.round(drawer.h) + "px");
+  el.drawerToggle.setAttribute("aria-expanded", String(drawer.open));
+  el.drawerGrip.setAttribute("aria-valuenow", String(Math.round(drawer.h)));
+  const lg = drawer.tab === "log";
+  el.tabLog.setAttribute("aria-selected", String(lg));
+  el.tabFlash.setAttribute("aria-selected", String(!lg));
+  el.log.hidden = !lg;
+  el.flashOut.hidden = lg;
+  el.logTools.hidden = !lg;
+  el.jump.hidden = !lg || state.stick;
+}
+function setDrawer(open) {
+  drawer.open = open;
+  store("devtool.drawerOpen", open ? "1" : "0");
+  applyDrawer();
+  if (open && drawer.tab === "log" && state.stick) el.log.scrollTop = el.log.scrollHeight;
+}
+function setTab(t) {
+  drawer.tab = t;
+  store("devtool.drawerTab", t);
+  applyDrawer();
+}
+el.drawerToggle.addEventListener("click", () => setDrawer(!drawer.open));
+el.drawerLast.addEventListener("click", () => { setTab("log"); setDrawer(true); });
+el.flashBadge.addEventListener("click", () => { setTab("flash"); setDrawer(true); });
+el.tabLog.addEventListener("click", () => setTab("log"));
+el.tabFlash.addEventListener("click", () => setTab("flash"));
+(function initGrip() {
+  const g = el.drawerGrip;
+  let y0 = 0, h0 = 0, moved = false;
+  g.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    g.classList.add("drag");
+    y0 = e.clientY; h0 = drawer.open ? drawer.h : 0; moved = false;
+  });
+  g.addEventListener("pointermove", (e) => {
+    if (!g.hasPointerCapture(e.pointerId)) return;
+    const dy = y0 - e.clientY;
+    if (Math.abs(dy) < 3 && !moved) return;
+    moved = true;
+    drawer.h = h0 + dy;
+    drawer.open = drawer.h >= DRAWER_MIN * 0.6;
+    applyDrawer();
+  });
+  const end = (e) => {
+    if (!g.hasPointerCapture(e.pointerId)) return;
+    g.releasePointerCapture(e.pointerId);
+    g.classList.remove("drag");
+    if (!moved) { setDrawer(!drawer.open); return; }
+    store("devtool.drawerH", String(Math.round(drawer.h)));
+    setDrawer(drawer.open);
+  };
+  g.addEventListener("pointerup", end);
+  g.addEventListener("pointercancel", end);
+  g.addEventListener("keydown", (e) => {
+    const st = e.shiftKey ? 80 : 20;
+    if (e.key === "ArrowUp") drawer.h += st;
+    else if (e.key === "ArrowDown") drawer.h -= st;
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDrawer(!drawer.open); return; }
+    else return;
+    e.preventDefault();
+    drawer.open = true;
+    applyDrawer();
+    store("devtool.drawerH", String(Math.round(drawer.h)));
+  });
+})();
+window.addEventListener("resize", applyDrawer);
 
 // ---------------------------------------------------------------------------
-// Current K1 slot (top bar), parsed from the pedal's DIAG state lines:
-//   explorer  `XP <auto|#n> K1 .. K2 .. K3 .. K4 .. K5 .. SW1 <MID> oct <played> | <selection> ...`
-//             selection: `tab <n>/<N> <NAME> <LFO|ANALOG|LOFI> ...` (+ `step <i>/<n>` on the LOFI slot),
-//             `WT/<zone>`, `LAB SPEC bank <n>/9 <NAME>`, `LAB <zone>`, else the model word (FM, XBAND-FM, ...)
-//   armitage  `<auto|#n> K1 .. SW1 <..> <MODE> h .. SW2 <..> | ...`
-// Only these lines change it; it stays through reconnects. The same lines give the active place for the
-// tree (state.active: bench id from the line type - armitage 1, `LAB ...` 3, else 2 -, mode from SW1 via
-// the registry layout, K1 preset from `tab n/N NAME`).
+// The pedal's current place, from its DIAG state lines (core.js parseState): top bar, nav dots, knob strip
+// values, the preset grid's "now" row. Only these lines change it; it stays through reconnects.
 // ---------------------------------------------------------------------------
-const XP_RE = /(?:^|\s)XP (?:auto|#\d+) K1 ([\d.]+) K2 [\d.]+ K3 [\d.]+ K4 [\d.]+ K5 [\d.]+ SW1 (\w+) oct (\w+) \| (.*)$/;
-const AR_RE = /(?:^|\s)(?:auto|#\d+) K1 ([\d.]+) K2 [\d.]+ K3 [\d.]+ K4 [\d.]+ K5 [\d.]+ SW1 (\w+) (\w+) h ?[\d.]+ SW2 (\w+) \| /;
-function slotSelection(rest) {
-  let m = /^tab (\d+)\/(\d+) (.+?) (LFO|ANALOG|LOFI)\b(.*)$/.exec(rest);
-  if (m) {
-    const st = /\bstep (\d+)\/(\d+)/.exec(m[5]);
-    return "K1 " + m[1] + "/" + m[2] + "  " + m[3] + " (" + m[4] + ")" + (st ? "  K2 stage " + st[1] + "/" + st[2] : "");
-  }
-  if ((m = /^WT\/(\S+)/.exec(rest))) return "WT " + m[1];
-  if ((m = /^LAB SPEC bank (\d+\/\d+) (\S+)/.exec(rest))) return "FM LAB SPEC bank " + m[1] + " " + m[2];
-  if ((m = /^LAB (\S+)/.exec(rest))) return "FM LAB " + m[1];
-  return (rest.split(/\s+/)[0] || "?");
-}
-function parseSlot(text) {
-  let m = XP_RE.exec(text);
-  if (m) {
-    const tb = /^tab \d+\/\d+ (.+?) (?:LFO|ANALOG|LOFI)\b/.exec(m[4]);
-    return { what: slotSelection(m[4]), k1: Number(m[1]), sw1: m[2], extra: "oct " + m[3],
-             bench: /^LAB /.test(m[4]) ? "3" : "2", preset: tb ? tb[1] : null };
-  }
-  m = AR_RE.exec(text);
-  if (m) return { what: "armitage " + m[3], k1: Number(m[1]), sw1: m[2], extra: "SW2 " + m[4], bench: "1", preset: null };
-  return null;
-}
-function onSlotLine(text, t) {
-  const p = parseSlot(text);
+function onStateLine(text, t) {
+  const p = parseState(text);
   if (!p) return;
-  el.slotV.textContent = p.what;
-  el.slotX.textContent = "K1 " + fmtNum(p.k1, "knob") + "  SW1 " + p.sw1 + "  " + p.extra + "  at " + fmtTime(t);
-  el.slotV.parentNode.title = text;
+  p.t = t;
+  state.st = p;
   const a = state.active;
-  if (!a || a.bench !== p.bench || a.sw1 !== p.sw1 || a.preset !== p.preset) {
-    state.active = { bench: p.bench, sw1: p.sw1, preset: p.preset };
-    renderActive();
-  }
+  const moved = !a || a.bench !== p.bench || a.sw1 !== p.sw1 || a.preset !== p.preset;
+  state.active = { bench: p.bench, sw1: p.sw1, preset: p.preset };
+  scheduleStatePaint(moved);
+}
+let statePaintPending = false, statePaintMoved = false;
+function scheduleStatePaint(moved) {
+  statePaintMoved = statePaintMoved || moved;
+  if (statePaintPending) return;
+  statePaintPending = true;
+  requestAnimationFrame(() => {
+    statePaintPending = false;
+    const m = statePaintMoved;
+    statePaintMoved = false;
+    renderWhere();
+    paintStrip();
+    if (m) { renderNavActive(); renderPresetNow(); renderViewTitle(); }
+  });
+}
+function renderWhere() {
+  const p = state.st;
+  if (!p) return;
+  const b = benchOf(p.bench);
+  const am = activeModeId();
+  const m = b && am ? b.modes.find((x) => b.id + "/" + x.id === am) : null;
+  el.whereBench.textContent = b ? b.name : "Bench " + p.bench;
+  el.whereMode.textContent = m ? m.name : "SW1 " + p.sw1;
+  el.whereK1.textContent = "K1 " + p.sel + (p.of ? " (" + p.of + ")" : "");
+  el.where.title = "At " + fmtTime(p.t) + " - SW1 " + p.sw1 + (p.oct ? ", oct " + p.oct : "");
 }
 
 // ---------------------------------------------------------------------------
-// Live constants (step 2)
-// The registry (labels, ranges, files) comes from devtool's `tun` snapshot;
-// values come from the pedal (`tval` echoes). DOM is built once per registry
-// structure / selection and then updated in place, so scroll position, open
-// rows, focus, the search and the selected section survive value updates and
-// reconnects. Every row has fixed-height lines (messages, badges and marks
-// have reserved space), so nothing reflows on a value update.
-// PAIRS (registry @pair): the constants that are the ends of one law (knob
-// positions CCW / noon / CW, or a value range) are ONE row: their value fields
-// in end order around one multi-handle slider (one lane per end, on the union
-// of their ranges in their shared taper; each handle stays in its own range).
+// Live constants: registry (devtool's `tun` snapshot) + the pedal's values (`tval`).
+// The view is built once per structure / selection, then updated in place, so selection, open detail
+// rows, scroll, focus and drags survive value updates and reconnects.
 // ---------------------------------------------------------------------------
 const LEVEL_TIP = {
-  live: "Live: read while audio runs - heard at once (next audio block).",
+  live: "Live: heard at once (next audio block).",
   reactivate: "Takes effect after the next mode / zone change.",
 };
-const SLIDER_STEPS = 1000;
+const DIR_ENDS = { ccw: "ccw", noon: "noon", cw: "cw" };
 const tun = {
-  snap: null,             // last `tun` snapshot
-  byName: new Map(),      // name -> constant (with .value)
-  structKey: "",          // names in order: rebuild the tree / rows only when this changes
-  sel: store("devtool.section") || "",     // "module/section"
+  snap: null,
+  byName: new Map(),
+  structKey: "",
+  viewKey: store("devtool.view") || "",
   search: store("devtool.search") || "",
-  open: new Set((() => { try { return JSON.parse(store("devtool.openRows") || "[]"); } catch (e) { return []; } })()),
-  rowEls: new Map(),      // name -> single row {row, slider, num, chk, def, msg, chg} | {pair: rec, i}
-  dragging: null,         // name of the slider under the pointer
-  inflight: new Map(),    // name -> true while a POST runs
-  queued: new Map(),      // name -> latest value waiting for the in-flight POST
-  rowsKey: "",
+  openCell: store("devtool.openCell") || "",      // preset grid: the constant whose detail row is open
+  compare: store("devtool.compare") || "",        // preset grid: the field shown as a fader bank
+  ctls: new Map(),        // name -> [control {update()}]
+  cardOf: new Map(),      // name -> section card record {msg, chg, list}
+  dragging: null,
+  local: new Map(),       // name -> value sent but not yet echoed by the pedal (shown meanwhile: no snap-back)
+  inflight: new Map(),
+  queued: new Map(),
+  scroll: new Map(),      // viewKey -> scrollTop
+  builtKey: "",
 };
 
-// Tree keys. With a registry layout (NitroLab: benches / modes, registry.py LAYOUT) a constant sits in one
-// leaf per place (`<bench>/<mode>/<section>`, c.places); without places it falls back to module / section.
-function fbKey(c) { return c.module + "/" + (c.display_section || c.section); }
-function keysOf(c) { return c.places && c.places.length ? c.places.map((p) => p.key) : [fbKey(c)]; }
-function secKey(c) {                     // the primary key (changes panel, search groups): the active place first
-  const ks = keysOf(c);
-  const a = state.active && activeModeId();
-  if (a) { const hit = ks.find((k) => k.startsWith(a + "/")); if (hit) return hit; }
-  return ks[0];
-}
 function layoutOf() { return (tun.snap && tun.snap.layout) || null; }
 function benchOf(id) { const L = layoutOf(); return L ? L.benches.find((b) => b.id === id) : null; }
+function modeOf(key) {
+  const [bid, mid] = key.split("/");
+  const b = benchOf(bid);
+  return b ? { bench: b, mode: b.modes.find((x) => x.id === mid) } : null;
+}
 function placeName(bench, mode) {
   const b = benchOf(bench);
   const m = b && b.modes.find((x) => x.id === mode);
-  return (b ? b.name : "Bench " + bench) + " \u00b7 " + (m ? m.name : mode);
+  return (b ? b.name : "Bench " + bench) + " / " + (m ? m.name : mode);
 }
-function activeModeId() {               // "<bench>/<mode>" of the pedal's current state, or null
+function activeModeId() {
   const a = state.active, b = a && benchOf(a.bench);
   if (!b) return null;
   const m = b.modes.find((x) => x.sw1 === a.sw1);
   return m ? b.id + "/" + m.id : null;
 }
-function sectionOrder(title) {           // within a mode: by the knob in the title (K1 .. K6), then the rest
-  const m = /\bK(\d)\b/.exec(title || "");
-  return m ? Number(m[1]) : 9;
+function targetName(id) {
+  const t = ((tun.snap && tun.snap.targets) || []).find((x) => x.id === id);
+  return t ? t.name : "";
+}
+function cur(c) {
+  if (tun.local.has(c.name)) return tun.local.get(c.name);
+  const cc = tun.byName.get(c.name) || c;
+  return cc.value !== null && cc.value !== undefined ? cc.value : cc.default;
 }
 function isChanged(c) {
+  c = tun.byName.get(c.name) || c;
   if (c.value === null || c.value === undefined || c.default === null) return false;
   if (c.type === "float") return Math.fround(c.value) !== Math.fround(c.default);
   return c.value !== c.default;
 }
 function writable() { return !!(tun.snap && tun.snap.writable && state.online); }
-
-// --- taper: slider position (0..SLIDER_STEPS) <-> value ---
-function toPos(c, v) {
-  if (!c.range) return 0;
-  const [lo, hi] = c.range;
-  let x = c.taper === "log" ? Math.log(v / lo) / Math.log(hi / lo) : (v - lo) / (hi - lo);
-  if (!isFinite(x)) x = 0;
-  return Math.round(Math.min(1, Math.max(0, x)) * SLIDER_STEPS);
+function canEdit(c) { c = tun.byName.get(c.name) || c; return writable() && c.in_firmware !== false; }
+function canReset() { return !!(tun.snap && tun.snap.state === "synced" && state.online); }
+function isPending(name) { return tun.inflight.has(name) || tun.queued.has(name); }
+function pairOf(c) {
+  const ps = tun.snap && tun.snap.pairs;
+  return c.pair && ps && ps[c.pair.id] ? ps[c.pair.id] : null;
 }
-function fromPos(c, p) {
-  if (!c.range) return c.value;
-  const [lo, hi] = c.range;
-  const x = p / SLIDER_STEPS;
-  let v = c.taper === "log" ? lo * Math.pow(hi / lo, x) : lo + (hi - lo) * x;
-  if (c.type === "int") v = Math.round(v);
-  return Math.min(hi, Math.max(lo, snapNum(v, c.unit, c.type)));
+// the view keys a constant appears in: "<bench>/<mode>" (layout) or "mod:<module>" (no places)
+function viewKeysOf(c) {
+  return c.places && c.places.length ? [...new Set(c.places.map((p) => p.bench + "/" + p.mode))] : ["mod:" + c.module];
 }
-
+function sectionIn(c, viewKey) {
+  const p = (c.places || []).find((x) => x.bench + "/" + x.mode === viewKey);
+  return p ? p.section : (c.display_section || c.section || "(no section)");
+}
+function sectionOrder(title) { const m = /\bK(\d)\b/.exec(title || ""); return m ? Number(m[1]) : 9; }
 function matchesSearch(c, q) {
   if (!q) return true;
   const hay = (c.name + "\n" + c.label + "\n" + c.note + "\n" + ((tun.snap.docs || {})[c.doc_of] || "")).toLowerCase();
   return q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
 }
+function sharedWith(c, viewKey) {
+  if (!c.places || c.places.length < 2) return [];
+  return [...new Set(c.places.filter((x) => x.bench + "/" + x.mode !== viewKey).map((x) => placeName(x.bench, x.mode)))];
+}
 
 function onTun(snap) {
   tun.snap = snap;
   tun.byName = new Map(snap.constants.map((c) => [c.name, c]));
+  tun.local.clear();
   const key = snap.pedal + "|" + snap.constants.map((c) => c.name).join(",");
   if (key !== tun.structKey) {
     tun.structKey = key;
-    const secs = snap.constants.flatMap(keysOf);
-    if (!secs.includes(tun.sel)) tun.sel = secs[0] || "";
-    renderTree();
-    renderRows(true);
+    const keys = allViewKeys();
+    if (!keys.includes(tun.viewKey)) tun.viewKey = activeModeId() && keys.includes(activeModeId()) ? activeModeId() : (keys[0] || "");
+    renderLegend();
+    renderNav();
+    renderView(true);
   } else {
-    updateTreeCounts();
-    for (const c of snap.constants) updateRow(c.name);
+    updateAll();
   }
-  renderTunState();
-  renderGuard();
+  renderBanner();
   renderChanges();
   if (document.activeElement !== el.note) el.note.value = snap.note || "";
 }
-
 function onTval(d) {
   const c = tun.byName.get(d.name);
   if (!c) return;
   c.value = d.value;
-  updateRow(d.name);
-  updateTreeCounts();
+  if (!isPending(d.name)) tun.local.delete(d.name);
+  updateName(d.name);
+  renderNavCounts();
   renderChanges();
 }
-
 function onTerr(d) {
   if (tun.snap) tun.snap.last_err = d;
-  renderTunState();
+  renderBanner();
 }
 
-// --- status strip: one fixed-height line (state / last pedal error, guard summary, override) ---
-function renderTunState() {
+// --- banner: pedal / guard state, only when there is something to say ---
+function renderBanner() {
   const s = tun.snap;
-  el.tunState.textContent = "";
-  let txt;
-  if (!state.online) txt = "devtool offline - reconnecting…";
-  else if (!s) txt = "Waiting for devtool…";
-  else txt = {
-    offline: "No pedal: showing " + s.pedal + "'s constants files (defaults). Values arrive when a DIAG build connects.",
-    asking: "Reading the pedal's values (list)…",
-    synced: "Values from the pedal (" + s.constants.length + " live constants).",
-    "no-answer": "The pedal does not answer `list` - flash a current DIAG build.",
-  }[s.state] || s.state;
-  el.tunState.appendChild(document.createTextNode(txt));
-  let title = txt;
-  if (state.online && s && s.last_err) {
-    const e = document.createElement("span");
-    e.className = "err";
-    e.textContent = "  Pedal error at " + fmtTime(s.last_err.t) + ": " + s.last_err.text;
-    el.tunState.appendChild(e);
-    title += "\n" + e.textContent.trim();
+  const parts = [];
+  let warn = false, btn = false;
+  if (!state.online) { parts.push("devtool offline - reconnecting…"); warn = true; }
+  else if (s) {
+    const st = {
+      offline: "No pedal: showing " + s.pedal + "'s constants files (compiled defaults). Values arrive when a DIAG build connects.",
+      asking: "Reading the pedal's values…",
+      "no-answer": "The pedal does not answer `list` - flash a current DIAG build.",
+    }[s.state];
+    if (st) parts.push(st);
+    const g = s.guard || { reasons: [], warnings: [] };
+    const reasons = g.reasons.filter((r) => !(s.state === "offline" && /no pedal/.test(r)));
+    if (reasons.length) {
+      parts.push((s.override ? "Changes allowed despite: " : "Changes blocked: ") + reasons.join("; ") + ".");
+      warn = !s.override;
+      btn = s.state === "synced";
+    }
+    if (g.warnings.length) parts.push("Note: " + g.warnings.join("; ") + ".");
   }
-  el.tunState.title = title;
-}
-
-function renderGuard() {
-  const s = tun.snap;
-  const g = s ? s.guard : null;
-  const reasons = g ? g.reasons.filter((r) => !(s.state === "offline" && /no pedal/.test(r))) : [];
-  const warns = g ? g.warnings : [];
-  const more = (n) => (n > 1 ? "  (+" + (n - 1) + " more)" : "");
-  let txt = "";
-  if (reasons.length) txt = (s.override ? "Allowed despite: " : "Changes blocked: ") + reasons[0] + more(reasons.length);
-  else if (warns.length) txt = "Note: " + warns[0] + more(warns.length);
-  el.guard.textContent = txt;
-  el.guard.title = reasons.map((r) => "blocked: " + r).concat(warns.map((w) => "note: " + w)).join("\n");
-  el.guard.className = "strip-guard" + (!reasons.length || s.override ? " allowed" : "");
-  const btn = !!(reasons.length && s.state === "synced");
-  el.guardBtn.style.visibility = btn ? "" : "hidden";   // (space kept: nothing in the strip moves)
-  el.guardBtn.disabled = !btn;
+  el.bannerText.textContent = parts.join("  ");
+  if (state.online && s && s.last_err) {
+    el.bannerText.appendChild(h("span", "err", "  Pedal error at " + fmtTime(s.last_err.t) + ": " + s.last_err.text));
+  }
+  el.banner.hidden = !el.bannerText.textContent;
+  el.banner.classList.toggle("quiet", !warn);
+  el.guardBtn.hidden = !btn;
   if (btn) el.guardBtn.textContent = s.override ? "Block changes again" : "Allow changes anyway";
 }
-el.guardBtn.addEventListener("click", () => {
-  if (tun.snap) post("/api/override", { on: !tun.snap.override });
-});
+el.guardBtn.addEventListener("click", () => { if (tun.snap) post("/api/override", { on: !tun.snap.override }); });
 
-// --- tree ---------------------------------------------------------------
-function treeGroups() {                  // fallback: module -> section (constants without places)
-  const s = tun.snap;
-  const mods = new Map();       // module -> Map(section -> [constants])
-  for (const c of s.constants) {
-    if (c.places && c.places.length) continue;
-    if (!mods.has(c.module)) mods.set(c.module, new Map());
-    const m = mods.get(c.module);
-    const sec = c.display_section || c.section;
-    if (!m.has(sec)) m.set(sec, []);
-    m.get(sec).push(c);
+// --- legend -----------------------------------------------------------------
+function renderLegend() {
+  el.legend.textContent = "";
+  for (const t of (tun.snap && tun.snap.targets) || []) {
+    const li = h("li");
+    li.dataset.target = t.id;
+    li.append(h("i"), document.createTextNode(t.name));
+    el.legend.appendChild(li);
   }
-  return mods;
 }
 
-function treeButton(key, title, list) {
-  const b = document.createElement("button");
+// --- nav: benches (headings) -> modes (items); constants without a place: per module ---
+function allViewKeys() {
+  const out = [];
+  const L = layoutOf();
+  if (L) for (const b of L.benches) for (const m of b.modes) out.push(b.id + "/" + m.id);
+  for (const c of tun.snap.constants) for (const k of viewKeysOf(c)) if (!out.includes(k)) out.push(k);
+  return out;
+}
+function listFor(viewKey) { return tun.snap.constants.filter((c) => viewKeysOf(c).includes(viewKey)); }
+function navItem(key, name, title) {
+  const b = h("button", "nav-item");
   b.type = "button";
-  b.className = "t-sec";
   b.dataset.key = key;
-  b.title = title || "(no section)";
-  const t = document.createElement("span");
-  t.className = "t-title";
-  t.textContent = title || "(no section)";
-  const chg = document.createElement("span");
-  chg.className = "t-chg";
-  const n = document.createElement("span");
-  n.className = "t-n";
-  b.append(t, chg, n);
-  b.addEventListener("click", () => selectSection(key));
-  b._list = list;
+  b.title = title || "";
+  b.append(h("span", "live"), h("span", "nname", name), h("span", "nchg"));
+  b.addEventListener("click", () => selectView(key));
   return b;
 }
-
-function renderTree() {
-  el.tree.textContent = "";
+function renderNav() {
+  el.navTree.textContent = "";
   const s = tun.snap;
-  if (!s) return;
   const L = layoutOf();
-  const ped = document.createElement("div");
-  ped.className = "t-pedal";
-  ped.textContent = L ? L.title : s.pedal;
-  el.tree.appendChild(ped);
-  if (!s.constants.length) {
-    const e = document.createElement("div");
-    e.className = "t-empty";
-    e.textContent = "No live constants in this pedal's files.";
-    el.tree.appendChild(e);
-  }
   if (L) {
     for (const b of L.benches) {
-      const bh = document.createElement("div");
-      bh.className = "t-bench";
-      bh.dataset.bench = b.id;
-      bh.textContent = b.name;
-      bh.title = "SW3 " + b.sw3;
-      el.tree.appendChild(bh);
-      if (!b.modes.length) {
-        const e = document.createElement("div");
-        e.className = "t-empty";
-        e.textContent = "No live constants yet.";
-        el.tree.appendChild(e);
-      }
-      for (const m of b.modes) {
-        const mid = b.id + "/" + m.id;
-        const mh = document.createElement("div");
-        mh.className = "t-mode";
-        mh.dataset.mode = mid;
-        mh.textContent = m.name;
-        mh.title = "SW1 " + m.sw1;
-        el.tree.appendChild(mh);
-        const secs = new Map();   // section -> [constants], file order
-        for (const c of s.constants)
-          for (const p of c.places || [])
-            if (p.bench === b.id && p.mode === m.id) {
-              if (!secs.has(p.section)) secs.set(p.section, []);
-              secs.get(p.section).push(c);
-            }
-        if (!secs.size) {
-          const e = document.createElement("div");
-          e.className = "t-empty t-empty-mode";
-          e.textContent = "No live constants.";
-          el.tree.appendChild(e);
-        }
-        const order = [...secs.keys()].map((t, i) => [t, i])
-          .sort((x, y) => (sectionOrder(x[0]) - sectionOrder(y[0])) || (x[1] - y[1])).map((x) => x[0]);
-        for (const sec of order) el.tree.appendChild(treeButton(mid + "/" + sec, sec, secs.get(sec)));
-      }
+      el.navTree.appendChild(h("div", "nav-bench", b.name));
+      if (!b.modes.length) el.navTree.appendChild(h("div", "nav-none", "No live constants yet"));
+      for (const m of b.modes) el.navTree.appendChild(navItem(b.id + "/" + m.id, m.name, "SW3 " + b.sw3 + " · SW1 " + m.sw1));
     }
   }
-  for (const [mod, secs] of treeGroups()) {
-    const m = document.createElement("div");
-    m.className = "t-mod";
-    m.textContent = L ? mod + " (no bench tag)" : mod;
-    el.tree.appendChild(m);
-    for (const [sec, list] of secs) el.tree.appendChild(treeButton(mod + "/" + sec, sec, list));
+  const mods = [...new Set(s.constants.filter((c) => !(c.places && c.places.length)).map((c) => c.module))];
+  if (mods.length) {
+    el.navTree.appendChild(h("div", "nav-bench", L ? "Not placed" : (s.pedal + " modules")));
+    for (const m of mods) el.navTree.appendChild(navItem("mod:" + m, m, ""));
   }
-  updateTreeCounts();
-  renderActive();
+  if (!s.constants.length) el.navTree.appendChild(h("div", "nav-none", "No live constants in this pedal's files."));
+  if (L) {
+    const lg = h("div", "nav-legend");
+    lg.append(h("span", "live"), document.createTextNode("on the pedal now"));
+    el.navTree.appendChild(lg);
+  }
+  renderNavActive();
+  renderNavCounts();
 }
-
-// The pedal's current place (state lines): bench / mode headers and their sections marked, and the K1
-// preset's panel in the rows.
-function renderActive() {
-  const a = state.active;
+function renderNavActive() {
   const am = activeModeId();
-  for (const e of el.tree.querySelectorAll(".t-bench")) e.classList.toggle("active", !!a && e.dataset.bench === a.bench);
-  for (const e of el.tree.querySelectorAll(".t-mode")) e.classList.toggle("active", e.dataset.mode === am);
-  for (const e of el.tree.querySelectorAll(".t-sec")) e.classList.toggle("active", !!am && e.dataset.key.startsWith(am + "/"));
-  for (const e of el.rows.querySelectorAll(".grp-title[data-preset]")) {
-    const on = !!a && a.preset === e.dataset.preset && am !== null && (tun.sel || "").startsWith(am + "/");
-    e.classList.toggle("active", on);
-    e.querySelector(".now").textContent = on ? "now on K1" : "";
+  for (const b of el.navTree.querySelectorAll(".nav-item")) {
+    b.classList.toggle("active", b.dataset.key === am);
+    b.setAttribute("aria-current", String(!tun.search.trim() && b.dataset.key === tun.viewKey));
   }
 }
-
-function updateTreeCounts() {
-  const q = tun.search.trim();
-  for (const b of el.tree.querySelectorAll(".t-sec")) {
-    const list = b._list.map((c) => tun.byName.get(c.name) || c);
-    const hits = list.filter((c) => matchesSearch(c, q));
-    const nchg = list.filter(isChanged).length;
-    b.hidden = !!q && hits.length === 0;
-    b.querySelector(".t-n").textContent = q ? hits.length + "/" + list.length : String(list.length);
-    const ch = b.querySelector(".t-chg");
-    ch.textContent = nchg ? String(nchg) : "";
-    ch.title = nchg ? nchg + " changed" : "";
-    b.setAttribute("aria-current", String(!q && b.dataset.key === tun.sel));
+function renderNavCounts() {
+  if (!tun.snap) return;
+  for (const b of el.navTree.querySelectorAll(".nav-item")) {
+    const n = listFor(b.dataset.key).filter(isChanged).length;
+    const e = b.querySelector(".nchg");
+    e.textContent = n ? String(n) : "";
+    e.title = n ? n + " changed" : "";
   }
 }
-
-function selectSection(key) {
-  tun.sel = key;
-  store("devtool.section", key);
+function selectView(key) {
+  tun.scroll.set(tun.viewKey, el.view.scrollTop);
+  tun.viewKey = key;
+  store("devtool.view", key);
   if (tun.search) { tun.search = ""; el.search.value = ""; store("devtool.search", ""); }
-  updateTreeCounts();
-  renderRows(true);
-  el.viewConst.scrollTop = 0;
-  setTreeOpen(false);
+  renderNavActive();
+  renderView(true);
+  el.view.scrollTop = tun.scroll.get(key) || 0;
+  setNavOpen(false);
 }
 
-// --- rows -----------------------------------------------------------------
-function pairOf(c) {
-  const ps = tun.snap && tun.snap.pairs;
-  return c.pair && ps && ps[c.pair.id] ? ps[c.pair.id] : null;
+// ---------------------------------------------------------------------------
+// The main view
+// ---------------------------------------------------------------------------
+function renderViewTitle() {
+  el.viewTitle.textContent = "";
+  const q = tun.search.trim();
+  if (q) {
+    el.viewTitle.append(h("h1", "", "Search"), h("span", "sub", "“" + q + "”"));
+    return;
+  }
+  const mo = modeOf(tun.viewKey);
+  if (mo && mo.mode) {
+    el.viewTitle.append(h("h1", "", mo.mode.name),
+      h("span", "sub", mo.bench.name + "  ·  SW3 " + mo.bench.sw3 + "  ·  SW1 " + mo.mode.sw1));
+    if (activeModeId() === tun.viewKey) el.viewTitle.appendChild(h("span", "badge-live", "● on the pedal now"));
+  } else {
+    el.viewTitle.append(h("h1", "", tun.viewKey.replace(/^mod:/, "")), h("span", "sub", tun.snap ? tun.snap.pedal : ""));
+  }
 }
 
-function renderRows(force) {
+function renderView(force) {
   const s = tun.snap;
   if (!s) return;
   const q = tun.search.trim();
-  const key = tun.structKey + "|" + (q ? "?" + q : tun.sel);
-  if (!force && key === tun.rowsKey) return;
-  tun.rowsKey = key;
-  const scroll = el.viewConst.scrollTop;
-  el.rows.textContent = "";
-  el.secHead.textContent = "";
-  tun.rowEls.clear();
-  const h = document.createElement("h2");
-  const p = document.createElement("div");
-  p.className = "path";
-  let list;
-  if (q) {
-    list = s.constants.filter((c) => matchesSearch(c, q));
-    h.textContent = "Search: " + list.length + (list.length === 1 ? " match" : " matches");
-    p.textContent = q;
-  } else {
-    list = s.constants.filter((c) => keysOf(c).includes(tun.sel));
-    const c0 = list[0];
-    const pl = c0 && (c0.places || []).find((x) => x.key === tun.sel);
-    h.textContent = c0 ? (pl ? pl.section : (c0.display_section || c0.section || "(no section)")) : "No section selected";
-    p.textContent = c0 ? (pl ? placeName(pl.bench, pl.mode) + " - " + c0.module : c0.module + " - " + c0.file) : "";
-  }
-  h.title = h.textContent;
-  p.title = p.textContent;
-  el.secHead.append(h, p);
-  el.navToggle.textContent = "Sections";
-  let lastGroup = null, lastPreset = null;
+  const key = tun.structKey + "|" + (q ? "?" + q : tun.viewKey);
+  if (!force && key === tun.builtKey) return;
+  tun.builtKey = key;
+  closePop();
+  tun.ctls.clear();
+  tun.cardOf.clear();
+  renderViewTitle();
+  renderStrip();
+  el.sections.textContent = "";
   const frag = document.createDocumentFragment();
+  if (q) {
+    const hits = s.constants.filter((c) => matchesSearch(c, q));
+    const groups = new Map();         // "<view>|<section>" -> constants
+    for (const c of hits) {
+      const vk = viewKeysOf(c)[0];
+      const k = vk + "|" + sectionIn(c, vk);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(c);
+    }
+    for (const [k, list] of groups) {
+      const vk = k.split("|")[0];
+      const mo = modeOf(vk);
+      frag.appendChild(buildSection(k.slice(vk.length + 1), list, vk,
+        mo && mo.mode ? mo.bench.name + " / " + mo.mode.name : vk.replace(/^mod:/, "")));
+    }
+    if (!hits.length) frag.appendChild(h("div", "empty-view", "Nothing matches “" + q + "”."));
+  } else {
+    const list = listFor(tun.viewKey);
+    const secs = new Map();
+    for (const c of list) {
+      const t = sectionIn(c, tun.viewKey);
+      if (!secs.has(t)) secs.set(t, []);
+      secs.get(t).push(c);
+    }
+    const order = [...secs.keys()].map((t, i) => [t, i])
+      .sort((x, y) => (sectionOrder(x[0]) - sectionOrder(y[0])) || (x[1] - y[1])).map((x) => x[0]);
+    for (const t of order) frag.appendChild(buildSection(t, secs.get(t), tun.viewKey, ""));
+    if (!list.length) frag.appendChild(h("div", "empty-view", "No live constants in this mode yet."));
+  }
+  el.sections.appendChild(frag);
+  updateAll();
+}
+
+// --- knob strip: the mode's knobs as cards (registry LAYOUT knobs) ---
+let stripCards = [];
+function renderStrip() {
+  el.strip.textContent = "";
+  stripCards = [];
+  if (tun.search.trim()) return;
+  const mo = modeOf(tun.viewKey);
+  if (!mo || !mo.mode || !mo.mode.knobs) return;
+  for (const k of mo.mode.knobs) {
+    const card = h("div", "kcard" + (k.target ? "" : " inert"));
+    card.dataset.target = k.target || "";
+    const top = h("div", "k-top");
+    top.append(h("span", "k-id", "K" + k.k));
+    const kind = h("span", "k-kind");
+    kind.appendChild(icon(k.kind));
+    kind.title = { uni: "Unipolar", bipolar: "Bipolar (noon = centre)", steps: "Stepped" }[k.kind] || "";
+    top.appendChild(kind);
+    const val = h("div", "k-val");
+    card.append(top, h("div", "k-job", k.job), val);
+    card.title = k.target ? "K" + k.k + " " + k.job + " - acts on: " + targetName(k.target) : "K" + k.k + ": no job in this mode";
+    el.strip.appendChild(card);
+    stripCards.push({ k, val });
+  }
+  paintStrip();
+}
+function paintStrip() {
+  if (!stripCards.length) return;
+  const here = activeModeId() === tun.viewKey && state.st;
+  for (const { k, val } of stripCards) {
+    let t, stale = false;
+    if (!k.target) t = "";
+    else if (here) t = knobShow(k.show, state.st, k.k);
+    else { t = state.st ? "pedal is elsewhere" : "no state line yet"; stale = true; }
+    if (val.textContent !== t) val.textContent = t;
+    val.classList.toggle("stale", stale);
+    val.title = here ? "At " + fmtTime(state.st.t) : "";
+  }
+}
+
+// --- one section card --------------------------------------------------------
+function splitTitle(t) {
+  const i = t.lastIndexOf(" · ");
+  if (i > 0 && /^K\d/.test(t.slice(i + 3))) return { title: t.slice(0, i), k: t.slice(i + 3) };
+  return { title: t, k: "" };
+}
+function buildSection(titleText, list, viewKey, where) {
+  const st = splitTitle(titleText);
+  const tgt = (list.find((c) => c.section_target) || {}).section_target || "";
+  const sec = h("section", "sec");
+  sec.dataset.target = tgt;
+  const head = h("div", "sec-head");
+  if (st.k) head.appendChild(h("span", "sec-k", st.k));
+  const title = h("div", "sec-title", st.title);
+  if (where) title.appendChild(h("span", "sec-where", where));
+  const chg = h("span", "sec-chg");
+  head.append(title, chg);
+  const body = h("div", "sec-body");
+  const msg = h("div", "sec-msg");
+  sec.append(head, body, msg);
+  const rec = { msg, chg, list };
+  for (const c of list) tun.cardOf.set(c.name, rec);
+
+  const presets = list.filter((c) => c.preset);
+  const rest = list.filter((c) => !c.preset);
+  let count = 0;
+  if (presets.length) {
+    sec.classList.add("full");
+    body.appendChild(buildPresetGrid(presets, viewKey));
+  }
+  // pairs -> fader banks (knob-end pairs of one unit / taper share a bank: one axis, comparable heights)
+  const inList = new Set(rest.map((c) => c.name));
   const done = new Set();
-  const shown = [];
-  const inList = new Set(list.map((c) => c.name));
-  for (const c of list) {
+  const banks = new Map();
+  const singles = [];
+  for (const c of rest) {
     if (done.has(c.name)) continue;
-    if (q && secKey(c) !== lastGroup) {
-      lastGroup = secKey(c);
-      const g = document.createElement("div");
-      g.className = "grp-title";
-      const pl = (c.places || []).find((x) => x.key === lastGroup);
-      g.textContent = pl ? placeName(pl.bench, pl.mode) + " / " + pl.section : c.module + " / " + (c.display_section || c.section || "(no section)");
-      frag.appendChild(g);
-      lastPreset = null;
-    }
-    if (c.preset && c.preset !== lastPreset) {   // per-preset panel (registry family): K1 position + name
-      lastPreset = c.preset;
-      const g = document.createElement("div");
-      g.className = "grp-title preset-grp";
-      g.dataset.preset = c.preset;
-      const t = document.createElement("span");
-      t.textContent = "K1 " + (c.preset_index + 1) + " \u00b7 " + c.preset;
-      const now = document.createElement("span");
-      now.className = "now";
-      g.append(t, now);
-      frag.appendChild(g);
-    }
-    let P = pairOf(c);
-    // a pair whose members do not all act in this place: only its members here, as single rows if < 2
-    if (P && !q) { const mem = P.members.filter((n) => inList.has(n)); P = mem.length >= 2 ? Object.assign({}, P, { members: mem }) : null; }
-    if (P) {
-      for (const n of P.members) { done.add(n); shown.push(n); }
-      frag.appendChild(makePairRow(c.pair.id, P));
+    const P = pairOf(c);
+    const mem = P ? P.members.filter((n) => inList.has(n)).map((n) => tun.byName.get(n)) : [];
+    if (P && mem.length >= 2) {
+      mem.forEach((m) => done.add(m.name));
+      const bk = P.kind === "knob" ? "knob|" + mem[0].unit + "|" + mem[0].taper : "range|" + c.pair.id;
+      if (!banks.has(bk)) banks.set(bk, []);
+      banks.get(bk).push({ P, mem });
     } else {
       done.add(c.name);
-      shown.push(c.name);
-      frag.appendChild(makeTRow(c));
+      singles.push(c);
     }
   }
-  if (!list.length) {
-    const e = document.createElement("div");
-    e.className = "empty-rows";
-    e.textContent = q ? "Nothing matches." : "No constants here.";
-    frag.appendChild(e);
+  for (const group of banks.values()) {
+    body.appendChild(buildPairBank(group, viewKey));
+    count += group.reduce((n, g) => n + g.mem.length, 0);
   }
-  el.rows.appendChild(frag);
-  for (const n of shown) updateRow(n);
-  renderActive();
-  if (!force) el.viewConst.scrollTop = scroll;
-}
-
-// "Shared": the other places a constant acts in (Bench · mode), for the row head / explanation.
-function sharedWith(c) {
-  if (!c.places || c.places.length < 2) return [];
-  const cur = c.places.find((x) => x.key === tun.sel);
-  return c.places.filter((x) => x !== cur && !(cur && x.bench === cur.bench && x.mode === cur.mode))
-    .map((x) => placeName(x.bench, x.mode));
-}
-function markShared(h, exp, names) {
-  if (!names.length) return;
-  const b = document.createElement("span");
-  b.className = "badge shared";
-  b.textContent = "shared";
-  b.title = "Also acts on: " + names.join(", ") + " (one value, changed everywhere)";
-  h.head.querySelector(".flags").prepend(b);
-  const d = document.createElement("div");
-  d.className = "doc-h";
-  d.textContent = "Shared with " + names.join(", ") + " - one value, changed everywhere.";
-  exp.prepend(d);
-}
-
-// Row head: twisty, label, (kind), name(s), message slot, changed + level badges. Click / Enter folds `exp`.
-function makeHead(openKey, labelText, kindText, nameText, level, when) {
-  const head = document.createElement("div");
-  head.className = "thead";
-  const tw = document.createElement("span");
-  tw.className = "twisty";
-  const label = document.createElement("span");
-  label.className = "label";
-  label.textContent = labelText;
-  label.title = labelText;
-  head.append(tw, label);
-  if (kindText) {
-    const k = document.createElement("span");
-    k.className = "kind";
-    k.textContent = kindText;
-    head.appendChild(k);
+  const faders = singles.some((c) => c.view === "faders");
+  const nums = singles.filter((c) => c.type !== "bool");
+  const bools = singles.filter((c) => c.type === "bool");
+  if (bools.length || (!faders && nums.length)) {
+    const grid = h("div", "ctl-grid");
+    for (const c of (faders ? [] : nums)) grid.appendChild(buildDialCell(c, viewKey));
+    for (const c of bools) grid.appendChild(buildToggleCell(c, viewKey));
+    body.appendChild(grid);
+    count += (faders ? 0 : nums.length) + bools.length;
   }
-  const name = document.createElement("span");
-  name.className = "name";
-  name.textContent = nameText;
-  name.title = nameText;
-  const msg = document.createElement("span");
-  msg.className = "tmsg";
-  const flags = document.createElement("span");
-  flags.className = "flags";
-  const chg = document.createElement("span");
-  chg.className = "badge chg no";
-  chg.textContent = "changed";
-  const lvl = document.createElement("span");
-  lvl.className = "badge " + level;
-  lvl.textContent = level;
-  lvl.title = when || LEVEL_TIP[level] || "";
-  flags.append(chg, lvl);
-  head.append(name, msg, flags);
-  return { head, tw, msg, chg, openKey };
+  if (faders && nums.length) {
+    const axis = nums.map((c) => c.unit).join("") ? "each its own range" : "";
+    body.appendChild(buildBank(titleText.split(" · ")[0] + " stages",
+      nums.map((c) => ({ c, cap: c.label.split(":")[0], wide: true })), null, axis, viewKey));
+    count += nums.length;
+  }
+  if (count > 8 && !presets.length) sec.classList.add("wide");
+  return sec;
+}
+function updateSectionCounts() {
+  for (const rec of new Set(tun.cardOf.values())) {
+    const n = rec.list.filter(isChanged).length;
+    rec.chg.textContent = n ? n + " changed" : "";
+  }
+}
+function showMsg(name, text) {
+  const rec = tun.cardOf.get(name);
+  if (!rec) return;
+  const c = tun.byName.get(name);
+  rec.msg.textContent = text ? (c ? c.label + ": " : "") + text : "";
 }
 
-function wireExpander(h, exp) {
-  const setOpen = (o) => {
-    exp.hidden = !o;
-    h.tw.textContent = o ? "▾" : "▸";
-    h.head.setAttribute("aria-expanded", String(o));
-  };
-  setOpen(tun.open.has(h.openKey));
-  h.head.tabIndex = 0;
-  h.head.setAttribute("role", "button");
-  const toggle = () => {
-    const o = exp.hidden;
-    if (o) tun.open.add(h.openKey); else tun.open.delete(h.openKey);
-    store("devtool.openRows", JSON.stringify([...tun.open]));
-    setOpen(o);
-  };
-  h.head.addEventListener("click", (e) => { if (!e.target.closest("button")) toggle(); });
-  h.head.addEventListener("keydown", (e) => {
-    if (e.target === h.head && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); }
-  });
-}
-
-// The explanation of one constant (note, the shared comment block above it, source + range).
-function explainInto(exp, c, prefix) {
+// --- explanation (info popover, preset detail) ---
+function explainInto(box, c, viewKey, heading) {
+  const ex = h("div", "explain");
+  if (heading) ex.appendChild(h("div", "ex-h", heading));
+  if (c.note) ex.appendChild(h("p", "ex-note", c.note));
   const docs = (tun.snap && tun.snap.docs) || {};
-  if (prefix) {
-    const t = document.createElement("div");
-    t.className = "doc-h";
-    t.textContent = prefix;
-    exp.appendChild(t);
+  if (c.doc_of && docs[c.doc_of]) {
+    ex.appendChild(h("p", "ex-meta", c.doc_of === c.name ? "Notes above it:" : "Notes above " + c.doc_of + " (shared by the constants below it):"));
+    ex.appendChild(h("div", "ex-doc", docs[c.doc_of]));
   }
-  if (c.note) {
-    const n = document.createElement("pre");
-    n.className = "note-txt";
-    n.textContent = c.note;
-    exp.appendChild(n);
-  }
-  if (c.doc_of && docs[c.doc_of] && !exp._docs.has(c.doc_of)) {
-    exp._docs.add(c.doc_of);
-    const dh = document.createElement("div");
-    dh.className = "doc-h";
-    dh.textContent = c.doc_of === c.name ? "Notes above it:" : "Notes above " + c.doc_of + " (shared by the constants below it):";
-    const d = document.createElement("pre");
-    d.className = "doc-txt";
-    d.textContent = docs[c.doc_of];
-    exp.append(dh, d);
-  }
-  const src = document.createElement("div");
-  src.className = "src";
-  src.textContent = c.file + ":" + c.line + "   default " + c.default_text +
-    (c.range ? "   range " + fmtNum(c.range[0], c.unit, c.type) + " .. " + fmtNum(c.range[1], c.unit, c.type) + " (" + c.taper + ")" : "");
-  exp.appendChild(src);
+  const meta = h("p", "ex-meta");
+  const code = h("code", "", c.name);
+  meta.append(code, document.createTextNode(
+    "  ·  default " + fmtWithUnit(c.default, c.unit, c.type) +
+    (c.range ? "  ·  range " + fmtWithUnit(c.range[0], c.unit, c.type) + " – " + fmtWithUnit(c.range[1], c.unit, c.type) + " (" + c.taper + ")" : "") +
+    "  ·  " + (LEVEL_TIP[c.level] || c.level) + (c.when ? " " + c.when : "") +
+    (c.target ? "  ·  acts on: " + targetName(c.target) : "")));
+  ex.appendChild(meta);
+  const sh = sharedWith(c, viewKey);
+  if (sh.length) ex.appendChild(h("p", "ex-meta", "Also acts on " + sh.join(", ") + " - one value, changed everywhere."));
+  ex.appendChild(h("p", "ex-meta", c.file + ":" + c.line + (c.in_firmware === false ? "  ·  not live in this firmware" : "")));
+  box.appendChild(ex);
+}
+let popAnchor = null;
+function openPop(anchor, fill) {
+  if (popAnchor === anchor && !el.pop.hidden) { closePop(); return; }
+  el.pop.textContent = "";
+  fill(el.pop);
+  el.pop.hidden = false;
+  popAnchor = anchor;
+  const r = anchor.getBoundingClientRect();
+  const pw = el.pop.offsetWidth, ph = el.pop.offsetHeight;
+  let x = Math.min(window.innerWidth - pw - 12, Math.max(12, r.left - pw / 2));
+  let y = r.bottom + 6;
+  if (y + ph > window.innerHeight - 12) y = Math.max(12, r.top - ph - 6);
+  el.pop.style.left = x + "px";
+  el.pop.style.top = y + "px";
+}
+function closePop() { el.pop.hidden = true; popAnchor = null; }
+function infoButton(fill) {
+  const b = h("button", "info");
+  b.type = "button";
+  b.setAttribute("aria-label", "Explanation");
+  b.title = "Explanation";
+  b.appendChild(glyph("info"));
+  b.addEventListener("click", (e) => { e.stopPropagation(); openPop(b, fill); });
+  return b;
+}
+function resetButton(c) {
+  const b = h("button", "rst");
+  b.type = "button";
+  b.title = "Back to the default (" + fmtWithUnit(c.default, c.unit, c.type) + ")";
+  b.setAttribute("aria-label", "Reset " + c.label);
+  b.appendChild(glyph("reset"));
+  b.addEventListener("click", (e) => { e.stopPropagation(); sendReset(c.name); });
+  return b;
+}
+document.addEventListener("pointerdown", (e) => {
+  if (!el.pop.hidden && !el.pop.contains(e.target) && !(popAnchor && popAnchor.contains(e.target))) closePop();
+  if (!el.changesPop.hidden && !el.changesPop.contains(e.target) && !el.changesBtn.contains(e.target)) setChangesOpen(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!el.pop.hidden) { closePop(); if (popAnchor) popAnchor.focus(); }
+  if (!el.changesPop.hidden) { setChangesOpen(false); el.changesBtn.focus(); }
+});
+el.view.addEventListener("scroll", () => { if (!el.pop.hidden) closePop(); }, { passive: true });
+
+// ---------------------------------------------------------------------------
+// Value controls: rotary knob (dial) and vertical fader share one input model (attachValueInput):
+//   drag vertically (Shift = fine), mouse wheel over it (Shift = fine), arrows / PageUp / PageDown /
+//   Home / End when focused, double-click = back to the default. Values go through core.js fromFrac (taper,
+//   snap to the shown precision, clamp) and sendSet (one request in flight per constant, latest wins).
+// ---------------------------------------------------------------------------
+// Controls built while `regTag` is set carry that tag, so a part of the view (preset detail row, compare
+// bank) can be rebuilt without touching the others (dropTag).
+let regTag = "";
+function register(name, ctl) {
+  if (!tun.ctls.has(name)) tun.ctls.set(name, []);
+  ctl.tag = regTag;
+  tun.ctls.get(name).push(ctl);
+}
+function dropTag(tag) {
+  for (const [n, list] of tun.ctls) tun.ctls.set(n, list.filter((x) => x.tag !== tag));
+}
+function tagged(tag, fn) {
+  const prev = regTag;
+  regTag = tag;
+  try { return fn(); } finally { regTag = prev; }
+}
+function updateName(name) {
+  for (const ctl of tun.ctls.get(name) || []) ctl.update();
+  updateSectionCounts();
+}
+function updateAll() {
+  for (const list of tun.ctls.values()) for (const ctl of list) ctl.update();
+  updateSectionCounts();
+  renderNavCounts();
 }
 
-// A typed number -> sendSet, or a message (range / type checks as devtool's).
+// value from a control position on `axis` (the constant itself, or a bank's shared axis), kept in its own range
+function valueAt(c, axis, f) {
+  let v = fromFrac(axis, f);
+  if (c.type === "int") v = Math.round(v);
+  return Math.min(c.range[1], Math.max(c.range[0], v));
+}
+function attachValueInput(target, c, axis, opts) {
+  // opts: {paint(v), frac(e) -> absolute position for a click on the track (faders) or null, sens: px per full travel}
+  let drag = null;
+  const set = (v) => {
+    if (v === drag.last) return;
+    drag.last = v;
+    opts.paint(v);
+    sendSet(c.name, v);
+  };
+  const step = (dir, fine, big) => {
+    if (!canEdit(c)) return;
+    const v0 = cur(c);
+    let v;
+    if (c.type === "int") v = Math.min(c.range[1], Math.max(c.range[0], v0 + dir * (big ? Math.max(1, Math.round((c.range[1] - c.range[0]) / 10)) : 1)));
+    else v = valueAt(c, axis, toFrac(axis, v0) + dir * (big ? 0.1 : fine ? 0.002 : 0.01));
+    if (v === v0) return;
+    opts.paint(v);
+    sendSet(c.name, v);
+  };
+  target.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !canEdit(c)) return;
+    e.preventDefault();
+    target.focus({ preventScroll: true });
+    target.setPointerCapture(e.pointerId);
+    tun.dragging = c.name;
+    const abs = opts.frac ? opts.frac(e) : null;
+    drag = { y0: e.clientY, f0: abs === null ? toFrac(axis, cur(c)) : abs, fine: e.shiftKey, last: undefined };
+    if (abs !== null) set(valueAt(c, axis, abs));
+  });
+  target.addEventListener("pointermove", (e) => {
+    if (!drag || !target.hasPointerCapture(e.pointerId)) return;
+    if (e.shiftKey !== drag.fine) {           // fine on / off mid-drag: continue from here
+      drag.f0 = toFrac(axis, drag.last === undefined ? cur(c) : drag.last);
+      drag.y0 = e.clientY;
+      drag.fine = e.shiftKey;
+    }
+    const sens = opts.sens * (drag.fine ? 10 : 1);
+    set(valueAt(c, axis, drag.f0 + (drag.y0 - e.clientY) / sens));
+  });
+  const end = (e) => {
+    if (!drag) return;
+    if (target.hasPointerCapture(e.pointerId)) target.releasePointerCapture(e.pointerId);
+    drag = null;
+    tun.dragging = null;
+    updateName(c.name);
+  };
+  target.addEventListener("pointerup", end);
+  target.addEventListener("pointercancel", end);
+  target.addEventListener("wheel", (e) => {
+    if (!canEdit(c)) return;
+    const d = e.deltaY || e.deltaX;
+    if (!d) return;
+    e.preventDefault();
+    step(d < 0 ? 1 : -1, e.shiftKey, false);
+  }, { passive: false });
+  target.addEventListener("keydown", (e) => {
+    const k = e.key;
+    if (k === "ArrowUp" || k === "ArrowRight") step(1, e.shiftKey, false);
+    else if (k === "ArrowDown" || k === "ArrowLeft") step(-1, e.shiftKey, false);
+    else if (k === "PageUp") step(1, false, true);
+    else if (k === "PageDown") step(-1, false, true);
+    else if ((k === "Home" || k === "End") && canEdit(c)) {
+      const v = k === "Home" ? c.range[0] : c.range[1];
+      opts.paint(v);
+      sendSet(c.name, v);
+    } else return;
+    e.preventDefault();
+  });
+  target.addEventListener("dblclick", (e) => { e.preventDefault(); if (canReset()) sendReset(c.name); });
+  target.setAttribute("role", "slider");
+  target.tabIndex = 0;
+  target.setAttribute("aria-valuemin", String(c.range[0]));
+  target.setAttribute("aria-valuemax", String(c.range[1]));
+}
+function ariaValue(target, c, v) {
+  target.setAttribute("aria-valuenow", String(v));
+  target.setAttribute("aria-valuetext", fmtWithUnit(v, c.unit, c.type));
+}
+
+// number field: type + Enter (range / type checked as devtool does)
 function commitNum(c, num) {
   const cc = tun.byName.get(c.name);
   const v = parseNum(num.value);
-  if (!isFinite(v)) { showMsg(c.name, "Not a number: " + num.value); updateRow(c.name, true); return; }
-  if (cc.type === "int" && v !== Math.round(v)) { showMsg(c.name, "Whole numbers only."); updateRow(c.name, true); return; }
-  const [lo, hi] = cc.range || [-Infinity, Infinity];
-  if (v < lo || v > hi) {
-    showMsg(c.name, "Outside the range " + fmtWithUnit(lo, cc.unit, cc.type) + " .. " + fmtWithUnit(hi, cc.unit, cc.type) + ".");
-    updateRow(c.name, true);
-    return;
-  }
-  sendSet(c.name, v);
+  let why = "";
+  if (!isFinite(v)) why = "not a number: " + num.value;
+  else if (cc.type === "int" && v !== Math.round(v)) why = "whole numbers only";
+  else if (cc.range && (v < cc.range[0] || v > cc.range[1]))
+    why = "outside " + fmtWithUnit(cc.range[0], cc.unit, cc.type) + " – " + fmtWithUnit(cc.range[1], cc.unit, cc.type);
+  if (why) { showMsg(c.name, why); num.value = fmtNum(cur(cc), cc.unit, cc.type, true); return; }
+  if (v !== cur(cc)) sendSet(c.name, v);
 }
-
 function makeNum(c, aria) {
-  const num = document.createElement("input");
+  const num = h("input", "num");
   num.type = "text";
   num.inputMode = "decimal";
-  num.className = "num";
-  num.setAttribute("aria-label", aria);
   num.spellcheck = false;
+  num.setAttribute("aria-label", aria);
   num.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); commitNum(c, num); num.select(); }
-    if (e.key === "Escape") { updateRow(c.name, true); num.blur(); }
+    if (e.key === "Escape") { num.value = fmtNum(cur(c), c.unit, c.type, true); num.blur(); }
   });
   num.addEventListener("change", () => commitNum(c, num));
-  num.addEventListener("blur", () => updateRow(c.name, true));
+  num.addEventListener("blur", () => { num.value = fmtNum(cur(c), c.unit, c.type, true); });
   return num;
 }
-
-function makeReset(c, text, aria) {
-  const rst = document.createElement("button");
-  rst.type = "button";
-  rst.className = "rst";
-  rst.textContent = text;
-  rst.title = "Back to the compiled default (" + fmtWithUnit(c.default, c.unit, c.type) + ")";
-  rst.setAttribute("aria-label", aria);
-  rst.addEventListener("click", () => sendReset(c.name));
-  return rst;
-}
-
-function makeTRow(c) {
-  const row = document.createElement("div");
-  row.className = "trow";
-  row.dataset.name = c.name;
-  const h = makeHead(c.name, c.label, "", c.name, c.level, c.when);
-  const ctl = document.createElement("div");
-  ctl.className = "tctl";
-  const r = { row, chg: h.chg, msg: h.msg, tw: h.tw };
-  if (c.type === "bool") {
-    const lab = document.createElement("label");
-    lab.className = "tog";
-    const chk = document.createElement("input");
-    chk.type = "checkbox";
-    chk.setAttribute("role", "switch");
-    chk.setAttribute("aria-label", c.label);
-    const txt = document.createElement("span");
-    txt.className = "tog-txt";
-    lab.append(chk, txt);
-    chk.addEventListener("change", () => sendSet(c.name, chk.checked));
-    r.chk = chk; r.chkTxt = txt;
-    ctl.appendChild(lab);
-  } else {
-    const sl = document.createElement("input");
-    sl.type = "range";
-    sl.min = "0"; sl.max = String(SLIDER_STEPS); sl.step = "1";
-    sl.setAttribute("aria-label", c.label);
-    const num = makeNum(c, c.label + " value");
-    const unit = document.createElement("span");
-    unit.className = "unit";
-    unit.textContent = c.unit === "bool" ? "" : c.unit;
-    sl.addEventListener("pointerdown", () => { tun.dragging = c.name; });
-    sl.addEventListener("pointerup", () => { tun.dragging = null; });
-    sl.addEventListener("change", () => { tun.dragging = null; });   // drag released anywhere
-    sl.addEventListener("input", () => {
-      const cc = tun.byName.get(c.name);
-      const v = fromPos(cc, +sl.value);
-      if (document.activeElement !== num) num.value = fmtNum(v, cc.unit, cc.type, true);
-      sendSet(c.name, v);
-    });
-    r.slider = sl; r.num = num;
-    sl.style.visibility = c.range ? "" : "hidden";   // (no @range: number field only; devtool flags the tag)
-    ctl.append(sl, num, unit);
-  }
-  const def = document.createElement("span");
-  def.className = "def";
-  def.textContent = "default " + fmtWithUnit(c.default, c.unit, c.type);
-  def.title = "Compiled default: " + c.default_text + "  (" + c.file + ":" + c.line + ")";
-  r.rst = makeReset(c, "Reset", "Reset " + c.label);
-  ctl.append(def, r.rst);
-
-  const exp = document.createElement("div");
-  exp.className = "texp";
-  exp._docs = new Set();
-  explainInto(exp, c, "");
-  markShared(h, exp, sharedWith(c));
-  wireExpander(h, exp);
-  row.append(h.head, ctl, exp);
-  tun.rowEls.set(c.name, r);
+function valueRow(c, num) {
+  const row = h("div", "val");
+  row.append(num, h("span", "unit", unitText(c.unit)));
   return row;
 }
 
-// --- pair row --------------------------------------------------------------
-// The slider axis of a pair: the union of the members' ranges, their (shared) taper.
-function pairAxis(members) {
-  const c0 = members[0];
-  let lo = Infinity, hi = -Infinity;
-  for (const c of members) { lo = Math.min(lo, c.range[0]); hi = Math.max(hi, c.range[1]); }
-  return { range: [lo, hi], taper: c0.taper, unit: c0.unit, type: c0.type };
+// arc on the manual's sweep (viewBox 0 0 100 100, centre 50 50)
+const DIAL_R = 34;
+function pt(r, deg) { const a = deg * Math.PI / 180; return [50 + r * Math.sin(a), 50 - r * Math.cos(a)]; }
+function arcD(a, b) {
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  if (hi - lo < 0.2) return "";
+  const s = pt(DIAL_R, lo), e = pt(DIAL_R, hi);
+  return "M " + s[0].toFixed(2) + " " + s[1].toFixed(2) + " A " + DIAL_R + " " + DIAL_R + " 0 " + (hi - lo > 180 ? 1 : 0) +
+    " 1 " + e[0].toFixed(2) + " " + e[1].toFixed(2);
 }
-function axisFrac(ax, v) { return toPos(ax, v) / SLIDER_STEPS; }
-function memberValueAt(c, ax, frac) {
-  const v = fromPos(ax, Math.round(Math.min(1, Math.max(0, frac)) * SLIDER_STEPS));
-  return Math.min(c.range[1], Math.max(c.range[0], snapNum(v, c.unit, c.type)));
+function makeDial(c, aria) {
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("class", "dial");
+  svg.setAttribute("aria-label", aria);
+  svg.innerHTML = '<path class="trk" d="' + arcD(KNOB_MIN_DEG, KNOB_MAX_DEG) + '"/><path class="arc"/>' +
+    '<circle class="cap" cx="50" cy="50" r="15"/><line class="ptr"/>';
+  const arc = svg.querySelector(".arc"), ptr = svg.querySelector(".ptr");
+  const o = fracToDeg(originFrac(c));
+  const paint = (v) => {
+    const d = fracToDeg(toFrac(c, v));
+    arc.setAttribute("d", arcD(o, d));
+    const p0 = pt(3, d), p1 = pt(13, d);
+    ptr.setAttribute("x1", p0[0].toFixed(2)); ptr.setAttribute("y1", p0[1].toFixed(2));
+    ptr.setAttribute("x2", p1[0].toFixed(2)); ptr.setAttribute("y2", p1[1].toFixed(2));
+    ariaValue(svg, c, v);
+  };
+  return { svg, paint };
 }
 
-function makePairRow(id, P) {
-  const members = P.members.map((n) => tun.byName.get(n));
-  const c0 = members[0];
-  const row = document.createElement("div");
-  row.className = "trow prow";
-  row.dataset.pair = id;
-  const kind = P.kind === "knob" ? "knob ends" : "range";
-  const h = makeHead("pair:" + id, P.label, kind, P.members.join(" · "), c0.level, c0.when);
-  const ctl = document.createElement("div");
-  ctl.className = "tctl pctl";
-  const rec = { row, chg: h.chg, msg: h.msg, tw: h.tw, members: P.members, ends: [], ax: pairAxis(members) };
-
-  const ms = document.createElement("div");
-  ms.className = "mslider";
-  ms.setAttribute("role", "group");
-  ms.setAttribute("aria-label", P.label);
-  rec.ms = ms;
-
-  members.forEach((c, i) => {
-    const endLab = c.pair.end_label;
-    const wrap = document.createElement("span");
-    wrap.className = "end";
-    const lab = document.createElement("span");
-    lab.className = "end-lab";
-    lab.textContent = endLab;
-    const num = makeNum(c, P.label + " " + endLab + " value");
-    num.title = c.name + " - " + c.label;
-    const unit = document.createElement("span");
-    unit.className = "unit";
-    unit.textContent = c.unit;
-    const rst = makeReset(c, "↺", "Reset " + P.label + " " + endLab);
-    wrap.append(lab, num, unit, rst);
-
-    // its lane in the multi-handle slider
-    const lane = document.createElement("div");
-    lane.className = "mlane";
-    lane.title = endLab + ": " + c.name;
-    const track = document.createElement("div");
-    track.className = "mtrack";
-    const span = document.createElement("div");
-    span.className = "mspan";
-    const a = axisFrac(rec.ax, c.range[0]), b = axisFrac(rec.ax, c.range[1]);
-    span.style.left = (a * 100) + "%";
-    span.style.width = ((b - a) * 100) + "%";
-    const hd = document.createElement("div");
-    hd.className = "mhandle";
-    hd.tabIndex = 0;
-    hd.setAttribute("role", "slider");
-    hd.setAttribute("aria-label", P.label + " " + endLab);
-    hd.setAttribute("aria-valuemin", String(c.range[0]));
-    hd.setAttribute("aria-valuemax", String(c.range[1]));
-    lane.append(track, span, hd);
-    ms.appendChild(lane);
-
-    const setFrac = (frac) => {
-      const cc = tun.byName.get(c.name);
-      const v = memberValueAt(cc, rec.ax, frac);
-      hd.style.left = (axisFrac(rec.ax, v) * 100) + "%";
-      if (document.activeElement !== num) num.value = fmtNum(v, cc.unit, cc.type, true);
-      sendSet(c.name, v);
-    };
-    const fracAt = (e) => {
-      const rc = lane.getBoundingClientRect();
-      return rc.width > 0 ? (e.clientX - rc.left) / rc.width : 0;
-    };
-    lane.addEventListener("pointerdown", (e) => {
-      if (ms.classList.contains("off") || e.button !== 0) return;
-      e.preventDefault();
-      lane.setPointerCapture(e.pointerId);
-      tun.dragging = c.name;
-      hd.focus({ preventScroll: true });
-      setFrac(fracAt(e));
-    });
-    lane.addEventListener("pointermove", (e) => {
-      if (tun.dragging === c.name && lane.hasPointerCapture(e.pointerId)) setFrac(fracAt(e));
-    });
-    const release = (e) => {
-      if (lane.hasPointerCapture(e.pointerId)) lane.releasePointerCapture(e.pointerId);
-      if (tun.dragging === c.name) { tun.dragging = null; updateRow(c.name); }
-    };
-    lane.addEventListener("pointerup", release);
-    lane.addEventListener("pointercancel", release);
-    hd.addEventListener("keydown", (e) => {
-      if (ms.classList.contains("off")) return;
-      const cc = tun.byName.get(c.name);
-      const cur = cc.value !== null && cc.value !== undefined ? cc.value : cc.default;
-      const f = axisFrac(rec.ax, cur);
-      const step = e.shiftKey ? 0.1 : 0.01;
-      let nf = null;
-      if (e.key === "ArrowRight" || e.key === "ArrowUp") nf = f + step;
-      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") nf = f - step;
-      else if (e.key === "PageUp") nf = f + 0.1;
-      else if (e.key === "PageDown") nf = f - 0.1;
-      else if (e.key === "Home") nf = axisFrac(rec.ax, cc.range[0]);
-      else if (e.key === "End") nf = axisFrac(rec.ax, cc.range[1]);
-      if (nf === null) return;
-      e.preventDefault();
-      setFrac(nf);
-    });
-    rec.ends.push({ name: c.name, label: endLab, wrap, num, rst, lane, hd });
-    tun.rowEls.set(c.name, { pair: rec, i });
+// one knob cell: label above, info + reset slots, dial, number field + unit, default when changed
+function buildDialCell(c, viewKey) {
+  const cell = h("div", "cell");
+  cell.dataset.target = c.target || c.section_target || "";
+  cell.dataset.name = c.name;
+  const lab = h("div", "lab", c.label);
+  lab.title = c.name;
+  const d = makeDial(c, c.label);
+  const num = makeNum(c, c.label + " value");
+  const def = h("div", "def", "default " + fmtWithUnit(c.default, c.unit, c.type));
+  cell.append(lab, resetButton(c), infoButton((box) => explainInto(box, c, viewKey, c.label)), d.svg, valueRow(c, num), def);
+  const paint = (v) => { d.paint(v); if (document.activeElement !== num) num.value = fmtNum(v, c.unit, c.type, true); };
+  if (c.range) attachValueInput(d.svg, c, c, { paint, sens: 180 });
+  register(c.name, {
+    update() {
+      const ok = canEdit(c), ch = isChanged(c);
+      if (tun.dragging !== c.name) paint(cur(c));
+      cell.classList.toggle("changed", ch);
+      cell.classList.toggle("off", c.in_firmware === false || (tun.byName.get(c.name) || c).in_firmware === false);
+      cell.classList.toggle("pending", isPending(c.name));
+      d.svg.classList.toggle("off", !ok);
+      d.svg.setAttribute("aria-disabled", String(!ok));
+      num.disabled = !ok;
+      cell.querySelector(".rst").disabled = !canReset() || !ch;
+    },
   });
-
-  ctl.appendChild(rec.ends[0].wrap);
-  ctl.appendChild(ms);
-  for (let i = 1; i < rec.ends.length; i++) ctl.appendChild(rec.ends[i].wrap);
-
-  const exp = document.createElement("div");
-  exp.className = "texp";
-  exp._docs = new Set();
-  members.forEach((c) => explainInto(exp, c, c.pair.end_label + " - " + c.name + " - " + c.label));
-  markShared(h, exp, [...new Set(members.flatMap(sharedWith))]);
-  wireExpander(h, exp);
-  row.append(h.head, ctl, exp);
-  return row;
+  return cell;
 }
 
-function showMsg(name, text) {
-  const r = tun.rowEls.get(name);
-  if (!r) return;
-  const tgt = r.pair ? r.pair : r;
-  const t = text ? (r.pair ? r.pair.ends[r.i].label + ": " : "") + text : "";
-  tgt.msg.textContent = t;
-  tgt.msg.title = t;
+// bool: a toggle switch (its @states words, else off / on)
+function stateWord(c, v) { return c.states ? c.states[v ? 1 : 0] : (v ? "on" : "off"); }
+function buildToggleCell(c, viewKey) {
+  const cell = h("div", "cell");
+  cell.dataset.target = c.target || c.section_target || "";
+  cell.dataset.name = c.name;
+  const lab = h("div", "lab", c.label);
+  lab.title = c.name;
+  const sw = h("label", "switch");
+  const chk = h("input");
+  chk.type = "checkbox";
+  chk.setAttribute("role", "switch");
+  chk.setAttribute("aria-label", c.label);
+  const st = h("span", "st");
+  sw.append(chk, st);
+  chk.addEventListener("change", () => sendSet(c.name, chk.checked));
+  const def = h("div", "def", "default " + stateWord(c, c.default));
+  cell.append(lab, resetButton(c), infoButton((box) => explainInto(box, c, viewKey, c.label)), sw, def);
+  register(c.name, {
+    update() {
+      const v = !!cur(c), ch = isChanged(c);
+      chk.checked = v;
+      st.textContent = stateWord(c, v);
+      chk.disabled = !canEdit(c);
+      cell.classList.toggle("changed", ch);
+      cell.classList.toggle("off", (tun.byName.get(c.name) || c).in_firmware === false);
+      cell.querySelector(".rst").disabled = !canReset() || !ch;
+    },
+  });
+  return cell;
 }
 
-// Value -> controls of one row (skips a field the user is typing in / a slider being dragged).
-function updateRow(name, forceNum) {
-  const r = tun.rowEls.get(name);
-  const c = tun.byName.get(name);
-  if (!r || !c) return;
-  if (r.pair) { updatePairEnd(r.pair, r.i, forceNum); return; }
-  const has = c.value !== null && c.value !== undefined;
-  const v = has ? c.value : c.default;
-  const off = c.in_firmware === false;
-  const can = writable() && !off;
-  r.row.classList.toggle("changed", isChanged(c));
-  r.row.classList.toggle("off", off);
-  r.row.classList.toggle("pending", tun.inflight.has(name) || tun.queued.has(name));
-  r.chg.classList.toggle("no", !isChanged(c));
-  if (r.chk) {
-    r.chk.checked = !!v;
-    r.chk.disabled = !can;
-    r.chkTxt.textContent = fmtNum(v, c.unit, "bool") + (has ? "" : "  (default)");
-  } else {
-    if (tun.dragging !== name) r.slider.value = String(toPos(c, v));
-    r.slider.disabled = !can;
-    r.num.disabled = !can;
-    if (forceNum || document.activeElement !== r.num) r.num.value = fmtNum(v, c.unit, c.type, true);
+// vertical fader (in a bank); axis = the bank's shared axis or the constant itself
+const FADER_H = 132;
+function buildFader(c, axis, capNode, viewKey, wide) {
+  const fd = h("div", "fd" + (wide ? " wide" : ""));
+  fd.dataset.target = c.target || c.section_target || "";
+  fd.dataset.name = c.name;
+  const fader = h("div", "fader");
+  fader.setAttribute("aria-label", c.label);
+  const trk = h("div", "f-trk"), own = h("div", "f-own"), fill = h("div", "f-fill"), cap = h("div", "f-cap");
+  fader.append(trk, own, fill, cap);
+  if (axis !== c) {                  // the constant's own range on the shared axis
+    const a = toFrac(axis, c.range[0]), b = toFrac(axis, c.range[1]);
+    own.style.top = ((1 - b) * 100) + "%";
+    own.style.height = ((b - a) * 100) + "%";
+  } else own.hidden = true;
+  const o = originFrac(axis);
+  const num = makeNum(c, c.label + " value");
+  const paint = (v) => {
+    const f = toFrac(axis, v);
+    cap.style.top = ((1 - f) * 100) + "%";
+    fill.style.top = ((1 - Math.max(f, o)) * 100) + "%";
+    fill.style.height = (Math.abs(f - o) * 100) + "%";
+    ariaValue(fader, c, v);
+    if (document.activeElement !== num) num.value = fmtNum(v, c.unit, c.type, true);
+  };
+  attachValueInput(fader, c, axis, {
+    paint, sens: FADER_H,
+    frac: (e) => {
+      if (e.target === cap) return null;     // grab the cap: relative; click the track: jump there
+      const r = fader.getBoundingClientRect();
+      return Math.min(1, Math.max(0, 1 - (e.clientY - r.top) / r.height));
+    },
+  });
+  const capLab = h("div", "cap-lab");
+  capLab.appendChild(capNode);
+  const info = infoButton((box) => explainInto(box, c, viewKey, c.label));
+  fd.append(resetButton(c), info, fader, valueRow(c, num), capLab);
+  register(c.name, {
+    update() {
+      const ok = canEdit(c), ch = isChanged(c);
+      if (tun.dragging !== c.name) paint(cur(c));
+      fd.classList.toggle("changed", ch);
+      fd.classList.toggle("off", (tun.byName.get(c.name) || c).in_firmware === false);
+      fd.classList.toggle("pending", isPending(c.name));
+      fader.classList.toggle("off", !ok);
+      fader.setAttribute("aria-disabled", String(!ok));
+      num.disabled = !ok;
+      fd.querySelector(".rst").disabled = !canReset() || !ch;
+    },
+  });
+  return fd;
+}
+// items: [{c, cap (text or node), wide}]; axis: shared axis or null (each its own range)
+function buildBank(title, items, axis, axisText, viewKey) {
+  const bank = h("div", "bank");
+  const tg = items.map((x) => x.c.target || x.c.section_target).filter(Boolean);
+  bank.dataset.target = tg.length && tg.every((t) => t === tg[0]) ? tg[0] : "";
+  const head = h("div", "bank-head");
+  head.appendChild(h("span", "bank-title", title));
+  if (axisText) head.appendChild(h("span", "bank-axis", axisText));
+  const row = h("div", "bank-row");
+  for (const it of items) {
+    const cap = typeof it.cap === "string" ? document.createTextNode(it.cap) : it.cap;
+    row.appendChild(buildFader(it.c, axis || it.c, cap, viewKey, it.wide));
   }
-  r.rst.disabled = !(tun.snap && tun.snap.state === "synced" && state.online) || !isChanged(c);
-  r.row.title = off ? "Not live in this firmware" : "";
+  bank.append(head, row);
+  return bank;
+}
+// pairs: one fader per end, captioned with the manual's direction icon (knob ends) or the end's name
+function buildPairBank(group, viewKey) {
+  const all = group.flatMap((g) => g.mem);
+  const knob = group[0].P.kind === "knob";
+  let axis = null, axisText = "";
+  if (knob) {
+    let lo = Infinity, hi = -Infinity;
+    for (const c of all) { lo = Math.min(lo, c.range[0]); hi = Math.max(hi, c.range[1]); }
+    axis = { range: [lo, hi], taper: all[0].taper, unit: all[0].unit, type: all[0].type };
+    axisText = "one scale " + fmtWithUnit(lo, axis.unit, axis.type) + " – " + fmtWithUnit(hi, axis.unit, axis.type) + (axis.taper === "log" ? " (log)" : "");
+  }
+  const items = [];
+  for (const g of group) {
+    for (const c of g.mem) {
+      const cap = h("span");
+      if (DIR_ENDS[c.pair.end]) {
+        cap.appendChild(icon(DIR_ENDS[c.pair.end]));
+        cap.title = "K at " + c.pair.end_label;
+      } else cap.appendChild(document.createTextNode(c.pair.end_label));
+      if (group.length > 1) cap.appendChild(document.createTextNode(shortPairLabel(g.P.label)));
+      items.push({ c, cap });
+    }
+  }
+  const title = group.map((g) => g.P.label).join("  ·  ");
+  return buildBank(title, items, axis, axisText, viewKey);
+}
+function shortPairLabel(l) { return l.split(" ")[0]; }
+
+// ---------------------------------------------------------------------------
+// Preset grid (registry @family): rows = presets (K1 order), columns = fields. A number cell opens a detail
+// row (knob, number field, default, explanation); a column header shows that field across all presets as
+// a fader bank (compare); a bool field is a small two-word toggle in the cell.
+// ---------------------------------------------------------------------------
+let presetRows = [];
+function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.preset.length + 1); }
+function fieldHead(c) {
+  const lab = (c.label || "").split(":")[0].trim();
+  if (c.pair && DIR_ENDS[c.pair.end]) {
+    const base = fieldOf(c).replace(/_(CCW|CW|NOON)$/, "");
+    return { text: base.charAt(0) + base.slice(1).toLowerCase().replace(/_/g, " "), icon: DIR_ENDS[c.pair.end] };
+  }
+  if (lab && lab.length <= 26) return { text: lab, icon: null };
+  const f = fieldOf(c);
+  return { text: f.charAt(0) + f.slice(1).toLowerCase().replace(/_/g, " "), icon: null };
+}
+function buildPresetGrid(list, viewKey) {
+  const wrap = h("div");
+  const presets = [];
+  const byPreset = new Map();
+  for (const c of list) {
+    if (!byPreset.has(c.preset)) { byPreset.set(c.preset, new Map()); presets.push({ name: c.preset, index: c.preset_index }); }
+    byPreset.get(c.preset).set(fieldOf(c), c);
+  }
+  presets.sort((a, b) => a.index - b.index);
+  const fields = [...byPreset.get(presets[0].name).keys()];
+  const proto = byPreset.get(presets[0].name);
+
+  const compare = h("div", "compare");
+  const renderCompare = () => {
+    compare.textContent = "";
+    dropTag("compare");
+    const f = tun.compare;
+    if (!f || !proto.has(f) || proto.get(f).type === "bool") return;
+    const items = presets.map((p) => ({ c: byPreset.get(p.name).get(f), cap: (p.index + 1) + " " + p.name }));
+    const fh = fieldHead(proto.get(f));
+    compare.appendChild(tagged("compare", () => buildBank(fh.text + (fh.icon ? " at " + proto.get(f).pair.end_label : "") +
+      " - all presets", items, null, "", viewKey)));
+    for (const it of items) updateName(it.c.name);
+    renderPresetNow();
+  };
+
+  const tblWrap = h("div", "pgrid-wrap");
+  const tbl = h("table", "pgrid");
+  const thead = h("thead");
+  const hr = h("tr");
+  const th0 = h("th", "ph-name", "K1 preset");
+  th0.scope = "col";
+  hr.appendChild(th0);
+  const headBtns = [];
+  for (const f of fields) {
+    const c = proto.get(f);
+    const th = h("th");
+    th.scope = "col";
+    th.dataset.target = c.target || "";
+    const fh = fieldHead(c);
+    const b = h("button", "ph");
+    b.type = "button";
+    b.append(h("span", "", fh.text));
+    if (fh.icon) b.appendChild(icon(fh.icon));
+    if (unitText(c.unit)) b.appendChild(h("span", "ph-unit", c.unit));
+    if (c.type !== "bool") {
+      b.title = "Compare " + fh.text + " across all presets (faders)";
+      b.setAttribute("aria-pressed", String(tun.compare === f));
+      b.addEventListener("click", () => {
+        tun.compare = tun.compare === f ? "" : f;
+        store("devtool.compare", tun.compare);
+        for (const x of headBtns) x.b.setAttribute("aria-pressed", String(tun.compare === x.f));
+        renderCompare();
+      });
+    } else { b.disabled = true; b.style.opacity = "1"; b.style.cursor = "default"; b.title = c.label; }
+    headBtns.push({ b, f });
+    th.appendChild(b);
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  const tbody = h("tbody");
+  presetRows = [];
+  for (const p of presets) {
+    const tr = h("tr", "prow");
+    tr.dataset.preset = p.name;
+    const tn = h("th", "pname");
+    tn.scope = "row";
+    tn.append(h("span", "pk", String(p.index + 1)), document.createTextNode(p.name), h("span", "pnow", "● now"));
+    tr.appendChild(tn);
+    for (const f of fields) {
+      const c = byPreset.get(p.name).get(f);
+      const td = h("td");
+      td.dataset.target = c.target || "";
+      td.appendChild(c.type === "bool" ? buildSegCell(c) : buildNumCell(c, tr, fields.length + 1, viewKey));
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+    presetRows.push({ tr, preset: p.name, viewKey });
+  }
+  tbl.append(thead, tbody);
+  tblWrap.appendChild(tbl);
+  wrap.append(compare, tblWrap);
+  renderCompare();
+  // a detail row that was open before (selection survives rebuilds / reconnects)
+  if (tun.openCell) {
+    const btn = tbody.querySelector('.pcell[data-name="' + tun.openCell + '"]');
+    if (btn) openDetail(btn, tun.byName.get(tun.openCell), btn.closest("tr"), fields.length + 1, viewKey);
+  }
+  return wrap;
+}
+function buildNumCell(c, tr, span, viewKey) {
+  const b = h("button", "pcell");
+  b.type = "button";
+  b.dataset.name = c.name;
+  b.setAttribute("aria-expanded", "false");
+  const pv = h("span", "pv"), pd = h("span", "pd");
+  b.append(pd, pv);
+  b.addEventListener("click", () => {
+    if (tun.openCell === c.name) { closeDetail(); return; }
+    openDetail(b, c, tr, span, viewKey);
+  });
+  register(c.name, {
+    update() {
+      const v = cur(c), ch = isChanged(c);
+      pv.textContent = fmtNum(v, c.unit, c.type);
+      b.classList.toggle("changed", ch);
+      b.classList.toggle("off", (tun.byName.get(c.name) || c).in_firmware === false);
+      b.title = c.label + "\n" + fmtWithUnit(v, c.unit, c.type) + (ch ? "  (default " + fmtWithUnit(c.default, c.unit, c.type) + ")" : "");
+    },
+  });
+  return b;
+}
+function buildSegCell(c) {
+  const seg = h("span", "seg");
+  seg.setAttribute("role", "group");
+  seg.setAttribute("aria-label", c.label);
+  const btns = [false, true].map((v) => {
+    const b = h("button", "", stateWord(c, v));
+    b.type = "button";
+    b.addEventListener("click", () => { if (cur(c) !== v) sendSet(c.name, v); });
+    seg.appendChild(b);
+    return b;
+  });
+  register(c.name, {
+    update() {
+      const v = !!cur(c), ok = canEdit(c);
+      btns.forEach((b, i) => { b.setAttribute("aria-pressed", String(v === !!i)); b.disabled = !ok; });
+      seg.classList.toggle("changed", isChanged(c));
+      seg.title = c.label + (isChanged(c) ? "  (default " + stateWord(c, c.default) + ")" : "");
+    },
+  });
+  return seg;
+}
+let detail = null;      // {tr, btn, name}
+function closeDetail() {
+  if (detail) {
+    detail.tr.remove();
+    detail.btn.setAttribute("aria-expanded", "false");
+    dropTag("detail");
+  }
+  detail = null;
+  tun.openCell = "";
+  store("devtool.openCell", "");
+}
+function openDetail(btn, c, tr, span, viewKey) {
+  closeDetail();
+  const row = h("tr", "pdetail");
+  const td = h("td");
+  td.colSpan = span;
+  td.dataset.target = c.target || "";
+  const inner = h("div", "pd-in");
+  inner.appendChild(tagged("detail", () => buildDialCell(c, viewKey)));
+  explainInto(inner, c, viewKey, c.preset + " - " + c.label);
+  td.appendChild(inner);
+  row.appendChild(td);
+  tr.after(row);
+  btn.setAttribute("aria-expanded", "true");
+  detail = { tr: row, btn, name: c.name };
+  tun.openCell = c.name;
+  store("devtool.openCell", c.name);
+  updateName(c.name);
+}
+function renderPresetNow() {
+  const a = state.active;
+  const am = activeModeId();
+  for (const r of presetRows) r.tr.classList.toggle("now", !!a && a.preset === r.preset && am === r.viewKey);
+  for (const fd of el.sections.querySelectorAll(".compare .fd")) {
+    const c = tun.byName.get(fd.dataset.name);
+    fd.classList.toggle("now", !!(a && c && a.preset === c.preset && am === tun.viewKey));
+  }
 }
 
-function updatePairEnd(rec, i, forceNum) {
-  const e = rec.ends[i];
-  const c = tun.byName.get(e.name);
-  const has = c.value !== null && c.value !== undefined;
-  const v = has ? c.value : c.default;
-  const off = c.in_firmware === false;
-  const can = writable() && !off;
-  const ch = isChanged(c);
-  e.wrap.classList.toggle("changed", ch);
-  e.lane.classList.toggle("changed", ch);
-  e.wrap.classList.toggle("pending", tun.inflight.has(e.name) || tun.queued.has(e.name));
-  if (tun.dragging !== e.name) e.hd.style.left = (axisFrac(rec.ax, v) * 100) + "%";
-  e.hd.setAttribute("aria-valuenow", String(v));
-  e.hd.setAttribute("aria-valuetext", fmtWithUnit(v, c.unit, c.type));
-  e.hd.setAttribute("aria-disabled", String(!can));
-  e.num.disabled = !can;
-  if (forceNum || document.activeElement !== e.num) e.num.value = fmtNum(v, c.unit, c.type, true);
-  e.rst.disabled = !(tun.snap && tun.snap.state === "synced" && state.online) || !ch;
-  // whole row: changed if any end is, off / not writable if every end is
-  const all = rec.members.map((n) => tun.byName.get(n));
-  const any = all.some(isChanged);
-  const allOff = all.every((x) => x.in_firmware === false);
-  rec.row.classList.toggle("changed", any);
-  rec.row.classList.toggle("off", allOff);
-  rec.chg.classList.toggle("no", !any);
-  rec.ms.classList.toggle("off", !can);
-  rec.row.title = allOff ? "Not live in this firmware" : "";
-}
-
-// --- sending: one request per constant in flight, latest value wins -------------
+// ---------------------------------------------------------------------------
+// Sending: one request per constant in flight, latest value wins (devtool throttles the serial side)
+// ---------------------------------------------------------------------------
 async function post(path, body) {
   try {
-    const r = await fetch(path, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const js = await r.json().catch(() => ({}));
     return { ok: r.ok, status: r.status, message: js.message || String(r.status) };
   } catch (e) {
     return { ok: false, status: 0, message: "devtool unreachable" };
   }
 }
-
 function sendSet(name, value) {
-  if (tun.inflight.has(name)) { tun.queued.set(name, value); updateRow(name); return; }
+  tun.local.set(name, value);
+  if (tun.inflight.has(name)) { tun.queued.set(name, value); updateName(name); return; }
   tun.inflight.set(name, true);
-  updateRow(name);
+  updateName(name);
   post("/api/set", { name, value }).then((res) => {
     tun.inflight.delete(name);
     showMsg(name, res.ok ? "" : res.message);
+    if (!res.ok && !tun.queued.has(name)) tun.local.delete(name);
     if (tun.queued.has(name)) {
       const v = tun.queued.get(name);
       tun.queued.delete(name);
       sendSet(name, v);
-    } else {
-      updateRow(name, !res.ok);
-    }
+    } else updateName(name);
   });
 }
-
 function sendReset(name) {
   tun.queued.delete(name);
+  tun.local.delete(name);
   post("/api/reset", { name }).then((res) => showMsg(name, res.ok ? "" : res.message));
 }
 
-// --- changes panel ------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Changes popover: default -> new, "what I heard", reset all
+// ---------------------------------------------------------------------------
 function renderChanges() {
   const s = tun.snap;
   const list = s ? s.constants.map((c) => tun.byName.get(c.name)).filter(isChanged) : [];
   el.changesCount.textContent = String(list.length);
-  el.changesCount.classList.toggle("on", list.length > 0);
+  el.changesWord.textContent = list.length === 1 ? "change" : "changes";
+  el.changesBtn.classList.toggle("on", list.length > 0);
   el.changesSub.textContent = s ? "- " + s.pedal + (s.firmware ? " " + s.firmware : "") : "";
   el.changesList.textContent = "";
-  if (!list.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = s && s.state === "synced" ? "Everything at the compiled defaults." : "No pedal values yet.";
-    el.changesList.appendChild(li);
-  }
+  if (!list.length)
+    el.changesList.appendChild(h("li", "empty", s && s.state === "synced" ? "Everything at the compiled defaults." : "No pedal values yet."));
   for (const c of list) {
-    const li = document.createElement("li");
-    const lab = document.createElement("span");
-    lab.className = "c-label";
-    lab.textContent = c.label;
+    const li = h("li");
+    li.dataset.target = c.target || c.section_target || "";
+    const lab = h("span", "c-label", (c.preset ? c.preset + " - " : "") + c.label);
     lab.title = "Show " + c.name;
-    lab.addEventListener("click", () => { selectSection(secKey(c)); revealRow(c.name); });
-    const nm = document.createElement("span");
-    nm.className = "c-name";
-    nm.textContent = c.name;
-    const val = document.createElement("span");
-    val.className = "c-val";
+    lab.addEventListener("click", () => { setChangesOpen(false); reveal(c); });
+    const val = h("span", "c-val");
     val.append(document.createTextNode(fmtNum(c.default, c.unit, c.type) + " → "));
-    const b = document.createElement("b");
-    b.textContent = fmtNum(c.value, c.unit, c.type);
-    val.append(b, document.createTextNode(c.unit && c.unit !== "bool" ? " " + c.unit : ""));
-    li.append(lab, nm, val);
+    val.appendChild(h("b", "", c.type === "bool" ? stateWord(c, c.value) : fmtNum(c.value, c.unit, c.type)));
+    if (unitText(c.unit)) val.appendChild(document.createTextNode(" " + c.unit));
+    const vk = viewKeysOf(c)[0];
+    const mo = modeOf(vk);
+    li.append(h("span", "swatch"), lab, val,
+      h("span", "c-where", (mo && mo.mode ? mo.bench.name + " / " + mo.mode.name : c.module) + "  ·  " + sectionIn(c, vk) + "  ·  " + c.name));
     el.changesList.appendChild(li);
   }
-  el.resetAll.disabled = !list.length || !(s && s.state === "synced" && state.online);
+  el.resetAll.disabled = !list.length || !canReset();
 }
-
-function revealRow(name) {
-  const r = tun.rowEls.get(name);
-  if (r) (r.pair ? r.pair.row : r.row).scrollIntoView({ block: "center" });
+function reveal(c) {
+  const keys = viewKeysOf(c);
+  const k = keys.includes(tun.viewKey) && !tun.search ? tun.viewKey : keys[0];
+  if (k !== tun.viewKey || tun.search) selectView(k);
+  let node = el.sections.querySelector('.pcell[data-name="' + c.name + '"]') ||
+    el.sections.querySelector('[data-name="' + c.name + '"]');
+  if (node && node.classList.contains("pcell") && tun.openCell !== c.name) {
+    node.click();
+    node = el.sections.querySelector('.pdetail [data-name="' + c.name + '"]') || node;
+  }
+  if (node) { node.scrollIntoView({ block: "center" }); const f = node.querySelector(".dial, .fader, input"); if (f) f.focus({ preventScroll: true }); }
 }
-
 let resetArmTimer = 0;
 el.resetAll.addEventListener("click", () => {
   if (!el.resetAll.classList.contains("armed")) {
@@ -1393,27 +1566,24 @@ el.resetAll.addEventListener("click", () => {
   el.resetAll.textContent = "Reset all";
   post("/api/reset", { name: "all" });
 });
-
 let noteTimer = 0;
 el.note.addEventListener("input", () => {
   clearTimeout(noteTimer);
   noteTimer = setTimeout(() => post("/api/note", { text: el.note.value }), 600);
 });
 el.note.addEventListener("blur", () => { clearTimeout(noteTimer); post("/api/note", { text: el.note.value }); });
-
 function setChangesOpen(o) {
-  el.changesPanel.hidden = !o;
+  el.changesPop.hidden = !o;
   el.changesBtn.setAttribute("aria-expanded", String(o));
-  store("devtool.changesOpen", o ? "1" : "0");
 }
-el.changesBtn.addEventListener("click", () => setChangesOpen(el.changesPanel.hidden));
+el.changesBtn.addEventListener("click", () => setChangesOpen(el.changesPop.hidden));
 
-// --- narrow pane: the tree as an overlay; search -----------------------------------
-function setTreeOpen(o) {
-  el.sidebar.classList.toggle("open", o);
+// --- nav overlay (narrow windows) + search ---
+function setNavOpen(o) {
+  el.nav.classList.toggle("open", o);
   el.navToggle.setAttribute("aria-expanded", String(o));
 }
-el.navToggle.addEventListener("click", () => setTreeOpen(!el.sidebar.classList.contains("open")));
+el.navToggle.addEventListener("click", () => setNavOpen(!el.nav.classList.contains("open")));
 let searchTimer = 0;
 el.search.addEventListener("input", () => {
   clearTimeout(searchTimer);
@@ -1421,104 +1591,34 @@ el.search.addEventListener("input", () => {
     tun.search = el.search.value;
     store("devtool.search", tun.search);
     if (!tun.snap) return;
-    updateTreeCounts();
-    renderRows(true);
-  }, 120);
+    renderNavActive();
+    renderView(true);
+  }, 150);
 });
 el.search.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { el.search.value = ""; el.search.dispatchEvent(new Event("input")); }
 });
-
-// --- panes: tree | values | log, sizes by the two splitters ---------------------------
-// Pointer drag or keyboard (arrows 16 px, Shift 64 px, Home / End = min / max, double-click = default);
-// the values pane keeps PANE_MIN.values; sizes remembered per browser (localStorage, try/catch in store()).
-const PANE_MIN = { tree: 160, values: 360, log: 260 };
-const PANE_DEF = { tree: 260, log: 520 };
-const SPLIT_W = 7;
-const panes = {
-  tree: Number(store("devtool.treeW")) || PANE_DEF.tree,
-  log: Number(store("devtool.logW")) || PANE_DEF.log,
-};
-function paneMax(which) {
-  const total = el.panes.clientWidth;
-  const other = which === "tree" ? panes.log : panes.tree;
-  return Math.max(PANE_MIN[which], total - 2 * SPLIT_W - PANE_MIN.values - other);
-}
-function applyPanes() {
-  const total = el.panes.clientWidth;
-  if (total > 0) {
-    // the log gives way first, then the tree, so the values pane keeps its minimum
-    panes.log = Math.max(PANE_MIN.log, Math.min(panes.log, total - 2 * SPLIT_W - PANE_MIN.values - PANE_MIN.tree));
-    panes.tree = Math.max(PANE_MIN.tree, Math.min(panes.tree, paneMax("tree")));
-  }
-  el.panes.style.setProperty("--tree-w", Math.round(panes.tree) + "px");
-  el.panes.style.setProperty("--log-w", Math.round(panes.log) + "px");
-  for (const [sp, which] of [[el.splitTree, "tree"], [el.splitLog, "log"]]) {
-    sp.setAttribute("aria-valuemin", String(PANE_MIN[which]));
-    sp.setAttribute("aria-valuemax", String(Math.round(paneMax(which))));
-    sp.setAttribute("aria-valuenow", String(Math.round(panes[which])));
-  }
-}
-function setPane(which, w) {
-  panes[which] = Math.max(PANE_MIN[which], Math.min(w, paneMax(which)));
-  applyPanes();
-  store(which === "tree" ? "devtool.treeW" : "devtool.logW", String(Math.round(panes[which])));
-}
-function initSplitter(sp, which) {
-  const dir = which === "tree" ? 1 : -1;      // dragging right widens the tree, narrows the log
-  let x0 = 0, w0 = 0;
-  sp.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    sp.setPointerCapture(e.pointerId);
-    sp.classList.add("drag");
-    x0 = e.clientX; w0 = panes[which];
-  });
-  sp.addEventListener("pointermove", (e) => {
-    if (sp.hasPointerCapture(e.pointerId)) setPane(which, w0 + dir * (e.clientX - x0));
-  });
-  const end = (e) => {
-    if (sp.hasPointerCapture(e.pointerId)) sp.releasePointerCapture(e.pointerId);
-    sp.classList.remove("drag");
-  };
-  sp.addEventListener("pointerup", end);
-  sp.addEventListener("pointercancel", end);
-  sp.addEventListener("dblclick", () => setPane(which, PANE_DEF[which]));
-  sp.addEventListener("keydown", (e) => {
-    const st = e.shiftKey ? 64 : 16;
-    let w = null;
-    if (e.key === "ArrowRight") w = panes[which] + dir * st;
-    else if (e.key === "ArrowLeft") w = panes[which] - dir * st;
-    else if (e.key === "Home") w = PANE_MIN[which];
-    else if (e.key === "End") w = paneMax(which);
-    if (w === null) return;
-    e.preventDefault();
-    setPane(which, w);
-  });
-}
-initSplitter(el.splitTree, "tree");
-initSplitter(el.splitLog, "log");
-window.addEventListener("resize", applyPanes);
 
 // ---------------------------------------------------------------------------
 // Server-Sent Events (reconnects by itself, also across a devtool restart)
 // ---------------------------------------------------------------------------
 let es = null;
 let retryTimer = 0;
-
 function connect() {
   clearTimeout(retryTimer);
   if (es) es.close();
   es = new EventSource("/events");
   es.addEventListener("hello", () => {
-    // A (re)connect replays the server's backlog: start the view over from it.
+    // a (re)connect replays the server's backlog: start the log over from it
     state.online = true;
     for (const l of state.lines) l.el = null;
     state.lines = [];
     state.pausedAt = 0;
     el.flashOut.textContent = "";
+    flashLast = "";
     loadMeta();
     fullRender();
+    renderBanner();
   });
   es.addEventListener("status", (e) => { state.status = JSON.parse(e.data); renderStatus(); });
   es.addEventListener("line", (e) => { const d = JSON.parse(e.data); addLine({ kind: "line", t: d.t, text: d.text }); });
@@ -1531,7 +1631,7 @@ function connect() {
   es.onerror = () => {
     state.online = false;
     renderStatus();
-    renderTunState();
+    if (tun.snap) updateAll();
     es.close();
     es = null;
     retryTimer = setTimeout(connect, 1000);
@@ -1539,15 +1639,13 @@ function connect() {
 }
 
 const savedFilter = store("devtool.filter");
-if (savedFilter) { el.filter.value = savedFilter; }
+if (savedFilter) el.filter.value = savedFilter;
 setFilter(el.filter.value);
 el.search.value = tun.search;
-applyPanes();
-setChangesOpen(store("devtool.changesOpen") === "1");
+applyDrawer();
 fillPedals();
 renderStatus();
 renderFlash();
 fullRender();
-renderTunState();
 renderChanges();
 connect();

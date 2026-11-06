@@ -83,7 +83,9 @@ DFU_POLL_S = 0.5
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/index.html": ("index.html", "text/html; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8"),
-          "/app.js": ("app.js", "text/javascript; charset=utf-8")}
+          "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+          "/core.js": ("core.js", "text/javascript; charset=utf-8"),
+          "/icons/icons.svg": ("icons/icons.svg", "image/svg+xml; charset=utf-8")}
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 
 # Live constants: where each pedal's TUNABLE(...) constants files live (dirs are
@@ -620,6 +622,7 @@ class Tuner:
                 "state": self.state, "guard": self.guard, "override": self.override,
                 "writable": self.writable(), "note": self.note, "constants": consts, "docs": docs,
                 "pairs": self.reg.get("pairs", {}), "layout": self.reg.get("layout"),
+                "targets": self.reg.get("targets", []),
                 "last_err": self.last_err}
 
     def snapshot(self):
@@ -1202,6 +1205,9 @@ def selftest():
     # 2) HTTP basics
     st, body = req("GET", "/")
     check(st == 200 and b"<html" in body.lower(), "GET / serves the page")
+    got = {pth: req("GET", pth) for pth in ("/app.css", "/core.js", "/app.js", "/icons/icons.svg")}
+    check(all(v[0] == 200 and len(v[1]) > 100 for v in got.values()) and b'id="ic-ccw"' in got["/icons/icons.svg"][1],
+          "GET page assets (app.css, core.js, app.js, icons sprite)")
     st, _ = req("GET", "/api/status", headers={"Host": "evil.example:80"})
     check(st == 403, "foreign Host header refused")
     st, _ = req("POST", "/api/flash", body=b"pedal=nitrolab",
@@ -1279,6 +1285,12 @@ def selftest():
           "/api/registry: pairs included")
     check((js.get("layout") or {}).get("title") == "NitroLab" and len(js["layout"]["benches"]) == 3,
           "/api/registry: layout (benches / modes) included")
+    tids = [t["id"] for t in js.get("targets", [])]
+    check(tids and all(k["target"] in tids + [""] for b in js["layout"]["benches"] for m in b["modes"]
+                       for k in m.get("knobs", []))
+          and all(c["target"] in tids + [""] for c in js["constants"])
+          and next(c for c in js["constants"] if c["name"] == "EXP_TB_SAW_ENV")["states"] == ["LFO", "env"],
+          "/api/registry: targets, knob strips, per-constant @target / @states")
     check(st == 200 and all(c["value"] == c["default"] for c in js["constants"])
           and {"label", "unit", "range", "taper", "level", "file", "line", "section", "module"} <= set(c0),
           "/api/registry: values merged (= defaults), metadata fields")
