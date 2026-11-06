@@ -239,9 +239,9 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(env, sizeof env, "%s lfo %s d%.2f >%.2f %.2fHz", te, lfo, d.lfod, d.llfd, d.lfohz);
   else if (d.sw1 == 0 || d.addz >= 0)
     snprintf(env, sizeof env, "%s fce %d lfo %s d%.2f %.2fHz", te, (int)(d.fce + 0.5f), lfo, d.lfod, d.lfohz);
-  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // audition bank JOURNEY: + the K5 touch env, travel5, m now
-    snprintf(env, sizeof env, "%s k5 gd%.2f Td%.2f gr%.2f Tr%.2f w%.2f o%.2f tr%.2f m%.2f", te, d.t5gd, d.t5Td, d.t5gr,
-             d.t5Tr, d.t5w, d.t5o, d.t5tr, d.tm);
+  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // audition bank JOURNEY: + start S, K5 direction /
+    snprintf(env, sizeof env, "%s S%.2f dir %s rate%.2fs pos%.2f blow%.2f", te, d.b,   // whole-journey s, morph / blow now
+             d.jdir > 0 ? "fwd" : d.jdir < 0 ? "back" : "still", d.jT, d.tm, d.tb);
   else if (d.sw1 == 1)
     snprintf(env, sizeof env, "%s lfo %s d%.2f %.2fHz", te, lfo, d.lfod, d.lfohz);
   else
@@ -269,7 +269,10 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
   else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbAnalog)   // audition bank ANALOG: Q (K2)
     snprintf(line, sizeof line, "tab %d/%d %s %s Q%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
              Explorer::TbKindName(d.tbk), d.tq, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
-  else if (d.model == Explorer::kWT && d.tbz >= 0)          // audition bank LFO / JOURNEY: morph m at the knob, position
+  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // JOURNEY: S / pos in env
+    snprintf(line, sizeof line, "tab %d/%d %s %s lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
+             Explorer::TbKindName(d.tbk), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+  else if (d.model == Explorer::kWT && d.tbz >= 0)          // audition bank LFO: morph m at the knob, position
     snprintf(line, sizeof line, "tab %d/%d %s %s m%.2f pos%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES,
              zn, Explorer::TbKindName(d.tbk), d.b, d.a, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   else if (d.model == Explorer::kWT)
@@ -774,9 +777,8 @@ int main(int argc, char** argv) {
                  ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"slp\":" + N(x.slp) + ",\"ssub\":" + N(x.ssub) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"tbz\":" + std::to_string(x.tbz) + ",\"tbk\":" + json::Esc(x.tbz >= 0 ? Explorer::TbKindName(x.tbk) : "") +
-                 ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"t5gd\":" + N(x.t5gd) + ",\"t5Td\":" + N(x.t5Td) +
-                 ",\"t5gr\":" + N(x.t5gr) + ",\"t5Tr\":" + N(x.t5Tr) + ",\"t5w\":" + N(x.t5w) + ",\"t5o\":" + N(x.t5o) +
-                 ",\"t5tr\":" + N(x.t5tr) +
+                 ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"jdir\":" + std::to_string(x.jdir) +
+                 ",\"jT\":" + N(x.jT) + ",\"tb\":" + N(x.tb) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +
                  ",\"sn\":" + N(x.sn) + ",\"sgd\":" + N(x.sgd) + ",\"sTd\":" + N(x.sTd) + ",\"sgr\":" + N(x.sgr) +
                  ",\"sTr\":" + N(x.sTr) + ",\"sw\":" + N(x.sw) + ",\"str\":" + N(x.str) + ",\"sL\":" + N(x.sL) + ",\"so\":" + N(x.so) +

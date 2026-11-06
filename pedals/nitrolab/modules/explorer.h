@@ -94,7 +94,9 @@
 //                preset's tonal gain at the position (bank; legacy: none); level_k (or the lo / hi blend) = the static
 //                open pick (hf = min(4000, fc) / f'_k, K3 dampener; + the 2-pole LP, see K3 2-POLE LOWPASS). A K1 zone
 //                change crossfades old -> new zone over EXP_TB_ZONE_XFADE_MS (each side its own morph m - its kind's K5
-//                offset - and the same per-band versions / blend); stateless. Bank kinds (K2 / K5): see TABLES.
+//                offset - and the same per-band versions / blend). Bank kinds (K2 / K5): see TABLES. Bank BLOW (b > 0
+//                at the position): the read phase is phi_k + b EXP_TB_BLOW_DEPTH j_k (per-band jitter, see TABLES);
+//                b = 0 (legacy, most presets): stateless, the plain read.
 //   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> an 11th K1 zone on MID after the 10 table zones)
 //                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
 //                [0, 1), v0 this step, v1 the next): tri = v0 + f (v1 - v0), saw = tri if v1 > v0 else v0,
@@ -301,17 +303,20 @@
 //                          bank ANALOG presets: the LP cutoff (TfUpdate) in octaves with the UP FM placement (LfoFcOct:
 //                          pluck side UP 0 .. EXP_LFO_FM_FC_OCT_DEC x depth x k3 x (1 - o_d), swell side DOWN 0 ..
 //                          -EXP_LFO_FM_FC_OCT x depth x o_r, blended by w; fc capped at EXP_TF_FMAX); bank JOURNEY
-//                          presets: no LFO - K5 = the second touch env (below); parked BITTAB: none
+//                          presets: no LFO - K5 = direction + speed of the morph travel (below); parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_ = o), K5 on feedback / morph (Derive, per sample): independent.
-//     K5 JOURNEY touch env (audition bank JOURNEY presets, SW3 MID; 2026-11-06): the K4 touch env implementation
-//       (TouchEnvUpdate / TouchOpenUpdate / TouchTravel) on a second instance te5_, driven by t5 = 2 k5 - 1 (smoothed):
-//       the same time laws (EXP_PS_*), morph zone and live dynamics; envelopes, openness and travel always running on
-//       the SW3 MID instance (bank build), read only by JOURNEY presets. Target = the morph: m = clamp(k2 + travel5, 0,
-//       1), travel5 = (1 - w5) depth_d5 (1 - o_d5) + w5 depth_r5 (1 - o_r5), depth per side = EXP_TB_JENV_DEPTH_MIN 0.12
-//       .. MAX 1.0, log over the side's time range (TouchTravel = SPECTRAL's density travel law). CCW pluck: each onset
-//       at K2, travels FORWARD toward the journey end as the note decays (a mute moves it on, damped); CW swell: each
-//       onset ahead by depth_r5, comes back to K2; noon = the 8 s pluck at full depth (continuous with just CCW of noon).
+//     K5 JOURNEY (audition bank JOURNEY presets, SW3 MID; 2026-11-06, replaces the second touch env): DIRECTION + constant
+//       SPEED of the morph travel (JourneyUpdate, per 8 kHz sample, always running on the SW3 MID instance with the bank,
+//       read only by JOURNEY presets). t5 = 2 k5 - 1 (smoothed), a = |t5|, Z = EXP_TB_JRN_ZERO_FRAC 0.05:
+//       rate = min(a / Z, 1) / T morph units / s, T = T_SLOW 30 s (T_FAST 0.3 s / T_SLOW)^max(0, (a - Z) / (1 - Z)) = the
+//       time for the whole journey (noon exactly 0, linear 0 -> 1 / 30 s over a < Z, then exponential 30 s -> 0.3 s);
+//       dir = sign(t5): CCW BACKWARD toward 0, noon still, CW FORWARD toward 1. No envelope, no dynamics.
+//       Offset jo (morph units): 0 on every onset; per 8 kHz sample a forward step jo = min(jo + rate / 8000, max(jo, 1 - S)),
+//       a backward step jo = max(jo - rate / 8000, min(jo, -S)) (S = the smoothed K2): it stops where S + jo reaches 1 / 0
+//       and holds (a reversed K5 moves it back at once); K2 never touches jo. Morph m = clamp(S + jo, 0, 1): K2 moves the
+//       sound live, the same K2 position always gives the same m for the same elapsed travel (any K2 path). A K5 turn
+//       mid-note changes rate / direction from the current offset on (no reset).
 //  LOOPING (RETIRED 2026-10-28: only with EXP_LOOP_ENABLE, then on SW3 DOWN instead of FM LAB) — generic K4 / K5
 //   envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
@@ -349,7 +354,7 @@
 //                    stepped, 1 ms crossfade: SAW PULSE PWM SYNC VOCAL GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN
 //                    PPG METAL; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through the
-//                    zone's frames (JOURNEY: the start of the K5 travel), ANALOG presets: LP resonance Q 0.3 -> 3
+//                    zone's frames (JOURNEY: the start S of the K5 travel, live), ANALOG presets: LP resonance Q 0.3 -> 3
 //                    (EXP_TF_Q_MIN / MAX, exponential); DOWN: per model (see MODELS)
 //   K3  UP:          index: the per-band cap law (fc 150 Hz CCW -> 4 kHz CW open, k3^0.5; L = min(4000, fc) caps the
 //                    index and the feedback)
@@ -362,7 +367,8 @@
 //                    the volume closes it damped), noon -> ~1:00 = pluck morphs into the fastest swell, CW = swell
 //                    (each onset drops to the bottom, rises to the K3 fc; 10 ms at ~1:00 -> 4 s; closed near silence)
 //       (retired LOOPING: envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms)
-//   K5  MID JOURNEY presets: the second touch env on the morph (see K5 JOURNEY touch env); MID ANALOG presets: the LFO
+//   K5  MID JOURNEY presets: direction + speed of the morph travel from S (see K5 JOURNEY: CCW backward, noon still, CW
+//                    forward; whole journey 30 s just off noon -> 0.3 s at the ends); MID ANALOG presets: the LFO
 //                    below on the LP cutoff (the UP FM placement);
 //       LFO on K2's parameter (UP FM feedback +-0.3, MID morph +-0.15; XBAND / DOWN none): CCW triangle (up to 20 Hz) | noon off | CW
 //                    staircase 100/50/0 %; depth fades in over the first 30 % of each side, rate 0.2 Hz -> top,
@@ -410,24 +416,29 @@
 // gr.. Tr.. w.. L.. o.. fce .. (Hz, applied fc: UP dampener / index fc) lfo tri|stp|off d.. ..Hz` (depth, rate at the
 // knob value), MID the same without fce (= eff), `ps - lfo -` on SW1 DOWN (K4 / K5 inert). MID WT lines: `dmp .. lp .. eff ..` = the tables' dampener fc (knob, unmodulated), the LP cutoff at the
 // knob, the effective LP cutoff (Hz) instead of `fc` (parked ladder: lp / eff = the ladder's). Audition bank: `tab <n>/15
-// <NAME> LFO|JOURNEY|ANALOG m<knob> pos<frame position>` (ANALOG `Q<at the K2 knob>`) `lp .. eff ..` + the touch env /
-// lfo part; JOURNEY: ` k5 gd.. Td.. gr.. Tr.. w.. o.. tr<travel5> m<applied morph now>` instead of the lfo part.
+// <NAME> LFO|ANALOG m<knob> pos<frame position>` (ANALOG `Q<at the K2 knob>`) `lp .. eff ..` + the touch env / lfo part;
+// JOURNEY `tab <n>/15 <NAME> JOURNEY lp .. eff ..` + the touch env + ` S<start = K2 knob> dir fwd|back|still rate <s for
+// the whole journey at the K5 knob; 0 = still>s pos<applied morph now> blow<applied b now>` (no lfo part).
 //
 // TABLES (SW1 MID; built at Init into SDRAM, int16, packed [frame][version][sample]). TWO BANKS (EXP_TB_LEGACY):
-// AUDITION BANK (default; 2026-11-06; BuildBank): 15 presets, data in explorer_tables.h (recipes, key stages, noise, level
+// AUDITION BANK (default; 2026-11-06; BuildBank): 15 presets, data in explorer_tables.h (recipes, key stages, blow, level
 //   rules per preset: a new preset = data, no code), each frame through the LEGACY pipeline below (time domain -> DFT
 //   or harmonic amplitudes -> peak 1 -> re-phase / RMS match + cap -> 14 band-limited versions). Frames between two key
 //   stages: same generator -> its parameter interpolated (a sweep); different generators -> per-harmonic dB
-//   interpolation of the two stages' magnitudes (EXP_TB_JOURNEY_FLOOR_DB). Per frame also a tonal gain and a noise
-//   share (explorer_tb_tone / explorer_tb_nzs), read at the morph position (Derive).
+//   interpolation of the two stages' magnitudes (EXP_TB_JOURNEY_FLOOR_DB). Per frame also a tonal gain and a blow
+//   amount b (explorer_tb_tone / explorer_tb_blow), read at the morph position (Derive, linear between the two frames).
 //   KINDS  LFO      PWM SYNC VOCAL PPG: K2 = morph, K5 = the K5 LFO on the morph (as the legacy zones)
-//          JOURNEY  GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN METAL: K2 = morph start, K5 = the K5 JOURNEY touch env
+//          JOURNEY  GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN METAL: K2 = morph start S, K5 = K5 JOURNEY (direction +
+//                   speed of the travel)
 //          ANALOG   SAW PULSE (1 frame): K2 = LP Q, K5 = the K5 LFO on the LP cutoff (TfUpdate / TabFilter)
-//   NOISE  (TbNoise, wet only): one LCG white source, unit-RMS one-pole colours LOW / MID (lowpass) / HIGH (highpass),
-//          per preset one colour; level per 8 kHz sample = share(m) x sum_k w_k a_k (COLOURED) or x sum_k w_k a_k |W_k|
-//          (PITCH-LOCKED) over the running slot's bands, x the tone's slot / SW2 / output gains (0 in silence, a mute
-//          takes it along); added at 48 kHz after the DC blocker, before the K3 2-pole LP (linear 8 kHz ramp).
-//          Presets: GLASS high, RASPY mid, AIR high (coloured), BREATH mid (pitch-locked); others none.
+//   BLOW   (2026-11-06; replaces the separate noise layer; wet only, in the table read itself): b > 0 -> per SW2 slot and
+//          band k, while the band sounds, per 8 kHz sample: one LCG step (uniform x sqrt(3)) -> one-pole lowpass j_k
+//          (EXP_TB_BLOW_FC 200 Hz, explorer_tb_rt.jl) -> read phase phi_k + b DEPTH g j_k, wrapped (g = the one-pole's
+//          unit-RMS gain, DEPTH = EXP_TB_BLOW_DEPTH 0.12 cycles RMS at b = 1). Table harmonic h: carrier -4.34
+//          (2 pi h b DEPTH)^2 dB, the rest a noise band around it (power kept), width ~BLOW_FC .. (2 pi h b DEPTH)^2
+//          BLOW_FC - grows with h. b = 0: the jitter is not run, the read is the plain one (bit-identical). Zone
+//          crossfade: the entering side advances the slot's jitter (the fading side only when the entering one has
+//          b = 0); both read it. Presets: GLASS 0 -> .5 -> 1, BREATH 0 -> .4 -> 1, AIR .8 -> 1; every other one 0.
 // LEGACY (EXP_TB_LEGACY = true; COPIED from wavemorph.h, values = wavemorph_constants.h as EXP_TB_*):
 // per zone F_z frames (frame 1 = the exact base wave), u = frame / (F_z - 1).
 // Each frame: defined in the time domain at EXP_TB_TD_SIZE (1024) points and analysed by DFT into harmonics 1..127
@@ -454,7 +465,7 @@
 // Header-only; main.cpp includes daisy.h / hothouse.h / control_surface.h / module.h first.
 // No dynamic allocation. Tables: audition bank 210 frames x 14 x 256 int16 = 1.44 MB in SDRAM (legacy: 66 frames =
 // 462 KB; explorer_tb, own array, built once, shared read-only by both instances; the second Init skips the build) +
-// 2 x 210 floats tone / noise share (SDRAM); noise / ANALOG-Q runtime explorer_tb_rt 1 KB (D2 SRAM, SW3 MID only). FM LAB ADDITIVE state: explorer_add_st,
+// 2 x 210 floats tone / blow (SDRAM); blow jitter / ANALOG-Q runtime explorer_tb_rt 1.3 KB (D2 SRAM, SW3 MID only). FM LAB ADDITIVE state: explorer_add_st,
 // 12 x 3 x 84 floats = 12 KB (one copy, the lab instance only; D2 SRAM, EXP_FAST_BSS - 2026-11-02, was SDRAM).
 // SPECTRAL has no per-band state (17-float weight table in the instance). (DUAL VOICE's explorer_dual_st, 9 KB,
 // removed 2026-11-03.)
@@ -465,7 +476,7 @@
 #include "knob_map.h"          // RemapKnob, Quantize
 #include "armitage_bands.h"    // band engine (read-only use)
 #include "explorer_constants.h"
-#include "explorer_tables.h"     // SW1 MID audition bank (EXP_TB_LEGACY = false): presets / stages / noise per preset
+#include "explorer_tables.h"     // SW1 MID audition bank (EXP_TB_LEGACY = false): presets / stages / blow per preset
 #include "env_follower.h"      // EnvFollower (live follower on top of the FM envelope)
 #include "moog_ladder.h"       // MoogLadder (NitroTron3 Mode A's Huovilainen ladder, used as is): parked SW1 MID K3 lowpass (EXP_LAD_ENABLE)
 
@@ -498,10 +509,10 @@ static float DTCM_MEM_SECTION explorer_sin_tab[explorer_k::EXP_SIN_SIZE + 1];
 // audition bank (explorer_tables.h; scale = the preset's), EXP_TB_BANK_FRAMES frames.
 static int16_t DSY_SDRAM_BSS explorer_tb[explorer_k::EXP_TB_TOTAL_FRAMES]
                                         [explorer_k::EXP_TB_LEVELS][explorer_k::EXP_TB_SIZE];
-// Audition bank (EXP_TB_LEGACY = false): tonal gain and noise share per packed frame (BuildBank; linear in the stage
+// Audition bank (EXP_TB_LEGACY = false): tonal gain and blow amount b per packed frame (BuildBank; linear in the stage
 // position), read per 8 kHz sample at the morph position (Derive). SDRAM; unused with the legacy bank.
 static float DSY_SDRAM_BSS explorer_tb_tone[explorer_k::EXP_TB_TOTAL_FRAMES];
-static float DSY_SDRAM_BSS explorer_tb_nzs[explorer_k::EXP_TB_TOTAL_FRAMES];
+static float DSY_SDRAM_BSS explorer_tb_blow[explorer_k::EXP_TB_TOTAL_FRAMES];
 // Init-only table build scratch (SDRAM: keeps DTCM free).
 struct ExplorerTbScratch {
   float x[explorer_k::EXP_TB_TD_SIZE];                                  // time-domain frame
@@ -512,16 +523,15 @@ struct ExplorerTbScratch {
 };
 static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
 // Audition bank runtime (SW3 MID instance only - tables never run on FM LAB; D2 SRAM, EXP_FAST_BSS, NOLOAD: Init sets
-// it). Noise layer: level per colour per 8 kHz sample of the block (Process -> TbNoise), the ramp start, the colour
-// one-poles, the LCG; ANALOG LP Q per 8 kHz sample (TfUpdate -> TabFilter; 0 = not ANALOG).
+// it). BLOW: the jitter one-pole state per SW2 slot and band, the LCG, the one-pole coefficient and the unit-RMS gain x
+// EXP_TB_BLOW_DEPTH (ShapeK<kWT>, only while b > 0); ANALOG LP Q per 8 kHz sample (TfUpdate -> TabFilter; 0 = not ANALOG).
 struct ExplorerTbRt {
   static constexpr int kSub = 64;                // 8 kHz samples per block held (= Explorer::kLadSub)
-  float lv[3][kSub];                             // noise level per colour (LOW / MID / HIGH), this block
-  float prev[3];                                 // last level of the previous block (linear ramp start)
-  float lp[3];                                   // colour one-pole states (white -> lowpass; HIGH = white - lowpass)
-  float c[3], g[3];                              // one-pole coefficients, unit-RMS gains
-  uint32_t rng;                                  // LCG state
   float q[kSub];                                 // ANALOG LP Q per 8 kHz sample (0 = not ANALOG: EXP_TF_Q)
+  float jl[3][armbands::kArmBands];              // BLOW: one-pole state j per slot (up / played / down) and band
+  uint32_t rng;                                  // BLOW: LCG state (one step per sounding band per 8 kHz sample, b > 0)
+  float jc;                                      // BLOW: one-pole coefficient 1 - exp(-2 pi EXP_TB_BLOW_FC / sr8)
+  float jg;                                      // BLOW: EXP_TB_BLOW_DEPTH x unit-RMS gain sqrt((2 - jc) / jc)
 };
 static ExplorerTbRt EXP_FAST_BSS explorer_tb_rt;
 // explorer_sin_tab + explorer_tb are filled by the first Init; further instances (SW3 DOWN) skip the build.
@@ -597,10 +607,10 @@ struct ExpSVF {
   void Reset() { ic1 = ic2 = 0.f; }
 };
 
-// K4 / K5 TOUCH ENV state (docs/DESIGN_PHILOSOPHY.md §12). ONE implementation - Explorer::TouchEnvUpdate /
-// TouchOpenUpdate / TouchTravel (built 2026-11-05 for K4, generalised 2026-11-06 to take the instance) - and two
-// instances per Explorer: te_ (K4, driven by t4: every ONE-SHOT K4 target) and te5_ (K5, driven by t5: the audition
-// bank's JOURNEY morph, SW3 MID only). Laws: see "K4 / K5" in the header comment.
+// K4 TOUCH ENV state (docs/DESIGN_PHILOSOPHY.md §12). ONE implementation - Explorer::TouchEnvUpdate / TouchOpenUpdate /
+// TouchTravel (built 2026-11-05 for K4, generalised 2026-11-06 to take the instance) - and one instance per Explorer:
+// te_ (K4, driven by t4: every ONE-SHOT K4 target). (The second instance te5_ - K5 on the audition bank's JOURNEY morph -
+// was replaced 2026-11-06 by K5 JOURNEY direction + speed, JourneyUpdate.) Laws: see "K4 / K5" in the header comment.
 struct ExpTouchEnv {
   // Env (every 8 kHz sample, ONE-SHOT): the pluck / swell envelopes
   volatile float gd = 1.f;         // DECAY g_d (onset -> 1, -> 0 over T_d, holds 0; 1 before the first onset)
@@ -746,22 +756,18 @@ class Explorer : public Module {
       else               BuildBank();
       explorer_tables_built = true;
     }
-    if (!EXP_TB_LEGACY && !lab_) {               // audition bank runtime (noise layer, ANALOG Q), D2 SRAM (NOLOAD)
+    if (!EXP_TB_LEGACY && !lab_) {               // audition bank runtime (BLOW jitter, ANALOG Q), D2 SRAM (NOLOAD)
       ExplorerTbRt& R = explorer_tb_rt;
-      static const float hz[3] = { EXP_TB_NOISE_LOW_HZ, EXP_TB_NOISE_MID_HZ, EXP_TB_NOISE_HIGH_HZ };
-      for (int c = 0; c < 3; c++) {
-        const float cc = 1.f - expf(-6.283185307f * hz[c] / sr);
-        R.c[c] = cc;
-        // unit RMS for white input: one-pole lowpass var ratio c / (2 - c); HIGH = white - lowpass: 2 (1 - c)^2 / (2 - c)
-        R.g[c] = (c == kTbNcHigh) ? sqrtf((2.f - cc) / (2.f * (1.f - cc) * (1.f - cc))) : sqrtf((2.f - cc) / cc);
-        R.prev[c] = R.lp[c] = 0.f;
-        for (int j = 0; j < ExplorerTbRt::kSub; j++) R.lv[c][j] = 0.f;
-      }
+      R.jc = 1.f - expf(-6.283185307f * EXP_TB_BLOW_FC / sr8_);    // jitter one-pole (8 kHz)
+      R.jg = EXP_TB_BLOW_DEPTH * sqrtf((2.f - R.jc) / R.jc);         // unit RMS for unit-RMS white: var ratio c / (2 - c)
+      for (int o = 0; o < kSlots; o++)
+        for (int k = 0; k < kBands; k++) R.jl[o][k] = 0.f;
+      R.rng = EXP_TB_BLOW_SEED;
       for (int j = 0; j < ExplorerTbRt::kSub; j++) R.q[j] = 0.f;
-      R.rng = EXP_TB_NOISE_SEED;
     }
-    nz_last_ = 0.f; nz_col_ = 0; rs_nz_[0] = rs_nz_[1] = rs_nz_[2] = 0.f;
-    jt5_ = 0.f; tb_aw_ = 0.f; tb_m_now_ = 0.f;
+    tb_aw_ = 0.f; tb_m_now_ = 0.f; tb_b_now_ = 0.f;
+    // K5 JOURNEY (JourneyUpdate): offset 0, still; the step is computed on the first sample.
+    jrn_o_ = 0.f; jrn_step_ = 0.f; jrn_t5_ = 2.f;
     lab_m_t_ = -1;                               // FM LAB 2-OP: no UP mode until Controls (ratio slide at rest, r 1)
     lab_st_t_ = EXP_LAB_N_STEPS / 2;
     l2r_.Jump(EXP_LAB_REST_R);
@@ -777,11 +783,10 @@ class Explorer : public Module {
     sk_g_ = sk_nu_ = sk_e_ = sk_k1_ = -1.f;      // forces every part on the first SpecWeights
     sp_nu_last_ = -1.f; sp_nu_div_ = 0;         // nu recompute state (the density depth caches: te_.Reset)
     sp_tr_ = 0.f;                                // SPECTRAL density travel
-    // K4 / K5 TOUCH ENV (ExpTouchEnv; te_ both instances, te5_ SW3 MID audition bank): openness 1, live level 0, L_d
-    // restarts at L on the first run; pluck / swell envelopes both 1 before the first onset; T / w forced on the 1st
-    // sample; travel depth caches cleared. Shared constants: te_flin_ .. te_iGr_ below, ps_a_ / ln_ps_* further down.
+    // K4 TOUCH ENV (ExpTouchEnv te_, both instances): openness 1, live level 0, L_d restarts at L on the first run;
+    // pluck / swell envelopes both 1 before the first onset; T / w forced on the 1st sample; travel depth caches
+    // cleared. Shared constants: te_flin_ .. te_iGr_ below, ps_a_ / ln_ps_* further down.
     te_.Reset();
-    te5_.Reset();
     te_lnfl_ = EXP_SPEC_DYN_FLOOR_DB * (logf(10.f) / 20.f);                  // dB -> ln of the linear level
     te_flin_ = expf(te_lnfl_);
     te_iLr_ = 20.f / ((EXP_SPEC_DYN_TOP_DB - EXP_SPEC_DYN_FLOOR_DB) * logf(10.f));
@@ -1023,8 +1028,10 @@ class Explorer : public Module {
     int   tbz;        // SW3 MID SW1 MID audition bank: preset 0..14 (-1 = legacy zones / not the tables); tbk its kind
     int   tbk;        // (explorer_k::kTbLfo / kTbJourney / kTbAnalog; -1 = none)
     float tq;         // ANALOG: LP Q at the K2 knob (TbAnalogQ), else 0
-    float tm;         // applied morph m now (JOURNEY: K2 + the K5 travel; LFO kind: + the LFO), latest 8 kHz sample
-    float t5gd, t5Td, t5gr, t5Tr, t5w, t5o, t5tr;   // JOURNEY: the K5 touch env (as the K4 sgd .. so) + travel5 now
+    float tm;         // applied morph m now (JOURNEY: S + the K5 travel offset; LFO kind: + the LFO), latest 8 kHz sample
+    int   jdir;       // JOURNEY: K5 direction at the knob: +1 forward (CW), -1 backward (CCW), 0 still (noon)
+    float jT;         // JOURNEY: time for the whole journey at the K5 knob's speed (s; 1 / rate), 0 = still
+    float tb;         // audition bank: applied blow amount b now (latest 8 kHz sample; 0 = none)
     bool  mute;
   };
   void Activate() override {
@@ -1180,14 +1187,16 @@ class Explorer : public Module {
       const int mnew = var_ >> 6, mold = vfrom_ >> 6;
       pn_ = Derive(mnew, var_ & 63, k2s_, k3s_, DiscOf(mnew), loop_ ? o2_ : LfoO2(mnew, var_ & 63), d3);
       if (fading) pf_ = Derive(mold, vfrom_ & 63, k2s_, k3s_, DiscOf(mold), loop_ ? o2_ : LfoO2(mold, vfrom_ & 63), d3);
-      if (mnew == kWT) tb_m_now_ = pn_.b;        // DIAG: the applied morph m (audition bank JOURNEY: incl. the K5 travel)
+      if (mnew == kWT) { tb_m_now_ = pn_.b; tb_b_now_ = pn_.p3; }   // DIAG: the applied morph m (JOURNEY: incl. the K5
+                                                                      // travel) and blow b (bank; legacy: 0)
       if (mnew == kLADD) AddWeights(pn_, 0);    // ADDITIVE: series weights (cached; recomputed when h / series moved)
       if (fading && mold == kLADD) AddWeights(pf_, 1);
       if (mnew == kLSPEC) SpecWeights(pn_);     // SPECTRAL: partial weights (one table; recomputed when an input moved)
       if (fading && mold == kLSPEC) SpecWeights(pf_);
-      // ADDITIVE unison theta: advanced by the entering side; by the fading side only when the entering one has none
+      // ADDITIVE unison theta / audition bank BLOW jitter: advanced by the entering side; by the fading side only when
+      // the entering one has none (BLOW: a table zone -> table zone crossfade whose entering side has b > 0)
       pn_.adv = true;
-      pf_.adv = !(mnew == kLADD && AddIsUni(var_ & 63));
+      pf_.adv = !(mnew == kLADD && AddIsUni(var_ & 63)) && !(mnew == kWT && mold == kWT && pn_.p3 > 0.f);
       mg_ = fading ? 1.f - (float)mfade_n_ / (float)(mfade_cur_ + 1) : 1.f;
       pk_g_ = (pk_fade_n_ > 0) ? 1.f - (float)pk_fade_n_ / (float)(pk_fade_len_ + 1) : 1.f;   // dampener pick slide
       // audition bank ANALOG weight on the LP (K2 = Q, K5 LFO on the cutoff): 1 while an ANALOG preset runs, slid with
@@ -1218,29 +1227,17 @@ class Explorer : public Module {
       // (weights slid over EXP_OCT_XFADE_MS); a slot with weight 0 is not computed.
       static constexpr int   oslot[3] = { kSU, kSP, kSD };
       static constexpr float ogain[3] = { EXP_GAIN_UP, 1.f, EXP_GAIN_DOWN };
-      // Audition bank noise level per colour (RunSlot -> rs_nz_), with the tone's slot / SW2 / output gains.
-      const bool tbn = !EXP_TB_LEGACY && !lab_;
       float acc = 0.f;
-      float nzc[3] = { 0.f, 0.f, 0.f };
       for (int j = 0; j < 3; j++) {
         const float g = og_[j];
-        if (g != 0.f) {
-          acc += g * ogain[j] * RunSlot(oslot[j], fading);
-          if (tbn) for (int c = 0; c < 3; c++) nzc[c] += g * ogain[j] * rs_nz_[c];
-        }
+        if (g != 0.f) acc += g * ogain[j] * RunSlot(oslot[j], fading);
         else slot_on_[oslot[j]] = false;
       }
       if (mfade_n_ > 0) --mfade_n_;
       if (pk_fade_n_ > 0) --pk_fade_n_;
       int_(acc * EXP_OUT_GAIN, wet + i);
-      if (tbn) {
-        int sb = (int)(i / kFactor);
-        if (sb >= ExplorerTbRt::kSub) sb = ExplorerTbRt::kSub - 1;
-        for (int c = 0; c < 3; c++) explorer_tb_rt.lv[c][sb] = nzc[c] * EXP_OUT_GAIN;
-      }
     }
     DcBlock(wet, size);
-    if (!EXP_TB_LEGACY && !lab_) TbNoise(wet, size);   // audition bank noise layer (wet only; not run while its level is 0)
     if (EXP_LAD_ENABLE) Ladder(wet, size);       // parked SW1 MID K3 ladder lowpass (mix m; not run while m = 0)
     else                TabFilter(wet, size);    // SW1 MID K3 2-pole SVF lowpass (mix m; not run while m = 0)
     SpecLpf(wet, size);                          // FM LAB SPECTRAL K3 2-pole SVF lowpass (mix m; not run while m = 0)
@@ -1346,7 +1343,8 @@ class Explorer : public Module {
   // every onset) and TouchOpenUpdate (openness o with the live level) -> o3_ = o, the one openness every K4 target of
   // the running model reads (UP index fc DampFmUpdate, MID 2-pole LP TfUpdate, FM LAB 2-OP u_eff, ADDITIVE index fc / h,
   // SPECTRAL K3 LPF; SPECTRAL density travel: SpecWeights). o computed on FM LAB always (every SW1 family uses K4),
-  // on SW3 MID while the current model is not an SW1 DOWN model (there o3_ = 1, K4 inert, as before).
+  // on SW3 MID while the current model is not an SW1 DOWN model (there o3_ = 1, K4 inert, as before). Then, on the SW3 MID
+  // instance with the audition bank, the K5 JOURNEY travel (JourneyUpdate).
   inline void EnvUpdate() {
     using namespace explorer_k;
     const bool onset = on_pending_;
@@ -1376,15 +1374,10 @@ class Explorer : public Module {
           mid_lfb_ = EXP_LFO_FB_SWING * ((1.f - te_.w) * (1.f - te_.od) * lfo_s_ - te_.w * te_.orr * up);
         }
       }
-      // Audition bank JOURNEY presets (SW3 MID): K5 = the second touch env (te5_, same implementation, driven by the
-      // smoothed t5): envelopes, openness and travel5 = TouchTravel over EXP_TB_JENV_DEPTH_MIN .. MAX (time-scaled per
-      // side) always running on this instance (same onset; so a JOURNEY preset entering by K1 finds them current - no
-      // step at the zone change), -> jt5_; only JOURNEY presets read it (LfoO2: m = clamp(k2 + jt5_)).
-      if (!lab_ && !EXP_TB_LEGACY) {
-        TouchEnvUpdate(te5_, onset, 2.f * k5s_ - 1.f);
-        TouchOpenUpdate(te5_, true);
-        jt5_ = TouchTravel(te5_, EXP_TB_JENV_DEPTH_MIN, EXP_TB_JENV_DEPTH_MAX);
-      }
+      // Audition bank JOURNEY presets (SW3 MID): K5 = direction + speed of the morph travel (JourneyUpdate -> jrn_o_),
+      // always running on this instance (same onset; so a JOURNEY preset entering by K1 finds it current - no step at
+      // the zone change); only JOURNEY presets read it (LfoO2: m = clamp(S + jrn_o_, 0, 1)).
+      if (!lab_ && !EXP_TB_LEGACY) JourneyUpdate(onset);
       return;
     }
     env_.Step(loop_, onset, on_seen_, am, sr8_, ln_tau_ratio_, ln_loop_ratio_);
@@ -1507,8 +1500,8 @@ class Explorer : public Module {
   }
   // K2 offset of the K5 LFO in knob units for model m (Derive: p = clamp(p_knob + o2 span)): FM b swing
   // EXP_LFO_FB_SWING / span EXP_FBFM_FB_MAX, table morph swing EXP_LFO_MORPH_SWING / span 1; XBAND, BITTAB, DOWN: 0.
-  // Tables (zone z): legacy zones and audition-bank LFO presets the LFO on the morph; JOURNEY presets the K5 touch env
-  // travel jt5_ (>= 0, morph units); ANALOG presets 0 (K5 acts on the LP cutoff, TfUpdate).
+  // Tables (zone z): legacy zones and audition-bank LFO presets the LFO on the morph; JOURNEY presets the K5 JOURNEY
+  // travel offset jrn_o_ (morph units, either sign); ANALOG presets 0 (K5 acts on the LP cutoff, TfUpdate).
   inline float LfoO2(int m, int z) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
@@ -1518,11 +1511,54 @@ class Explorer : public Module {
     if (m == kWT) {
       if (EXP_TF_Q_ON_K5) return 0.f;                                  // K5 = LP Q on tables (temp)
       const int kd = TbKind(z);
-      if (kd == kTbJourney) return jt5_;                               // K5 touch env travel (audition bank)
+      if (kd == kTbJourney) return jrn_o_;                             // K5 JOURNEY travel offset (audition bank)
       if (kd == kTbAnalog) return 0.f;                                 // K5 LFO on the LP cutoff instead
       return lfo_s_ * EXP_LFO_MORPH_SWING;
     }
     return 0.f;
+  }
+
+  // K5 JOURNEY speed (audition bank JOURNEY presets): signed rate in morph units per second at t5 (-1..1).
+  //   a = |t5|, s = max(0, (a - Z) / (1 - Z)), T = T_SLOW (T_FAST / T_SLOW)^s (s for the whole journey 0 -> 1),
+  //   rate = min(a / Z, 1) / T, sign = sign(t5) (Z = EXP_TB_JRN_ZERO_FRAC); t5 == 0: 0 exactly.
+  static inline float JrnRate(float t5) {
+    using namespace explorer_k;
+    const float a = fabsf(t5);
+    if (a == 0.f) return 0.f;
+    float s = (a - EXP_TB_JRN_ZERO_FRAC) * (1.f / (1.f - EXP_TB_JRN_ZERO_FRAC));
+    if (s < 0.f) s = 0.f;
+    const float T = EXP_TB_JRN_T_SLOW * expf(s * logf(EXP_TB_JRN_T_FAST / EXP_TB_JRN_T_SLOW));
+    const float r = ((a < EXP_TB_JRN_ZERO_FRAC) ? a * (1.f / EXP_TB_JRN_ZERO_FRAC) : 1.f) / T;
+    return (t5 > 0.f) ? r : -r;
+  }
+  // K5 JOURNEY (SW3 MID with the bank; per 8 kHz sample in EnvUpdate, after the K4 touch env; whatever model runs, so a
+  // JOURNEY preset entering by K1 finds it current). The travel offset jrn_o_ (morph units) from the start S = the
+  // smoothed K2 (clamped 0..1):
+  //   t5 moved (smoothed, lands exactly) -> step = JrnRate(t5) / sr8 (one expf).
+  //   onset -> jrn_o_ = 0 (the position restarts at S).
+  //   forward step (step > 0):  jrn_o_ = min(jrn_o_ + step, max(jrn_o_, 1 - S))
+  //   backward step (step < 0): jrn_o_ = max(jrn_o_ + step, min(jrn_o_, -S))
+  //   noon (step 0): unchanged.
+  // So the travel stops where S + jrn_o_ reaches 1 / 0 and holds there (a reversed K5 moves it back at once), and only
+  // the travel changes jrn_o_ - K2 never does (a step never pulls back an offset K2 alone pushed past an end). Derive:
+  // m = clamp(S + jrn_o_, 0, 1). No envelope, no dynamics, no slide (the step is at most 1 / (0.3 s x 8 kHz) = 0.0004).
+  inline void JourneyUpdate(bool onset) {
+    const float t5 = 2.f * k5s_ - 1.f;
+    if (t5 != jrn_t5_) { jrn_t5_ = t5; jrn_step_ = JrnRate(t5) / sr8_; }
+    if (onset) jrn_o_ = 0.f;
+    const float S = Clamp01(k2s_);
+    const float st = jrn_step_;
+    if (st > 0.f) {
+      const float hi = 1.f - S;
+      float v = jrn_o_ + st;
+      if (v > hi) v = (jrn_o_ > hi) ? jrn_o_ : hi;
+      jrn_o_ = v;
+    } else if (st < 0.f) {
+      const float lo = -S;
+      float v = jrn_o_ + st;
+      if (v < lo) v = (jrn_o_ < lo) ? jrn_o_ : lo;
+      jrn_o_ = v;
+    }
   }
 
   // --- FM LAB helpers (SW3 DOWN instance) ---
@@ -1610,7 +1646,7 @@ class Explorer : public Module {
   //   DECAY g_d: PsUpdate's decay law (EXP_PS_DEC_LINEAR linear | EXP_PS_DEC_2POLE 2-pole | one-pole) toward 0, snaps
   //              to 0 within 0.02, holds. RISE g_r: one-pole toward 1 (tau T_r / EXP_ENV_TRAVEL_TAUS), snaps at 98 %.
   //   g_ds / g_rs = one-pole slid (ps_a_, tau EXP_PS_SLIDE_MS), land exactly. No LEAVE, no side state.
-  inline void TouchEnvUpdate(ExpTouchEnv& e, bool onset, float t4) {   // e = te_ (t4) or te5_ (t5)
+  inline void TouchEnvUpdate(ExpTouchEnv& e, bool onset, float t4) {   // e = te_ (t4; the instance is a parameter)
     using namespace explorer_k;
     constexpr float Z = EXP_SPEC_MORPH_ZONE;
     if (t4 != e.t) {
@@ -1666,7 +1702,7 @@ class Explorer : public Module {
   // Every K4 target of the running model reads the same o (o3_ / te_.o; FULL travel: target = bottom + o (K3 value -
   // bottom), as g_s before); SPECTRAL's density travel (time-scaled depth) is SPECTRAL's own (SpecWeights, from o_d /
   // o_r / w). Looping (retired LOOPING variant): not called; readers use o = 1.
-  inline void TouchOpenUpdate(ExpTouchEnv& e, bool run) {   // e = te_ (K4) or te5_ (K5 journeys)
+  inline void TouchOpenUpdate(ExpTouchEnv& e, bool run) {   // e = te_ (K4)
     using namespace explorer_k;
     if (!run) { e.Ld_init = true; return; }
     const float env = on_base_;
@@ -2680,46 +2716,6 @@ class Explorer : public Module {
     sp_m_ = m;
   }
 
-  // Audition bank NOISE LAYER on the 48 kHz wet (after the DC blocker, before the K3 2-pole LP / its saturation, so
-  // K3 / K4 colour it; wet only): one white source (LCG, uniform x sqrt(3) = unit RMS), three one-pole colours (LOW / MID
-  // lowpass, HIGH = white - lowpass; fixed unit-RMS gains), each x its level: linear ramp from the previous 8 kHz value to
-  // this one over the kFactor 48 kHz samples (levels from Process: share x band level, per colour). Every level 0 (this
-  // block and the ramp start): not run, the wet untouched.
-  void TbNoise(float* wet, size_t size) {
-    ExplorerTbRt& R = explorer_tb_rt;
-    const int nsub = (int)(size / kFactor);
-    bool any = false;
-    for (int c = 0; c < 3; c++) {
-      if (R.prev[c] != 0.f) any = true;
-      for (int j = 0; j < nsub && j < ExplorerTbRt::kSub; j++) if (R.lv[c][j] != 0.f) any = true;
-    }
-    if (!any) return;
-    constexpr float kInv = 1.f / (float)kFactor;
-    constexpr float kU = 1.7320508f / 2147483648.f;   // int32 -> uniform [-1, 1) x sqrt(3)
-    uint32_t x = R.rng;
-    float l0 = R.lp[0], l1 = R.lp[1], l2 = R.lp[2];
-    const float c0 = R.c[0], c1 = R.c[1], c2 = R.c[2];
-    const float g0 = R.g[0], g1 = R.g[1], g2 = R.g[2];
-    size_t n = 0;
-    for (int j = 0; j < nsub; j++) {
-      const int jj = (j < ExplorerTbRt::kSub) ? j : ExplorerTbRt::kSub - 1;
-      float v0 = R.prev[0], v1 = R.prev[1], v2 = R.prev[2];
-      const float d0 = (R.lv[0][jj] - v0) * kInv, d1 = (R.lv[1][jj] - v1) * kInv, d2 = (R.lv[2][jj] - v2) * kInv;
-      R.prev[0] = R.lv[0][jj]; R.prev[1] = R.lv[1][jj]; R.prev[2] = R.lv[2][jj];
-      for (int q = 0; q < kFactor; q++, n++) {
-        x = x * 1664525u + 1013904223u;
-        const float w = (float)(int32_t)x * kU;
-        l0 += c0 * (w - l0);
-        l1 += c1 * (w - l1);
-        l2 += c2 * (w - l2);
-        v0 += d0; v1 += d1; v2 += d2;
-        wet[n] += v0 * g0 * l0 + v1 * g1 * l1 + v2 * g2 * (w - l2);
-      }
-    }
-    R.rng = x;
-    R.lp[0] = l0; R.lp[1] = l1; R.lp[2] = l2;
-  }
-
   // Dampener (tables: fc = tpk_fc_, the knob value only): per band of slot o, hf = min(TB_FMAX, fc) / f'_k -> the table blend lo / x (BlendPick, read with
   // EXP_TB_BLEND) and the discrete table version (largest H <= hf, floor H = 1; read with EXP_TB_BLEND = false),
   // and the bit-table step count (largest S of 16 / 8 / 4 / 2 with (S/2) f'_k <= min(FOLD_LIMIT_HZ, fc), floor 2;
@@ -2859,7 +2855,7 @@ class Explorer : public Module {
       case kWT: {                          // morph m = K2: n0 = packed frame below, n1 = the frame above (n0 + 1;
                                            // a 1-frame preset: n0), p0 = fraction toward n1, p1 = 1 / zone storage
                                            // scale (WaveMorph MorphPos / Shape); audition bank: p2 = tonal gain,
-                                           // p3 = noise share at the position (linear between the two frames)
+                                           // p3 = blow amount b at the position (linear between the two frames)
         const int nf = TbFrames(zone);
         const float mm = Clamp01(k2 + o2);                // morph m in [0, 1]
         const float pos = (float)(nf - 1) * mm;
@@ -2871,9 +2867,9 @@ class Explorer : public Module {
         p.p0 = pos - (float)f0;
         p.p1 = 1.f / TbScale(zone);
         if (!EXP_TB_LEGACY) {
-          const float t0 = explorer_tb_tone[p.n0], z0 = explorer_tb_nzs[p.n0];
+          const float t0 = explorer_tb_tone[p.n0], b0 = explorer_tb_blow[p.n0];
           p.p2 = t0 + p.p0 * (explorer_tb_tone[p.n1] - t0);
-          p.p3 = z0 + p.p0 * (explorer_tb_nzs[p.n1] - z0);
+          p.p3 = b0 + p.p0 * (explorer_tb_blow[p.n1] - b0);
         }
         p.a = pos; p.b = mm; break;
       }
@@ -2889,25 +2885,13 @@ class Explorer : public Module {
     return p;
   }
 
-  // One 8 kHz sample of slot o: derive u_k, return the model's band sum sum_k w_k a_k W_k.
-  // Audition bank: also the slot's noise level per colour into rs_nz_ (ShapeK<kWT> leaves its side's level in nz_last_ /
-  // nz_col_; crossfaded with the same weights as the tone; 0 for every other model).
+  // One 8 kHz sample of slot o: derive u_k, return the model's band sum sum_k w_k a_k W_k. (A zone crossfade runs the
+  // entering side first: it advances the slot's BLOW jitter when its b > 0, the fading side then reads it - p.adv.)
   float RunSlot(int o, bool fading) {
-    using namespace explorer_k;
     if (!slot_on_[o]) { ResetSlotState(o); slot_on_[o] = true; }
     Prep(o, NeedsPhaseV(var_) || (fading && NeedsPhaseV(vfrom_)));
-    nz_last_ = 0.f;
     float sh = Shape(var_ >> 6, o, pn_);
-    if (!EXP_TB_LEGACY) {
-      rs_nz_[0] = rs_nz_[1] = rs_nz_[2] = 0.f;
-      if (nz_last_ != 0.f) rs_nz_[nz_col_] += (fading ? mg_ : 1.f) * nz_last_;
-    }
-    if (fading) {
-      nz_last_ = 0.f;
-      const float sf = Shape(vfrom_ >> 6, o, pf_);
-      sh = (1.f - mg_) * sf + mg_ * sh;
-      if (!EXP_TB_LEGACY && nz_last_ != 0.f) rs_nz_[nz_col_] += (1.f - mg_) * nz_last_;
-    }
+    if (fading) sh = (1.f - mg_) * Shape(vfrom_ >> 6, o, pf_) + mg_ * sh;
     return sh;
   }
 
@@ -3006,9 +2990,17 @@ class Explorer : public Module {
     const uint8_t* __restrict tlo  = tblo_[o];                // EXP_TB_BLEND: lower version, weight 1 - x
     const float*   __restrict tx   = tbx_[o];                 //               blend weight x toward lo + 1
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
-    // audition bank noise (tables only): mode of the preset while its share here is > 0 (0 = none), band level na
-    const int nzm = (M == kWT && !EXP_TB_LEGACY && p.p3 > 0.f) ? (int)EXP_TB_PRESETS[p.zone].nmode : 0;
-    float na = 0.f;
+    // audition bank BLOW (tables only, b = p.p3 > 0; 0 = the plain read, nothing below runs): per sounding band one LCG
+    // step -> the slot's jitter one-pole j_k (only when p.adv: this side advances it), read phase phi_k + b jg j_k
+    // (jg = EXP_TB_BLOW_DEPTH x the unit-RMS gain), wrapped to [0, 1) (floorf; a rounding 1.0 reads index 256 & 255 = 0).
+    const float bl = (M == kWT && !EXP_TB_LEGACY) ? p.p3 : 0.f;
+    ExplorerTbRt& R = explorer_tb_rt;
+    float* __restrict jl = R.jl[o];
+    const float jc = R.jc;
+    const float jk = bl * R.jg;                  // read offset per unit of j (cycles)
+    const bool  jadv = p.adv;
+    uint32_t    jx = R.rng;
+    constexpr float kBlowU = 1.7320508f / 2147483648.f;   // int32 -> uniform [-1, 1) x sqrt(3) (unit RMS)
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
@@ -3018,6 +3010,20 @@ class Explorer : public Module {
       }
       const float cr = ur[k], ci = ui[k];
       float W;
+      float wph = 0.f;                           // tables: read phase (phi_k; BLOW: + the jitter)
+      if (M == kWT) {
+        wph = phs[k];
+        if (bl > 0.f) {
+          float j = jl[k];
+          if (jadv) {
+            jx = jx * 1664525u + 1013904223u;
+            j += jc * ((float)(int32_t)jx * kBlowU - j);
+            jl[k] = j;
+          }
+          wph += jk * j;
+          wph -= floorf(wph);
+        }
+      }
       if (M == kFM) {
         // m = sin(2 pi pm + b (m1 + m2) / 2), W = cos(2 pi phi + I m); pm at r x the band's phase.
         const float pm = AccPhase(o, k, phs[k], p.p0);
@@ -3091,7 +3097,7 @@ class Explorer : public Module {
         const float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
         W = H + p.p1 * (cr - H);
       } else if (M == kWT && EXP_TB_BLEND) {     // WaveMorph's Shape, versions lo / lo + 1 blended (x)
-        const float ph = phs[k];
+        const float ph = wph;
         const float xi = ph * (float)EXP_TB_SIZE;
         const int   i0 = (int)xi;
         const float fr = xi - (float)i0;
@@ -3112,7 +3118,7 @@ class Explorer : public Module {
         }
         W = Wv * p.p1;
       } else if (M == kWT) {                     // WaveMorph's Shape: frames n0 / n0 + 1 of the packed tables
-        const float ph = phs[k];
+        const float ph = wph;
         const int lv = wlv[k];
         const int16_t* t0 = explorer_tb[p.n0][lv];
         const int16_t* t1 = explorer_tb[p.n1][lv];
@@ -3140,15 +3146,10 @@ class Explorer : public Module {
           W = Wf + pkg * (W - Wf);
         }
       }
-      if (M == kWT && nzm != 0)                  // audition bank noise level: w_k a_k (COLOURED) / w_k a_k |W_k| (PITCH)
-        na += (played ? wmid_[k] : 1.f) * a * ((nzm == kTbNzPitch) ? fabsf(W) : 1.f);
       acc += (played ? wmid_[k] : 1.f) * a * W;
     }
-    if (M == kWT && !EXP_TB_LEGACY) {            // audition bank: noise level of this side (share x band level) for
-      nz_last_ = p.p3 * na;                      // RunSlot, the preset's colour, and the tonal gain on the table output
-      nz_col_ = EXP_TB_PRESETS[p.zone].ncol;
-      acc *= p.p2;
-    }
+    if (M == kWT && bl > 0.f && jadv) R.rng = jx;   // BLOW: the LCG moved on
+    if (M == kWT && !EXP_TB_LEGACY) acc *= p.p2;    // audition bank: the tonal gain on the table output
     return acc;
   }
 
@@ -3604,8 +3605,8 @@ class Explorer : public Module {
   }
 
   // AUDITION BANK (EXP_TB_LEGACY = false): every preset of explorer_tables.h, frame by frame through the same steps:
-  // TbBankFrame (recipe at u -> A, B, peak 1) -> the preset's re-phase / RMS-match rules -> TbStore; tonal gain / noise
-  // share per frame into explorer_tb_tone / explorer_tb_nzs. RMS target = the plain saw built as legacy (zone 3 frame 1).
+  // TbBankFrame (recipe at u -> A, B, peak 1) -> the preset's re-phase / RMS-match rules -> TbStore; tonal gain / blow
+  // amount per frame into explorer_tb_tone / explorer_tb_blow. RMS target = the plain saw built as legacy (zone 3 frame 1).
   void BuildBank() {
     using namespace explorer_k;
     static_assert(EXP_SIN_SIZE == EXP_TB_TD_SIZE, "table build indexes explorer_sin_tab exactly (as wavemorph)");
@@ -3621,32 +3622,32 @@ class Explorer : public Module {
       tb_off_[z] = off;
       for (int f = 0; f < P.frames; f++) {
         const float u = (P.frames > 1) ? (float)f / (float)(P.frames - 1) : 0.f;
-        float tone = 1.f, nz = 0.f;
-        TbBankFrame(z, P, u, A, B, tone, nz, ckz, cki);
+        float tone = 1.f, bw = 0.f;
+        TbBankFrame(z, P, u, A, B, tone, bw, ckz, cki);
         if (P.rephase) TbRephase(A, B, P.rms);
         if (P.rms) TbRmsMatch(A, B, P.scale, rms_saw);
         TbStore(A, B, P.scale, off + f);
         explorer_tb_tone[off + f] = tone;
-        explorer_tb_nzs[off + f] = nz;
+        explorer_tb_blow[off + f] = bw;
       }
       off += P.frames;
     }
   }
-  // Frame of preset P at morph position u (0..1) -> A, B (peak 1), tonal gain, noise share. Segment i = the last stage
+  // Frame of preset P at morph position u (0..1) -> A, B (peak 1), tonal gain, blow amount. Segment i = the last stage
   // with pos <= u (< the last), t = (u - pos_i) / (pos_i+1 - pos_i):
   //   one stage / t = 0 / t = 1: that stage, generated directly;
   //   same generator and list at both stages: the parameter interpolated linearly, generated directly (a sweep);
   //   else: per harmonic, the two stages' magnitudes (each normalised to RMS 1; cached per segment) interpolated in dB:
   //     a_h = exp((1 - t) ln max(m0, F) + t ln max(m1, F)), F = EXP_TB_JOURNEY_FLOOR_DB; both <= F (or the result
   //     <= F): 0; sine phase; then peak 1.
-  //   tone / noise: linear in t.
-  void TbBankFrame(int z, const explorer_k::ExpTbPreset& P, float u, float* A, float* B, float& tone, float& nz,
+  //   tone / blow: linear in t.
+  void TbBankFrame(int z, const explorer_k::ExpTbPreset& P, float u, float* A, float* B, float& tone, float& bw,
                    int& ckz, int& cki) {
     using namespace explorer_k;
     if (P.nst == 1) {
       const ExpTbStage& S = P.st[0];
       TbStageSpec(S, S.p, A, B, true);
-      tone = S.tone; nz = S.noise;
+      tone = S.tone; bw = S.blow;
       return;
     }
     int i = 0;
@@ -3655,7 +3656,7 @@ class Explorer : public Module {
     const ExpTbStage& S1 = P.st[i + 1];
     const float t = Clamp01((u - S0.pos) / (S1.pos - S0.pos));
     tone = S0.tone + t * (S1.tone - S0.tone);
-    nz = S0.noise + t * (S1.noise - S0.noise);
+    bw = S0.blow + t * (S1.blow - S0.blow);
     if (t <= 0.f) { TbStageSpec(S0, S0.p, A, B, true); return; }
     if (t >= 1.f) { TbStageSpec(S1, S1.p, A, B, true); return; }
     if (S0.gen == S1.gen && S0.list == S1.list) { TbStageSpec(S0, S0.p + t * (S1.p - S0.p), A, B, true); return; }
@@ -3817,8 +3818,12 @@ class Explorer : public Module {
     s.tbk = (diag_tbz_ >= 0) ? TbKind(diag_tbz_) : -1;
     s.tq = (s.tbk == kTbAnalog) ? TbAnalogQ(kv[1]) : 0.f;
     s.tm = tb_m_now_;
-    s.t5gd = te5_.gd; s.t5Td = te5_.Td; s.t5gr = te5_.gr; s.t5Tr = te5_.Tr; s.t5w = te5_.w; s.t5o = te5_.o;
-    s.t5tr = jt5_;
+    {                                            // JOURNEY K5 at the knob: direction, whole-journey time (0 = still)
+      const float r = JrnRate(2.f * kv[4] - 1.f);
+      s.jdir = (r > 0.f) ? 1 : (r < 0.f) ? -1 : 0;
+      s.jT = (r != 0.f) ? 1.f / fabsf(r) : 0.f;
+    }
+    s.tb = tb_b_now_;
     s.mute = mute_;
     if (cs.Foot(0).rising) {
       s.n = ++diag_n_;
@@ -4002,9 +4007,8 @@ class Explorer : public Module {
   int   sp_nu_div_ = 0;            // samples until the next comb recompute while nu moves
   // SPECTRAL density travel (SpecTravel = te_.Travel, while kLSPEC runs; the depth caches live in te_)
   volatile float sp_tr_ = 0.f;     // density travel (K2 knob units): (1 - w) depth_d (1 - o_d) + w depth_r (1 - o_r)
-  // K4 / K5 TOUCH ENV (docs/DESIGN_PHILOSOPHY.md §12; ExpTouchEnv): te_ = K4 (t4; every ONE-SHOT K4 target), te5_ = K5
-  // (t5; SW3 MID audition bank JOURNEY morph, run only on SW3 MID with EXP_TB_LEGACY = false).
-  ExpTouchEnv te_, te5_;
+  // K4 TOUCH ENV (docs/DESIGN_PHILOSOPHY.md §12; ExpTouchEnv): te_ = K4 (t4; every ONE-SHOT K4 target).
+  ExpTouchEnv te_;
   float te_flin_ = 0.f, te_lnfl_ = 0.f;   // touch env (both instances): floor level (linear, ln) of EXP_SPEC_DYN_FLOOR_DB
   float te_iLr_ = 0.f, te_iGr_ = 0.f;     // L / G per neper above the floor
   // FM LAB ADDITIVE: weight caches (0 = current side, 1 = fading side), keys, STRETCH rho_m, ln m
@@ -4059,12 +4063,12 @@ class Explorer : public Module {
   float dfc_diag_ = 0.f;           // DIAG: the tables' dampener fc at the knob (Controls -> DiagControls)
   static_assert(ExplorerTbRt::kSub == kLadSub, "audition bank per-8 kHz-sample buffers = kLadSub");
   // SW1 MID audition bank (EXP_TB_LEGACY = false; SW3 MID instance)
-  float nz_last_ = 0.f;            // noise level of the last ShapeK<kWT> side (share x band level; 0 = none / other model)
-  int   nz_col_ = 0;               // its colour (kTbNcLow / Mid / High)
-  float rs_nz_[3] = {};            // RunSlot: the slot's noise level per colour (both crossfade sides, weighted)
-  volatile float jt5_ = 0.f;       // JOURNEY: K5 touch env travel5 (morph units, >= 0; LfoO2; computed always on SW3 MID)
+  float jrn_o_ = 0.f;              // JOURNEY K5: travel offset from S (morph units; JourneyUpdate, LfoO2), 0 on each onset
+  float jrn_step_ = 0.f;           // JOURNEY K5: offset step per 8 kHz sample (JrnRate(t5) / sr8; 0 = still)
+  float jrn_t5_ = 2.f;             // JOURNEY K5: t5 the step was computed for (2 = force)
   float tb_aw_ = 0.f;              // ANALOG weight on the LP this 8 kHz sample (TbAnalogW; 0 = not ANALOG)
   volatile float tb_m_now_ = 0.f;  // DIAG: applied morph m of the current table side (Process)
+  volatile float tb_b_now_ = 0.f;  // DIAG: applied blow amount b of the current table side (Process; 0 = none)
   int   diag_tbz_ = -1;            // DIAG: audition bank preset of the last Controls (-1 = not the bank's tables)
   float on_env_ = 0.f, on_gate_ = 0.f, on_base_ = 0.f;   // fast meter, gate meter, slow baseline (48 kHz)
   float on_env_a_ = 0.f, on_fall_a_ = 0.f;               // meter rise / gate fall coefficients (48 kHz)

@@ -194,7 +194,7 @@ const LFO_SHAPES = "CCW triangle | noon off | CW staircase 100/50/0 %; rate 0.2 
 const XMEAN = {
   explorer: {
     up:   ["FM ratio zone (14 ratios) | XBAND at full CW", "feedback b 0 → 1.5 (XBAND: inert)", "index: per-band cap, fc 150 Hz → 4 kHz (k3^0.5)", PS_UP, "LFO on feedback ±0.3: " + LFO_SHAPES, "dry → wet"],
-    mid:  ["audition bank, 15 presets (stepped, 1 ms crossfade): SAW PULSE (ANALOG) | PWM SYNC VOCAL (LFO) | GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN (JOURNEY) | PPG (LFO) | METAL (JOURNEY)", "LFO / JOURNEY: morph m 0 → 1 through the preset's frames (JOURNEY: where the K5 travel starts) | ANALOG: LP resonance Q 0.3 → 3", "2-pole LP 250 Hz → 16 kHz (dampener: static open)", PS_UP.replace("the K3 fc", "the 2-pole LP cutoff"), "LFO presets: LFO on morph ±0.15 | ANALOG: LFO on the LP cutoff (pluck side up × K3, swell side down) | JOURNEY: touch env on the morph (CCW pluck travels forward from K2, CW swell starts ahead and comes back; travel 0.12 → full journey with the time): " + LFO_SHAPES, "dry → wet"],
+    mid:  ["audition bank, 15 presets (stepped, 1 ms crossfade): SAW PULSE (ANALOG) | PWM SYNC VOCAL (LFO) | GLASS WOOD REED BRASS RASPY BREATH AIR ORGAN (JOURNEY) | PPG (LFO) | METAL (JOURNEY)", "LFO / JOURNEY: morph m 0 → 1 through the preset's frames (JOURNEY: start S of the K5 travel, moves the sound live) | ANALOG: LP resonance Q 0.3 → 3", "2-pole LP 250 Hz → 16 kHz (dampener: static open)", PS_UP.replace("the K3 fc", "the 2-pole LP cutoff"), "LFO presets: LFO on morph ±0.15 | ANALOG: LFO on the LP cutoff (pluck side up × K3, swell side down): " + LFO_SHAPES + " | JOURNEY: travel direction + constant speed from S, restarts at S on every onset (CCW backward | noon still | CW forward; whole journey 30 s just off noon → 0.3 s at the ends; holds at the end it reaches)", "dry → wet"],
     down: ["model: HARMONICS / FREQ SHIFT / INTERVAL", "HARMONICS n 1 → 6 | FREQ SHIFT ±800 Hz (noon 0) | INTERVAL −12 → +12 st", "HARMONICS blend to the fundamental | FREQ SHIFT fixed → proportional | INTERVAL ±50 cents", "inert on SW1 DOWN", "inert on SW1 DOWN", "dry → wet"],
   },
   lab: {
@@ -474,11 +474,14 @@ function explorerNow(m) {
     r[3] = `${ps} · fc ${hz(m.fce)}`;
     r[4] = lfo;
   } else if (m.sw1 === "mid" && m.tbz >= 0) {   // audition bank: "tab n/15 NAME kind" (m.zone)
-    r[1] = m.tbk === "ANALOG" ? `LP Q ${fmt(m.tq, 2)}` : `morph ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)}`;
+    r[1] = m.tbk === "ANALOG" ? `LP Q ${fmt(m.tq, 2)}`
+      : m.tbk === "JOURNEY" ? `start S ${fmt(m.b, 2)} · morph now ${fmt(m.tm, 2)} · blow ${fmt(m.tb, 2)}`
+      : `morph ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)}`;
     r[2] = `LP ${hz(m.fc)}`;
     r[3] = `${ps} · LP now ${hz(m.lfe)}`;
     r[4] = m.tbk === "JOURNEY"
-      ? `K5 touch env: pluck g ${fmt(m.t5gd, 2)} T ${fmt(m.t5Td, 2)} s · swell g ${fmt(m.t5gr, 2)} T ${fmt(m.t5Tr, 2)} s · w ${fmt(m.t5w, 2)} o ${fmt(m.t5o, 2)} · travel ${fmt(m.t5tr, 2)} → m ${fmt(m.tm, 2)}`
+      ? (m.jdir === 0 ? `travel still (noon) · morph ${fmt(m.tm, 2)}`
+          : `travel ${m.jdir > 0 ? "forward" : "backward"} · whole journey ${fmt(m.jT, 2)} s · morph ${fmt(m.tm, 2)}`)
       : `${lfo} ${m.tbk === "ANALOG" ? "on the LP cutoff" : "on the morph"}`;
   } else if (m.sw1 === "mid") {
     r[1] = `morph ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)}`;

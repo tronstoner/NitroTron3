@@ -62,7 +62,7 @@ constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number
 //                            values exact (approved, tuned there) - exactly the tables of 45c2f4e (byte-identical render).
 //   EXP_TB_LEGACY = false -> the AUDITION BANK (default): 15 data-driven presets, recipes in explorer_tables.h (one place;
 //                            a new preset / journey = data, not code), kinds LFO / JOURNEY / ANALOG (K2 / K5 per kind,
-//                            see explorer.h TABLES), noise layer per preset.
+//                            see explorer.h TABLES), blow amount per frame (phase jitter, EXP_TB_BLOW_*).
 // K1 = zone / preset (equal stepped zones, EXP_TB_ZONE_XFADE_MS crossfade on a change), K2 = morph m: position
 // (F_z - 1) m through the zone's frames, linear crossfade between the two adjacent frames (ANALOG: K2 = LP Q).
 // Built at Init into SDRAM (explorer_tb, int16, packed [frame][version][sample]). See explorer.h TABLES.
@@ -162,7 +162,7 @@ constexpr float EXP_TB_CLIP_H1        = 0.3f;    // clipper: 1: H1; 2..KNEE: FLA
 constexpr float EXP_TB_CLIP_FLAT      = 0.8f;    // (= WM_CLIP_FLAT)
 constexpr int   EXP_TB_CLIP_KNEE      = 24;      // (= WM_CLIP_KNEE)
 constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n without harmonics 1 .. this (= WM_PPGFB_SKIP)
-// --- AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): recipes / stages / noise per preset in explorer_tables.h ---
+// --- AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): recipes / stages / blow per preset in explorer_tables.h ---
 // Build (BuildBank, Init): every frame goes through the legacy pipeline (time-domain DFT or harmonic list -> peak 1 ->
 // the preset's re-phase / RMS-match / storage-cap rules -> 14 band-limited int16 versions). A frame between two key
 // stages: same generator (and list) at both stages -> the generator's PARAMETER is interpolated (a real sweep: formant
@@ -170,24 +170,31 @@ constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n withou
 // are interpolated in dB per harmonic (moving harmonic amplitudes; an absent partial grows from the floor below).
 constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spectrum: floor of the per-harmonic dB interpolation
                                                    // (a partial absent at one stage starts / ends here; at / below it: 0)
-// Noise layer (wet only; SW3 MID SW1 MID audition bank): ONE white source (32-bit LCG, uniform x sqrt(3) = unit RMS),
-// three one-pole colour filters (unit RMS for white input: fixed gain from the coefficient), per preset one colour.
-// Level per 8 kHz sample = share(m) x the band level of the tables path: sum over the running slot's bands of
-// w_k a_k (COLOURED) or w_k a_k |W_k| (PITCH-LOCKED: the table output per band), with the same slot / SW2 / output
-// gains as the tone; 0 in silence (silent bands). Added at 48 kHz after the DC blocker, BEFORE the K3 2-pole LP (K3 /
-// K4 colour it), linear ramp between the 8 kHz level values. Not run while every level is 0.
-constexpr float    EXP_TB_NOISE_LOW_HZ  = 400.f;    // Hz; LOW colour: one-pole lowpass
-constexpr float    EXP_TB_NOISE_MID_HZ  = 1500.f;   // Hz; MID colour: one-pole lowpass
-constexpr float    EXP_TB_NOISE_HIGH_HZ = 3000.f;   // Hz; HIGH colour: one-pole highpass (white - one-pole lowpass)
-constexpr uint32_t EXP_TB_NOISE_SEED    = 0x6D2B79F5u;   // LCG start state (x = 1664525 x + 1013904223)
-// JOURNEY presets: K5 = a SECOND touch env (docs/DESIGN_PHILOSOPHY.md §12; the K4 implementation, own instance, driven
-// by t5 = 2 k5 - 1; EXP_PS_* times, EXP_SPEC_MORPH_ZONE, EXP_SPEC_DYN_* dynamics as K4) on the morph position:
-//   m = clamp(k2 + travel5, 0, 1), travel5 = (1 - w5) depth_d5 (1 - o_d5) + w5 depth_r5 (1 - o_r5) (SpecTravel's
-//   structure): pluck travels FORWARD from K2 toward the journey end, swell starts ahead and comes back to K2.
-//   TIME-SCALED travel per side: depth = MIN + (MAX - MIN) clamp(ln(T / FAST) / ln(SLOW / FAST), 0, 1) over that side's
-//   EXP_PS_* range (pluck 0.45 .. 8 s, swell 0.01 .. 4 s). Noon = the slowest pluck (8 s, full depth), as K4.
-constexpr float    EXP_TB_JENV_DEPTH_MIN = 0.12f;   // morph units; travel at the shortest times (~1-2 of the 16 stages)
-constexpr float    EXP_TB_JENV_DEPTH_MAX = 1.0f;    // morph units; travel at the longest times (the full journey)
+// BLOW (wet only; SW3 MID SW1 MID audition bank; 2026-11-06, replaces the separate noise layer): per-band PHASE JITTER
+// of the table read. Per SW2 slot and band k: j_k = white noise (ONE 32-bit LCG, uniform x sqrt(3) = unit RMS, one step
+// per band) -> one-pole lowpass (cutoff EXP_TB_BLOW_FC, 8 kHz) -> unit RMS (fixed gain sqrt((2 - c) / c), c = the
+// one-pole coefficient). Read position = phi_k + b EXP_TB_BLOW_DEPTH j_k (cycles, wrapped), b = the blow amount at the
+// morph position (per-frame recipe value, explorer_tables.h; 0 = the plain read, bit-identical, jitter not run).
+// Table harmonic h is phase-modulated by 2 pi h b DEPTH j_k (RMS): its carrier falls to exp(-(2 pi h b DEPTH)^2 / 2)
+// = -4.34 (2 pi h b DEPTH)^2 dB, the rest of its power becomes a noise band around it - ~BLOW_FC wide while the carrier
+// holds, ~(2 pi h b DEPTH)^2 BLOW_FC once it is gone: every partial a noise band whose width grows with h (power kept).
+// DEPTH = 0.12 (2026-11-06): b = 1 = wind - every table harmonic from h 3 up has lost its carrier (h3 -22 dB, h4 -40,
+// h5 -62), h1 / h2 keep a breathy carrier (-2.5 / -10 dB), their noise bands (~1 kHz at h3) keep the surface's lowest
+// resonances. (0.35 would take h1 to -21 dB too, but then b 0.4 / 0.8 = already broadband hiss on every surface.)
+constexpr float    EXP_TB_BLOW_FC    = 200.f;   // Hz; jitter one-pole cutoff (lower = narrower noise bands per partial)
+constexpr float    EXP_TB_BLOW_DEPTH = 0.12f;   // cycles; RMS read offset at b = 1 (see above)
+constexpr uint32_t EXP_TB_BLOW_SEED  = 0x6D2B79F5u;   // LCG start state (x = 1664525 x + 1013904223)
+// JOURNEY presets: K5 = DIRECTION + constant SPEED of the morph travel (2026-11-06; replaces the second touch env).
+// t5 = 2 k5 - 1 (smoothed, lands exactly), a = |t5|:
+//   s = max(0, (a - ZERO_FRAC) / (1 - ZERO_FRAC)), T = T_SLOW (T_FAST / T_SLOW)^s   (time for the whole journey 0 -> 1)
+//   rate = min(a / ZERO_FRAC, 1) / T  morph units / s (noon exactly 0; linear 0 -> 1 / T_SLOW over a = 0 .. ZERO_FRAC,
+//                                     then exponential T_SLOW 30 s -> T_FAST 0.3 s at the ends; continuous)
+//   dir = sign(t5): CCW BACKWARD toward 0, CW FORWARD toward 1, noon still. No envelope, no dynamics.
+// Each onset: the offset restarts at 0 (position = S = the smoothed K2); per 8 kHz sample offset += dir rate / 8000,
+// stopping where S + offset reaches 0 / 1 (holds); morph m = clamp(S + offset, 0, 1) (explorer.h JourneyUpdate).
+constexpr float    EXP_TB_JRN_T_SLOW    = 30.f;    // s; whole journey just off noon (a = ZERO_FRAC)
+constexpr float    EXP_TB_JRN_T_FAST    = 0.3f;    // s; whole journey at full CCW / CW
+constexpr float    EXP_TB_JRN_ZERO_FRAC = 0.05f;   // |t5| over which the rate ramps 0 -> 1 / T_SLOW (noon still)
 // Bit table (BITTAB, Ataraxic Iteritas style): 16-step pattern per band cycle.
 // (PARKED, EXP_BITTAB_ENABLE.) K2 STEPS through EXP_BT_WAVES waveforms (equal zones): the 16 LFSR patterns, then SQR n = 1 .. EXP_BT_SQR_N_MAX;
 // a step = EXP_MODEL_XFADE_MS crossfade, no blend. K3 = step shape, continuous: CCW triangle (linear to the
