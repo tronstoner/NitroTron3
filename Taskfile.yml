@@ -76,6 +76,11 @@ tasks:
       - python3 tools/diag/log.py
     interactive: true
 
+  dev:
+    desc: Dev interface (tools/devtool) - serial log + flash button in the browser; prints its URL. Holds the serial port (no `task log` at the same time)
+    cmds:
+      - python3 tools/devtool/devtool.py
+
   # NitroTron3m (prototype: NitroTron3 on the Module system). INSTRUMENT and
   # NT3M_SLOT_B go on EVERY make call, or the profile stamp wipes build/ and the
   # flash step rebuilds another profile. Guitar: `task flash-nitrotron3m INSTRUMENT=guitar`.

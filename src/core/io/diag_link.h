@@ -31,6 +31,15 @@
 //    defines DIAG_GIT_HASH / DIAG_BUILD_TIME only when DIAG=1 (together with
 //    CT3_DIAG_BUILD).
 //
+// 4. Line commands (newline-terminated, '\r' ignored, unknown lines ignored):
+//      dfu   -> prints `DFU entering bootloader`, waits DFU_DELAY_MS (checked
+//               on later Polls, never a busy wait) so the line can go out,
+//               then stops ADC + audio and jumps to the Daisy bootloader the
+//               same way the shells' both-footswitch gesture does
+//               (System::ResetToBootloader(DAISY_INFINITE_TIMEOUT); no LED
+//               blink). Used by tools/devtool for gesture-free flashing.
+//    `?` keeps working as before (any '?' byte, no newline needed).
+//
 // Usage in a pedal shell:
 //   hw.seed.StartLog(false);             // USB CDC init (unchanged)
 //   DIAG_LINK_INIT();                    // after StartLog
@@ -41,7 +50,9 @@
 // flag), so those binaries are byte-identical.
 //
 // The USB receive callback runs in interrupt context: it only scans for '?'
-// and sets a volatile flag. Everything else happens in the main loop.
+// (volatile flag) and copies the bytes into a small single-producer /
+// single-consumer ring. Line assembly and command parsing happen in Poll()
+// (main loop).
 //
 // Requires daisy.h included before this file (DIAG builds).
 
@@ -63,6 +74,9 @@ namespace diag_link {
 
 static constexpr uint32_t LINK_DEAD_MS = 50;   // failing this long -> link dead
 static constexpr int      LINE_BUF     = 256;  // bytes per line incl. "\r\n"
+static constexpr uint32_t DFU_DELAY_MS = 20;   // let the DFU line go out before the jump
+static constexpr int      RX_RING      = 64;   // ISR -> main loop bytes (power of 2)
+static constexpr int      CMD_BUF      = 16;   // longest accepted command line
 
 // C++14 (no inline variables): shared state via function-local statics.
 struct State {
@@ -72,7 +86,24 @@ struct State {
   uint32_t drops        = 0;
   int      next_buf     = 0;
   char     buf[2][LINE_BUF];
+  // command line assembly (main loop only)
+  char     cmd[CMD_BUF];
+  int      cmd_len      = 0;
+  bool     cmd_overflow = false;     // line too long -> ignore until newline
+  bool     dfu_pending  = false;
+  uint32_t dfu_at       = 0;
 };
+// ISR -> main loop byte ring. The ISR only writes `head`, the main loop only
+// writes `tail`; both are 32-bit (atomic on the M7). Full ring -> bytes dropped.
+struct Rx {
+  volatile uint32_t head = 0;
+  volatile uint32_t tail = 0;
+  uint8_t           data[RX_RING];
+};
+inline Rx& RxRing() {
+  static Rx r;
+  return r;
+}
 inline State& St() {
   static State s;
   return s;
@@ -87,8 +118,17 @@ inline daisy::UsbHandle& Usb() {
 }
 
 inline void OnRx(uint8_t* buf, uint32_t* len) {
-  for (uint32_t i = 0; i < *len; i++)
+  Rx& r = RxRing();
+  uint32_t h = r.head;
+  for (uint32_t i = 0; i < *len; i++) {
     if (buf[i] == '?') Query() = true;
+    if (h - r.tail < (uint32_t)RX_RING) {
+      r.data[h & (RX_RING - 1)] = buf[i];
+      h++;
+    }
+  }
+  __asm__ volatile("" ::: "memory");   // data before head (same core: no DMB needed)
+  r.head = h;
 }
 
 inline void Init() {
@@ -131,15 +171,62 @@ inline void Print(const char* fmt, ...) {
   va_end(va);
 }
 
-// Main loop: on `?` re-arm a dead link and answer with the BUILD line.
-template <typename Seed>
-inline void Poll(Seed& /*seed*/, const char* pedal) {
-  if (!Query()) return;
-  Query() = false;
+// One complete command line (main loop). Unknown lines are ignored.
+inline void OnLine(const char* line) {
   State& s = St();
-  s.dead = false;
-  s.failing = false;
-  PrintLine("BUILD %s %s DIAG %s", pedal, DIAG_GIT_HASH, DIAG_BUILD_TIME);
+  if (line[0] == 'd' && line[1] == 'f' && line[2] == 'u' && line[3] == '\0') {
+    if (s.dfu_pending) return;
+    s.dead = false;      // the host is listening: give the line a chance
+    s.failing = false;
+    PrintLine("DFU entering bootloader");
+    s.dfu_pending = true;
+    s.dfu_at = daisy::System::GetNow();
+  }
+}
+
+// Main loop: drain the RX ring into command lines; on `?` re-arm a dead link
+// and answer with the BUILD line; a pending `dfu` jumps once DFU_DELAY_MS passed.
+template <typename Seed>
+inline void Poll(Seed& seed, const char* pedal) {
+  State& s = St();
+  Rx& r = RxRing();
+  const uint32_t h = r.head;
+  __asm__ volatile("" ::: "memory");   // head before data
+  uint32_t t = r.tail;
+  while (t != h) {
+    const char c = (char)r.data[t & (RX_RING - 1)];
+    t++;
+    if (c == '\n') {
+      if (!s.cmd_overflow) {
+        s.cmd[s.cmd_len] = '\0';
+        OnLine(s.cmd);
+      }
+      s.cmd_len = 0;
+      s.cmd_overflow = false;
+    } else if (c == '\r') {
+      // ignored (CRLF hosts)
+    } else if (s.cmd_len < CMD_BUF - 1) {
+      s.cmd[s.cmd_len++] = c;
+    } else {
+      s.cmd_overflow = true;
+    }
+  }
+  r.tail = t;
+
+  if (Query()) {
+    Query() = false;
+    s.dead = false;
+    s.failing = false;
+    PrintLine("BUILD %s %s DIAG %s", pedal, DIAG_GIT_HASH, DIAG_BUILD_TIME);
+  }
+
+  if (s.dfu_pending && daisy::System::GetNow() - s.dfu_at >= DFU_DELAY_MS) {
+    // Same exit as the shells' both-footswitch gesture (Hothouse::StopAdc =
+    // seed.adc.Stop(), Hothouse::StopAudio = seed.StopAudio()).
+    seed.adc.Stop();
+    seed.StopAudio();
+    daisy::System::ResetToBootloader(daisy::System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
+  }
 }
 
 }  // namespace diag_link

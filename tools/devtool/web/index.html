@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pedal Devtool</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="conn" id="conn" title="">
+    <span class="dot" id="conn-dot"></span>
+    <span class="conn-text" id="conn-text">connecting to devtool…</span>
+  </div>
+  <dl class="build" id="build">
+    <div><dt>Pedal</dt><dd id="b-pedal">–</dd></div>
+    <div><dt>Firmware</dt><dd id="b-hash">–</dd></div>
+    <div><dt>Built</dt><dd id="b-time">–</dd></div>
+  </dl>
+  <div class="flash-ctl">
+    <label class="visually-hidden" for="flash-pedal">Pedal to flash</label>
+    <select id="flash-pedal"></select>
+    <button id="flash-btn" class="primary" type="button">Flash</button>
+  </div>
+  <p class="note" id="b-note" hidden></p>
+</header>
+
+<details class="flash-panel" id="flash-panel" hidden>
+  <summary>
+    <span class="flash-badge" id="flash-badge">idle</span>
+    <span class="flash-msg" id="flash-msg"></span>
+    <span class="flash-time" id="flash-time"></span>
+  </summary>
+  <pre class="flash-out" id="flash-out"></pre>
+</details>
+
+<div class="layout">
+  <aside class="sidebar" aria-label="Constants">
+    <h2>Constants</h2>
+    <p class="placeholder">Live constants arrive in step 2.</p>
+  </aside>
+
+  <main class="logpanel">
+    <div class="toolbar">
+      <div class="filter">
+        <label class="visually-hidden" for="filter">Filter</label>
+        <input id="filter" type="search" placeholder="Filter (regex, case-insensitive)" spellcheck="false" autocomplete="off">
+        <span class="filter-mode" id="filter-mode"></span>
+      </div>
+      <div class="tools">
+        <span class="count" id="count">0 lines</span>
+        <button id="pause-btn" type="button" aria-pressed="false">Pause</button>
+        <button id="clear-btn" type="button">Clear view</button>
+      </div>
+    </div>
+    <div class="log" id="log" tabindex="0" aria-live="off"></div>
+    <button class="jump" id="jump" type="button" hidden>Jump to latest</button>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
