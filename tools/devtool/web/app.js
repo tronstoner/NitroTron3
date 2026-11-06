@@ -369,6 +369,26 @@ function applyDock() {
   el.drawer.classList.toggle("dock-right", right);
   document.getElementById("drawer-dock").textContent = right ? "Log bottom" : "Log right";
 }
+// right dock: drag the panel's left edge to resize (width remembered), 280 px .. 75 % of the window
+(function () {
+  const body = document.getElementById("drawer-body"), work = document.getElementById("work");
+  const g = document.createElement("div");
+  g.className = "log-vgrip"; g.title = "Drag to resize the log";
+  body.appendChild(g);
+  const clamp = (w) => Math.max(280, Math.min(w, window.innerWidth * 0.75));
+  let w = Number(store("devtool.logW")) || 480;
+  work.style.setProperty("--logw", clamp(w) + "px");
+  let x0 = 0, w0 = 0;
+  g.addEventListener("pointerdown", (e) => {
+    x0 = e.clientX; w0 = body.getBoundingClientRect().width; g.setPointerCapture(e.pointerId); g.classList.add("drag"); e.preventDefault();
+  });
+  g.addEventListener("pointermove", (e) => {
+    if (!g.classList.contains("drag")) return;
+    w = clamp(w0 + (x0 - e.clientX)); work.style.setProperty("--logw", w + "px");
+  });
+  const end = () => { if (g.classList.contains("drag")) { g.classList.remove("drag"); store("devtool.logW", String(Math.round(w))); } };
+  g.addEventListener("pointerup", end); g.addEventListener("pointercancel", end);
+})();
 document.getElementById("drawer-dock").addEventListener("click", () => {
   drawer.dock = drawer.dock === "right" ? "bottom" : "right";
   store("devtool.drawerDock", drawer.dock);

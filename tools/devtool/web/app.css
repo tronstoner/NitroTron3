@@ -567,7 +567,10 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .wt-tile.play2 { outline: 1px dashed var(--tc); }
 
 /* log docked right: a third column in the work area; the bottom drawer keeps only its status line */
-.work.logright { grid-template-columns: auto minmax(0, 1fr) minmax(320px, 34%); }
+.work.logright { grid-template-columns: auto minmax(0, 1fr) var(--logw, 480px); }
+.log-vgrip { display: none; position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 5; touch-action: none; }
+.work.logright .log-vgrip { display: block; }
+.log-vgrip:hover, .log-vgrip.drag { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 .work > .drawer-body { display: none; }
 .work.logright > .drawer-body { display: flex; border-top: 0; border-left: 1px solid var(--line); min-height: 0; background: var(--surface); }
 .drawer-dock { flex: none; border: 1px solid var(--line); background: none; padding: 1px 9px; font-size: 12px; border-radius: 6px; color: var(--dim); }
