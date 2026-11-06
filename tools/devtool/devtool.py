@@ -92,7 +92,8 @@ LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 CONST_SOURCES = {
     "nitrolab": ["pedals/nitrolab"],
     "chronotron3": ["pedals/chronotron3"],
-    "nitrotron3m": ["pedals/nitrotron3m", "pedals/nitrolab/modules/explorer_constants.h"],
+    "nitrotron3m": ["pedals/nitrotron3m", "pedals/nitrolab/modules/explorer_constants.h",
+                    "pedals/nitrolab/modules/explorer_tables.h"],
 }
 TUNE_DIR = os.path.join(REPO, "tune")
 SEND_MIN_S = 1.0 / 30.0   # throttle: at most ~30 command writes per second
@@ -473,7 +474,9 @@ class Tuner:
                 self.pending.clear()
                 self.last_send = now
                 self.sess.send(data)
-            if self.changes_due and now - self.changes_at >= CHANGES_WRITE_S:
+            # not while a `list` is coming in: half-synced values would overwrite the record before
+            # the T END archive check sees it (a long list - the per-preset constants - made this race real)
+            if self.changes_due and now - self.changes_at >= CHANGES_WRITE_S and self.state != "asking":
                 self.changes_due = False
                 self.changes_at = now
                 self._write_changes()
@@ -616,7 +619,7 @@ class Tuner:
                 "files": self.reg["files"], "problems": self.reg["problems"],
                 "state": self.state, "guard": self.guard, "override": self.override,
                 "writable": self.writable(), "note": self.note, "constants": consts, "docs": docs,
-                "pairs": self.reg.get("pairs", {}),
+                "pairs": self.reg.get("pairs", {}), "layout": self.reg.get("layout"),
                 "last_err": self.last_err}
 
     def snapshot(self):
@@ -1237,6 +1240,21 @@ def selftest():
                   "LFO_rate": ["EXP_LFO_HZ_MAX_CCW", "EXP_LFO_HZ_MIN", "EXP_LFO_HZ_MAX"],
                   "Live_level_range": ["EXP_SPEC_DYN_FLOOR_DB", "EXP_SPEC_DYN_TOP_DB"],
                   "Density_travel_by_env_time": ["EXP_SPEC_ENV_DEPTH_MIN", "EXP_SPEC_ENV_DEPTH_MAX"]}
+    fam = [c for c in reg["constants"] if c.get("preset")]
+    presets = sorted({(c["preset_index"], c["preset"]) for c in fam})
+    for _i, pn in presets:      # per-preset LFO rate pairs (explorer_tables.h @family)
+        want_pairs["%s_LFO_rate" % pn] = ["EXP_TB_%s_RATE_CCW" % pn, "EXP_TB_%s_RATE_CW" % pn]
+    byn = {c["name"]: c for c in reg["constants"]}
+    check(len(presets) == 16 and len(fam) == 16 * 7
+          and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_PWM_TIMBRE"]["default"] == 0.15
+          and byn["EXP_TB_LOFI_ENV"]["default"] is False and byn["EXP_TB_AIR_PITCH"]["default"] == 0.0,
+          "registry: @family per-preset tunables (16 presets x 7 fields, defaults from the EXP_TB_MOD rows)")
+    check(reg["layout"] and [p["key"] for p in byn["EXP_PS_SLIDE_MS"]["places"]] ==
+          ["2/fm/Touch env \u00b7 K4", "2/wt/Touch env \u00b7 K4", "3/2op/Touch env \u00b7 K4",
+           "3/spectral/Touch env \u00b7 K4", "3/additive/Touch env \u00b7 K4"]
+          and [p["key"] for p in byn["EXP_TB_PWM_TIMBRE"]["places"]] == ["2/wt/Presets"]
+          and all(c["places"] for c in reg["constants"]),
+          "registry: places from @at / @section (bench / mode / section), every nitrolab constant placed")
     check({k: v["members"] for k, v in reg["pairs"].items()} == want_pairs
           and reg["pairs"]["LFO_rate"]["kind"] == "knob" and reg["pairs"]["Live_level_range"]["kind"] == "range",
           "registry: @pair rows (members in end order, knob / range kind)")
@@ -1259,6 +1277,8 @@ def selftest():
     c0 = js["constants"][0]
     check(js.get("pairs", {}).get("LFO_rate", {}).get("members") == ["EXP_LFO_HZ_MAX_CCW", "EXP_LFO_HZ_MIN", "EXP_LFO_HZ_MAX"],
           "/api/registry: pairs included")
+    check((js.get("layout") or {}).get("title") == "NitroLab" and len(js["layout"]["benches"]) == 3,
+          "/api/registry: layout (benches / modes) included")
     check(st == 200 and all(c["value"] == c["default"] for c in js["constants"])
           and {"label", "unit", "range", "taper", "level", "file", "line", "section", "module"} <= set(c0),
           "/api/registry: values merged (= defaults), metadata fields")

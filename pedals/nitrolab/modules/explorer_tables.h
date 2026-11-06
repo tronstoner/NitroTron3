@@ -5,37 +5,32 @@
 // a new preset / journey is a new stage list + one EXP_TB_PRESETS entry, no code. Built at Init by BuildBank
 // (explorer.h) through the legacy table pipeline; see explorer.h TABLES for the render and the K2 / K5 law per kind.
 //
-// PRESET = name, kind, frame count, key stages, level rules (re-phase, RMS match, int16 scale), share.
-//   kind   LFO      K2 = morph through the frames, K5 = the K5 LFO on the morph (+- EXP_LFO_MORPH_SWING), as legacy
-//          JOURNEY  K2 = morph start S, K5 = direction + constant speed of the travel from S (EXP_TB_JRN_*, explorer.h
-//                   JourneyUpdate): CCW backward, noon still, CW forward; restarts at S on every onset
-//          ANALOG   one frame; K2 = 2-pole LP resonance Q (EXP_TF_Q_MIN .. EXP_TF_Q_MAX, exponential), K5 = the K5 LFO
-//                   on the LP cutoff (the SW3 MID FM placement: DampFmUpdate's octaves, explorer.h)
-//          LOFI     K2 = static morph position (no LFO / journey, nothing restarts), K5 = no job; the four LOFI stages
-//                   are set by their constants (explorer_constants.h EXP_TB_LOFI_*, explorer.h TABLES LOFI)
+// PRESET = name, kind, frame count, key stages, level rules (re-phase, RMS match, int16 scale), share, MOD (the K5 / touch
+//          env targets, EXP_TB_MOD; live per preset: see "Presets" below).
+//   kind   LFO      K2 = TIMBRE = morph through the frames, K5 = the K5 LFO (as SW3 MID FM: CCW triangle, noon off, CW
+//                   steps) on the preset's targets (MOD below)
+//          ANALOG   one frame; K2 = 2-pole LP resonance Q (EXP_TF_Q_MIN .. EXP_TF_Q_MAX, exponential), K5 = the K5 LFO on
+//                   the LP cutoff (the SW3 MID FM placement, explorer.h LfoFcOct; depths = MOD filter / filter swell)
+//          LOFI     K2 = static morph position, K5 = no job with the default MOD (all depths 0); the four LOFI stages are
+//                   set by their constants (explorer_constants.h EXP_TB_LOFI_*, explorer.h TABLES LOFI)
 //   (every kind but ANALOG: K2 stepped through the key stages with EXP_TB_K2_DISCRETE / EXP_TB_LOFI_K2_DISCRETE)
+//   (JOURNEY, K5 = direction + speed of a morph travel, was removed 2026-11-06: its presets are LFO presets now.)
 //   share  >= 0: the preset reads that (earlier) preset's frames instead of building its own; -1 = own frames.
-// STAGE  = position on the morph (0..1, first 0, last 1, ascending), generator + parameter p (or a harmonic list),
-//          tonal gain (render-time factor on the table output, 1 = the frame at the preset's level).
-//   Frame f of F sits at u = f / (F - 1). Between stage i and i + 1 (t = (u - pos_i) / (pos_i+1 - pos_i)):
-//     same generator (and the same list) -> the parameter p = p_i + t (p_i+1 - p_i), generated directly (a sweep);
-//     different generators -> per harmonic h: a_h = exp((1 - t) ln max(a_ih, F) + t ln max(a_i+1,h, F)) with each
-//                             stage's magnitudes at RMS 1 and F = EXP_TB_JOURNEY_FLOOR_DB (-60 dB); <= F -> 0;
-//                             sine phase (dB interpolation of the harmonic amplitudes, not a wave crossfade).
-//     u exactly on a stage: that stage, generated directly. tone: linear in t (per frame, then linear between the two
-//     frames at the morph position, per 8 kHz sample).
-//   Then the preset's level rules (legacy pipeline): peak 1 -> re-phase (sine phase, positive; magnitudes kept) ->
-//   RMS match to the plain saw + cap to the int16 headroom 32767 / scale -> 14 band-limited versions.
-// LOFI (2026-11-06; replaces the per-band LOFI mode of 57f7bfc and, later the same day, the four LOFI BITS / RATE / TABLE
-//   / TBITS presets): ONE preset at the CW end of K1 (K1 16), on LOFI SPECTRA (16 key stages CCW sparse -> CW dense, 31
-//   frames: each stage one frame, one in-between frame between neighbours). EXP_TB_LOFI_ENABLE = false: it reads clean
-//   (all four stages bypassed).
-
+//   MOD    EXP_TB_MOD(timbre, filter, filter swell, pitch, rate CCW, rate CW, env) - the DEFAULTS of the per-preset live
+//          tunables (section Presets below; explorer.h K5 / TABLES MOD for the laws):
+//            timbre        morph swing at full depth (+-, morph units 0..1)
+//            filter        LP cutoff swing, octaves: PLUCK side (K4 CCW of the morph zone) upward 0 .. filter x depth x k3
+//                          x (1 - o_d); with env: the ENV depth (+ filter x o octaves)
+//            filter swell  LP cutoff swing, octaves: SWELL side downward 0 .. -filter swell x depth x o_r (LFO only)
+//            pitch         vibrato depth, cents (+- c = pitch x l; env: + pitch x o)
+//            rate CCW / CW K5 LFO top rate (Hz) at K5 full CCW (triangle) / full CW (steps); the bottom = EXP_LFO_HZ_MIN
+//            env           false = the K5 LFO l drives the targets; true = the K4 touch env openness o (0..1) drives them
+//                          instead (m = K2 + timbre o, cutoff + filter o octaves, pitch + pitch o cents); K5 then no effect
 #include "explorer_constants.h"
 
 namespace explorer_k {
 
-enum : uint8_t { kTbLfo = 0, kTbJourney = 1, kTbAnalog = 2, kTbLofi = 3 };  // preset kind
+enum : uint8_t { kTbLfo = 0, kTbAnalog = 2, kTbLofi = 3 };  // preset kind (1 was JOURNEY, removed 2026-11-06)
 // Generators: spectral (harmonic amplitudes, sine phase) or time domain (DFT at EXP_TB_TD_SIZE, as legacy). Legacy
 // recipes are reused 1:1 (explorer.h TbStageSpec maps them onto the legacy TbSpectral / TbTimeDomain cases).
 enum : uint8_t {
@@ -64,9 +59,20 @@ struct ExpTbStage {
   int n;                   //           its length
   float tone;              // tonal gain at this stage
 };
+// Per-preset K5 / touch env targets (defaults of the per-preset live tunables, section Presets below).
+struct ExpTbMod {
+  float timbre;            // morph swing, morph units
+  float filter;            // LP cutoff, octaves: pluck side up (LFO) / the ENV depth
+  float filter_swell;      // LP cutoff, octaves: swell side down (LFO)
+  float pitch;             // vibrato, cents
+  float rate_ccw;          // K5 LFO top rate at K5 full CCW, Hz
+  float rate_cw;           // K5 LFO top rate at K5 full CW, Hz
+  bool  env;               // source: false = K5 LFO, true = K4 touch env openness o
+};
+#define EXP_TB_MOD(td, fd, fs, pd, rccw, rcw, env) ExpTbMod{ td, fd, fs, pd, rccw, rcw, env }
 struct ExpTbPreset {
   const char* name;
-  uint8_t kind;            // kTbLfo / kTbJourney / kTbAnalog / kTbLofi
+  uint8_t kind;            // kTbLfo / kTbAnalog / kTbLofi
   int frames;              // frames built (ANALOG: 1)
   const ExpTbStage* st;    // key stages
   int nst;
@@ -74,6 +80,7 @@ struct ExpTbPreset {
   bool rms;                // legacy RMS match to the plain saw (+ cap to the int16 headroom)
   float scale;             // int16 storage scale
   int share;               // -1 = own frames; >= 0 = read that earlier preset's frames (same frames / level rules)
+  ExpTbMod mod;            // K5 / touch env targets: the per-preset tunables' defaults (EXP_TB_MOD)
 };
 #define EXP_TB_L(arr) arr, (int)(sizeof(arr) / sizeof(arr[0]))
 #define EXP_TB_S(arr) arr, (int)(sizeof(arr) / sizeof(arr[0]))
@@ -120,7 +127,7 @@ constexpr ExpTbStage EXP_TB_ST_RASPY[]  = { { 0.f,  kTbgSaw,  1.f,             n
                                             { .5f,  kTbgSaw,  EXP_TB_FUZZ_EXP, nullptr, 0, 1.f },
                                             { 1.f,  kTbgClip, 0.f,             nullptr, 0, 1.f } };
 // BREATH: hollow tube / flute (ghost fifths: odd h 3 / 5, h1 weak) at every stage - the same frame all along
-// (its journey only moved the former blow amount; with BLOW gone K2 / K5 travel through identical frames).
+// (K2 / the timbre LFO travel through identical frames; filter / pitch depths are what move it).
 constexpr ExpTbStage EXP_TB_ST_BREATH[] = { { 0.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GHOST5), 1.f },
                                             { .5f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GHOST5), 1.f },
                                             { 1.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GHOST5), 1.f } };
@@ -169,22 +176,22 @@ constexpr ExpTbStage EXP_TB_ST_LOFISPEC[] = {
 // silence at the narrow end) -> their frames are the legacy zone 4 / 5 frames; every other preset (AIR and LOFI SPECTRA
 // too): re-phase + RMS match to the plain saw, scale EXP_TB_I16_SCALE_WIDE (headroom 5.0, as legacy zones 3 / 10).
 constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
-  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE,      -1 },
-  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1 },
-  { "WOOD",   kTbJourney,16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "REED",   kTbJourney,16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "BRASS",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "ORGAN",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "METAL",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "GLASS",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "RASPY",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "BREATH", kTbJourney,16, EXP_TB_S(EXP_TB_ST_BREATH), true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "AIR",    kTbJourney,16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
-  { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1 },
+  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f,  2.6f, 1.f,  0.f, 20.f, 20.f, false) },
+  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f,  2.6f, 1.f,  0.f, 20.f, 20.f, false) },
+  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "WOOD",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "REED",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "BRASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "ORGAN",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "METAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "GLASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "RASPY",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "BREATH", kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BREATH), true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "AIR",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false) },
+  { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f,  0.f,  0.f,  0.f, 20.f, 20.f, false) },
 };
 #undef EXP_TB_L
 #undef EXP_TB_S
@@ -208,6 +215,7 @@ constexpr bool ExpTbPresetOk(const ExpTbPreset& P, int z) {
     if (P.st[i].gen == kTbgList && (P.st[i].list == nullptr || P.st[i].n < 1)) return false;
     if (i > 0 && !(P.st[i].pos > P.st[i - 1].pos)) return false;
   }
+  if (!(P.mod.rate_ccw > 0.f) || !(P.mod.rate_cw > 0.f) || P.mod.pitch < 0.f) return false;   // MOD: rates > 0
   if (P.share >= 0) {
     if (P.share >= z) return false;
     const ExpTbPreset& Q = EXP_TB_PRESETS[P.share];
@@ -217,11 +225,68 @@ constexpr bool ExpTbPresetOk(const ExpTbPreset& P, int z) {
   return true;
 }
 constexpr bool ExpTbBankOk(int i = 0) { return (i >= EXP_TB_BANK_N) ? true : ExpTbPresetOk(EXP_TB_PRESETS[i], i) && ExpTbBankOk(i + 1); }
-static_assert(ExpTbBankOk(), "EXP_TB_PRESETS: invalid stage data (positions 0 .. 1 ascending, ANALOG 1 frame / stage, lists, share)");
+static_assert(ExpTbBankOk(), "EXP_TB_PRESETS: invalid stage data (positions 0 .. 1 ascending, ANALOG 1 frame / stage, lists, share, MOD rates)");
 static_assert(EXP_TB_BANK_N < 64, "VarKey holds the zone in 6 bits");
 // The LOFI stages run on preset z (a LOFI preset, EXP_TB_LOFI_ENABLE, the audition bank, in range).
 TUNABLE_CONSTEXPR_FN bool ExpTbLofiOn(int z) {   // (inline in DIAG builds: EXP_TB_LOFI_ENABLE is a live tunable)
   return !EXP_TB_LEGACY && EXP_TB_LOFI_ENABLE && z >= 0 && z < EXP_TB_BANK_N && EXP_TB_PRESETS[z].kind == kTbLofi;
+}
+
+// --- Presets ---
+// @section Presets
+// @at 2/wt
+// Per-preset live settings of the K5 LFO / touch env targets (2026-11-06): one tunable per preset and field, named
+// EXP_TB_<PRESET>_<FIELD>, declared by EXP_TB_MOD_DECLARE for every preset of EXP_TB_PRESET_MODS (K1 order = the
+// EXP_TB_PRESETS rows; a static_assert checks the names). DEFAULT = that field of the preset's EXP_TB_MOD(...) in
+// EXP_TB_PRESETS above (the single source of truth); normal builds: constexpr, DIAG builds: live. Laws: explorer.h
+// TABLES MOD. tools/devtool/registry.py reads the @family / @field lines and the EXP_TB_MOD rows (field order = the
+// EXP_TB_MOD arguments) and shows one panel per preset.
+// @family EXP_TB_ EXP_TB_MOD EXP_TB_PRESET_MODS
+// @field TIMBRE float @unit 0..1 @range 0 1 @taper lin @level live  Timbre depth: morph swing at full LFO depth (+-) / x o (env)
+// @field FILTER float @unit oct @range 0 6 @taper lin @level live  Filter depth: LP cutoff, pluck side upward (LFO) / + this x o (env)
+// @field FILTER_SWELL float @unit oct @range 0 4 @taper lin @level live  Filter depth, swell side: LP cutoff downward (LFO only)
+// @field PITCH float @unit cents @range 0 1200 @taper lin @level live  Pitch depth: vibrato +- this x l cents / + this x o (env)
+// @field RATE_CCW float @unit Hz @range 5 80 @taper log @level live @pair LFO_rate ccw  LFO rate at K5 full CCW (triangle)
+// @field RATE_CW float @unit Hz @range 5 80 @taper log @level live @pair LFO_rate cw  LFO rate at K5 full CW (steps)
+// @field ENV bool @unit bool @level live  Source ENV: the K4 touch env drives the targets instead of the K5 LFO
+constexpr bool ExpTbStrEq(const char* a, const char* b) {
+  return (*a != *b) ? false : (*a == 0) ? true : ExpTbStrEq(a + 1, b + 1);
+}
+#define EXP_TB_PRESET_MODS(X) \
+  X(0, SAW)                   \
+  X(1, PULSE)                 \
+  X(2, PWM)                   \
+  X(3, SYNC)                  \
+  X(4, VOCAL)                 \
+  X(5, WOOD)                  \
+  X(6, REED)                  \
+  X(7, BRASS)                 \
+  X(8, ORGAN)                 \
+  X(9, PPG)                   \
+  X(10, METAL)                \
+  X(11, GLASS)                \
+  X(12, RASPY)                \
+  X(13, BREATH)               \
+  X(14, AIR)                  \
+  X(15, LOFI)
+#define EXP_TB_MOD_DECLARE(Z, N)                                                                      \
+  static_assert(ExpTbStrEq(EXP_TB_PRESETS[Z].name, #N), "EXP_TB_PRESET_MODS: name / index mismatch"); \
+  TUNABLE(float, EXP_TB_##N##_TIMBRE, EXP_TB_PRESETS[Z].mod.timbre);                                  \
+  TUNABLE(float, EXP_TB_##N##_FILTER, EXP_TB_PRESETS[Z].mod.filter);                                  \
+  TUNABLE(float, EXP_TB_##N##_FILTER_SWELL, EXP_TB_PRESETS[Z].mod.filter_swell);                      \
+  TUNABLE(float, EXP_TB_##N##_PITCH, EXP_TB_PRESETS[Z].mod.pitch);                                    \
+  TUNABLE(float, EXP_TB_##N##_RATE_CCW, EXP_TB_PRESETS[Z].mod.rate_ccw);                              \
+  TUNABLE(float, EXP_TB_##N##_RATE_CW, EXP_TB_PRESETS[Z].mod.rate_cw);                                \
+  TUNABLE(bool, EXP_TB_##N##_ENV, EXP_TB_PRESETS[Z].mod.env);
+EXP_TB_PRESET_MODS(EXP_TB_MOD_DECLARE)
+static_assert(EXP_TB_BANK_N == 16, "EXP_TB_PRESET_MODS lists 16 presets");
+// The current values of every preset's MOD tunables (explorer.h: Init, and DIAG TunableRefresh after a set).
+inline void ExpTbModRead(ExpTbMod* out) {
+#define EXP_TB_MOD_READ(Z, N)                                                                             \
+  out[Z] = ExpTbMod{ EXP_TB_##N##_TIMBRE, EXP_TB_##N##_FILTER, EXP_TB_##N##_FILTER_SWELL, EXP_TB_##N##_PITCH, \
+                     EXP_TB_##N##_RATE_CCW, EXP_TB_##N##_RATE_CW, EXP_TB_##N##_ENV };
+  EXP_TB_PRESET_MODS(EXP_TB_MOD_READ)
+#undef EXP_TB_MOD_READ
 }
 
 }  // namespace explorer_k

@@ -129,6 +129,7 @@ const state = {
   clearedAt: 0,           // "Clear view": hide lines up to this server time
   stick: true,            // auto-scroll while the view is at the bottom
   filter: { text: "", rx: null, isRegex: true },
+  active: null,           // the pedal's current place from its state lines: {bench, sw1, preset}
 };
 
 function store(key, val) {
@@ -448,15 +449,17 @@ el.flashBtn.addEventListener("click", startFlash);
 // ---------------------------------------------------------------------------
 // Current K1 slot (top bar), parsed from the pedal's DIAG state lines:
 //   explorer  `XP <auto|#n> K1 .. K2 .. K3 .. K4 .. K5 .. SW1 <MID> oct <played> | <selection> ...`
-//             selection: `tab <n>/<N> <NAME> <LFO|JOURNEY|ANALOG|LOFI> ...` (+ `step <i>/<n>` on the LOFI slot),
+//             selection: `tab <n>/<N> <NAME> <LFO|ANALOG|LOFI> ...` (+ `step <i>/<n>` on the LOFI slot),
 //             `WT/<zone>`, `LAB SPEC bank <n>/9 <NAME>`, `LAB <zone>`, else the model word (FM, XBAND-FM, ...)
 //   armitage  `<auto|#n> K1 .. SW1 <..> <MODE> h .. SW2 <..> | ...`
-// Only these lines change it; it stays through reconnects.
+// Only these lines change it; it stays through reconnects. The same lines give the active place for the
+// tree (state.active: bench id from the line type - armitage 1, `LAB ...` 3, else 2 -, mode from SW1 via
+// the registry layout, K1 preset from `tab n/N NAME`).
 // ---------------------------------------------------------------------------
 const XP_RE = /(?:^|\s)XP (?:auto|#\d+) K1 ([\d.]+) K2 [\d.]+ K3 [\d.]+ K4 [\d.]+ K5 [\d.]+ SW1 (\w+) oct (\w+) \| (.*)$/;
 const AR_RE = /(?:^|\s)(?:auto|#\d+) K1 ([\d.]+) K2 [\d.]+ K3 [\d.]+ K4 [\d.]+ K5 [\d.]+ SW1 (\w+) (\w+) h ?[\d.]+ SW2 (\w+) \| /;
 function slotSelection(rest) {
-  let m = /^tab (\d+)\/(\d+) (.+?) (LFO|JOURNEY|ANALOG|LOFI)\b(.*)$/.exec(rest);
+  let m = /^tab (\d+)\/(\d+) (.+?) (LFO|ANALOG|LOFI)\b(.*)$/.exec(rest);
   if (m) {
     const st = /\bstep (\d+)\/(\d+)/.exec(m[5]);
     return "K1 " + m[1] + "/" + m[2] + "  " + m[3] + " (" + m[4] + ")" + (st ? "  K2 stage " + st[1] + "/" + st[2] : "");
@@ -468,9 +471,13 @@ function slotSelection(rest) {
 }
 function parseSlot(text) {
   let m = XP_RE.exec(text);
-  if (m) return { what: slotSelection(m[4]), k1: Number(m[1]), sw1: m[2], extra: "oct " + m[3] };
+  if (m) {
+    const tb = /^tab \d+\/\d+ (.+?) (?:LFO|ANALOG|LOFI)\b/.exec(m[4]);
+    return { what: slotSelection(m[4]), k1: Number(m[1]), sw1: m[2], extra: "oct " + m[3],
+             bench: /^LAB /.test(m[4]) ? "3" : "2", preset: tb ? tb[1] : null };
+  }
   m = AR_RE.exec(text);
-  if (m) return { what: "armitage " + m[3], k1: Number(m[1]), sw1: m[2], extra: "SW2 " + m[4] };
+  if (m) return { what: "armitage " + m[3], k1: Number(m[1]), sw1: m[2], extra: "SW2 " + m[4], bench: "1", preset: null };
   return null;
 }
 function onSlotLine(text, t) {
@@ -479,6 +486,11 @@ function onSlotLine(text, t) {
   el.slotV.textContent = p.what;
   el.slotX.textContent = "K1 " + fmtNum(p.k1, "knob") + "  SW1 " + p.sw1 + "  " + p.extra + "  at " + fmtTime(t);
   el.slotV.parentNode.title = text;
+  const a = state.active;
+  if (!a || a.bench !== p.bench || a.sw1 !== p.sw1 || a.preset !== p.preset) {
+    state.active = { bench: p.bench, sw1: p.sw1, preset: p.preset };
+    renderActive();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +525,33 @@ const tun = {
   rowsKey: "",
 };
 
-function secKey(c) { return c.module + "/" + c.section; }
+// Tree keys. With a registry layout (NitroLab: benches / modes, registry.py LAYOUT) a constant sits in one
+// leaf per place (`<bench>/<mode>/<section>`, c.places); without places it falls back to module / section.
+function fbKey(c) { return c.module + "/" + (c.display_section || c.section); }
+function keysOf(c) { return c.places && c.places.length ? c.places.map((p) => p.key) : [fbKey(c)]; }
+function secKey(c) {                     // the primary key (changes panel, search groups): the active place first
+  const ks = keysOf(c);
+  const a = state.active && activeModeId();
+  if (a) { const hit = ks.find((k) => k.startsWith(a + "/")); if (hit) return hit; }
+  return ks[0];
+}
+function layoutOf() { return (tun.snap && tun.snap.layout) || null; }
+function benchOf(id) { const L = layoutOf(); return L ? L.benches.find((b) => b.id === id) : null; }
+function placeName(bench, mode) {
+  const b = benchOf(bench);
+  const m = b && b.modes.find((x) => x.id === mode);
+  return (b ? b.name : "Bench " + bench) + " \u00b7 " + (m ? m.name : mode);
+}
+function activeModeId() {               // "<bench>/<mode>" of the pedal's current state, or null
+  const a = state.active, b = a && benchOf(a.bench);
+  if (!b) return null;
+  const m = b.modes.find((x) => x.sw1 === a.sw1);
+  return m ? b.id + "/" + m.id : null;
+}
+function sectionOrder(title) {           // within a mode: by the knob in the title (K1 .. K6), then the rest
+  const m = /\bK(\d)\b/.exec(title || "");
+  return m ? Number(m[1]) : 9;
+}
 function isChanged(c) {
   if (c.value === null || c.value === undefined || c.default === null) return false;
   if (c.type === "float") return Math.fround(c.value) !== Math.fround(c.default);
@@ -550,7 +588,7 @@ function onTun(snap) {
   const key = snap.pedal + "|" + snap.constants.map((c) => c.name).join(",");
   if (key !== tun.structKey) {
     tun.structKey = key;
-    const secs = snap.constants.map(secKey);
+    const secs = snap.constants.flatMap(keysOf);
     if (!secs.includes(tun.sel)) tun.sel = secs[0] || "";
     renderTree();
     renderRows(true);
@@ -625,25 +663,47 @@ el.guardBtn.addEventListener("click", () => {
 });
 
 // --- tree ---------------------------------------------------------------
-function treeGroups() {
+function treeGroups() {                  // fallback: module -> section (constants without places)
   const s = tun.snap;
   const mods = new Map();       // module -> Map(section -> [constants])
   for (const c of s.constants) {
+    if (c.places && c.places.length) continue;
     if (!mods.has(c.module)) mods.set(c.module, new Map());
     const m = mods.get(c.module);
-    if (!m.has(c.section)) m.set(c.section, []);
-    m.get(c.section).push(c);
+    const sec = c.display_section || c.section;
+    if (!m.has(sec)) m.set(sec, []);
+    m.get(sec).push(c);
   }
   return mods;
+}
+
+function treeButton(key, title, list) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "t-sec";
+  b.dataset.key = key;
+  b.title = title || "(no section)";
+  const t = document.createElement("span");
+  t.className = "t-title";
+  t.textContent = title || "(no section)";
+  const chg = document.createElement("span");
+  chg.className = "t-chg";
+  const n = document.createElement("span");
+  n.className = "t-n";
+  b.append(t, chg, n);
+  b.addEventListener("click", () => selectSection(key));
+  b._list = list;
+  return b;
 }
 
 function renderTree() {
   el.tree.textContent = "";
   const s = tun.snap;
   if (!s) return;
+  const L = layoutOf();
   const ped = document.createElement("div");
   ped.className = "t-pedal";
-  ped.textContent = s.pedal;
+  ped.textContent = L ? L.title : s.pedal;
   el.tree.appendChild(ped);
   if (!s.constants.length) {
     const e = document.createElement("div");
@@ -651,32 +711,71 @@ function renderTree() {
     e.textContent = "No live constants in this pedal's files.";
     el.tree.appendChild(e);
   }
+  if (L) {
+    for (const b of L.benches) {
+      const bh = document.createElement("div");
+      bh.className = "t-bench";
+      bh.dataset.bench = b.id;
+      bh.textContent = b.name;
+      bh.title = "SW3 " + b.sw3;
+      el.tree.appendChild(bh);
+      if (!b.modes.length) {
+        const e = document.createElement("div");
+        e.className = "t-empty";
+        e.textContent = "No live constants yet.";
+        el.tree.appendChild(e);
+      }
+      for (const m of b.modes) {
+        const mid = b.id + "/" + m.id;
+        const mh = document.createElement("div");
+        mh.className = "t-mode";
+        mh.dataset.mode = mid;
+        mh.textContent = m.name;
+        mh.title = "SW1 " + m.sw1;
+        el.tree.appendChild(mh);
+        const secs = new Map();   // section -> [constants], file order
+        for (const c of s.constants)
+          for (const p of c.places || [])
+            if (p.bench === b.id && p.mode === m.id) {
+              if (!secs.has(p.section)) secs.set(p.section, []);
+              secs.get(p.section).push(c);
+            }
+        if (!secs.size) {
+          const e = document.createElement("div");
+          e.className = "t-empty t-empty-mode";
+          e.textContent = "No live constants.";
+          el.tree.appendChild(e);
+        }
+        const order = [...secs.keys()].map((t, i) => [t, i])
+          .sort((x, y) => (sectionOrder(x[0]) - sectionOrder(y[0])) || (x[1] - y[1])).map((x) => x[0]);
+        for (const sec of order) el.tree.appendChild(treeButton(mid + "/" + sec, sec, secs.get(sec)));
+      }
+    }
+  }
   for (const [mod, secs] of treeGroups()) {
     const m = document.createElement("div");
     m.className = "t-mod";
-    m.textContent = mod;
+    m.textContent = L ? mod + " (no bench tag)" : mod;
     el.tree.appendChild(m);
-    for (const [sec, list] of secs) {
-      const key = mod + "/" + sec;
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "t-sec";
-      b.dataset.key = key;
-      b.title = sec || "(no section)";
-      const t = document.createElement("span");
-      t.className = "t-title";
-      t.textContent = sec || "(no section)";
-      const chg = document.createElement("span");
-      chg.className = "t-chg";
-      const n = document.createElement("span");
-      n.className = "t-n";
-      b.append(t, chg, n);
-      b.addEventListener("click", () => selectSection(key));
-      el.tree.appendChild(b);
-      b._list = list;
-    }
+    for (const [sec, list] of secs) el.tree.appendChild(treeButton(mod + "/" + sec, sec, list));
   }
   updateTreeCounts();
+  renderActive();
+}
+
+// The pedal's current place (state lines): bench / mode headers and their sections marked, and the K1
+// preset's panel in the rows.
+function renderActive() {
+  const a = state.active;
+  const am = activeModeId();
+  for (const e of el.tree.querySelectorAll(".t-bench")) e.classList.toggle("active", !!a && e.dataset.bench === a.bench);
+  for (const e of el.tree.querySelectorAll(".t-mode")) e.classList.toggle("active", e.dataset.mode === am);
+  for (const e of el.tree.querySelectorAll(".t-sec")) e.classList.toggle("active", !!am && e.dataset.key.startsWith(am + "/"));
+  for (const e of el.rows.querySelectorAll(".grp-title[data-preset]")) {
+    const on = !!a && a.preset === e.dataset.preset && am !== null && (tun.sel || "").startsWith(am + "/");
+    e.classList.toggle("active", on);
+    e.querySelector(".now").textContent = on ? "now on K1" : "";
+  }
 }
 
 function updateTreeCounts() {
@@ -730,29 +829,47 @@ function renderRows(force) {
     h.textContent = "Search: " + list.length + (list.length === 1 ? " match" : " matches");
     p.textContent = q;
   } else {
-    list = s.constants.filter((c) => secKey(c) === tun.sel);
+    list = s.constants.filter((c) => keysOf(c).includes(tun.sel));
     const c0 = list[0];
-    h.textContent = c0 ? (c0.section || "(no section)") : "No section selected";
-    p.textContent = c0 ? c0.module + " - " + c0.file : "";
+    const pl = c0 && (c0.places || []).find((x) => x.key === tun.sel);
+    h.textContent = c0 ? (pl ? pl.section : (c0.display_section || c0.section || "(no section)")) : "No section selected";
+    p.textContent = c0 ? (pl ? placeName(pl.bench, pl.mode) + " - " + c0.module : c0.module + " - " + c0.file) : "";
   }
   h.title = h.textContent;
   p.title = p.textContent;
   el.secHead.append(h, p);
   el.navToggle.textContent = "Sections";
-  let lastGroup = null;
+  let lastGroup = null, lastPreset = null;
   const frag = document.createDocumentFragment();
   const done = new Set();
   const shown = [];
+  const inList = new Set(list.map((c) => c.name));
   for (const c of list) {
     if (done.has(c.name)) continue;
     if (q && secKey(c) !== lastGroup) {
       lastGroup = secKey(c);
       const g = document.createElement("div");
       g.className = "grp-title";
-      g.textContent = c.module + " / " + (c.section || "(no section)");
+      const pl = (c.places || []).find((x) => x.key === lastGroup);
+      g.textContent = pl ? placeName(pl.bench, pl.mode) + " / " + pl.section : c.module + " / " + (c.display_section || c.section || "(no section)");
+      frag.appendChild(g);
+      lastPreset = null;
+    }
+    if (c.preset && c.preset !== lastPreset) {   // per-preset panel (registry family): K1 position + name
+      lastPreset = c.preset;
+      const g = document.createElement("div");
+      g.className = "grp-title preset-grp";
+      g.dataset.preset = c.preset;
+      const t = document.createElement("span");
+      t.textContent = "K1 " + (c.preset_index + 1) + " \u00b7 " + c.preset;
+      const now = document.createElement("span");
+      now.className = "now";
+      g.append(t, now);
       frag.appendChild(g);
     }
-    const P = pairOf(c);
+    let P = pairOf(c);
+    // a pair whose members do not all act in this place: only its members here, as single rows if < 2
+    if (P && !q) { const mem = P.members.filter((n) => inList.has(n)); P = mem.length >= 2 ? Object.assign({}, P, { members: mem }) : null; }
     if (P) {
       for (const n of P.members) { done.add(n); shown.push(n); }
       frag.appendChild(makePairRow(c.pair.id, P));
@@ -770,7 +887,28 @@ function renderRows(force) {
   }
   el.rows.appendChild(frag);
   for (const n of shown) updateRow(n);
+  renderActive();
   if (!force) el.viewConst.scrollTop = scroll;
+}
+
+// "Shared": the other places a constant acts in (Bench · mode), for the row head / explanation.
+function sharedWith(c) {
+  if (!c.places || c.places.length < 2) return [];
+  const cur = c.places.find((x) => x.key === tun.sel);
+  return c.places.filter((x) => x !== cur && !(cur && x.bench === cur.bench && x.mode === cur.mode))
+    .map((x) => placeName(x.bench, x.mode));
+}
+function markShared(h, exp, names) {
+  if (!names.length) return;
+  const b = document.createElement("span");
+  b.className = "badge shared";
+  b.textContent = "shared";
+  b.title = "Also acts on: " + names.join(", ") + " (one value, changed everywhere)";
+  h.head.querySelector(".flags").prepend(b);
+  const d = document.createElement("div");
+  d.className = "doc-h";
+  d.textContent = "Shared with " + names.join(", ") + " - one value, changed everywhere.";
+  exp.prepend(d);
 }
 
 // Row head: twisty, label, (kind), name(s), message slot, changed + level badges. Click / Enter folds `exp`.
@@ -959,6 +1097,7 @@ function makeTRow(c) {
   exp.className = "texp";
   exp._docs = new Set();
   explainInto(exp, c, "");
+  markShared(h, exp, sharedWith(c));
   wireExpander(h, exp);
   row.append(h.head, ctl, exp);
   tun.rowEls.set(c.name, r);
@@ -1090,6 +1229,7 @@ function makePairRow(id, P) {
   exp.className = "texp";
   exp._docs = new Set();
   members.forEach((c) => explainInto(exp, c, c.pair.end_label + " - " + c.name + " - " + c.label));
+  markShared(h, exp, [...new Set(members.flatMap(sharedWith))]);
   wireExpander(h, exp);
   row.append(h.head, ctl, exp);
   return row;

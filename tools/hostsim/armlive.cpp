@@ -225,7 +225,7 @@ static const char* ModeName(int m) {
 // Explorer / FM LAB DIAG second half, as pedals/nitrolab/main.cpp prints it
 // (same branches and names; %.2f instead of the firmware's FLT_FMT(2) macros).
 static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
-  char env[256], line[384], te[96];
+  char env[256], line[512], te[96];
   const char* lfo = d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off";
   // K4 touch env (every ONE-SHOT model; SPECTRAL adds tr): pluck g / T, swell g / T, blend w, live level L, openness o
   snprintf(te, sizeof te, " gd%.2f Td%.2f gr%.2f Tr%.2f w%.2f L%.2f o%.2f", d.sgd, d.sTd, d.sgr, d.sTr, d.sw, d.sL, d.so);
@@ -239,11 +239,8 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(env, sizeof env, "%s lfo %s d%.2f >%.2f %.2fHz", te, lfo, d.lfod, d.llfd, d.lfohz);
   else if (d.sw1 == 0 || d.addz >= 0)
     snprintf(env, sizeof env, "%s fce %d lfo %s d%.2f %.2fHz", te, (int)(d.fce + 0.5f), lfo, d.lfod, d.lfohz);
-  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // audition bank JOURNEY: + start S, K5 direction /
-    snprintf(env, sizeof env, "%s S%.2f dir %s rate%.2fs pos%.2f", te, d.b,   // whole-journey s, morph now
-             d.jdir > 0 ? "fwd" : d.jdir < 0 ? "back" : "still", d.jT, d.tm);
-  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbLofi)      // audition bank LOFI slot: touch env only
-    snprintf(env, sizeof env, "%s", te);
+  else if (d.tbz >= 0 && d.tenv)                           // audition bank, MOD source ENV: K5 does nothing
+    snprintf(env, sizeof env, "%s lfo -", te);
   else if (d.sw1 == 1)
     snprintf(env, sizeof env, "%s lfo %s d%.2f %.2fHz", te, lfo, d.lfod, d.lfohz);
   else
@@ -268,25 +265,24 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(line, sizeof line, "FM r%.2f b%.2f fc %d%s mute %s", d.a, d.b, (int)(d.fc + 0.5f), env, mu);
   else if (d.model == Explorer::kXFM)
     snprintf(line, sizeof line, "XBAND-FM n%d I%.2f fc %d%s mute %s", (int)(d.a + 0.5f), d.b, (int)(d.fc + 0.5f), env, mu);
-  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbAnalog)   // audition bank ANALOG: Q (K2)
-    snprintf(line, sizeof line, "tab %d/%d %s %s Q%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
-             Explorer::TbKindName(d.tbk), d.tq, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
-  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // JOURNEY: S / pos in env
-    snprintf(line, sizeof line, "tab %d/%d %s %s lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
-             Explorer::TbKindName(d.tbk), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
-  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // LOFI slot: K2 step, 4 stages
-    char st[32], sb[24], sr[24], tb[24];
-    if (d.tdst > 0) snprintf(st, sizeof st, "step %d/%d", d.tdst, d.tnst); else snprintf(st, sizeof st, "morph");
-    if (d.tsb > 0.f) snprintf(sb, sizeof sb, "%.2f", d.tsb); else snprintf(sb, sizeof sb, "off");
-    if (d.tsr > 0.f) snprintf(sr, sizeof sr, "%d", (int)(d.tsr + 0.5f)); else snprintf(sr, sizeof sr, "off");
-    if (d.ttb > 0.f) snprintf(tb, sizeof tb, "%.2f", d.ttb); else snprintf(tb, sizeof tb, "off");
-    snprintf(line, sizeof line, "tab %d/%d %s %s k2 %.2f %s sb %s sr %s tb %s ti %.2f lp %d eff %d%s mute %s", d.tbz + 1,
-             explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), d.b, st, sb, sr, tb, d.tti,
-             (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+  else if (d.model == Explorer::kWT && d.tbz >= 0) {       // audition bank: K2 knob, kind part, MOD (as main.cpp)
+    char kp[96], mod[96];
+    if (d.tbk == explorer_k::kTbAnalog)
+      snprintf(kp, sizeof kp, " Q %.2f", d.tq);
+    else if (d.tbk == explorer_k::kTbLofi) {
+      char st[32], sb[24], sr[24], tb[24];
+      if (d.tdst > 0) snprintf(st, sizeof st, "step %d/%d", d.tdst, d.tnst); else snprintf(st, sizeof st, "morph");
+      if (d.tsb > 0.f) snprintf(sb, sizeof sb, "%.2f", d.tsb); else snprintf(sb, sizeof sb, "off");
+      if (d.tsr > 0.f) snprintf(sr, sizeof sr, "%d", (int)(d.tsr + 0.5f)); else snprintf(sr, sizeof sr, "off");
+      if (d.ttb > 0.f) snprintf(tb, sizeof tb, "%.2f", d.ttb); else snprintf(tb, sizeof tb, "off");
+      snprintf(kp, sizeof kp, " %s sb %s sr %s tb %s ti %.2f", st, sb, sr, tb, d.tti);
+    } else
+      snprintf(kp, sizeof kp, " pos %.2f", d.a);
+    snprintf(mod, sizeof mod, " src %s td %.2f fd %.2f fs %.2f pd %d", d.tenv ? "env" : "lfo", d.ttd, d.tfd, d.tfs,
+             (int)(d.tpd + 0.5f));
+    snprintf(line, sizeof line, "tab %d/%d %s %s k2 %.2f%s%s lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES,
+             zn, Explorer::TbKindName(d.tbk), d.b, kp, mod, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   }
-  else if (d.model == Explorer::kWT && d.tbz >= 0)          // audition bank LFO: morph m at the knob, position
-    snprintf(line, sizeof line, "tab %d/%d %s %s m%.2f pos%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES,
-             zn, Explorer::TbKindName(d.tbk), d.b, d.a, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   else if (d.model == Explorer::kWT)
     snprintf(line, sizeof line, "WT/%s m%.2f pos%.2f dmp %d lp %d eff %d%s mute %s", zn, d.b, d.a, (int)(d.dfc + 0.5f),
              (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
@@ -789,8 +785,9 @@ int main(int argc, char** argv) {
                  ",\"a\":" + N(x.a) + ",\"b\":" + N(x.b) + ",\"slp\":" + N(x.slp) + ",\"ssub\":" + N(x.ssub) + ",\"c3\":" + N(x.c3) + ",\"bm\":" + std::to_string(x.bm) +
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"tbz\":" + std::to_string(x.tbz) + ",\"tbk\":" + json::Esc(x.tbz >= 0 ? Explorer::TbKindName(x.tbk) : "") +
-                 ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"jdir\":" + std::to_string(x.jdir) +
-                 ",\"jT\":" + N(x.jT) + ",\"tdst\":" + std::to_string(x.tdst) + ",\"tnst\":" + std::to_string(x.tnst) +
+                 ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"tenv\":" + std::string(x.tenv ? "true" : "false") +
+                 ",\"ttd\":" + N(x.ttd) + ",\"tfd\":" + N(x.tfd) + ",\"tfs\":" + N(x.tfs) + ",\"tpd\":" + N(x.tpd) +
+                 ",\"tdst\":" + std::to_string(x.tdst) + ",\"tnst\":" + std::to_string(x.tnst) +
                  ",\"ton\":" + std::string(x.ton ? "true" : "false") + ",\"tsb\":" + N(x.tsb) + ",\"tsr\":" + N(x.tsr) +
                  ",\"ttb\":" + N(x.ttb) + ",\"tti\":" + N(x.tti) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +

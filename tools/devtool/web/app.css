@@ -222,6 +222,19 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .tree .t-n { color: var(--dim); font-size: 11px; font-family: var(--mono); width: 5ch; text-align: right; flex: none; }
 .tree .t-chg { color: var(--chg); font-size: 11px; font-family: var(--mono); font-weight: 600; width: 3ch; text-align: right; flex: none; }
 .tree .t-empty { color: var(--dim); padding: 8px 12px; }
+/* NitroLab layout: bench (SW3) -> mode (SW1) -> sections; the pedal's current place is marked */
+.tree .t-bench {
+  font-size: 12px; font-weight: 700; color: var(--fg); padding: 10px 6px 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tree .t-mode {
+  font-size: 12px; font-weight: 600; color: var(--dim); padding: 4px 6px 1px 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tree .t-bench.active, .tree .t-mode.active { color: var(--accent); }
+.tree .t-bench.active::after, .tree .t-mode.active::after { content: "  \25cf now"; font-size: 10px; font-weight: 600; }
+.tree .t-sec.active .t-title { color: var(--accent); }
+.tree .t-empty-mode { padding: 2px 12px 4px 22px; font-size: 12px; }
 
 .values-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px 4px; flex: none; min-width: 0; }
 .nav-toggle { display: none; flex: none; }
@@ -263,6 +276,10 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .badge.reactivate { color: var(--warn); border-color: var(--warn); }
 .badge.chg { color: var(--accent-fg); background: var(--chg); border-color: var(--chg); }
 .badge.chg.no { visibility: hidden; }
+.badge.shared { color: var(--sep); border-color: var(--sep); }
+.grp-title.preset-grp { display: flex; gap: 10px; align-items: baseline; color: var(--fg); border-bottom: 1px solid var(--line); padding-bottom: 2px; height: 22px; }
+.grp-title.preset-grp .now { color: var(--accent); font-size: 11px; }
+.grp-title.preset-grp.active { color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
 .tctl { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; min-height: 28px; }
 .tctl input[type="range"] { flex: 1 1 160px; min-width: 100px; accent-color: var(--accent); margin: 0; }
 .tctl .num { width: 10ch; flex: none; font-family: var(--mono); text-align: right; }

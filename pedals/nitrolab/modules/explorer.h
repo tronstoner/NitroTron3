@@ -299,24 +299,10 @@
 //       FM LAB DOWN (ADD)  A: h, B: index knob, STRETCH: delta, each clamp(k2 + 0.3 l, 0, 1) (EXP_ADD_LFO_SWING);
 //                          UNISON: no LFO (K5 = beat speed)
 //       FM LAB MID (SPEC)  none (K5 = SUB level; the shared LFO runs on, unused)
-//       MID tables         morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1] (legacy zones, bank LFO presets);
-//                          bank ANALOG presets: the LP cutoff (TfUpdate) in octaves with the UP FM placement (LfoFcOct:
-//                          pluck side UP 0 .. EXP_LFO_FM_FC_OCT_DEC x depth x k3 x (1 - o_d), swell side DOWN 0 ..
-//                          -EXP_LFO_FM_FC_OCT x depth x o_r, blended by w; fc capped at EXP_TF_FMAX); bank JOURNEY
-//                          presets: no LFO - K5 = direction + speed of the morph travel (below); parked BITTAB: none
+//       MID tables         audition bank: the preset's MOD (see TABLES MOD; top rates per preset); legacy zones:
+//                          morph m = m_knob + 0.15 l (EXP_LFO_MORPH_SWING), [0, 1]; parked BITTAB: none
 //       DOWN               none
 //     K4 acts on fc (DampFmUpdate UP / TfUpdate MID, o3_ = o), K5 on feedback / morph (Derive, per sample): independent.
-//     K5 JOURNEY (audition bank JOURNEY presets, SW3 MID; 2026-11-06, replaces the second touch env): DIRECTION + constant
-//       SPEED of the morph travel (JourneyUpdate, per 8 kHz sample, always running on the SW3 MID instance with the bank,
-//       read only by JOURNEY presets). t5 = 2 k5 - 1 (smoothed), a = |t5|, Z = EXP_TB_JRN_ZERO_FRAC 0.05:
-//       rate = min(a / Z, 1) / T morph units / s, T = T_SLOW 30 s (T_FAST 0.3 s / T_SLOW)^max(0, (a - Z) / (1 - Z)) = the
-//       time for the whole journey (noon exactly 0, linear 0 -> 1 / 30 s over a < Z, then exponential 30 s -> 0.3 s);
-//       dir = sign(t5): CCW BACKWARD toward 0, noon still, CW FORWARD toward 1. No envelope, no dynamics.
-//       Offset jo (morph units): 0 on every onset; per 8 kHz sample a forward step jo = min(jo + rate / 8000, max(jo, 1 - S)),
-//       a backward step jo = max(jo - rate / 8000, min(jo, -S)) (S = the smoothed K2): it stops where S + jo reaches 1 / 0
-//       and holds (a reversed K5 moves it back at once); K2 never touches jo. Morph m = clamp(S + jo, 0, 1): K2 moves the
-//       sound live, the same K2 position always gives the same m for the same elapsed travel (any K2 path). A K5 turn
-//       mid-note changes rate / direction from the current offset on (no reset).
 //  LOOPING (RETIRED 2026-10-28: only with EXP_LOOP_ENABLE, then on SW3 DOWN instead of FM LAB) — generic K4 / K5
 //   envelope modulation (discovery comparison):
 //   e (0..1), per 8 kHz sample; 0 before the first onset; the envelope runs regardless of K4 noon:
@@ -353,8 +339,8 @@
 //   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: audition bank preset (16,
 //                    stepped, 1 ms crossfade: SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY
 //                    BREATH AIR | LOFI; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
-//   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: morph m 0..1 (smoothed, continuous) through the
-//                    zone's frames (JOURNEY: the start S of the K5 travel, live), ANALOG presets: LP resonance Q 0.3 -> 3;
+//   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: timbre = morph m 0..1 (smoothed, continuous) through
+//                    the preset's frames, ANALOG presets: LP resonance Q 0.3 -> 3;
 //                    stepped through the key stages with EXP_TB_K2_DISCRETE / EXP_TB_LOFI_K2_DISCRETE (TbDiscMorph)
 //                    (EXP_TF_Q_MIN / MAX, exponential); DOWN: per model (see MODELS)
 //   K3  UP:          index: the per-band cap law (fc 150 Hz CCW -> 4 kHz CW open, k3^0.5; L = min(4000, fc) caps the
@@ -368,10 +354,9 @@
 //                    the volume closes it damped), noon -> ~1:00 = pluck morphs into the fastest swell, CW = swell
 //                    (each onset drops to the bottom, rises to the K3 fc; 10 ms at ~1:00 -> 4 s; closed near silence)
 //       (retired LOOPING: envelope time + direction: CCW down | pad +-0.08 off | CW up; loop ramp 4 s -> 30 ms)
-//   K5  MID JOURNEY presets: direction + speed of the morph travel from S (see K5 JOURNEY: CCW backward, noon still, CW
-//                    forward; whole journey 30 s just off noon -> 0.3 s at the ends); MID ANALOG presets: the LFO
-//                    below on the LP cutoff (the UP FM placement); MID LOFI slot: no job;
-//       LFO on K2's parameter (UP FM feedback +-0.3, MID morph +-0.15; XBAND / DOWN none): CCW triangle (up to 20 Hz) | noon off | CW
+//   K5  MID (audition bank): the LFO below on the preset's MOD targets (timbre / filter / pitch depths, top rates per
+//                    preset; TABLES MOD); a preset with source ENV: no effect (the K4 touch env drives its targets);
+//       LFO on K2's parameter (UP FM feedback +-0.3; XBAND / DOWN none): CCW triangle (up to 20 Hz) | noon off | CW
 //                    staircase 100/50/0 %; depth fades in over the first 30 % of each side, rate 0.2 Hz -> top,
 //                    exponential over the side; phase synced on each onset
 //       (retired LOOPING: env target: CCW on K2's parameter, CW on K3's parameter; amount |2 k5 - 1|)
@@ -417,12 +402,11 @@
 // gr.. Tr.. w.. L.. o.. fce .. (Hz, applied fc: UP dampener / index fc) lfo tri|stp|off d.. ..Hz` (depth, rate at the
 // knob value), MID the same without fce (= eff), `ps - lfo -` on SW1 DOWN (K4 / K5 inert). MID WT lines: `dmp .. lp .. eff ..` = the tables' dampener fc (knob, unmodulated), the LP cutoff at the
 // knob, the effective LP cutoff (Hz) instead of `fc` (parked ladder: lp / eff = the ladder's). Audition bank: `tab <n>/16
-// <NAME> LFO|ANALOG m<knob> pos<frame position>` (ANALOG `Q<at the K2 knob>`) `lp .. eff ..` + the touch env / lfo part;
-// JOURNEY `tab <n>/16 <NAME> JOURNEY lp .. eff ..` + the touch env + ` S<start = K2 knob> dir fwd|back|still rate <s for
-// the whole journey at the K5 knob; 0 = still>s pos<applied morph now>` (no lfo part); LOFI `tab 16/16 LOFI LOFI
-// k2 <K2 knob> step <n>/16|morph sb <bits|off> sr <Hz|off> tb <bits|off> ti <i>` (step: K2 discrete, the key stage
-// at the knob; morph: continuous; each stage `off` at its bypass value or with EXP_TB_LOFI_ENABLE false, ti 0 then)
-// `lp .. eff ..` + the touch env (no lfo / journey part).
+// <NAME> LFO|ANALOG|LOFI k2 <K2 knob>` + LFO `pos <frame position>` | ANALOG `Q <at the K2 knob>` | LOFI `step <n>/16|morph`
+// (step: K2 discrete, the key stage at the knob) + ` src lfo|env td <timbre depth> fd <filter oct> fs <filter swell oct>
+// pd <pitch cents>` (the preset's MOD) + LOFI ` sb <bits|off> sr <Hz|off> tb <bits|off> ti <i>` (each stage `off` at its
+// bypass value or with EXP_TB_LOFI_ENABLE false, ti 0 then) + ` lp .. eff ..` + the touch env + the lfo part (rate with
+// the preset's top rates; `lfo -` with src env).
 //
 // TABLES (SW1 MID; built at Init into SDRAM, int16, packed [frame][version][sample]). TWO BANKS (EXP_TB_LEGACY):
 // AUDITION BANK (default; 2026-11-06; BuildBank): 16 presets, data in explorer_tables.h (recipes, key stages, level
@@ -432,17 +416,31 @@
 //   interpolation of the two stages' magnitudes (EXP_TB_JOURNEY_FLOOR_DB). Per frame also a tonal gain
 //   (explorer_tb_tone), read at the morph position (Derive, linear between the two frames). A preset with share >= 0
 //   reads another preset's frames (no own build / storage).
-//   KINDS  LFO      PWM SYNC VOCAL PPG: K2 = morph, K5 = the K5 LFO on the morph (as the legacy zones)
-//          JOURNEY  WOOD REED BRASS ORGAN METAL GLASS RASPY BREATH AIR: K2 = morph start S, K5 = K5 JOURNEY (direction +
-//                   speed of the travel)
-//          ANALOG   SAW PULSE (1 frame): K2 = LP Q, K5 = the K5 LFO on the LP cutoff (TfUpdate / TabFilter)
-//          LOFI     LOFI (the 31-frame LOFI SPECTRA table): K2 = static morph (no LFO, no journey, nothing restarts
-//                   on onsets), K5 = no job; the four stages set by their constants
+//   KINDS  LFO      PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY BREATH AIR: K2 = TIMBRE = morph
+//          ANALOG   SAW PULSE (1 frame): K2 = LP Q (TfUpdate / TabFilter)
+//          LOFI     LOFI (the 31-frame LOFI SPECTRA table): K2 = morph; the four stages set by their constants
+//          (JOURNEY - K5 = direction + speed of a morph travel - was removed 2026-11-06; its presets are LFO presets.)
+//   MOD    per preset (explorer_tables.h Presets: EXP_TB_<NAME>_TIMBRE / _FILTER / _FILTER_SWELL / _PITCH / _RATE_CCW /
+//          _RATE_CW / _ENV, live in DIAG builds; defaults in the EXP_TB_PRESETS rows), the targets of ONE source s:
+//          LFO (default): s = the K5 LFO (LfoUpdate; CCW triangle up to RATE_CCW, noon off, CW steps up to RATE_CW, bottom
+//                         EXP_LFO_HZ_MIN; depth fade-in EXP_LFO_DEPTH_FRAC)
+//            timbre  m = clamp(K2 + TIMBRE l, 0, 1)                         (LfoO2, l = lfo_s_ -1..1)
+//            filter  log2 fc += FILTER_SWELL / FILTER octaves in the SW3 MID FM placement (LfoFcOct: swell side DOWN 0 ..
+//                    -FILTER_SWELL x depth x o_r x w, pluck side UP 0 .. FILTER x depth x (1 - o_d) x (1 - w) x k3)
+//            pitch   c = PITCH l cents
+//          ENV:  s = the K4 touch env openness o (0..1); K5 no effect
+//            timbre  m = clamp(K2 + TIMBRE o, 0, 1);  filter  log2 fc += FILTER o;  pitch  c = PITCH o cents
+//          cutoff capped at EXP_TF_FMAX (as the ANALOG law before); the two sides of a zone crossfade weighted by it.
+//          PITCH (vibrato; TbPitchStep / TbPitchAdvance): per band k and running slot, per 8 kHz sample
+//            off_k += f'_k (2^(c / 1200) - 1) / 8000, wrapped to [0, 1); the table read uses phi_k + off_k (wrapped) ->
+//            every band x 2^(c / 1200), the same ratio (stays harmonic). Pitch depth 0: no per-band work; a slot that
+//            used it keeps adding its held offsets (no phase jump) until its state resets (tables enter, slot restart).
+//          Defaults = the former behaviour: LFO presets TIMBRE .15 (former EXP_LFO_MORPH_SWING), ANALOG FILTER 2.6 /
+//          FILTER_SWELL 1.0 (former EXP_LFO_FM_FC_OCT_DEC / _OCT), LOFI none; PITCH 0, rates 20 / 20 Hz, source LFO.
 //   K2 DISCRETE (EXP_TB_K2_DISCRETE / EXP_TB_LOFI_K2_DISCRETE; TbDiscMorph): the morph snaps to the preset's key stages
 //          (stage positions, not the in-between frames; a stage between two frames reads their blend), each step a
-//          linear slide over EXP_DISC_SLIDE_MS. LFO: the K2 base = the key stage of K2's equal zone (raw knob), the K5
-//          LFO swings around it; JOURNEY: the start S = the key stage of K2's equal zone, the travelled S + offset ->
-//          the NEAREST key stage (tie: the lower); ANALOG: none (1 frame, K2 = Q); LOFI: as LFO without the LFO.
+//          linear slide over EXP_DISC_SLIDE_MS. LFO / LOFI: the K2 base = the key stage of K2's equal zone (raw knob),
+//          the MOD timbre offset swings around it; ANALOG: none (1 frame, K2 = Q).
 //   K1 order SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY BREATH AIR | LOFI.
 //   LOFI   (2026-11-06; replaces the per-band LOFI mode of 57f7bfc and the four BITS / RATE / TABLE / TBITS presets;
 //          laws: explorer_constants.h EXP_TB_LOFI_*). All four stages together, each skipped at its bypass value:
@@ -626,8 +624,7 @@ struct ExpSVF {
 
 // K4 TOUCH ENV state (docs/DESIGN_PHILOSOPHY.md §12). ONE implementation - Explorer::TouchEnvUpdate / TouchOpenUpdate /
 // TouchTravel (built 2026-11-05 for K4, generalised 2026-11-06 to take the instance) - and one instance per Explorer:
-// te_ (K4, driven by t4: every ONE-SHOT K4 target). (The second instance te5_ - K5 on the audition bank's JOURNEY morph -
-// was replaced 2026-11-06 by K5 JOURNEY direction + speed, JourneyUpdate.) Laws: see "K4 / K5" in the header comment.
+// te_ (K4, driven by t4: every ONE-SHOT K4 target). Laws: see "K4 / K5" in the header comment.
 struct ExpTouchEnv {
   // Env (every 8 kHz sample, ONE-SHOT): the pluck / swell envelopes
   volatile float gd = 1.f;         // DECAY g_d (onset -> 1, -> 0 over T_d, holds 0; 1 before the first onset)
@@ -649,7 +646,7 @@ struct ExpTouchEnv {
   float od = 1.f, orr = 1.f;       // pluck openness o_d = min(g_ds, L_d), swell openness o_r = g_rs G
   volatile float o = 1.f;          // openness o = (1 - w) o_d + w o_r (1 = the target's knob value, 0 = fully moved)
   volatile float L = 0.f;          // live level L (0..1; DIAG)
-  // Travel (time-scaled depth, SPECTRAL density / JOURNEY morph): depths per side and the T they were made for
+  // Travel (time-scaled depth, SPECTRAL density): depths per side and the T they were made for
   float kTd = -1.f, kTr = -1.f;
   float dd = 0.f, dr = 0.f;        // depth_d / depth_r (target units)
   volatile float tr = 0.f;         // travel (1 - w) depth_d (1 - o_d) + w depth_r (1 - o_r)
@@ -787,8 +784,8 @@ class Explorer : public Module {
     lr_ph_ = 0.f; lr_y_ = 0.f; lr_on_ = false;   // LOFI SUM_RATE hold state (reset again whenever the stage starts)
     tbd_[0].z = tbd_[1].z = -1;                  // K2 DISCRETE slides: fresh (TbDiscMorph jumps on first use)
     tb_aw_ = 0.f; tb_m_now_ = 0.f;
-    // K5 JOURNEY (JourneyUpdate): offset 0, still; the step is computed on the first sample.
-    jrn_o_ = 0.f; jrn_step_ = 0.f; jrn_t5_ = 2.f;
+    tb_fon_ = false; tb_fo_ = 0.f; tb_pg_ = 0.f; tb_pc_ = 0.f;   // MOD: filter octaves off, pitch step 0
+    TbModLoad();                                 // per-preset MOD values (live tunables in DIAG builds)
     lab_m_t_ = -1;                               // FM LAB 2-OP: no UP mode until Controls (ratio slide at rest, r 1)
     lab_st_t_ = EXP_LAB_N_STEPS / 2;
     l2r_.Jump(EXP_LAB_REST_R);
@@ -872,6 +869,7 @@ class Explorer : public Module {
     ln_lfo_ = logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN);
     ln_lfo_ccw_ = logf(EXP_LFO_HZ_MAX_CCW / EXP_LFO_HZ_MIN);
     lfo_u_ = 2.f;                                // forces the rate / depth on the first sample
+    lfo_z_ = -2;
     lfo_inc_ = 0.f;
     lfo_depth_ = 0.f;
     lfo_ph_ = 0.f;
@@ -989,7 +987,9 @@ class Explorer : public Module {
         const float u5 = fabsf(t5);              // + K5 LFO at the knob value: shape, depth, rate (Hz)
         const int lsh = (t5 < 0.f) ? 1 : (t5 > 0.f) ? 2 : 0;
         const float ldp = (u5 >= EXP_LFO_DEPTH_FRAC) ? 1.f : u5 * (1.f / EXP_LFO_DEPTH_FRAC);
-        const float lhz = EXP_LFO_HZ_MIN * expf(u5 * logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN));
+        const int lz = TbModZone(VarKey(model, zone));   // audition bank: the preset's top rate for that side
+        const float lhz = EXP_LFO_HZ_MIN * expf(u5 * ((lz >= 0) ? tbm_ln_[lz][(t5 < 0.f) ? 0 : 1]
+                                                                 : logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN)));
         float da = p.a, db = p.b;                // FM LAB: feedback b at the knob / with the LFO
         diag_lab_z_ = labz;
         diag_spec_z_ = specz;
@@ -1047,16 +1047,16 @@ class Explorer : public Module {
     float c3;
     int   bm;
     int   tbz;        // SW3 MID SW1 MID audition bank: preset 0..15 (-1 = legacy zones / not the tables); tbk its kind
-    int   tbk;        // (explorer_k::kTbLfo / kTbJourney / kTbAnalog / kTbLofi; -1 = none)
+    int   tbk;        // (explorer_k::kTbLfo / kTbAnalog / kTbLofi; -1 = none)
     bool  ton;        // LOFI: the stages run (EXP_TB_LOFI_ENABLE; false: the slot reads clean)
     float tsb, tsr;   // LOFI: SUM_BITS bits / SUM_RATE Hz (0 = bypassed / off)
     float ttb, tti;   // LOFI: TABLE_BITS bits (0 = bypassed / off) / TABLE_INTERP (0 = linear, the clean read)
     int   tdst;       // K2 DISCRETE on this preset: the key stage 1..n at the K2 knob (0 = continuous morph)
     int   tnst;       //   its key-stage count
     float tq;         // ANALOG: LP Q at the K2 knob (TbAnalogQ), else 0
-    float tm;         // applied morph m now (JOURNEY: S + the K5 travel offset; LFO kind: + the LFO), latest 8 kHz sample
-    int   jdir;       // JOURNEY: K5 direction at the knob: +1 forward (CW), -1 backward (CCW), 0 still (noon)
-    float jT;         // JOURNEY: time for the whole journey at the K5 knob's speed (s; 1 / rate), 0 = still
+    float tm;         // applied morph m now (K2 + the timbre offset: LFO l / env o), latest 8 kHz sample
+    bool  tenv;       // MOD source: true = the K4 touch env o, false = the K5 LFO
+    float ttd, tfd, tfs, tpd;   // MOD depths: timbre (morph units), filter / filter swell (octaves), pitch (cents)
     bool  mute;
   };
   void Activate() override {
@@ -1139,11 +1139,10 @@ class Explorer : public Module {
   }
   static inline bool IsTbKind(int var, int kind) { return (var >> 6) == kWT && TbKind(var & 63) == kind; }
   static const char* TbKindName(int k) {         // DIAG
-    return (k == explorer_k::kTbJourney) ? "JOURNEY" : (k == explorer_k::kTbAnalog) ? "ANALOG"
-         : (k == explorer_k::kTbLofi) ? "LOFI" : "LFO";
+    return (k == explorer_k::kTbAnalog) ? "ANALOG" : (k == explorer_k::kTbLofi) ? "LOFI" : "LFO";
   }
   // K2 DISCRETE (section Wavetable K2): is K2 stepped on table zone z? Audition bank only: LOFI presets
-  // EXP_TB_LOFI_K2_DISCRETE, LFO / JOURNEY presets EXP_TB_K2_DISCRETE, ANALOG never (1 frame, K2 = LP Q); legacy: never.
+  // EXP_TB_LOFI_K2_DISCRETE, LFO presets EXP_TB_K2_DISCRETE, ANALOG never (1 frame, K2 = LP Q); legacy: never.
   static inline bool TbK2Disc(int z) {
     using namespace explorer_k;
     if (EXP_TB_LEGACY || z < 0 || z >= EXP_TB_ZONES) return false;
@@ -1153,16 +1152,53 @@ class Explorer : public Module {
   }
   // Key stage of K2's equal zone (nst zones over the knob, Quantize) on preset z (audition bank only).
   static inline int TbStageK2(int z, float k2) { return Quantize(k2, explorer_k::EXP_TB_PRESETS[z].nst); }
-  // Key stage nearest to the morph position m (|pos - m| smallest; a tie: the lower stage).
-  static inline int TbStageNearest(int z, float m) {
-    const explorer_k::ExpTbPreset& P = explorer_k::EXP_TB_PRESETS[z];
-    int b = 0;
-    float bd = fabsf(P.st[0].pos - m);
-    for (int i = 1; i < P.nst; i++) {
-      const float d = fabsf(P.st[i].pos - m);
-      if (d < bd) { bd = d; b = i; }
+  // Audition bank MOD (section Presets, explorer_tables.h): the bank zone of var for the per-preset MOD (SW3 MID instance,
+  // a bank table zone), else -1 (legacy zones, FM LAB, other models).
+  inline int TbModZone(int var) const {
+    using namespace explorer_k;
+    if (EXP_TB_LEGACY || lab_ || loop_ || (var >> 6) != kWT) return -1;
+    const int z = var & 63;
+    return (z < EXP_TB_BANK_N) ? z : -1;
+  }
+  // Per-preset MOD values from their tunables (constexpr normally, live in DIAG) + the LFO top-rate logs (the same
+  // expression as ln_lfo_ / ln_lfo_ccw_). Init, and DIAG TunableRefresh after a set / reset.
+  void TbModLoad() {
+    using namespace explorer_k;
+    ExpTbModRead(tbm_);
+    for (int z = 0; z < EXP_TB_BANK_N; z++) {
+      tbm_ln_[z][0] = logf(tbm_[z].rate_ccw / EXP_LFO_HZ_MIN);
+      tbm_ln_[z][1] = logf(tbm_[z].rate_cw / EXP_LFO_HZ_MIN);
     }
-    return b;
+  }
+  // MOD PITCH (vibrato) of the current bank preset, per 8 kHz sample (Process, after the LFO / touch env, before the
+  // slots run): c = pitch x l cents (source LFO; l = lfo_s_, the applied K5 LFO -1..1, as the timbre target) or
+  // pitch x o (source ENV; o = the K4 touch env openness 0..1); tb_pg_ = (2^(c / 1200) - 1) / sr8. Pitch depth 0: tb_pg_
+  // = 0 and no per-band work (RunSlot skips TbPitchAdvance).
+  inline void TbPitchStep() {
+    tb_pg_ = 0.f; tb_pc_ = 0.f;
+    const int z = TbModZone(var_);
+    if (z < 0) return;
+    const explorer_k::ExpTbMod& M = tbm_[z];
+    if (M.pitch == 0.f) return;
+    const float c = M.pitch * (M.env ? te_.o : lfo_s_);
+    tb_pc_ = c;
+    tb_pg_ = (exp2f(c * (1.f / 1200.f)) - 1.f) / sr8_;
+  }
+  // Slot o, per 8 kHz sample while tb_pg_ != 0: off_k += f'_k (2^(c / 1200) - 1) / 8000, wrapped to [0, 1) (f'_k = the
+  // band's frequency in that slot). The table read adds off_k to the band phase (ShapeK<kWT>): every band's frequency
+  // x 2^(c / 1200), the same ratio -> stays harmonic. Once used, the slot keeps adding its (then held) offsets until its
+  // state resets (ResetModelState kWT: the tables enter / the slot restarts), so depth -> 0 does not jump the phase.
+  inline void TbPitchAdvance(int o) {
+    float* __restrict off = tb_poff_[o];
+    const float* __restrict fp = fp_[o];
+    const float g = tb_pg_;
+    for (int k = 0; k < kBands; k++) {
+      float v = off[k] + fp[k] * g;
+      v -= floorf(v);
+      if (v >= 1.f) v -= 1.f;
+      off[k] = v;
+    }
+    tb_pon_[o] = true;
   }
   // ANALOG LP Q at the K2 value (0..1): EXP_TF_Q_MIN (EXP_TF_Q_MAX / EXP_TF_Q_MIN)^k2 (the EXP_TF_Q_ON_K5 law, read on K2).
   static inline float TbAnalogQ(float k2) {
@@ -1195,6 +1231,7 @@ class Explorer : public Module {
     te_.LdT = -1.f;                              // TouchOpenUpdate: the L_d fall coefficient
     te_.kTd = te_.kTr = -1.f;                    // TouchTravel: depth_d / depth_r
     lfo_u_ = 2.f;                                // LfoUpdate: rate / depth
+    TbModLoad();                                 // per-preset MOD values + their LFO ln rates
   }
 #endif
 
@@ -1276,7 +1313,7 @@ class Explorer : public Module {
           pf_ = Derive(mold, vfrom_ & 63, k2f, k3s_, DiscOf(mold), o2f, d3);
         }
       }
-      if (mnew == kWT) tb_m_now_ = pn_.b;        // DIAG: the applied morph m (JOURNEY: incl. the K5 travel)
+      if (mnew == kWT) tb_m_now_ = pn_.b;        // DIAG: the applied morph m (incl. the MOD timbre offset)
       if (mnew == kLADD) AddWeights(pn_, 0);    // ADDITIVE: series weights (cached; recomputed when h / series moved)
       if (fading && mold == kLADD) AddWeights(pf_, 1);
       if (mnew == kLSPEC) SpecWeights(pn_);     // SPECTRAL: partial weights (one table; recomputed when an input moved)
@@ -1289,6 +1326,10 @@ class Explorer : public Module {
       // audition bank ANALOG weight on the LP (K2 = Q, K5 LFO on the cutoff): 1 while an ANALOG preset runs, slid with
       // the zone crossfade (mg_) when one enters / leaves; 0 otherwise (and always with EXP_TB_LEGACY / FM LAB)
       tb_aw_ = (!EXP_TB_LEGACY && !lab_ && !loop_) ? TbAnalogW(fading) : 0.f;
+      if (!EXP_TB_LEGACY && !lab_ && !loop_) {   // audition bank MOD: cutoff octaves (TfUpdate), pitch step (RunSlot)
+        TbFcMod(fading, Clamp01(k3s_));
+        TbPitchStep();
+      }
       if (EXP_LAD_ENABLE) LadUpdate((int)(i / kFactor));   // parked SW1 MID ladder: mix target + cutoff
       else                TfUpdate((int)(i / kFactor));    // SW1 MID 2-pole LP: mix target + cutoff (this 8 kHz sample)
       if (!EXP_TB_LEGACY && !lab_) LofiUpdate((int)(i / kFactor), fading);   // LOFI SUM_BITS / SUM_RATE: weights + parameters
@@ -1432,8 +1473,7 @@ class Explorer : public Module {
   // every onset) and TouchOpenUpdate (openness o with the live level) -> o3_ = o, the one openness every K4 target of
   // the running model reads (UP index fc DampFmUpdate, MID 2-pole LP TfUpdate, FM LAB 2-OP u_eff, ADDITIVE index fc / h,
   // SPECTRAL K3 LPF; SPECTRAL density travel: SpecWeights). o computed on FM LAB always (every SW1 family uses K4),
-  // on SW3 MID while the current model is not an SW1 DOWN model (there o3_ = 1, K4 inert, as before). Then, on the SW3 MID
-  // instance with the audition bank, the K5 JOURNEY travel (JourneyUpdate).
+  // on SW3 MID while the current model is not an SW1 DOWN model (there o3_ = 1, K4 inert, as before).
   inline void EnvUpdate() {
     using namespace explorer_k;
     const bool onset = on_pending_;
@@ -1463,10 +1503,6 @@ class Explorer : public Module {
           mid_lfb_ = EXP_LFO_FB_SWING * ((1.f - te_.w) * (1.f - te_.od) * lfo_s_ - te_.w * te_.orr * up);
         }
       }
-      // Audition bank JOURNEY presets (SW3 MID): K5 = direction + speed of the morph travel (JourneyUpdate -> jrn_o_),
-      // always running on this instance (same onset; so a JOURNEY preset entering by K1 finds it current - no step at
-      // the zone change); only JOURNEY presets read it (LfoO2: m = clamp(S + jrn_o_, 0, 1)).
-      if (!lab_ && !EXP_TB_LEGACY) JourneyUpdate(onset);
       return;
     }
     env_.Step(loop_, onset, on_seen_, am, sr8_, ln_tau_ratio_, ln_loop_ratio_);
@@ -1553,13 +1589,18 @@ class Explorer : public Module {
   //   (+1 / 0 / -1 = 100 / 50 / 0 %, equal thirds of the cycle, repeating; 2026-10-28, was S&H), t5 == 0 nothing (0).
   //   The steps land through the slide below (1 ms), no click. Applied l = depth shape, one-pole slid
   //   (mv_a_ = tau EXP_ENV_FM_SLIDE_MS), lands exactly (EXP_CTRL_SNAP) -> lfo_s_ (0 exactly at noon once settled).
+  //   Audition bank (SW3 MID, the current model a bank table zone z): the top rates are the preset's MOD rate_ccw /
+  //   rate_cw (EXP_TB_<NAME>_RATE_CCW / _CW; ln cached in tbm_ln_), the bottom EXP_LFO_HZ_MIN; recomputed also when z changed.
   inline void LfoUpdate(bool onset) {
     using namespace explorer_k;
     const float t5 = 2.f * k5s_ - 1.f;
     const float u = fabsf(t5);
-    if (t5 != lfo_u_) {                          // (signed: the CCW side has its own top rate)
+    const int tz = TbModZone(var_);
+    if (t5 != lfo_u_ || tz != lfo_z_) {          // (signed: the CCW side has its own top rate)
       lfo_u_ = t5;
-      lfo_inc_ = EXP_LFO_HZ_MIN * expf(u * ((t5 < 0.f) ? ln_lfo_ccw_ : ln_lfo_)) / sr8_;
+      lfo_z_ = tz;
+      const float ln = (tz >= 0) ? tbm_ln_[tz][(t5 < 0.f) ? 0 : 1] : ((t5 < 0.f) ? ln_lfo_ccw_ : ln_lfo_);
+      lfo_inc_ = EXP_LFO_HZ_MIN * expf(u * ln) / sr8_;
       lfo_depth_ = (u >= EXP_LFO_DEPTH_FRAC) ? 1.f : u * (1.f / EXP_LFO_DEPTH_FRAC);
     }
     if (onset) {                                 // phase sync on each attack (2026-10-28)
@@ -1589,8 +1630,8 @@ class Explorer : public Module {
   }
   // K2 offset of the K5 LFO in knob units for model m (Derive: p = clamp(p_knob + o2 span)): FM b swing
   // EXP_LFO_FB_SWING / span EXP_FBFM_FB_MAX, table morph swing EXP_LFO_MORPH_SWING / span 1; XBAND, BITTAB, DOWN: 0.
-  // Tables (zone z): legacy zones and audition-bank LFO presets the LFO on the morph; JOURNEY presets the K5 JOURNEY
-  // travel offset jrn_o_ (morph units, either sign); ANALOG presets 0 (K5 acts on the LP cutoff, TfUpdate).
+  // Tables (zone z): legacy zones the LFO x EXP_LFO_MORPH_SWING; audition bank: the preset's MOD timbre depth td,
+  // o2 = td l (source LFO) or td o (source ENV, o = the K4 touch env openness), exactly 0 at td 0 (ANALOG / LOFI defaults).
   inline float LfoO2(int m, int z) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
@@ -1599,89 +1640,28 @@ class Explorer : public Module {
                                                                  // (Derive; not used by the UNISON zones)
     if (m == kWT) {
       if (EXP_TF_Q_ON_K5) return 0.f;                                  // K5 = LP Q on tables (temp)
-      const int kd = TbKind(z);
-      if (kd == kTbJourney) return jrn_o_;                             // K5 JOURNEY travel offset (audition bank)
-      if (kd == kTbAnalog) return 0.f;                                 // K5 LFO on the LP cutoff instead
-      if (kd == kTbLofi) return 0.f;                                   // K5 = lofi amount: static morph (K2 only)
-      return lfo_s_ * EXP_LFO_MORPH_SWING;
+      if (EXP_TB_LEGACY || z < 0 || z >= EXP_TB_BANK_N) return lfo_s_ * EXP_LFO_MORPH_SWING;   // legacy zones
+      const ExpTbMod& M = tbm_[z];
+      if (M.timbre == 0.f) return 0.f;                                 // no timbre target (ANALOG / LOFI defaults)
+      return M.env ? te_.o * M.timbre : lfo_s_ * M.timbre;            // MOD timbre: LFO l or touch env o
     }
     return 0.f;
-  }
-
-  // K5 JOURNEY speed (audition bank JOURNEY presets): signed rate in morph units per second at t5 (-1..1).
-  //   a = |t5|, s = max(0, (a - Z) / (1 - Z)), T = T_SLOW (T_FAST / T_SLOW)^s (s for the whole journey 0 -> 1),
-  //   rate = min(a / Z, 1) / T, sign = sign(t5) (Z = EXP_TB_JRN_ZERO_FRAC); t5 == 0: 0 exactly.
-  static inline float JrnRate(float t5) {
-    using namespace explorer_k;
-    const float a = fabsf(t5);
-    if (a == 0.f) return 0.f;
-    float s = (a - EXP_TB_JRN_ZERO_FRAC) * (1.f / (1.f - EXP_TB_JRN_ZERO_FRAC));
-    if (s < 0.f) s = 0.f;
-    const float T = EXP_TB_JRN_T_SLOW * expf(s * logf(EXP_TB_JRN_T_FAST / EXP_TB_JRN_T_SLOW));
-    const float r = ((a < EXP_TB_JRN_ZERO_FRAC) ? a * (1.f / EXP_TB_JRN_ZERO_FRAC) : 1.f) / T;
-    return (t5 > 0.f) ? r : -r;
-  }
-  // K5 JOURNEY (SW3 MID with the bank; per 8 kHz sample in EnvUpdate, after the K4 touch env; whatever model runs, so a
-  // JOURNEY preset entering by K1 finds it current). The travel offset jrn_o_ (morph units) from the start S = the
-  // smoothed K2 (clamped 0..1):
-  //   t5 moved (smoothed, lands exactly) -> step = JrnRate(t5) / sr8 (one expf).
-  //   onset -> jrn_o_ = 0 (the position restarts at S).
-  //   forward step (step > 0):  jrn_o_ = min(jrn_o_ + step, max(jrn_o_, 1 - S))
-  //   backward step (step < 0): jrn_o_ = max(jrn_o_ + step, min(jrn_o_, -S))
-  //   noon (step 0): unchanged.
-  // So the travel stops where S + jrn_o_ reaches 1 / 0 and holds there (a reversed K5 moves it back at once), and only
-// the travel changes jrn_o_ - K2 never does (a step never pulls back an offset K2 alone pushed past an end). Derive:
-  // m = clamp(S + jrn_o_, 0, 1). No envelope, no dynamics, no slide (the step is at most 1 / (0.3 s x 8 kHz) = 0.0004).
-  // K2 DISCRETE on the running JOURNEY preset (TbK2Disc): S = the key stage of K2's equal zone (JrnStart; TbDiscMorph
-  // then snaps S + jrn_o_ to the nearest key stage).
-  inline float JrnStart() const {
-    using namespace explorer_k;
-    const int z = var_ & 63;
-    if ((var_ >> 6) == kWT && TbK2Disc(z) && TbKind(z) == kTbJourney)
-      return EXP_TB_PRESETS[z].st[TbStageK2(z, k2_t_)].pos;
-    return Clamp01(k2s_);
-  }
-  inline void JourneyUpdate(bool onset) {
-    const float t5 = 2.f * k5s_ - 1.f;
-    if (t5 != jrn_t5_) { jrn_t5_ = t5; jrn_step_ = JrnRate(t5) / sr8_; }
-    if (onset) jrn_o_ = 0.f;
-    const float S = JrnStart();
-    const float st = jrn_step_;
-    if (st > 0.f) {
-      const float hi = 1.f - S;
-      float v = jrn_o_ + st;
-      if (v > hi) v = (jrn_o_ > hi) ? jrn_o_ : hi;
-      jrn_o_ = v;
-    } else if (st < 0.f) {
-      const float lo = -S;
-      float v = jrn_o_ + st;
-      if (v < lo) v = (jrn_o_ < lo) ? jrn_o_ : lo;
-      jrn_o_ = v;
-    }
   }
 
   // K2 DISCRETE (audition bank, TbK2Disc; Process, per 8 kHz sample, before Derive): side 0 = the running table zone
   // (var_), 1 = the fading one (vfrom_). k2 / o2 = Derive's K2 and offset for zone z; on a discrete preset they become
   // the slid key-stage position (k2) and the offset Derive still adds (o2):
-  //   LFO / LOFI  target = the key stage of K2's equal zone (raw knob k2_t_); o2 kept (LFO kind: the K5 LFO swings
-  //               around the stage; LOFI: 0)
-  //   JOURNEY     target = the key stage NEAREST to clamp(S + jrn_o_) (S = JrnStart, the snapped start; o2 = jrn_o_);
-  //               o2 -> 0 (the travel is in the target)
+  //   LFO / LOFI  target = the key stage of K2's equal zone (raw knob k2_t_); o2 kept (the MOD timbre offset, LFO l or
+  //               touch env o, swings around the stage; 0 at timbre depth 0)
   // A target change slides linearly over EXP_DISC_SLIDE_MS (DSlide, disc_len_ samples); a side meeting zone z fresh
   // (zone change, discrete just switched on) jumps to the target. Not discrete: untouched, the side's slide forgotten.
   inline void TbDiscMorph(int side, int z, float& k2, float& o2) {
     using namespace explorer_k;
     TbDisc& d = tbd_[side];
     if (!TbK2Disc(z)) { d.z = -1; return; }
+    (void)o2;
     const ExpTbPreset& P = EXP_TB_PRESETS[z];
-    float target;
-    if (P.kind == kTbJourney) {
-      const float S = P.st[TbStageK2(z, k2_t_)].pos;
-      target = P.st[TbStageNearest(z, Clamp01(S + o2))].pos;
-      o2 = 0.f;
-    } else {
-      target = P.st[TbStageK2(z, k2_t_)].pos;
-    }
+    const float target = P.st[TbStageK2(z, k2_t_)].pos;
     if (d.z != z) { d.s.Jump(target); d.z = z; }
     else          d.s.Set(target, disc_len_);
     d.s.Tick();
@@ -2588,11 +2568,39 @@ class Explorer : public Module {
   // The SW3 MID K5 LFO on a cutoff, in octaves (DampFmUpdate: the FM cutoff; TfUpdate: the audition bank ANALOG LP
   // cutoff): swell side lo = DOWNWARD 0 .. -EXP_LFO_FM_FC_OCT x depth x o_r x w; pluck side ld = UPWARD 0 ..
   // EXP_LFO_FM_FC_OCT_DEC x depth x (1 - o_d) x (1 - w), before the caller's K3-position scale; up = depth (shape + 1) / 2.
+  // (Audition bank presets: the same law with the preset's MOD depths, oct = filter_swell, oct_dec = filter.)
   inline void LfoFcOct(float& lo, float& ld) const {
-    using namespace explorer_k;
+    LfoFcOct(lo, ld, explorer_k::EXP_LFO_FM_FC_OCT, explorer_k::EXP_LFO_FM_FC_OCT_DEC);
+  }
+  inline void LfoFcOct(float& lo, float& ld, float oct, float oct_dec) const {
     float up = 0.5f * (lfo_depth_ + lfo_s_); if (up < 0.f) up = 0.f;
-    lo = -te_.w * te_.orr * up * EXP_LFO_FM_FC_OCT;   // swell: DOWNWARD only, 0 .. -OCT x depth (2026-11-05)
-    ld = (1.f - te_.w) * up * EXP_LFO_FM_FC_OCT_DEC * (1.f - te_.od);
+    lo = -te_.w * te_.orr * up * oct;            // swell: DOWNWARD only, 0 .. -OCT x depth (2026-11-05)
+    ld = (1.f - te_.w) * up * oct_dec * (1.f - te_.od);
+  }
+  // Audition bank MOD on the LP cutoff (TfUpdate), per 8 kHz sample: does preset z move the cutoff (LFO: filter or
+  // filter swell != 0; ENV: filter != 0), and by how many octaves (LFO: LfoFcOct with its depths, lo + ld k3; ENV:
+  // filter x o). TbFcMod: tb_fon_ = the current or the fading side moves it, tb_fo_ = the octaves, the sides weighted
+  // with the zone crossfade (mg_; equal octaves: (w_a + w_b) x, the former ANALOG weight law); kc = the smoothed K3 0..1.
+  inline bool TbFcHas(int var) const {
+    const int z = TbModZone(var);
+    if (z < 0) return false;
+    const explorer_k::ExpTbMod& M = tbm_[z];
+    return M.env ? (M.filter != 0.f) : (M.filter != 0.f || M.filter_swell != 0.f);
+  }
+  inline float TbFcOctZ(int z, float kc) const {
+    const explorer_k::ExpTbMod& M = tbm_[z];
+    if (M.env) return M.filter * te_.o;
+    float lo, ld;
+    LfoFcOct(lo, ld, M.filter_swell, M.filter);
+    return lo + ld * kc;
+  }
+  inline void TbFcMod(bool fading, float kc) {
+    const bool an = TbFcHas(var_), ao = fading && TbFcHas(vfrom_);
+    tb_fon_ = an || ao;
+    if (!tb_fon_) { tb_fo_ = 0.f; return; }
+    const float wa = an ? (fading ? mg_ : 1.f) : 0.f, wb = ao ? 1.f - mg_ : 0.f;
+    const float a = an ? TbFcOctZ(var_ & 63, kc) : 0.f, b = ao ? TbFcOctZ(vfrom_ & 63, kc) : 0.f;
+    tb_fo_ = (a == b) ? (wa + wb) * a : wa * a + wb * b;
   }
   // Audition bank ANALOG weight on the LP this 8 kHz sample: the current preset ANALOG -> 1 (mg_ while a zone crossfade
   // runs), the fading one ANALOG -> + (1 - mg_); neither -> 0.
@@ -2792,19 +2800,18 @@ class Explorer : public Module {
     } else {                                     // ONE-SHOT: touch env o between the bottom and the knob value (octaves)
       const float lk = (k3s_ >= 1.f) ? tf_lnr_ : (k3s_ <= 0.f) ? 0.f : k3s_ * tf_lnr_;   // ln(fc_knob / TF_FMIN)
       const float lb = tf_lnb_ + k3s_ * (EXP_TF_ENV_BOTTOM_OCT * 0.6931472f);          // bottom rises with K3
-      if (tb_aw_ > 0.f) {
-        // Audition bank ANALOG: + the K5 LFO octaves (LfoFcOct, the SW3 MID FM placement; pluck side x the K3 position in
-        // the LP's log range = k3, as DampFmUpdate scales by DampCurve(k3)), x the ANALOG weight; capped at EXP_TF_FMAX
-        // (the SVF needs fc < Nyquist). Q = TbAnalogQ(K2) (smoothed), linear toward EXP_TF_Q by the weight.
-        float lo, ld;
-        LfoFcOct(lo, ld);
-        const float kc = Clamp01(k3s_);
-        fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb) + tb_aw_ * (lo + ld * kc) * 0.6931472f);
+      if (tb_fon_) {
+        // Audition bank MOD on the cutoff (TbFcMod: the preset's filter depths - LFO: the SW3 MID FM placement, pluck side
+        // x the K3 position in the LP's log range = k3, as DampFmUpdate scales by DampCurve(k3); ENV: + filter x o),
+        // crossfade-weighted; capped at EXP_TF_FMAX (the SVF needs fc < Nyquist).
+        fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb) + tb_fo_ * 0.6931472f);
         if (fc > EXP_TF_FMAX) fc = EXP_TF_FMAX;
-        const float qa = TbAnalogQ(k2s_);
-        explorer_tb_rt.q[sub] = (tb_aw_ >= 1.f) ? qa : EXP_TF_Q + tb_aw_ * (qa - EXP_TF_Q);
       } else {
         fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb));
+      }
+      if (tb_aw_ > 0.f) {                        // ANALOG: Q = TbAnalogQ(K2) (smoothed), linear toward EXP_TF_Q by the weight
+        const float qa = TbAnalogQ(k2s_);
+        explorer_tb_rt.q[sub] = (tb_aw_ >= 1.f) ? qa : EXP_TF_Q + tb_aw_ * (qa - EXP_TF_Q);
       }
     }
     tf_fcb_[sub] = fc;
@@ -3078,6 +3085,7 @@ class Explorer : public Module {
   // One 8 kHz sample of slot o: derive u_k, return the model's band sum sum_k w_k a_k W_k.
   float RunSlot(int o, bool fading) {
     if (!slot_on_[o]) { ResetSlotState(o); slot_on_[o] = true; }
+    if (tb_pg_ != 0.f) TbPitchAdvance(o);        // audition bank MOD pitch (0 = none)
     Prep(o, NeedsPhaseV(var_) || (fading && NeedsPhaseV(vfrom_)));
     float sh = Shape(var_ >> 6, o, pn_);
     if (fading) sh = (1.f - mg_) * Shape(vfrom_ >> 6, o, pf_) + mg_ * sh;
@@ -3188,6 +3196,8 @@ class Explorer : public Module {
     const bool  ltab = lrnd || ta > 0.f;
     const float lq   = lrnd ? exp2f(16.f - EXP_TB_LOFI_TABLE_BITS) : 1.f;
     const float lqi  = 1.f / lq;
+    const bool  pit  = (M == kWT) && tb_pon_[o];  // audition bank MOD pitch: + the slot's phase offsets (TbPitchAdvance)
+    const float* __restrict po = tb_poff_[o];
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
@@ -3270,7 +3280,8 @@ class Explorer : public Module {
         const float H = (1.f - p.p0) * h0 * Cos01((float)n0 * ph) + p.p0 * h1 * Cos01((float)n1 * ph);
         W = H + p.p1 * (cr - H);
       } else if (M == kWT && EXP_TB_BLEND) {     // WaveMorph's Shape, versions lo / lo + 1 blended (x)
-        const float ph = phs[k];
+        float ph = phs[k];
+        if (pit) { ph += po[k]; if (ph >= 1.f) ph -= 1.f; }
         const float xi = ph * (float)EXP_TB_SIZE;
         const int   i0 = (int)xi;
         const float fr = xi - (float)i0;
@@ -3291,7 +3302,8 @@ class Explorer : public Module {
         }
         W = Wv * p.p1;
       } else if (M == kWT) {                     // WaveMorph's Shape: frames n0 / n0 + 1 of the packed tables
-        const float ph = phs[k];
+        float ph = phs[k];
+        if (pit) { ph += po[k]; if (ph >= 1.f) ph -= 1.f; }   // MOD pitch: phase + offset, wrapped
         const int lv = wlv[k];
         const float xi = ph * (float)EXP_TB_SIZE;
         const int   i0 = (int)xi;
@@ -3367,6 +3379,7 @@ class Explorer : public Module {
     const int ru = (m == kFSH) ? kRotFSH : (m == kISH) ? kRotISH : -1;
     for (int k = 0; k < kBands; k++) {
       if (m == kFM) { pm_[o][k] = 0.f; pp_[o][k] = -1.f; m1_[o][k] = m2_[o][k] = 0.f; }
+      if (m == kWT) tb_poff_[o][k] = 0.f;        // audition bank MOD pitch offsets
       if (ru >= 0)  th_[ru][o][k] = 0.f;
       if (m == kLSPEC && lab_) explorer_spec_st.th[o][k] = 0.f;   // FM LAB SPECTRAL shift phase (D2 SRAM)
       if (m == kLADD && lab_) {                  // FM LAB ADDITIVE (D2 SRAM, the lab instance only)
@@ -3376,11 +3389,13 @@ class Explorer : public Module {
         A.slp[o][k] = -1.f;
       }
     }
+    if (m == kWT) tb_pon_[o] = false;
   }
   void ResetSlotState(int o) {
     ResetModelState(kFM, o);
     ResetModelState(kFSH, o);
     ResetModelState(kISH, o);
+    ResetModelState(kWT, o);                     // MOD pitch offsets
     if (lab_) ResetModelState(kLADD, o);
     if (lab_) ResetModelState(kLSPEC, o);        // SPECTRAL: K4 shift phase
   }
@@ -4019,10 +4034,12 @@ class Explorer : public Module {
     s.tti = s.ton ? Clamp01(EXP_TB_LOFI_TABLE_INTERP) : 0.f;
     s.tnst = (diag_tbz_ >= 0) ? EXP_TB_PRESETS[diag_tbz_].nst : 0;   // K2 DISCRETE: key stage at the K2 knob
     s.tdst = (diag_tbz_ >= 0 && TbK2Disc(diag_tbz_)) ? TbStageK2(diag_tbz_, kv[1]) + 1 : 0;
-    {                                            // JOURNEY K5 at the knob: direction, whole-journey time (0 = still)
-      const float r = JrnRate(2.f * kv[4] - 1.f);
-      s.jdir = (r > 0.f) ? 1 : (r < 0.f) ? -1 : 0;
-      s.jT = (r != 0.f) ? 1.f / fabsf(r) : 0.f;
+    {                                            // MOD of the preset (live values)
+      const bool ok = (diag_tbz_ >= 0 && diag_tbz_ < EXP_TB_BANK_N);
+      const ExpTbMod& M = tbm_[ok ? diag_tbz_ : 0];
+      s.tenv = ok && M.env;
+      s.ttd = ok ? M.timbre : 0.f; s.tfd = ok ? M.filter : 0.f; s.tfs = ok ? M.filter_swell : 0.f;
+      s.tpd = ok ? M.pitch : 0.f;
     }
     s.mute = mute_;
     if (cs.Foot(0).rising) {
@@ -4263,9 +4280,15 @@ class Explorer : public Module {
   float dfc_diag_ = 0.f;           // DIAG: the tables' dampener fc at the knob (Controls -> DiagControls)
   static_assert(ExplorerTbRt::kSub == kLadSub, "audition bank per-8 kHz-sample buffers = kLadSub");
   // SW1 MID audition bank (EXP_TB_LEGACY = false; SW3 MID instance)
-  float jrn_o_ = 0.f;              // JOURNEY K5: travel offset from S (morph units; JourneyUpdate, LfoO2), 0 on each onset
-  float jrn_step_ = 0.f;           // JOURNEY K5: offset step per 8 kHz sample (JrnRate(t5) / sr8; 0 = still)
-  float jrn_t5_ = 2.f;             // JOURNEY K5: t5 the step was computed for (2 = force)
+  explorer_k::ExpTbMod tbm_[explorer_k::EXP_TB_BANK_N];   // per-preset MOD values (TbModLoad: Init / DIAG refresh)
+  float tbm_ln_[explorer_k::EXP_TB_BANK_N][2];             // ln(rate_ccw / HZ_MIN), ln(rate_cw / HZ_MIN) per preset
+  int   lfo_z_ = -2;               // LfoUpdate: bank zone the rate was computed for (-1 = not the bank)
+  bool  tb_fon_ = false;           // MOD: the LP cutoff is moved this 8 kHz sample (TbFcMod)
+  float tb_fo_ = 0.f;              //      by this many octaves
+  float tb_pg_ = 0.f;              // MOD pitch: phase-offset step factor this 8 kHz sample, (2^(c / 1200) - 1) / sr8 (0 = none)
+  float tb_pc_ = 0.f;              //            c in cents (DIAG)
+  bool  tb_pon_[kSlots] = { false, false, false };   // slot o: offsets in use (the read adds them)
+  float tb_poff_[kSlots][kBands];  // per slot / band phase offset (cycles, [0, 1)) of the MOD pitch
   float tb_aw_ = 0.f;              // ANALOG weight on the LP this 8 kHz sample (TbAnalogW; 0 = not ANALOG)
   float lr_ph_ = 0.f, lr_y_ = 0.f;  // LOFI SUM_RATE: hold phase, held value (LofiStage)
   bool  lr_on_ = false;            // LOFI SUM_RATE: stage running last sample (false -> reset on the next start)

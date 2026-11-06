@@ -29,6 +29,29 @@ shown as ONE row (one multi-handle slider in their common unit / taper).
   A pair needs >= 2 members, distinct ends, one kind (knob or range), the same
   type / unit / taper; members are ordered by END_ORDER.
 
+PLACES (where a constant acts on the pedal; the page's tree): LAYOUT below is
+the ONE list of display names (pedal -> benches -> modes). In the constants
+files:
+  // @section <Title>     comment directive: the display section (what it does +
+                          which knob, e.g. `Touch env · K4`) of the following
+                          declarations, until the next `// --- ---` header
+  // @at 2/fm,2/wt        comment directive: default places of the following
+                          declarations (same scope); `<bench id>/<mode id>`
+  @at 2/fm,3/2op          per-declaration tag (overrides the directive)
+  c["places"] = [{key: "<bench>/<mode>/<section>", bench, mode, section}], in
+  LAYOUT order. A constant without places (no @at) shows under its module /
+  section as before (pedals without a LAYOUT entry use that tree only).
+
+FAMILIES (per-preset tunables declared by a macro, explorer_tables.h):
+  // @family <PREFIX> <ROW_MACRO> <LIST_MACRO>
+  // @field <SUFFIX> <float|int|bool> <tags>  <note>     (one per field, in the
+                                                         ROW_MACRO argument order)
+  The LIST_MACRO's `#define` body lists `X(<index>, <NAME>)`; the table rows
+  `{ "<NAME>", ..., ROW_MACRO(v0, v1, ...) }` give the defaults. Each preset
+  NAME x field gives one constant <PREFIX><NAME>_<SUFFIX> (file / line of the
+  list entry), with c["preset"] = NAME, c["preset_index"] = index; a field's
+  @pair id becomes <NAME>_<id>.
+
 Python 3 stdlib only.
 """
 import os
@@ -46,6 +69,39 @@ END_LABELS = {"ccw": "CCW", "noon": "noon", "cw": "CW", "floor": "floor", "top":
 KNOB_ENDS = ("ccw", "noon", "cw")
 TAPERS = ("lin", "log")
 LABEL_MAX = 64
+FAMILY_RE = re.compile(r"^@family\s+(\w+)\s+(\w+)\s+(\w+)\s*$")
+FIELD_RE = re.compile(r"^@field\s+(\w+)\s+(float|int|bool)\s+(.*)$")
+DIRECTIVE_RE = re.compile(r"^@(section|at)\s+(.*)$")
+ROW_RE = re.compile(r'^\s*\{\s*"(\w+)".*\b(\w+)\(([^()]*)\)\s*\},?\s*(//.*)?$')
+LIST_ITEM_RE = re.compile(r"^\s*X\(\s*(\d+)\s*,\s*(\w+)\s*\)\s*\\?\s*$")
+
+# The ONE list of display names for the page's tree (benches = SW3 positions,
+# modes = SW1 positions). Ids are what the constants files' @at tags use.
+LAYOUT = {
+    "nitrolab": {
+        "title": "NitroLab",
+        "benches": [
+            {"id": "1", "name": "Bench 1 \u00b7 Armitage", "sw3": "UP", "modes": []},
+            {"id": "2", "name": "Bench 2 \u00b7 Explorer", "sw3": "MID", "modes": [
+                {"id": "fm", "name": "FM", "sw1": "UP"},
+                {"id": "wt", "name": "Wavetable", "sw1": "MID"},
+                {"id": "shift", "name": "Harmonics & Shift", "sw1": "DOWN"}]},
+            {"id": "3", "name": "Bench 3 \u00b7 FM Lab", "sw3": "DOWN", "modes": [
+                {"id": "2op", "name": "2-OP FM", "sw1": "UP"},
+                {"id": "spectral", "name": "Spectral", "sw1": "MID"},
+                {"id": "additive", "name": "Additive", "sw1": "DOWN"}]},
+        ],
+    },
+}
+
+
+def layout_places(layout):
+    """{'2/wt': (bench_index, mode_index), ...} for one pedal's layout."""
+    out = {}
+    for bi, b in enumerate((layout or {}).get("benches", [])):
+        for mi, m in enumerate(b["modes"]):
+            out["%s/%s" % (b["id"], m["id"])] = (bi, mi)
+    return out
 
 
 def comment_text(line):
@@ -129,20 +185,95 @@ def num(text, ty):
     return int(v) if ty == "int" else v
 
 
+def make_entry(name, ty, value, comment, ctx, rel, lineno, problems):
+    """One constant from its declaration parts. ctx: module, section, display, at, doc, doc_of."""
+    tags, note = parse_tags(comment)
+    e = {"name": name, "type": ty, "default_text": value, "module": ctx["module"],
+         "section": ctx["section"], "doc": ctx["doc"], "doc_of": ctx["doc_of"] if ctx["doc"] else "",
+         "note": note, "file": rel, "line": lineno}
+    try:
+        e["default"] = num(value, ty)
+    except ValueError:
+        e["default"] = None
+        problems.append("%s:%d %s: default %r is not a plain number" % (rel, lineno, name, value))
+    e["unit"] = (tags.get("unit") or [""])[0]
+    rng = tags.get("range")
+    e["range"] = None
+    if ty != "bool":
+        try:
+            lo, hi = float(rng[0]), float(rng[1])
+            if not lo < hi:
+                raise ValueError
+            e["range"] = [lo, hi]
+        except (TypeError, ValueError, IndexError):
+            problems.append("%s:%d %s: missing / bad @range" % (rel, lineno, name))
+    taper = (tags.get("taper") or ["lin"])[0]
+    if taper not in TAPERS or (taper == "log" and e["range"] and e["range"][0] <= 0):
+        problems.append("%s:%d %s: bad @taper %s" % (rel, lineno, name, taper))
+        taper = "lin"
+    e["taper"] = taper
+    level = (tags.get("level") or [""])[0]
+    if level not in LEVELS:
+        problems.append("%s:%d %s: missing / bad @level" % (rel, lineno, name))
+        level = "live"
+    e["level"] = level
+    e["when"] = (" ".join(tags.get("when") or [])) or None
+    e["pair"] = None
+    if "pair" in tags:
+        pv = tags["pair"]
+        if len(pv) == 2 and re.match(r"^\w+$", pv[0]) and pv[1] in END_ORDER:
+            e["pair"] = {"id": pv[0], "end": pv[1], "end_label": END_LABELS[pv[1]]}
+        else:
+            problems.append("%s:%d %s: bad @pair (want: @pair <ID> %s)" % (rel, lineno, name, "|".join(END_ORDER)))
+    if e["default"] is not None and e["range"] and ty != "bool":
+        if not e["range"][0] <= e["default"] <= e["range"][1]:
+            problems.append("%s:%d %s: default outside @range" % (rel, lineno, name))
+    e["label"] = make_label(name, note, ctx["doc"], e["unit"])
+    at = (tags.get("at") or [None])[0] or ctx.get("at") or ""
+    e["at"] = [x.strip() for x in at.split(",") if x.strip()]
+    e["display_section"] = ctx.get("display") or ctx["section"]
+    e["preset"] = None
+    e["preset_index"] = None
+    return e
+
+
+def split_args(text):
+    """'1.f, 2.f, false' -> ['1.f', '2.f', 'false'] (no nesting needed)."""
+    return [x.strip() for x in text.split(",")]
+
+
 def parse_file(path, rel=None):
     """Returns (entries, problems). entries: list of dicts in file order."""
     with open(path, encoding="utf-8", errors="replace") as f:
         lines = f.read().split("\n")
     rel = rel or path
-    module = re.sub(r"_constants$", "", os.path.splitext(os.path.basename(path))[0])
+    module = re.sub(r"_(constants|tables)$", "", os.path.splitext(os.path.basename(path))[0])
     entries, problems = [], []
     section = ""
+    display, at = "", ""      # @section / @at directives (until the next `// ---` header)
     block = []
     run_doc, run_of = "", ""
     in_run = False
     last = None       # entry that may take note continuation lines
+    fam = None        # @family: prefix, row / list macro, fields, doc, section, display, at, items, rows
+    in_list = False
+    rows = {}         # (macro, NAME) -> args of `{ "<NAME>", ..., <macro>(args) },` table rows
     for i, raw in enumerate(lines):
         line = raw.rstrip("\r")
+        ctx = {"module": module, "section": section, "display": display, "at": at}
+        if fam is not None:
+            if re.match(r"^\s*#define\s+%s\b" % fam["list"], line):
+                in_list = True
+                continue
+            if in_list:
+                lm = LIST_ITEM_RE.match(line)
+                if lm:
+                    fam["items"].append((int(lm.group(1)), lm.group(2), i + 1))
+                    continue
+                in_list = False
+        rm = ROW_RE.match(line)
+        if rm:
+            rows[(rm.group(2), rm.group(1))] = split_args(rm.group(3))
         m = TUNABLE_RE.match(line)
         cm = None if m else CONSTEXPR_RE.match(line)
         if m or cm:
@@ -159,48 +290,8 @@ def parse_file(path, rel=None):
             ty, value, tail = m.group(1), m.group(3), m.group(4)
             ci = tail.find("//")
             comment = tail[ci + 2:].strip() if ci >= 0 else ""
-            tags, note = parse_tags(comment)
-            e = {"name": name, "type": ty, "default_text": value, "module": module,
-                 "section": section, "doc": run_doc, "doc_of": run_of if run_doc else "",
-                 "note": note, "file": rel, "line": i + 1}
-            try:
-                e["default"] = num(value, ty)
-            except ValueError:
-                e["default"] = None
-                problems.append("%s:%d %s: default %r is not a plain number" % (rel, i + 1, name, value))
-            e["unit"] = (tags.get("unit") or [""])[0]
-            rng = tags.get("range")
-            e["range"] = None
-            if ty != "bool":
-                try:
-                    lo, hi = float(rng[0]), float(rng[1])
-                    if not lo < hi:
-                        raise ValueError
-                    e["range"] = [lo, hi]
-                except (TypeError, ValueError, IndexError):
-                    problems.append("%s:%d %s: missing / bad @range" % (rel, i + 1, name))
-            taper = (tags.get("taper") or ["lin"])[0]
-            if taper not in TAPERS or (taper == "log" and e["range"] and e["range"][0] <= 0):
-                problems.append("%s:%d %s: bad @taper %s" % (rel, i + 1, name, taper))
-                taper = "lin"
-            e["taper"] = taper
-            level = (tags.get("level") or [""])[0]
-            if level not in LEVELS:
-                problems.append("%s:%d %s: missing / bad @level" % (rel, i + 1, name))
-                level = "live"
-            e["level"] = level
-            e["when"] = (" ".join(tags.get("when") or [])) or None
-            e["pair"] = None
-            if "pair" in tags:
-                pv = tags["pair"]
-                if len(pv) == 2 and re.match(r"^\w+$", pv[0]) and pv[1] in END_ORDER:
-                    e["pair"] = {"id": pv[0], "end": pv[1], "end_label": END_LABELS[pv[1]]}
-                else:
-                    problems.append("%s:%d %s: bad @pair (want: @pair <ID> %s)" % (rel, i + 1, name, "|".join(END_ORDER)))
-            if e["default"] is not None and e["range"] and ty != "bool":
-                if not e["range"][0] <= e["default"] <= e["range"][1]:
-                    problems.append("%s:%d %s: default outside @range" % (rel, i + 1, name))
-            e["label"] = make_label(name, note, run_doc, e["unit"])
+            ctx.update(doc=run_doc, doc_of=run_of)
+            e = make_entry(name, ty, value, comment, ctx, rel, i + 1, problems)
             entries.append(e)
             last = e
             continue
@@ -209,7 +300,25 @@ def parse_file(path, rel=None):
             title = section_title(ct)
             if title is not None:
                 section = title
+                display, at = "", ""
                 block, in_run, last = [], False, None
+                continue
+            d = DIRECTIVE_RE.match(ct.strip())
+            if d:
+                if d.group(1) == "section":
+                    display = d.group(2).strip()
+                else:
+                    at = d.group(2).strip()
+                continue
+            fm = FAMILY_RE.match(ct.strip())
+            if fm:
+                fam = {"prefix": fm.group(1), "row": fm.group(2), "list": fm.group(3), "fields": [],
+                       "doc": "\n".join(block), "section": section, "display": display, "at": at,
+                       "items": [], "line": i + 1}
+                continue
+            fd = FIELD_RE.match(ct.strip())
+            if fd and fam is not None:
+                fam["fields"].append((fd.group(1), fd.group(2), fd.group(3)))
                 continue
             # note continuation: comment text starting with `//`, or a comment indented far
             # right (aligned under the inline note) directly below the declaration
@@ -223,7 +332,35 @@ def parse_file(path, rel=None):
             continue
         # blank or other code line (array body, closing brace): ends blocks and runs
         block, in_run, last = [], False, None
+    if fam is not None:
+        frows = {name: args for (mac, name), args in rows.items() if mac == fam["row"]}
+        entries.extend(expand_family(fam, frows, module, rel, problems))
     return entries, problems
+
+
+def expand_family(fam, rows, module, rel, problems):
+    out = []
+    if not fam["items"] or not fam["fields"]:
+        problems.append("%s:%d @family %s: no list items / @field lines" % (rel, fam["line"], fam["prefix"]))
+        return out
+    doc_of = ""
+    for idx, preset, lineno in fam["items"]:
+        row = rows.get(preset)
+        if row is None or len(row) != len(fam["fields"]):
+            problems.append("%s:%d %s: no %s(...) row with %d values" % (rel, lineno, preset, fam["row"], len(fam["fields"])))
+            continue
+        for (suffix, ty, comment), value in zip(fam["fields"], row):
+            name = "%s%s_%s" % (fam["prefix"], preset, suffix)
+            doc_of = doc_of or name
+            ctx = {"module": module, "section": fam["section"], "display": fam["display"], "at": fam["at"],
+                   "doc": fam["doc"], "doc_of": doc_of}
+            e = make_entry(name, ty, value, comment, ctx, rel, lineno, problems)
+            if e["pair"]:
+                e["pair"]["id"] = "%s_%s" % (preset, e["pair"]["id"])
+            e["preset"] = preset
+            e["preset_index"] = idx
+            out.append(e)
+    return out
 
 
 def constants_files(repo, sources):
@@ -265,8 +402,27 @@ def build(repo, pedal, sources):
         if c["name"] in seen:
             problems.append("%s: declared twice" % c["name"])
         seen.add(c["name"])
+    layout = LAYOUT.get(pedal)
+    lp = layout_places(layout)
+    for c in consts:
+        places = []
+        for a in c.pop("at", []):
+            if a not in lp:
+                if layout:
+                    problems.append("%s: @at %s is not a bench/mode of LAYOUT[%s]" % (c["name"], a, pedal))
+                continue
+            b, m = a.split("/")
+            places.append({"key": "%s/%s" % (a, c["display_section"]), "bench": b, "mode": m,
+                           "section": c["display_section"], "order": lp[a]})
+        if layout and not places:
+            problems.append("%s: no @at place (bench/mode) for LAYOUT[%s]" % (c["name"], pedal))
+        places.sort(key=lambda x: x["order"])
+        for x in places:
+            x.pop("order")
+        c["places"] = places
     return {"pedal": pedal, "files": [os.path.relpath(p, repo) for p in files],
-            "constants": consts, "pairs": build_pairs(consts, problems), "problems": problems}
+            "constants": consts, "pairs": build_pairs(consts, problems), "problems": problems,
+            "layout": layout}
 
 
 def build_pairs(consts, problems):
