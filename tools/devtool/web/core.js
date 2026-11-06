@@ -195,7 +195,7 @@ function envText(st) {
 }
 const LFO_SHAPES = { tri: "tri", stp: "steps" };
 function lfoText(st) {
-  if (/(?:^|\s)src env\b/.test(st.rest)) return "env drives";
+  if (/(?:^|\s)src EEE\b/.test(st.rest)) return "env drives";   // all three targets on the touch env: K5 no job
   const m = /(?:^|\s)lfo (tri|stp|off|-)(?: d ([\d.]+))?(?: > [\d.]+)?\s+([\d.]+)Hz/.exec(st.rest);
   if (!m) return /(?:^|\s)lfo (?:-|off)(?=\s|$)/.test(st.rest) ? "off" : null;
   if (m[1] === "off" || m[1] === "-" || Number(m[2]) === 0) return "off";

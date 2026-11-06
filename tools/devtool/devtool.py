@@ -1419,13 +1419,15 @@ def selftest():
             mrow = re.match(r'^\s*\{\s*"(\w+)"\s*,\s*kTb', ln)
             if mrow:
                 rows[mrow.group(1)] = n
-    check(len(presets) == 16 and len(fam) == 16 * 10
+    check(len(presets) == 16 and len(fam) == 16 * 12
           and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_PWM_TIMBRE"]["default"] == 0.15
-          and byn["EXP_TB_LOFI_ENV"]["default"] is False and byn["EXP_TB_AIR_PITCH"]["default"] == 15.0
+          and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] is False and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
+                  for _i, pn in presets for t in ("TIMBRE", "FILTER", "PITCH"))
+          and "EXP_TB_SAW_ENV" not in byn and byn["EXP_TB_AIR_PITCH"]["default"] == 15.0
           and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn == "AIR") for _i, pn in presets)
           and all(byn["EXP_TB_%s_STEPPED" % pn]["default"] is (pn == "LOFI") for _i, pn in presets)
           and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
-          "registry: @family per-preset tunables (16 presets x 10 fields, defaults from the EXP_TB_MOD rows; Lofi on AIR, Stepped on LOFI only)")
+          "registry: @family per-preset tunables (16 presets x 12 fields, defaults from the EXP_TB_MOD rows; Lofi on AIR, Stepped on LOFI only; per-target sources all LFO)")
     check(all(byn["EXP_TB_%s_RES" % pn]["default"] == 1.5 and byn["EXP_TB_%s_RES" % pn]["unit"] == "Q"
               and byn["EXP_TB_%s_RES" % pn]["taper"] == "log" and byn["EXP_TB_%s_RES" % pn]["target"] == "filter"
               and (byn["EXP_TB_%s_RES" % pn]["inert"] == "K2 sets Q on ANALOG") == (pn in ("SAW", "PULSE"))
@@ -1472,7 +1474,8 @@ def selftest():
     check(tids and all(k["target"] in tids + [""] for b in js["layout"]["benches"] for m in b["modes"]
                        for k in m.get("knobs", []))
           and all(c["target"] in tids + [""] for c in js["constants"])
-          and next(c for c in js["constants"] if c["name"] == "EXP_TB_SAW_ENV")["states"] == ["LFO", "env"],
+          and all(next(c for c in js["constants"] if c["name"] == "EXP_TB_SAW_%s_ENV" % t)["states"] == ["LFO", "env"]
+                  for t in ("TIMBRE", "FILTER", "PITCH")),
           "/api/registry: targets, knob strips, per-constant @target / @states")
     check(st == 200 and all(c["value"] == c["default"] for c in js["constants"])
           and {"label", "unit", "range", "taper", "level", "file", "line", "section", "module"} <= set(c0),

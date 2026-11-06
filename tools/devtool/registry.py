@@ -242,7 +242,8 @@ LABELS = {
     "EXP_SPEC_DYN_GATE_DB": "Swell gate", "EXP_SPEC_DYN_REL_FRAC": "Mute damping", "EXP_ENV_TRAVEL_TAUS": "Swell curve",
 }
 FIELD_LABELS = {"TIMBRE": "Depth", "FILTER": "Pluck side", "FILTER_SWELL": "Swell side", "RES": "Resonance", "PITCH": "Vibrato depth",
-                "RATE_CCW": "Fastest CCW", "RATE_CW": "Fastest CW", "ENV": "Driven by", "STEPPED": "Stepped",
+                "RATE_CCW": "Fastest CCW", "RATE_CW": "Fastest CW", "TIMBRE_ENV": "Source", "FILTER_ENV": "Source",
+                "PITCH_ENV": "Source", "STEPPED": "Stepped",
                 "LOFI": "Lofi"}
 
 

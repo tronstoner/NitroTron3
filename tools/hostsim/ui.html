@@ -480,8 +480,9 @@ function explorerNow(m) {
       : `timbre (morph) ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)} · now ${fmt(m.tm, 2)}`;
     r[2] = `LP ${hz(m.fc)}`;
     r[3] = `${ps} · LP now ${hz(m.lfe)}`;
-    const mod = `timbre ${fmt(m.ttd, 2)} · filter ${fmt(m.tfd, 2)} / swell ${fmt(m.tfs, 2)} oct · pitch ${fmt(m.tpd, 0)} ct`;
-    r[4] = (m.tenv ? `source ENV (K4 openness; K5 no effect) · ${mod}` : `${lfo} · ${mod}`)
+    const src = (i) => (m.tsrc && m.tsrc[i] === "E") ? "env" : "LFO";   // per target: timbre / filter / pitch
+    const mod = `timbre ${fmt(m.ttd, 2)} (${src(0)}) · filter ${fmt(m.tfd, 2)} / swell ${fmt(m.tfs, 2)} oct (${src(1)}) · pitch ${fmt(m.tpd, 0)} ct (${src(2)})`;
+    r[4] = (m.tsrc === "EEE" ? `all on ENV (K4 openness; K5 no effect) · ${mod}` : `${lfo} · ${mod}`)
       + (m.tlf
         ? " · " + (!m.ton ? "lofi off (master)" : `sum ${m.tsb > 0 ? fmt(m.tsb, 2) + " bits" : "bits off"} · ${m.tsr > 0 ? "hold " + fmt(m.tsr, 0) + " Hz" : "hold off"} · table ${m.ttb > 0 ? fmt(m.ttb, 2) + " bits" : "bits off"} · nearest ${fmt(m.tti, 2)}`)
         : "");

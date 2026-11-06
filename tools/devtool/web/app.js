@@ -1350,11 +1350,10 @@ function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.pre
 // values, grouped by target (timbre / filter / pitch knobs, LFO rates as a CCW / CW fader pair, source switch).
 // ---------------------------------------------------------------------------
 const PRESET_GROUPS = [
-  { title: "Timbre", target: "timbre", fields: ["TIMBRE", "STEPPED"] },
-  { title: "Filter", target: "filter", fields: ["FILTER", "FILTER_SWELL", "RES"] },
-  { title: "Pitch", target: "pitch", fields: ["PITCH"] },
+  { title: "Timbre", target: "timbre", fields: ["TIMBRE", "TIMBRE_ENV", "STEPPED"] },
+  { title: "Filter", target: "filter", fields: ["FILTER", "FILTER_SWELL", "RES", "FILTER_ENV"] },
+  { title: "Pitch", target: "pitch", fields: ["PITCH", "PITCH_ENV"] },
   { title: "LFO speed", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
-  { title: "Source", target: "env", fields: ["ENV"] },
   { title: "Lofi", target: "lofi", fields: ["LOFI"] },
 ];
 let presetEd = null;     // {presets, byPreset, viewKey, chips, body, follow}

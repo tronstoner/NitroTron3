@@ -255,12 +255,12 @@ int main() {
         // `u <knob> bt <beat Hz> prop|hz|off`); + the SW1 UP touch env / `fce` / `lfo` part (fce = the applied index fc; DOWN)
         // SW3 MID SW1 MID audition bank (EXP_TB_LEGACY = false): `tab <n>/16 <NAME> LFO|ANALOG|LOFI k2 <K2 knob>` then
         // LFO `pos <frame position>`, ANALOG `Q <LP Q at the K2 knob>`, LOFI `step <n>/16|morph`; then the preset's MOD
-        // `src lfo|env td <timbre depth> fd <filter depth oct> fs <filter swell oct> q <LP Q: RES,
-        // ANALOG the K2 Q; 1.50 / 5.5e6 / 4.0e-8> pd <pitch depth cents>` (src env: the
-        // K4 touch env o drives the targets - m = K2 + td o, cutoff + fd o oct, pitch + pd o cents - and K5 does nothing),
+        // `src <t><f><p> td <timbre depth> fd <filter depth oct> fs <filter swell oct> q <LP Q: RES,
+        // ANALOG the K2 Q; 1.50 / 5.5e6 / 4.0e-8> pd <pitch depth cents>` (src: one char per target timbre / filter /
+        // pitch, L = the K5 LFO drives it, E = the K4 touch env o - m = K2 + td o, cutoff + fd o oct, pitch + pd o cents),
         // LOFI also `sb <bits|off> sr <Hz|off> tb <bits|off> ti <i>` (each stage `off` at its bypass value /
         // EXP_TB_LOFI_ENABLE false); `lp .. eff ..` + the K4 touch env + `lfo ..` (K5 LFO shape, depth, rate at the knob
-        // with the preset's top rates; `lfo -` with src env).
+        // with the preset's top rates; `lfo -` with src EEE: K5 does nothing).
         // Legacy zones: `WT/<zone> m.. pos.. dmp .. lp .. eff ..` as before.
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
@@ -286,7 +286,7 @@ int main() {
                    " fce %d lfo %s d" D2F " " D2F "Hz",
                    D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
-        else if (d.tbz >= 0 && d.tenv)                        // SW1 MID audition bank, MOD source ENV: K5 does nothing
+        else if (d.tbz >= 0 && d.tsrc == 7)                   // SW1 MID audition bank, all targets on env: K5 does nothing
           snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " L" D2F " o" D2F " lfo -",
                    D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so));
         else if (d.sw1 == 1)                                  // SW3 MID, SW1 MID: the same without fce (= eff)
@@ -344,7 +344,8 @@ int main() {
           }
           char qs[16];                                        // the LP Q this preset sets (RES / ANALOG K2 Q), compact
           DiagCompact(qs, sizeof qs, d.tres);
-          snprintf(mod, sizeof mod, " src %s td" D2F " fd" D2F " fs" D2F " q %s pd %d", d.tenv ? "env" : "lfo",
+          snprintf(mod, sizeof mod, " src %c%c%c td" D2F " fd" D2F " fs" D2F " q %s pd %d",
+                   (d.tsrc & 1) ? 'E' : 'L', (d.tsrc & 2) ? 'E' : 'L', (d.tsrc & 4) ? 'E' : 'L',
                    D2V(d.ttd), D2V(d.tfd), D2V(d.tfs), qs, (int)(d.tpd + 0.5f));
           diag_link::PrintLine("tab %d/%d %s %s k2" D2F "%s lofi %d stp %d%s%s lp %d eff %d%s mute %d cpu %u%%",
                             d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), kp,
