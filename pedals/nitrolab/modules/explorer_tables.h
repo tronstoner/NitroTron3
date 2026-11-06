@@ -198,8 +198,8 @@ constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
   { "GLASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false, false, false) },
   { "RASPY",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false, false, false) },
   { "BREATH", kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BREATH), true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false, false, false) },
-  { "AIR",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f,  0.f,  0.f, 20.f, 20.f, false, false, false) },
-  { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f,  0.f,  0.f,  0.f, 20.f, 20.f, false, true,  true) },
+  { "AIR",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.047f, .54f, .64f, 15.f, 5.228f, 20.f, false, false, true) },
+  { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.114f, 0.f,  0.f,  0.f, .4552f, 20.f, false, true,  false) },
 };
 #undef EXP_TB_L
 #undef EXP_TB_S
