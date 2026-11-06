@@ -523,3 +523,17 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .cell:hover .info, .fd:hover .info, .cell:focus-within .info, .fd:focus-within .info { visibility: visible; }
 .fd .rst { visibility: hidden; }
 .sec.full { flex-basis: 100%; }
+
+/* preset editor: one preset at a time (row of names, follows K1 by default) */
+.ped-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.ped-bar button { padding: 5px 11px; font-size: 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.ped-bar button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.ped-chip .pk { color: var(--dim); margin-right: 6px; font-size: 12px; }
+.ped-chip[aria-pressed="true"] .pk { color: inherit; opacity: .8; }
+.ped-chip.now .pnow::before { content: "●"; color: var(--ok); margin-left: 6px; font-size: 10px; }
+.ped-follow { font-weight: 600; margin-right: 8px; }
+.ped-body { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.ped-group { border: 1px solid var(--line); border-top: 3px solid var(--tc); border-radius: 0 0 6px 6px; padding: 8px 10px 6px; }
+.ped-gtitle { font-weight: 700; font-size: 14px; color: var(--tc); margin-bottom: 4px; }
+.ped-group .bank { border: 0; padding: 0; background: none; }
+.ped-group .bank-head { display: none; }

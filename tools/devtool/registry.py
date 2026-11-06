@@ -228,8 +228,8 @@ LABELS = {
     "EXP_SPEC_MORPH_ZONE": "Noon blend zone", "EXP_SPEC_DYN_FLOOR_DB": "Level floor", "EXP_SPEC_DYN_TOP_DB": "Level top",
     "EXP_SPEC_DYN_GATE_DB": "Swell gate", "EXP_SPEC_DYN_REL_FRAC": "Mute damping", "EXP_ENV_TRAVEL_TAUS": "Swell curve",
 }
-FIELD_LABELS = {"TIMBRE": "Timbre", "FILTER": "Filter, pluck", "FILTER_SWELL": "Filter, swell", "PITCH": "Pitch",
-                "RATE_CCW": "Rate CCW", "RATE_CW": "Rate CW", "ENV": "Source"}
+FIELD_LABELS = {"TIMBRE": "Depth", "FILTER": "Pluck side", "FILTER_SWELL": "Swell side", "PITCH": "Vibrato depth",
+                "RATE_CCW": "Fastest CCW", "RATE_CW": "Fastest CW", "ENV": "Driven by"}
 
 
 def make_label(name, note, doc, unit):

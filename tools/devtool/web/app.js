@@ -825,7 +825,7 @@ function buildSection(titleText, list, viewKey, where) {
   let count = 0;
   if (presets.length) {
     sec.classList.add("full");
-    body.appendChild(buildPresetGrid(presets, viewKey));
+    body.appendChild(buildPresetEditor(presets, viewKey));
   }
   // pairs -> fader banks (knob-end pairs of one unit / taper share a bank: one axis, comparable heights)
   const inList = new Set(rest.map((c) => c.name));
@@ -1286,194 +1286,104 @@ function buildPairBank(group, viewKey) {
 }
 function shortPairLabel(l) { return l.split(" ")[0]; }
 
-// ---------------------------------------------------------------------------
-// Preset grid (registry @family): rows = presets (K1 order), columns = fields. A number cell opens a detail
-// row (knob, number field, default, explanation); a column header shows that field across all presets as
-// a fader bank (compare); a bool field is a small two-word toggle in the cell.
-// ---------------------------------------------------------------------------
-let presetRows = [];
 function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.preset.length + 1); }
-function fieldHead(c) {
-  const lab = (c.label || "").split(":")[0].trim();
-  if (c.pair && DIR_ENDS[c.pair.end]) {
-    const base = fieldOf(c).replace(/_(CCW|CW|NOON)$/, "");
-    return { text: base.charAt(0) + base.slice(1).toLowerCase().replace(/_/g, " "), icon: DIR_ENDS[c.pair.end] };
-  }
-  if (lab && lab.length <= 26) return { text: lab, icon: null };
-  const f = fieldOf(c);
-  return { text: f.charAt(0) + f.slice(1).toLowerCase().replace(/_/g, " "), icon: null };
+
+// ---------------------------------------------------------------------------
+// Preset editor (registry @family): ONE preset at a time. A row of preset names on top; by default it
+// follows the pedal's K1 preset ("Follow K1"); clicking a name pins that preset. Below: only that preset's
+// values, grouped by target (timbre / filter / pitch knobs, LFO rates as a CCW / CW fader pair, source switch).
+// ---------------------------------------------------------------------------
+const PRESET_GROUPS = [
+  { title: "Timbre", target: "timbre", fields: ["TIMBRE"] },
+  { title: "Filter", target: "filter", fields: ["FILTER", "FILTER_SWELL"] },
+  { title: "Pitch", target: "pitch", fields: ["PITCH"] },
+  { title: "LFO speed", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
+  { title: "Source", target: "env", fields: ["ENV"] },
+];
+let presetEd = null;     // {presets, byPreset, viewKey, chips, body, follow}
+function presetShown() {
+  const a = state.active;
+  if (tun.presetFollow !== false && a && a.preset && activeModeId() === (presetEd && presetEd.viewKey)
+      && presetEd.byPreset.has(a.preset)) return a.preset;
+  if (tun.presetSel && presetEd && presetEd.byPreset.has(tun.presetSel)) return tun.presetSel;
+  return presetEd ? presetEd.presets[0].name : "";
 }
-function buildPresetGrid(list, viewKey) {
-  const wrap = h("div");
-  const presets = [];
-  const byPreset = new Map();
+function buildPresetEditor(list, viewKey) {
+  const wrap = h("div", "ped");
+  const presets = [], byPreset = new Map();
   for (const c of list) {
     if (!byPreset.has(c.preset)) { byPreset.set(c.preset, new Map()); presets.push({ name: c.preset, index: c.preset_index }); }
     byPreset.get(c.preset).set(fieldOf(c), c);
   }
   presets.sort((a, b) => a.index - b.index);
-  const fields = [...byPreset.get(presets[0].name).keys()];
-  const proto = byPreset.get(presets[0].name);
-
-  const compare = h("div", "compare");
-  const renderCompare = () => {
-    compare.textContent = "";
-    dropTag("compare");
-    const f = tun.compare;
-    if (!f || !proto.has(f) || proto.get(f).type === "bool") return;
-    const items = presets.map((p) => ({ c: byPreset.get(p.name).get(f), cap: (p.index + 1) + " " + p.name }));
-    const fh = fieldHead(proto.get(f));
-    compare.appendChild(tagged("compare", () => buildBank(fh.text + (fh.icon ? " at " + proto.get(f).pair.end_label : "") +
-      " - all presets", items, null, "", viewKey)));
-    for (const it of items) updateName(it.c.name);
-    renderPresetNow();
-  };
-
-  const tblWrap = h("div", "pgrid-wrap");
-  const tbl = h("table", "pgrid");
-  const thead = h("thead");
-  const hr = h("tr");
-  const th0 = h("th", "ph-name", "K1 preset");
-  th0.scope = "col";
-  hr.appendChild(th0);
-  const headBtns = [];
-  for (const f of fields) {
-    const c = proto.get(f);
-    const th = h("th");
-    th.scope = "col";
-    th.dataset.target = c.target || "";
-    const fh = fieldHead(c);
-    const b = h("button", "ph");
-    b.type = "button";
-    b.append(h("span", "", fh.text));
-    if (fh.icon) b.appendChild(icon(fh.icon));
-    if (unitText(c.unit)) b.appendChild(h("span", "ph-unit", c.unit));
-    if (c.type !== "bool") {
-      b.title = "Compare " + fh.text + " across all presets (faders)";
-      b.setAttribute("aria-pressed", String(tun.compare === f));
-      b.addEventListener("click", () => {
-        tun.compare = tun.compare === f ? "" : f;
-        store("devtool.compare", tun.compare);
-        for (const x of headBtns) x.b.setAttribute("aria-pressed", String(tun.compare === x.f));
-        renderCompare();
-      });
-    } else { b.disabled = true; b.style.opacity = "1"; b.style.cursor = "default"; b.title = c.label; }
-    headBtns.push({ b, f });
-    th.appendChild(b);
-    hr.appendChild(th);
-  }
-  thead.appendChild(hr);
-  const tbody = h("tbody");
-  presetRows = [];
+  if (tun.presetFollow === undefined) tun.presetFollow = store("devtool.presetFollow") !== "0";
+  if (tun.presetSel === undefined) tun.presetSel = store("devtool.presetSel") || "";
+  const bar = h("div", "ped-bar");
+  const follow = h("button", "ped-follow", "Follow K1");
+  follow.type = "button";
+  follow.addEventListener("click", () => { tun.presetFollow = true; store("devtool.presetFollow", "1"); renderPresetBody(true); });
+  bar.appendChild(follow);
+  const chips = new Map();
   for (const p of presets) {
-    const tr = h("tr", "prow");
-    tr.dataset.preset = p.name;
-    const tn = h("th", "pname");
-    tn.scope = "row";
-    tn.append(h("span", "pk", String(p.index + 1)), document.createTextNode(p.name), h("span", "pnow", "● now"));
-    tr.appendChild(tn);
-    for (const f of fields) {
-      const c = byPreset.get(p.name).get(f);
-      const td = h("td");
-      td.dataset.target = c.target || "";
-      td.appendChild(c.type === "bool" ? buildSegCell(c) : buildNumCell(c, tr, fields.length + 1, viewKey));
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-    presetRows.push({ tr, preset: p.name, viewKey });
+    const b = h("button", "ped-chip");
+    b.type = "button";
+    b.append(h("span", "pk", String(p.index + 1)), document.createTextNode(p.name), h("span", "pnow"));
+    b.addEventListener("click", () => {
+      tun.presetFollow = false; tun.presetSel = p.name;
+      store("devtool.presetFollow", "0"); store("devtool.presetSel", p.name);
+      renderPresetBody(true);
+    });
+    chips.set(p.name, b);
+    bar.appendChild(b);
   }
-  tbl.append(thead, tbody);
-  tblWrap.appendChild(tbl);
-  wrap.append(compare, tblWrap);
-  renderCompare();
-  // a detail row that was open before (selection survives rebuilds / reconnects)
-  if (tun.openCell) {
-    const btn = tbody.querySelector('.pcell[data-name="' + tun.openCell + '"]');
-    if (btn) openDetail(btn, tun.byName.get(tun.openCell), btn.closest("tr"), fields.length + 1, viewKey);
-  }
+  const body = h("div", "ped-body");
+  wrap.append(bar, body);
+  presetEd = { presets, byPreset, viewKey, chips, body, follow, shown: "" };
+  renderPresetBody(true);
   return wrap;
 }
-function buildNumCell(c, tr, span, viewKey) {
-  const b = h("button", "pcell");
-  b.type = "button";
-  b.dataset.name = c.name;
-  b.setAttribute("aria-expanded", "false");
-  const pv = h("span", "pv"), pd = h("span", "pd");
-  b.append(pd, pv);
-  b.addEventListener("click", () => {
-    if (tun.openCell === c.name) { closeDetail(); return; }
-    openDetail(b, c, tr, span, viewKey);
-  });
-  register(c.name, {
-    update() {
-      const v = cur(c), ch = isChanged(c);
-      pv.textContent = fmtNum(v, c.unit, c.type);
-      b.classList.toggle("changed", ch);
-      b.classList.toggle("off", (tun.byName.get(c.name) || c).in_firmware === false);
-      b.title = c.label + "\n" + fmtWithUnit(v, c.unit, c.type) + (ch ? "  (default " + fmtWithUnit(c.default, c.unit, c.type) + ")" : "");
-    },
-  });
-  return b;
-}
-function buildSegCell(c) {
-  const seg = h("span", "seg");
-  seg.setAttribute("role", "group");
-  seg.setAttribute("aria-label", c.label);
-  const btns = [false, true].map((v) => {
-    const b = h("button", "", stateWord(c, v));
-    b.type = "button";
-    b.addEventListener("click", () => { if (cur(c) !== v) sendSet(c.name, v); });
-    seg.appendChild(b);
-    return b;
-  });
-  register(c.name, {
-    update() {
-      const v = !!cur(c), ok = canEdit(c);
-      btns.forEach((b, i) => { b.setAttribute("aria-pressed", String(v === !!i)); b.disabled = !ok; });
-      seg.classList.toggle("changed", isChanged(c));
-      seg.title = c.label + (isChanged(c) ? "  (default " + stateWord(c, c.default) + ")" : "");
-    },
-  });
-  return seg;
-}
-let detail = null;      // {tr, btn, name}
-function closeDetail() {
-  if (detail) {
-    detail.tr.remove();
-    detail.btn.setAttribute("aria-expanded", "false");
-    dropTag("detail");
-  }
-  detail = null;
-  tun.openCell = "";
-  store("devtool.openCell", "");
-}
-function openDetail(btn, c, tr, span, viewKey) {
-  closeDetail();
-  const row = h("tr", "pdetail");
-  const td = h("td");
-  td.colSpan = span;
-  td.dataset.target = c.target || "";
-  const inner = h("div", "pd-in");
-  inner.appendChild(tagged("detail", () => buildDialCell(c, viewKey)));
-  explainInto(inner, c, viewKey, c.preset + " - " + c.label);
-  td.appendChild(inner);
-  row.appendChild(td);
-  tr.after(row);
-  btn.setAttribute("aria-expanded", "true");
-  detail = { tr: row, btn, name: c.name };
-  tun.openCell = c.name;
-  store("devtool.openCell", c.name);
-  updateName(c.name);
-}
-function renderPresetNow() {
+function renderPresetBody(force) {
+  if (!presetEd) return;
+  const name = presetShown();
   const a = state.active;
-  const am = activeModeId();
-  for (const r of presetRows) r.tr.classList.toggle("now", !!a && a.preset === r.preset && am === r.viewKey);
-  for (const fd of el.sections.querySelectorAll(".compare .fd")) {
-    const c = tun.byName.get(fd.dataset.name);
-    fd.classList.toggle("now", !!(a && c && a.preset === c.preset && am === tun.viewKey));
+  for (const [n, b] of presetEd.chips) {
+    b.setAttribute("aria-pressed", String(n === name));
+    b.classList.toggle("now", !!a && a.preset === n && activeModeId() === presetEd.viewKey);
   }
+  presetEd.follow.setAttribute("aria-pressed", String(tun.presetFollow !== false));
+  if (!force && name === presetEd.shown) return;
+  presetEd.shown = name;
+  dropTag("preset");
+  const body = presetEd.body, vk = presetEd.viewKey;
+  body.textContent = "";
+  const fm = presetEd.byPreset.get(name);
+  if (!fm) return;
+  tagged("preset", () => {
+    for (const g of PRESET_GROUPS) {
+      const mem = g.fields.map((f) => fm.get(f)).filter(Boolean);
+      if (!mem.length) continue;
+      const box = h("div", "ped-group");
+      box.dataset.target = g.target;
+      box.appendChild(h("div", "ped-gtitle", g.title));
+      if (g.faders) {
+        const items = mem.map((c) => {
+          const cap = h("span");
+          if (c.pair && DIR_ENDS[c.pair.end]) cap.appendChild(icon(DIR_ENDS[c.pair.end]));
+          cap.appendChild(document.createTextNode(c.pair ? c.pair.end_label : c.label));
+          return { c, cap };
+        });
+        box.appendChild(buildBank("", items, null, "", vk));
+      } else {
+        const row = h("div", "ctl-grid");
+        for (const c of mem) row.appendChild(c.type === "bool" ? buildToggleCell(c, vk) : buildDialCell(c, vk));
+        box.appendChild(row);
+      }
+      body.appendChild(box);
+    }
+  });
+  for (const c of fm.values()) updateName(c.name);
 }
+function renderPresetNow() { renderPresetBody(false); }
 
 // ---------------------------------------------------------------------------
 // Sending: one request per constant in flight, latest value wins (devtool throttles the serial side)
@@ -1544,6 +1454,7 @@ function reveal(c) {
   const keys = viewKeysOf(c);
   const k = keys.includes(tun.viewKey) && !tun.search ? tun.viewKey : keys[0];
   if (k !== tun.viewKey || tun.search) selectView(k);
+  if (c.preset && presetEd) { tun.presetFollow = false; tun.presetSel = c.preset; renderPresetBody(true); }
   let node = el.sections.querySelector('.pcell[data-name="' + c.name + '"]') ||
     el.sections.querySelector('[data-name="' + c.name + '"]');
   if (node && node.classList.contains("pcell") && tun.openCell !== c.name) {
