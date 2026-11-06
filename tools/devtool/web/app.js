@@ -104,7 +104,7 @@ const el = {
   pedal: $("b-pedal"), hash: $("b-hash"), time: $("b-time"), note: $("b-note"),
   flashPedal: $("flash-pedal"), flashBtn: $("flash-btn"),
   flashPanel: $("flash-panel"), flashBadge: $("flash-badge"), flashMsg: $("flash-msg"),
-  flashTime: $("flash-time"), flashOut: $("flash-out"),
+  flashTime: $("flash-time"), flashOut: $("flash-out"), flashLast: $("flash-last"),
   filter: $("filter"), filterMode: $("filter-mode"), count: $("count"),
   pauseBtn: $("pause-btn"), clearBtn: $("clear-btn"), log: $("log"), jump: $("jump"),
   changesBtn: $("changes-btn"), changesCount: $("changes-count"), changesPanel: $("changes-panel"),
@@ -232,8 +232,8 @@ function onFlash(f) {
   const prev = state.flash.state;
   state.flash = f && f.state ? f : { active: false, state: "idle" };
   if (state.flash.state === "building" && prev !== "building") {
-    el.flashOut.textContent = "";
-    el.flashPanel.open = true;
+    el.flashOut.textContent = "";        // never auto-expands: the summary shows the latest line
+    el.flashLast.textContent = "";
   }
   renderFlash();
 }
@@ -252,6 +252,8 @@ function onFlashOut(d) {
   el.flashOut.appendChild(line);
   while (el.flashOut.childNodes.length > 4000) el.flashOut.removeChild(el.flashOut.firstChild);
   if (atBottom) el.flashOut.scrollTop = el.flashOut.scrollHeight;
+  el.flashLast.textContent = d.text;     // latest output line, visible while collapsed
+  el.flashLast.title = d.text;
 }
 
 async function startFlash() {

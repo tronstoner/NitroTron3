@@ -140,6 +140,7 @@ button[aria-pressed="true"] { background: var(--warn); color: var(--accent-fg); 
 .flash-badge.ok { background: var(--ok); color: var(--accent-fg); }
 .flash-badge.bad { background: var(--bad); color: var(--accent-fg); }
 .flash-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flash-last { flex: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-family: var(--mono); font-size: .9em; }
 .flash-msg.attn { color: var(--warn); font-weight: 600; }
 .flash-time { color: var(--dim); font-family: var(--mono); font-size: 12px; }
 .flash-out {
