@@ -13,10 +13,16 @@
     <span class="conn-text" id="conn-text">connecting to devtool…</span>
   </div>
   <dl class="build" id="build">
-    <div><dt>Pedal</dt><dd id="b-pedal">–</dd></div>
-    <div><dt>Firmware</dt><dd id="b-hash">–</dd></div>
-    <div><dt>Built</dt><dd id="b-time">–</dd></div>
+    <div class="b-pedal"><dt>Pedal</dt><dd id="b-pedal">–</dd></div>
+    <div class="b-hash"><dt>Firmware</dt><dd id="b-hash">–</dd></div>
+    <div class="b-time"><dt>Built</dt><dd id="b-time">–</dd></div>
   </dl>
+  <div class="slot" id="slot" title="The pedal's current selection, from its latest explorer state line">
+    <span class="slot-k">Slot</span>
+    <span class="slot-v" id="slot-v">–</span>
+    <span class="slot-x" id="slot-x"></span>
+  </div>
+  <p class="note" id="b-note"></p>
   <div class="top-actions">
     <button id="changes-btn" type="button" aria-expanded="false" aria-controls="changes-panel" title="Constants that differ from the compiled defaults">
       Changes <span class="count-badge" id="changes-count">0</span>
@@ -27,10 +33,9 @@
       <button id="flash-btn" class="primary" type="button">Flash</button>
     </div>
   </div>
-  <p class="note" id="b-note" hidden></p>
 </header>
 
-<details class="flash-panel" id="flash-panel" hidden>
+<details class="flash-panel" id="flash-panel">
   <summary>
     <span class="flash-badge" id="flash-badge">idle</span>
     <span class="flash-msg" id="flash-msg"></span>
@@ -50,8 +55,8 @@
   <p class="changes-foot dim" id="changes-foot">Written to tune/changes.json on every change. The agent applies it to the constants files.</p>
 </section>
 
-<div class="layout">
-  <aside class="sidebar" id="sidebar" aria-label="Constants">
+<div class="panes" id="panes">
+  <aside class="pane pane-tree" id="sidebar" aria-label="Constants">
     <div class="side-search">
       <label class="visually-hidden" for="search">Search constants</label>
       <input id="search" type="search" placeholder="Search name, label, explanation" spellcheck="false" autocomplete="off">
@@ -59,37 +64,43 @@
     <nav class="tree" id="tree" aria-label="Sections"></nav>
   </aside>
 
-  <main class="main">
-    <div class="tabs" role="tablist">
+  <div class="splitter" id="split-tree" role="separator" aria-orientation="vertical" tabindex="0"
+       aria-label="Resize the sections pane" aria-controls="sidebar"></div>
+
+  <main class="pane pane-values" aria-label="Values">
+    <div class="values-head">
       <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Sections</button>
-      <button role="tab" id="tab-const" aria-selected="true" aria-controls="view-const" type="button">Constants</button>
-      <button role="tab" id="tab-log" aria-selected="false" aria-controls="view-log" type="button">Log <span class="tab-count" id="tab-log-count"></span></button>
-    </div>
-
-    <section class="view-const" id="view-const" role="tabpanel" aria-labelledby="tab-const">
-      <div class="tun-state" id="tun-state"></div>
-      <div class="guard" id="guard" hidden></div>
       <div class="sec-head" id="sec-head"></div>
+    </div>
+    <div class="strip" id="strip">
+      <span class="strip-state" id="tun-state"></span>
+      <span class="strip-guard" id="guard"></span>
+      <button class="strip-btn" id="guard-btn" type="button">Allow changes anyway</button>
+    </div>
+    <div class="view-const" id="view-const">
       <div class="rows" id="rows"></div>
-    </section>
-
-    <section class="logpanel" id="view-log" role="tabpanel" aria-labelledby="tab-log" hidden>
-      <div class="toolbar">
-        <div class="filter">
-          <label class="visually-hidden" for="filter">Filter</label>
-          <input id="filter" type="search" placeholder="Filter (regex, case-insensitive)" spellcheck="false" autocomplete="off">
-          <span class="filter-mode" id="filter-mode"></span>
-        </div>
-        <div class="tools">
-          <span class="count" id="count">0 lines</span>
-          <button id="pause-btn" type="button" aria-pressed="false">Pause</button>
-          <button id="clear-btn" type="button">Clear view</button>
-        </div>
-      </div>
-      <div class="log" id="log" tabindex="0" aria-live="off"></div>
-      <button class="jump" id="jump" type="button" hidden>Jump to latest</button>
-    </section>
+    </div>
   </main>
+
+  <div class="splitter" id="split-log" role="separator" aria-orientation="vertical" tabindex="0"
+       aria-label="Resize the log pane" aria-controls="view-log"></div>
+
+  <section class="pane pane-log" id="view-log" aria-label="Log">
+    <div class="toolbar">
+      <div class="filter">
+        <label class="visually-hidden" for="filter">Filter</label>
+        <input id="filter" type="search" placeholder="Filter (regex, case-insensitive)" spellcheck="false" autocomplete="off">
+        <span class="filter-mode" id="filter-mode"></span>
+      </div>
+      <div class="tools">
+        <span class="count" id="count">0 lines</span>
+        <button id="pause-btn" type="button" aria-pressed="false">Pause</button>
+        <button id="clear-btn" type="button">Clear view</button>
+      </div>
+    </div>
+    <div class="log" id="log" tabindex="0" aria-live="off"></div>
+    <button class="jump" id="jump" type="button" hidden>Jump to latest</button>
+  </section>
 </div>
 
 <script src="app.js"></script>

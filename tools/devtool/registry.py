@@ -14,10 +14,20 @@ Per `TUNABLE(type, NAME, value);` line:
   note        trailing inline comment after the `@` tags, plus continuation
               lines below whose comment text itself starts with `//`.
   tags        @unit <u>  @range <min> <max>  @taper lin|log  @level live|reactivate
+              @pair <ID> <end>   (optional; see PAIRS below)
               (written first in the inline comment, before the note text)
   label       readable label from the note's first clause (parentheses and a
               leading unit like `Hz;` removed), else the doc's first sentence,
               else the name.
+
+PAIRS: constants that are the ends of one law share `@pair <ID> <end>` and are
+shown as ONE row (one multi-handle slider in their common unit / taper).
+  ID   the row label, `_` = space (e.g. `Pluck_decay_time`)
+  end  where the constant acts: knob position `ccw`, `noon`, `cw` (a knob-end
+       pair: the values the knob law reaches there), or the ends of a value range
+       that is not a knob law: `floor` / `top`, `fast` / `slow` (a "range" row).
+  A pair needs >= 2 members, distinct ends, one kind (knob or range), the same
+  type / unit / taper; members are ordered by END_ORDER.
 
 Python 3 stdlib only.
 """
@@ -30,6 +40,10 @@ CONSTEXPR_RE = re.compile(r"^\s*(?:static\s+)?constexpr\s+[\w:]+\s+(\w+)\b(.*)$"
 TAG_RE = re.compile(r"@(\w+)((?:\s+(?!@)\S+)*)")
 LABEL_UNITS = {"hz", "s", "ms", "db", "dbfs", "bits", "oct", "rad", "x", "t4 units"}
 LEVELS = ("live", "reactivate")
+END_ORDER = ("ccw", "noon", "cw", "floor", "top", "fast", "slow")
+END_LABELS = {"ccw": "CCW", "noon": "noon", "cw": "CW", "floor": "floor", "top": "top",
+              "fast": "fastest env", "slow": "slowest env"}
+KNOB_ENDS = ("ccw", "noon", "cw")
 TAPERS = ("lin", "log")
 LABEL_MAX = 64
 
@@ -61,7 +75,7 @@ def parse_tags(comment):
             break
         key, vals = m.group(1), m.group(2).split()
         # a tag takes a fixed number of values; anything after is note text
-        n = 2 if key == "range" else 1
+        n = 2 if key in ("range", "pair") else 1
         tags[key] = vals[:n]
         tail = vals[n:]
         rest = (" ".join(tail) + rest[m.end():]).strip() if tail else rest[m.end():].strip()
@@ -176,6 +190,13 @@ def parse_file(path, rel=None):
                 level = "live"
             e["level"] = level
             e["when"] = (" ".join(tags.get("when") or [])) or None
+            e["pair"] = None
+            if "pair" in tags:
+                pv = tags["pair"]
+                if len(pv) == 2 and re.match(r"^\w+$", pv[0]) and pv[1] in END_ORDER:
+                    e["pair"] = {"id": pv[0], "end": pv[1], "end_label": END_LABELS[pv[1]]}
+                else:
+                    problems.append("%s:%d %s: bad @pair (want: @pair <ID> %s)" % (rel, i + 1, name, "|".join(END_ORDER)))
             if e["default"] is not None and e["range"] and ty != "bool":
                 if not e["range"][0] <= e["default"] <= e["range"][1]:
                     problems.append("%s:%d %s: default outside @range" % (rel, i + 1, name))
@@ -245,4 +266,37 @@ def build(repo, pedal, sources):
             problems.append("%s: declared twice" % c["name"])
         seen.add(c["name"])
     return {"pedal": pedal, "files": [os.path.relpath(p, repo) for p in files],
-            "constants": consts, "problems": problems}
+            "constants": consts, "pairs": build_pairs(consts, problems), "problems": problems}
+
+
+def build_pairs(consts, problems):
+    """{ID: {label, kind: knob|range, members: [names, END_ORDER]}}; a bad pair is reported and dropped
+    (its members then show as single rows)."""
+    groups = {}
+    for c in consts:
+        if c.get("pair"):
+            groups.setdefault(c["pair"]["id"], []).append(c)
+    pairs = {}
+    for pid, mem in groups.items():
+        ends = [c["pair"]["end"] for c in mem]
+        knob = [e in KNOB_ENDS for e in ends]
+        why = None
+        if len(mem) < 2:
+            why = "only one member"
+        elif len(set(ends)) != len(ends):
+            why = "an end is used twice"
+        elif any(knob) and not all(knob):
+            why = "knob ends (ccw / noon / cw) mixed with range ends"
+        elif len({(c["type"], c["unit"], c["taper"]) for c in mem}) != 1:
+            why = "members differ in type / unit / taper"
+        elif any(c["type"] == "bool" or not c["range"] for c in mem):
+            why = "members need a number type and a @range"
+        if why:
+            problems.append("@pair %s: %s" % (pid, why))
+            for c in mem:
+                c["pair"] = None
+            continue
+        mem.sort(key=lambda c: END_ORDER.index(c["pair"]["end"]))
+        pairs[pid] = {"label": pid.replace("_", " "), "kind": "knob" if all(knob) else "range",
+                      "members": [c["name"] for c in mem]}
+    return pairs

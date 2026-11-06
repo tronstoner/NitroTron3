@@ -1,20 +1,20 @@
 #pragma once
 //
-// explorer_tables.h — the SW3 MID SW1 MID AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): 18 data-driven table
-// presets, K1 = 18 equal stepped zones in this list order (EXP_TB_ZONE_XFADE_MS crossfade on a change). ONE place:
+// explorer_tables.h — the SW3 MID SW1 MID AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): 16 data-driven table
+// presets, K1 = 16 equal stepped zones in this list order (EXP_TB_ZONE_XFADE_MS crossfade on a change). ONE place:
 // a new preset / journey is a new stage list + one EXP_TB_PRESETS entry, no code. Built at Init by BuildBank
 // (explorer.h) through the legacy table pipeline; see explorer.h TABLES for the render and the K2 / K5 law per kind.
 //
-// PRESET = name, kind, frame count, key stages, level rules (re-phase, RMS match, int16 scale), lofi variant, share.
+// PRESET = name, kind, frame count, key stages, level rules (re-phase, RMS match, int16 scale), share.
 //   kind   LFO      K2 = morph through the frames, K5 = the K5 LFO on the morph (+- EXP_LFO_MORPH_SWING), as legacy
 //          JOURNEY  K2 = morph start S, K5 = direction + constant speed of the travel from S (EXP_TB_JRN_*, explorer.h
 //                   JourneyUpdate): CCW backward, noon still, CW forward; restarts at S on every onset
 //          ANALOG   one frame; K2 = 2-pole LP resonance Q (EXP_TF_Q_MIN .. EXP_TF_Q_MAX, exponential), K5 = the K5 LFO
 //                   on the LP cutoff (the SW3 MID FM placement: DampFmUpdate's octaves, explorer.h)
-//          LOFI     K2 = static morph position (no LFO / journey, nothing restarts), K5 = lofi amount a of the preset's
-//                   variant (BITS / RATE / TABLE; laws: explorer_constants.h EXP_TB_LOFI_*, explorer.h TABLES LOFI)
-//   share  >= 0: the preset reads that (earlier) preset's frames instead of building its own (the 3 LOFI presets share
-//          the one LOFI SPECTRA table: built once, 31 frames); -1 = own frames.
+//          LOFI     K2 = static morph position (no LFO / journey, nothing restarts), K5 = no job; the four LOFI stages
+//                   are set by their constants (explorer_constants.h EXP_TB_LOFI_*, explorer.h TABLES LOFI)
+//   (every kind but ANALOG: K2 stepped through the key stages with EXP_TB_K2_DISCRETE / EXP_TB_LOFI_K2_DISCRETE)
+//   share  >= 0: the preset reads that (earlier) preset's frames instead of building its own; -1 = own frames.
 // STAGE  = position on the morph (0..1, first 0, last 1, ascending), generator + parameter p (or a harmonic list),
 //          tonal gain (render-time factor on the table output, 1 = the frame at the preset's level).
 //   Frame f of F sits at u = f / (F - 1). Between stage i and i + 1 (t = (u - pos_i) / (pos_i+1 - pos_i)):
@@ -26,17 +26,16 @@
 //     frames at the morph position, per 8 kHz sample).
 //   Then the preset's level rules (legacy pipeline): peak 1 -> re-phase (sine phase, positive; magnitudes kept) ->
 //   RMS match to the plain saw + cap to the int16 headroom 32767 / scale -> 14 band-limited versions.
-// LOFI (2026-11-06; replaces the per-band LOFI mode of 57f7bfc - GLASS RASPY BREATH AIR read clean again): 3 presets at
-//   the CW end of K1, LOFI BITS / LOFI RATE / LOFI TABLE, on LOFI SPECTRA (16 key stages CCW sparse -> CW dense, 31
-//   frames: each stage one frame, one in-between frame between neighbours). EXP_TB_LOFI_ENABLE = false: they read
-//   clean (no lofi stage, K5 inert).
+// LOFI (2026-11-06; replaces the per-band LOFI mode of 57f7bfc and, later the same day, the four LOFI BITS / RATE / TABLE
+//   / TBITS presets): ONE preset at the CW end of K1 (K1 16), on LOFI SPECTRA (16 key stages CCW sparse -> CW dense, 31
+//   frames: each stage one frame, one in-between frame between neighbours). EXP_TB_LOFI_ENABLE = false: it reads clean
+//   (all four stages bypassed).
 
 #include "explorer_constants.h"
 
 namespace explorer_k {
 
 enum : uint8_t { kTbLfo = 0, kTbJourney = 1, kTbAnalog = 2, kTbLofi = 3 };  // preset kind
-enum : uint8_t { kLofiNone = 0, kLofiBits = 1, kLofiRate = 2, kLofiTable = 3, kLofiTableBits = 4 };   // LOFI preset variant
 // Generators: spectral (harmonic amplitudes, sine phase) or time domain (DFT at EXP_TB_TD_SIZE, as legacy). Legacy
 // recipes are reused 1:1 (explorer.h TbStageSpec maps them onto the legacy TbSpectral / TbTimeDomain cases).
 enum : uint8_t {
@@ -74,7 +73,6 @@ struct ExpTbPreset {
   bool rephase;            // legacy re-phase rule (sine phase, positive; magnitudes kept)
   bool rms;                // legacy RMS match to the plain saw (+ cap to the int16 headroom)
   float scale;             // int16 storage scale
-  uint8_t lofi;            // LOFI variant (kTbLofi presets: kLofiBits / kLofiRate / kLofiTable; else kLofiNone)
   int share;               // -1 = own frames; >= 0 = read that earlier preset's frames (same frames / level rules)
 };
 #define EXP_TB_L(arr) arr, (int)(sizeof(arr) / sizeof(arr[0]))
@@ -143,7 +141,7 @@ constexpr ExpTbStage EXP_TB_ST_METAL[]  = { { 0.f,  kTbgList, 0.f, EXP_TB_L(EXP_
                                             { .5f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_BASSBELL), 1.f },
                                             { 1.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_TINESTACK), 1.f } };
 
-// LOFI SPECTRA (the 3 LOFI presets, 2026-11-06): 16 key stages at i / 15, CCW sparse -> CW dense; 31 frames = each
+// LOFI SPECTRA (the LOFI slot, 2026-11-06): 16 key stages at i / 15, CCW sparse -> CW dense; 31 frames = each
 // stage one frame + one in-between frame (all neighbours differ in generator / list -> per-harmonic dB interpolation).
 // Existing recipes: ghost fifths / glass bell / drawbar / clarinet lists, VOCAL p 0 ('a'), the nasal oboe reed (legacy
 // HARD A 2), formant brass at its legacy centre EXP_TB_BRASS_CENTER, pulse 50 % = the square (odd 1 / h, as PULSE),
@@ -166,30 +164,27 @@ constexpr ExpTbStage EXP_TB_ST_LOFISPEC[] = {
   { 14.f / 15.f, kTbgSync,  EXP_TB_SYNCSAW_R, nullptr, 0, 1.f },         // 15 sync saw
   { 15.f / 15.f, kTbgClip,  0.f, nullptr, 0, 1.f } };                    // 16 clipper
 
-// --- the bank, K1 order (CCW -> CW); the LOFI presets at the CW end (2026-11-06) ---
+// --- the bank, K1 order (CCW -> CW); the LOFI slot at the CW end (2026-11-06) ---
 // level rules: PWM / VOCAL keep their legacy zones' rules (peak 1, no re-phase, scale EXP_TB_I16_SCALE: PWM falls to
 // silence at the narrow end) -> their frames are the legacy zone 4 / 5 frames; every other preset (AIR and LOFI SPECTRA
 // too): re-phase + RMS match to the plain saw, scale EXP_TB_I16_SCALE_WIDE (headroom 5.0, as legacy zones 3 / 10).
 constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
-  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE,      kLofiNone, -1 },
-  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      kLofiNone, -1 },
-  { "WOOD",   kTbJourney,16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "REED",   kTbJourney,16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "BRASS",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "ORGAN",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "METAL",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "GLASS",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "RASPY",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "BREATH", kTbJourney,16, EXP_TB_S(EXP_TB_ST_BREATH), true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "AIR",    kTbJourney,16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, kLofiNone, -1 },
-  { "LOFI BITS",  kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiBits,  -1 },
-  { "LOFI RATE",  kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiRate,  15 },
-  { "LOFI TABLE", kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiTable, 15 },
-  { "LOFI TBITS", kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiTableBits, 15 },
+  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE,      -1 },
+  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1 },
+  { "WOOD",   kTbJourney,16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "REED",   kTbJourney,16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "BRASS",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "ORGAN",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "METAL",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "GLASS",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "RASPY",  kTbJourney,16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "BREATH", kTbJourney,16, EXP_TB_S(EXP_TB_ST_BREATH), true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "AIR",    kTbJourney,16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1 },
+  { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1 },
 };
 #undef EXP_TB_L
 #undef EXP_TB_S
@@ -200,8 +195,8 @@ constexpr int ExpTbBankFrames(int i = 0) {
 }
 constexpr int EXP_TB_BANK_FRAMES  = ExpTbBankFrames();
 constexpr int EXP_TB_TOTAL_FRAMES = EXP_TB_LEGACY ? EXP_TB_LEGACY_TOTAL_FRAMES : EXP_TB_BANK_FRAMES;
-// Data checks: stages start at 0, end at 1, ascend; ANALOG = 1 frame / 1 stage; generators / lists valid; LOFI kind
-// <-> a lofi variant; share: an earlier own-frames preset with the same frames / stages / level rules.
+// Data checks: stages start at 0, end at 1, ascend; ANALOG = 1 frame / 1 stage; generators / lists valid; share: an
+// earlier own-frames preset with the same frames / stages / level rules.
 constexpr bool ExpTbPresetOk(const ExpTbPreset& P, int z) {
   if (P.nst < 1 || P.frames < 1 || P.st[0].pos != 0.f) return false;
   if (P.nst > 1 && P.st[P.nst - 1].pos != 1.f) return false;
@@ -213,7 +208,6 @@ constexpr bool ExpTbPresetOk(const ExpTbPreset& P, int z) {
     if (P.st[i].gen == kTbgList && (P.st[i].list == nullptr || P.st[i].n < 1)) return false;
     if (i > 0 && !(P.st[i].pos > P.st[i - 1].pos)) return false;
   }
-  if ((P.kind == kTbLofi) != (P.lofi != kLofiNone) || P.lofi > kLofiTableBits) return false;
   if (P.share >= 0) {
     if (P.share >= z) return false;
     const ExpTbPreset& Q = EXP_TB_PRESETS[P.share];
@@ -223,11 +217,11 @@ constexpr bool ExpTbPresetOk(const ExpTbPreset& P, int z) {
   return true;
 }
 constexpr bool ExpTbBankOk(int i = 0) { return (i >= EXP_TB_BANK_N) ? true : ExpTbPresetOk(EXP_TB_PRESETS[i], i) && ExpTbBankOk(i + 1); }
-static_assert(ExpTbBankOk(), "EXP_TB_PRESETS: invalid stage data (positions 0 .. 1 ascending, ANALOG 1 frame / stage, lists, lofi, share)");
+static_assert(ExpTbBankOk(), "EXP_TB_PRESETS: invalid stage data (positions 0 .. 1 ascending, ANALOG 1 frame / stage, lists, share)");
 static_assert(EXP_TB_BANK_N < 64, "VarKey holds the zone in 6 bits");
-// LOFI variant of preset z that runs (kLofiNone: not a LOFI preset, EXP_TB_LOFI_ENABLE false, legacy, out of range).
-TUNABLE_CONSTEXPR_FN int ExpTbLofiVariant(int z) {   // (inline in DIAG builds: EXP_TB_LOFI_ENABLE is a live tunable)
-  return (EXP_TB_LEGACY || !EXP_TB_LOFI_ENABLE || z < 0 || z >= EXP_TB_BANK_N) ? kLofiNone : EXP_TB_PRESETS[z].lofi;
+// The LOFI stages run on preset z (a LOFI preset, EXP_TB_LOFI_ENABLE, the audition bank, in range).
+TUNABLE_CONSTEXPR_FN bool ExpTbLofiOn(int z) {   // (inline in DIAG builds: EXP_TB_LOFI_ENABLE is a live tunable)
+  return !EXP_TB_LEGACY && EXP_TB_LOFI_ENABLE && z >= 0 && z < EXP_TB_BANK_N && EXP_TB_PRESETS[z].kind == kTbLofi;
 }
 
 }  // namespace explorer_k

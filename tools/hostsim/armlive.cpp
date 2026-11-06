@@ -242,7 +242,7 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
   else if (d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // audition bank JOURNEY: + start S, K5 direction /
     snprintf(env, sizeof env, "%s S%.2f dir %s rate%.2fs pos%.2f", te, d.b,   // whole-journey s, morph now
              d.jdir > 0 ? "fwd" : d.jdir < 0 ? "back" : "still", d.jT, d.tm);
-  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbLofi)      // audition bank LOFI: touch env only
+  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbLofi)      // audition bank LOFI slot: touch env only
     snprintf(env, sizeof env, "%s", te);
   else if (d.sw1 == 1)
     snprintf(env, sizeof env, "%s lfo %s d%.2f %.2fHz", te, lfo, d.lfod, d.lfohz);
@@ -274,14 +274,14 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
   else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // JOURNEY: S / pos in env
     snprintf(line, sizeof line, "tab %d/%d %s %s lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
              Explorer::TbKindName(d.tbk), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
-  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // LOFI: variant, k2, amount, value
-    char lv[32];
-    if (!d.ton)                              snprintf(lv, sizeof lv, "off");
-    else if (d.tlv == explorer_k::kLofiBits || d.tlv == explorer_k::kLofiTableBits) snprintf(lv, sizeof lv, "bits %.2f", d.tv);
-    else if (d.tlv == explorer_k::kLofiRate) snprintf(lv, sizeof lv, "rate %d Hz", (int)(d.tv + 0.5f));
-    else                                     snprintf(lv, sizeof lv, "interp %.2f", d.tv);
-    snprintf(line, sizeof line, "tab %d/%d %s %s %s k2 %.2f amt %.2f %s lp %d eff %d%s mute %s", d.tbz + 1,
-             explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), Explorer::TbLofiName(d.tlv), d.b, d.ta, lv,
+  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // LOFI slot: K2 step, 4 stages
+    char st[32], sb[24], sr[24], tb[24];
+    if (d.tdst > 0) snprintf(st, sizeof st, "step %d/%d", d.tdst, d.tnst); else snprintf(st, sizeof st, "morph");
+    if (d.tsb > 0.f) snprintf(sb, sizeof sb, "%.2f", d.tsb); else snprintf(sb, sizeof sb, "off");
+    if (d.tsr > 0.f) snprintf(sr, sizeof sr, "%d", (int)(d.tsr + 0.5f)); else snprintf(sr, sizeof sr, "off");
+    if (d.ttb > 0.f) snprintf(tb, sizeof tb, "%.2f", d.ttb); else snprintf(tb, sizeof tb, "off");
+    snprintf(line, sizeof line, "tab %d/%d %s %s k2 %.2f %s sb %s sr %s tb %s ti %.2f lp %d eff %d%s mute %s", d.tbz + 1,
+             explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), d.b, st, sb, sr, tb, d.tti,
              (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   }
   else if (d.model == Explorer::kWT && d.tbz >= 0)          // audition bank LFO: morph m at the knob, position
@@ -304,7 +304,7 @@ static std::string ExplorerZone(const Explorer::DiagSnap& d) {
   if (d.specz >= 0) return Explorer::SpecZoneName(d.specz);
   if (d.labz >= 0) return Explorer::LabZoneName(d.labz);
   const char* zn = Explorer::ZoneName(d.model, d.zone);
-  if (d.tbz >= 0)                                           // audition bank: "tab n/18 NAME kind"
+  if (d.tbz >= 0)                                           // audition bank: "tab n/16 NAME kind"
     return "tab " + std::to_string(d.tbz + 1) + "/" + std::to_string(explorer_k::EXP_TB_ZONES) + " " + zn + " " +
            Explorer::TbKindName(d.tbk);
   return std::string(Explorer::ModelName(d.model)) + (zn[0] ? std::string("/") + zn : std::string());
@@ -790,8 +790,9 @@ int main(int argc, char** argv) {
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"tbz\":" + std::to_string(x.tbz) + ",\"tbk\":" + json::Esc(x.tbz >= 0 ? Explorer::TbKindName(x.tbk) : "") +
                  ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"jdir\":" + std::to_string(x.jdir) +
-                 ",\"jT\":" + N(x.jT) + ",\"tlv\":" + json::Esc(Explorer::TbLofiName(x.tlv)) +
-                 ",\"ton\":" + std::string(x.ton ? "true" : "false") + ",\"ta\":" + N(x.ta) + ",\"tv\":" + N(x.tv) +
+                 ",\"jT\":" + N(x.jT) + ",\"tdst\":" + std::to_string(x.tdst) + ",\"tnst\":" + std::to_string(x.tnst) +
+                 ",\"ton\":" + std::string(x.ton ? "true" : "false") + ",\"tsb\":" + N(x.tsb) + ",\"tsr\":" + N(x.tsr) +
+                 ",\"ttb\":" + N(x.ttb) + ",\"tti\":" + N(x.tti) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +
                  ",\"sn\":" + N(x.sn) + ",\"sgd\":" + N(x.sgd) + ",\"sTd\":" + N(x.sTd) + ",\"sgr\":" + N(x.sgr) +
                  ",\"sTr\":" + N(x.sTr) + ",\"sw\":" + N(x.sw) + ",\"str\":" + N(x.str) + ",\"sL\":" + N(x.sL) + ",\"so\":" + N(x.so) +

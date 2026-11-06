@@ -616,6 +616,7 @@ class Tuner:
                 "files": self.reg["files"], "problems": self.reg["problems"],
                 "state": self.state, "guard": self.guard, "override": self.override,
                 "writable": self.writable(), "note": self.note, "constants": consts, "docs": docs,
+                "pairs": self.reg.get("pairs", {}),
                 "last_err": self.last_err}
 
     def snapshot(self):
@@ -1231,12 +1232,33 @@ def selftest():
 
     check(reg["constants"] and not reg["problems"], "registry: TUNABLE constants parsed, no tag problems (%d)"
           % len(reg["constants"]))
+    want_pairs = {"Pluck_decay_time": ["EXP_PS_DEC_FAST_S", "EXP_PS_DEC_SLOW_S"],
+                  "Swell_rise_time": ["EXP_PS_RISE_FAST_S", "EXP_PS_RISE_SLOW_S"],
+                  "LFO_rate": ["EXP_LFO_HZ_MAX_CCW", "EXP_LFO_HZ_MIN", "EXP_LFO_HZ_MAX"],
+                  "Live_level_range": ["EXP_SPEC_DYN_FLOOR_DB", "EXP_SPEC_DYN_TOP_DB"],
+                  "Density_travel_by_env_time": ["EXP_SPEC_ENV_DEPTH_MIN", "EXP_SPEC_ENV_DEPTH_MAX"]}
+    check({k: v["members"] for k, v in reg["pairs"].items()} == want_pairs
+          and reg["pairs"]["LFO_rate"]["kind"] == "knob" and reg["pairs"]["Live_level_range"]["kind"] == "range",
+          "registry: @pair rows (members in end order, knob / range kind)")
+    bad_dir = os.path.join(tmp, "badpair")
+    os.makedirs(bad_dir)
+    with open(os.path.join(bad_dir, "x_constants.h"), "w") as fh:
+        fh.write("// --- S ---\n"
+                 "TUNABLE(float, A1, 1.f);  // @unit s @range 0 2 @taper lin @level live @pair P ccw  a\n"
+                 "TUNABLE(float, A2, 1.f);  // @unit Hz @range 0 2 @taper lin @level live @pair P cw  b\n"
+                 "TUNABLE(float, A3, 1.f);  // @unit s @range 0 2 @taper lin @level live @pair Q sideways  c\n")
+    br = reglib.build(tmp, "x", ["badpair"])
+    check(br["pairs"] == {} and any("@pair P" in x for x in br["problems"])
+          and any("A3: bad @pair" in x for x in br["problems"]) and all(c["pair"] is None for c in br["constants"]),
+          "registry: a bad @pair is reported, its members fall back to single rows")
     check(has("tun", lambda d: d.get("state") == "synced" and d.get("writable") is True),
           "connect: `list` sent, synced, writable (guard ok)")
     check(b"list\n" in pedal["got"], "devtool sent `list` after BUILD")
     st, body = req("GET", "/api/registry")
     js = json.loads(body)
     c0 = js["constants"][0]
+    check(js.get("pairs", {}).get("LFO_rate", {}).get("members") == ["EXP_LFO_HZ_MAX_CCW", "EXP_LFO_HZ_MIN", "EXP_LFO_HZ_MAX"],
+          "/api/registry: pairs included")
     check(st == 200 and all(c["value"] == c["default"] for c in js["constants"])
           and {"label", "unit", "range", "taper", "level", "file", "line", "section", "module"} <= set(c0),
           "/api/registry: values merged (= defaults), metadata fields")
@@ -1266,7 +1288,9 @@ def selftest():
     check(st == 202 and has("tval", lambda d: d["name"] == "EXP_TB_LOFI_ENABLE" and d["value"] is False),
           "set: bool")
     st, _ = post("/api/set", {"name": "EXP_TB_LOFI_TABLE_BITS", "value": 4.5})
-    check(st == 400, "set: int refuses a fraction")
+    check(st == 202, "set: fractional bits accepted (float)")
+    st, _ = post("/api/set", {"name": "EXP_TB_LOFI_SUM_RATE_HZ", "value": 50})
+    check(st == 400, "set: below @range refused")
     post("/api/note", {"text": "faster LFO sounds better"})
     check(wait_for(lambda: (changes_file() or {}).get("note") == "faster LFO sounds better"), "note -> changes.json")
     st, _ = post("/api/reset", {"name": "EXP_TB_LOFI_ENABLE"})

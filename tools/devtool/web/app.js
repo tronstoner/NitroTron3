@@ -1,5 +1,7 @@
 // Pedal devtool page (steps 1 + 2): connection + build info, flash, live log,
-// live constants (tree, rows, changes panel).
+// live constants (tree, rows, pair rows, changes panel). Three panes: tree |
+// values | log (always visible), draggable splitters; the pedal's current K1
+// slot in the top bar.
 // No build step, no external assets. Talks to tools/devtool/devtool.py.
 "use strict";
 
@@ -38,6 +40,7 @@ const NUM_LOCALE = "en-US";
 const UNIT_FMT = {
   Hz: { sig: 4 }, s: { sig: 3 }, ms: { sig: 3 }, dB: { dec: 1 }, bits: { dec: 1 },
   oct: { dec: 2 }, rad: { dec: 2 }, x: { sig: 3 }, "0..1": { dec: 3 }, b: { dec: 2 },
+  knob: { dec: 2 },             // knob positions parsed from the pedal's state line (top bar)
   "": { sig: 4 },
 };
 const numFormatters = new Map();
@@ -107,9 +110,10 @@ const el = {
   changesBtn: $("changes-btn"), changesCount: $("changes-count"), changesPanel: $("changes-panel"),
   changesList: $("changes-list"), changesSub: $("changes-sub"), resetAll: $("reset-all-btn"),
   note: $("note"), sidebar: $("sidebar"), search: $("search"), tree: $("tree"),
-  navToggle: $("nav-toggle"), tabConst: $("tab-const"), tabLog: $("tab-log"), tabLogCount: $("tab-log-count"),
-  viewConst: $("view-const"), viewLog: $("view-log"), tunState: $("tun-state"), guard: $("guard"),
-  secHead: $("sec-head"), rows: $("rows"),
+  navToggle: $("nav-toggle"), viewConst: $("view-const"), viewLog: $("view-log"),
+  tunState: $("tun-state"), guard: $("guard"), guardBtn: $("guard-btn"),
+  secHead: $("sec-head"), rows: $("rows"), slotV: $("slot-v"), slotX: $("slot-x"),
+  panes: $("panes"), splitTree: $("split-tree"), splitLog: $("split-log"),
 };
 
 const state = {
@@ -162,8 +166,8 @@ function renderStatus() {
   const bt = b ? parseBuildTime(b.time) : null;
   el.time.textContent = b ? (bt ? fmtTime(bt, TIME_FORMATS.build) : b.time) : "–";
   const note = s && s.connected && s.note ? s.note : "";
-  el.note.textContent = note;
-  el.note.hidden = !note;
+  el.note.textContent = note;          // (a fixed slot in the top bar: empty, never removed)
+  el.note.title = note;
 
   if (!state.userPicked && !state.flash.active) {
     const want = b && state.pedals.includes(b.pedal) ? b.pedal : state.defaultPedal;
@@ -218,6 +222,7 @@ function renderFlash() {
     st === "done" ? "ok" : st === "failed" ? "bad" : st === "gesture" ? "attn" : f.active ? "run" : "");
   el.flashMsg.textContent = f.message ? (f.pedal ? f.pedal + ": " : "") + f.message : "";
   el.flashMsg.className = "flash-msg" + (st === "gesture" ? " attn" : "");
+  el.flashMsg.title = el.flashMsg.textContent;
   el.flashTime.textContent = f.t ? fmtTime(f.t) : "";
   renderFlashControls();
 }
@@ -347,7 +352,6 @@ function renderCount() {
   let s = total + (total === 1 ? " line" : " lines");
   if (state.paused) s += " - paused, " + (state.lines.length - state.pausedAt) + " new";
   el.count.textContent = s;
-  el.tabLogCount.textContent = total ? "(" + total + ")" : "";
 }
 
 function renderEmpty() {
@@ -380,6 +384,7 @@ function scrollToBottom() {
 }
 
 function addLine(l) {
+  if (l.kind === "line") onSlotLine(l.text, l.t);
   state.lines.push(l);
   if (state.lines.length > MAX_LINES) {
     const old = state.lines.shift();
@@ -441,12 +446,53 @@ el.flashPedal.addEventListener("change", () => { state.userPicked = true; });
 el.flashBtn.addEventListener("click", startFlash);
 
 // ---------------------------------------------------------------------------
+// Current K1 slot (top bar), parsed from the pedal's DIAG state lines:
+//   explorer  `XP <auto|#n> K1 .. K2 .. K3 .. K4 .. K5 .. SW1 <MID> oct <played> | <selection> ...`
+//             selection: `tab <n>/<N> <NAME> <LFO|JOURNEY|ANALOG|LOFI> ...` (+ `step <i>/<n>` on the LOFI slot),
+//             `WT/<zone>`, `LAB SPEC bank <n>/9 <NAME>`, `LAB <zone>`, else the model word (FM, XBAND-FM, ...)
+//   armitage  `<auto|#n> K1 .. SW1 <..> <MODE> h .. SW2 <..> | ...`
+// Only these lines change it; it stays through reconnects.
+// ---------------------------------------------------------------------------
+const XP_RE = /(?:^|\s)XP (?:auto|#\d+) K1 ([\d.]+) K2 [\d.]+ K3 [\d.]+ K4 [\d.]+ K5 [\d.]+ SW1 (\w+) oct (\w+) \| (.*)$/;
+const AR_RE = /(?:^|\s)(?:auto|#\d+) K1 ([\d.]+) K2 [\d.]+ K3 [\d.]+ K4 [\d.]+ K5 [\d.]+ SW1 (\w+) (\w+) h ?[\d.]+ SW2 (\w+) \| /;
+function slotSelection(rest) {
+  let m = /^tab (\d+)\/(\d+) (.+?) (LFO|JOURNEY|ANALOG|LOFI)\b(.*)$/.exec(rest);
+  if (m) {
+    const st = /\bstep (\d+)\/(\d+)/.exec(m[5]);
+    return "K1 " + m[1] + "/" + m[2] + "  " + m[3] + " (" + m[4] + ")" + (st ? "  K2 stage " + st[1] + "/" + st[2] : "");
+  }
+  if ((m = /^WT\/(\S+)/.exec(rest))) return "WT " + m[1];
+  if ((m = /^LAB SPEC bank (\d+\/\d+) (\S+)/.exec(rest))) return "FM LAB SPEC bank " + m[1] + " " + m[2];
+  if ((m = /^LAB (\S+)/.exec(rest))) return "FM LAB " + m[1];
+  return (rest.split(/\s+/)[0] || "?");
+}
+function parseSlot(text) {
+  let m = XP_RE.exec(text);
+  if (m) return { what: slotSelection(m[4]), k1: Number(m[1]), sw1: m[2], extra: "oct " + m[3] };
+  m = AR_RE.exec(text);
+  if (m) return { what: "armitage " + m[3], k1: Number(m[1]), sw1: m[2], extra: "SW2 " + m[4] };
+  return null;
+}
+function onSlotLine(text, t) {
+  const p = parseSlot(text);
+  if (!p) return;
+  el.slotV.textContent = p.what;
+  el.slotX.textContent = "K1 " + fmtNum(p.k1, "knob") + "  SW1 " + p.sw1 + "  " + p.extra + "  at " + fmtTime(t);
+  el.slotV.parentNode.title = text;
+}
+
+// ---------------------------------------------------------------------------
 // Live constants (step 2)
 // The registry (labels, ranges, files) comes from devtool's `tun` snapshot;
 // values come from the pedal (`tval` echoes). DOM is built once per registry
 // structure / selection and then updated in place, so scroll position, open
 // rows, focus, the search and the selected section survive value updates and
-// reconnects.
+// reconnects. Every row has fixed-height lines (messages, badges and marks
+// have reserved space), so nothing reflows on a value update.
+// PAIRS (registry @pair): the constants that are the ends of one law (knob
+// positions CCW / noon / CW, or a value range) are ONE row: their value fields
+// in end order around one multi-handle slider (one lane per end, on the union
+// of their ranges in their shared taper; each handle stays in its own range).
 // ---------------------------------------------------------------------------
 const LEVEL_TIP = {
   live: "Live: read while audio runs - heard at once (next audio block).",
@@ -460,7 +506,7 @@ const tun = {
   sel: store("devtool.section") || "",     // "module/section"
   search: store("devtool.search") || "",
   open: new Set((() => { try { return JSON.parse(store("devtool.openRows") || "[]"); } catch (e) { return []; } })()),
-  rowEls: new Map(),      // name -> {row, slider, num, chk, def, msg, chg}
+  rowEls: new Map(),      // name -> single row {row, slider, num, chk, def, msg, chg} | {pair: rec, i}
   dragging: null,         // name of the slider under the pointer
   inflight: new Map(),    // name -> true while a POST runs
   queued: new Map(),      // name -> latest value waiting for the in-flight POST
@@ -532,56 +578,51 @@ function onTerr(d) {
   renderTunState();
 }
 
+// --- status strip: one fixed-height line (state / last pedal error, guard summary, override) ---
 function renderTunState() {
   const s = tun.snap;
   el.tunState.textContent = "";
-  if (!s) { el.tunState.textContent = "Waiting for devtool…"; return; }
-  const txt = {
+  let txt;
+  if (!state.online) txt = "devtool offline - reconnecting…";
+  else if (!s) txt = "Waiting for devtool…";
+  else txt = {
     offline: "No pedal: showing " + s.pedal + "'s constants files (defaults). Values arrive when a DIAG build connects.",
     asking: "Reading the pedal's values (list)…",
     synced: "Values from the pedal (" + s.constants.length + " live constants).",
     "no-answer": "The pedal does not answer `list` - flash a current DIAG build.",
   }[s.state] || s.state;
-  el.tunState.appendChild(document.createTextNode(state.online ? txt : "devtool offline - reconnecting…"));
-  if (s.last_err) {
-    const e = document.createElement("div");
+  el.tunState.appendChild(document.createTextNode(txt));
+  let title = txt;
+  if (state.online && s && s.last_err) {
+    const e = document.createElement("span");
     e.className = "err";
-    e.textContent = "Pedal error at " + fmtTime(s.last_err.t) + ": " + s.last_err.text;
+    e.textContent = "  Pedal error at " + fmtTime(s.last_err.t) + ": " + s.last_err.text;
     el.tunState.appendChild(e);
+    title += "\n" + e.textContent.trim();
   }
+  el.tunState.title = title;
 }
 
 function renderGuard() {
   const s = tun.snap;
   const g = s ? s.guard : null;
-  el.guard.textContent = "";
   const reasons = g ? g.reasons.filter((r) => !(s.state === "offline" && /no pedal/.test(r))) : [];
   const warns = g ? g.warnings : [];
-  if (!g || (!reasons.length && !warns.length)) { el.guard.hidden = true; return; }
-  el.guard.hidden = false;
-  el.guard.className = "guard" + (s.override && reasons.length ? " allowed" : "");
-  if (reasons.length) {
-    const p = document.createElement("p");
-    p.textContent = s.override ? "Changes allowed for this session despite:" : "Changes are blocked:";
-    el.guard.appendChild(p);
-    const ul = document.createElement("ul");
-    for (const r of reasons) { const li = document.createElement("li"); li.textContent = r; ul.appendChild(li); }
-    el.guard.appendChild(ul);
-    if (s.state === "synced") {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = s.override ? "Block changes again" : "Allow changes anyway (this session)";
-      b.addEventListener("click", () => post("/api/override", { on: !s.override }));
-      el.guard.appendChild(b);
-    }
-  }
-  if (warns.length) {
-    const w = document.createElement("div");
-    w.className = "warns";
-    w.textContent = "Note: " + warns.join("; ");
-    el.guard.appendChild(w);
-  }
+  const more = (n) => (n > 1 ? "  (+" + (n - 1) + " more)" : "");
+  let txt = "";
+  if (reasons.length) txt = (s.override ? "Allowed despite: " : "Changes blocked: ") + reasons[0] + more(reasons.length);
+  else if (warns.length) txt = "Note: " + warns[0] + more(warns.length);
+  el.guard.textContent = txt;
+  el.guard.title = reasons.map((r) => "blocked: " + r).concat(warns.map((w) => "note: " + w)).join("\n");
+  el.guard.className = "strip-guard" + (!reasons.length || s.override ? " allowed" : "");
+  const btn = !!(reasons.length && s.state === "synced");
+  el.guardBtn.style.visibility = btn ? "" : "hidden";   // (space kept: nothing in the strip moves)
+  el.guardBtn.disabled = !btn;
+  if (btn) el.guardBtn.textContent = s.override ? "Block changes again" : "Allow changes anyway";
 }
+el.guardBtn.addEventListener("click", () => {
+  if (tun.snap) post("/api/override", { on: !tun.snap.override });
+});
 
 // --- tree ---------------------------------------------------------------
 function treeGroups() {
@@ -646,7 +687,9 @@ function updateTreeCounts() {
     const nchg = list.filter(isChanged).length;
     b.hidden = !!q && hits.length === 0;
     b.querySelector(".t-n").textContent = q ? hits.length + "/" + list.length : String(list.length);
-    b.querySelector(".t-chg").textContent = nchg ? nchg + " changed" : "";
+    const ch = b.querySelector(".t-chg");
+    ch.textContent = nchg ? String(nchg) : "";
+    ch.title = nchg ? nchg + " changed" : "";
     b.setAttribute("aria-current", String(!q && b.dataset.key === tun.sel));
   }
 }
@@ -658,12 +701,15 @@ function selectSection(key) {
   updateTreeCounts();
   renderRows(true);
   el.viewConst.scrollTop = 0;
-  setTab("const");
-  el.sidebar.classList.remove("open");
-  el.navToggle.setAttribute("aria-expanded", "false");
+  setTreeOpen(false);
 }
 
 // --- rows -----------------------------------------------------------------
+function pairOf(c) {
+  const ps = tun.snap && tun.snap.pairs;
+  return c.pair && ps && ps[c.pair.id] ? ps[c.pair.id] : null;
+}
+
 function renderRows(force) {
   const s = tun.snap;
   if (!s) return;
@@ -676,26 +722,29 @@ function renderRows(force) {
   el.secHead.textContent = "";
   tun.rowEls.clear();
   const h = document.createElement("h2");
+  const p = document.createElement("div");
+  p.className = "path";
   let list;
   if (q) {
     list = s.constants.filter((c) => matchesSearch(c, q));
     h.textContent = "Search: " + list.length + (list.length === 1 ? " match" : " matches");
+    p.textContent = q;
   } else {
     list = s.constants.filter((c) => secKey(c) === tun.sel);
     const c0 = list[0];
     h.textContent = c0 ? (c0.section || "(no section)") : "No section selected";
-    if (c0) {
-      const p = document.createElement("div");
-      p.className = "path";
-      p.textContent = c0.module + " - " + c0.file;
-      el.secHead.append(h, p);
-    }
+    p.textContent = c0 ? c0.module + " - " + c0.file : "";
   }
-  if (!el.secHead.firstChild) el.secHead.appendChild(h);
-  el.navToggle.textContent = q ? "Sections" : "Sections: " + (list[0] ? list[0].section : "–");
+  h.title = h.textContent;
+  p.title = p.textContent;
+  el.secHead.append(h, p);
+  el.navToggle.textContent = "Sections";
   let lastGroup = null;
   const frag = document.createDocumentFragment();
+  const done = new Set();
+  const shown = [];
   for (const c of list) {
+    if (done.has(c.name)) continue;
     if (q && secKey(c) !== lastGroup) {
       lastGroup = secKey(c);
       const g = document.createElement("div");
@@ -703,7 +752,15 @@ function renderRows(force) {
       g.textContent = c.module + " / " + (c.section || "(no section)");
       frag.appendChild(g);
     }
-    frag.appendChild(makeTRow(c));
+    const P = pairOf(c);
+    if (P) {
+      for (const n of P.members) { done.add(n); shown.push(n); }
+      frag.appendChild(makePairRow(c.pair.id, P));
+    } else {
+      done.add(c.name);
+      shown.push(c.name);
+      frag.appendChild(makeTRow(c));
+    }
   }
   if (!list.length) {
     const e = document.createElement("div");
@@ -712,122 +769,85 @@ function renderRows(force) {
     frag.appendChild(e);
   }
   el.rows.appendChild(frag);
-  for (const c of list) updateRow(c.name);
+  for (const n of shown) updateRow(n);
   if (!force) el.viewConst.scrollTop = scroll;
 }
 
-function makeTRow(c) {
-  const row = document.createElement("div");
-  row.className = "trow";
-  row.dataset.name = c.name;
+// Row head: twisty, label, (kind), name(s), message slot, changed + level badges. Click / Enter folds `exp`.
+function makeHead(openKey, labelText, kindText, nameText, level, when) {
   const head = document.createElement("div");
   head.className = "thead";
   const tw = document.createElement("span");
   tw.className = "twisty";
   const label = document.createElement("span");
   label.className = "label";
-  label.textContent = c.label;
+  label.textContent = labelText;
+  label.title = labelText;
+  head.append(tw, label);
+  if (kindText) {
+    const k = document.createElement("span");
+    k.className = "kind";
+    k.textContent = kindText;
+    head.appendChild(k);
+  }
   const name = document.createElement("span");
   name.className = "name";
-  name.textContent = c.name;
+  name.textContent = nameText;
+  name.title = nameText;
+  const msg = document.createElement("span");
+  msg.className = "tmsg";
   const flags = document.createElement("span");
   flags.className = "flags";
   const chg = document.createElement("span");
-  chg.className = "badge chg";
+  chg.className = "badge chg no";
   chg.textContent = "changed";
   const lvl = document.createElement("span");
-  lvl.className = "badge " + c.level;
-  lvl.textContent = c.level;
-  lvl.title = c.when || LEVEL_TIP[c.level] || "";
+  lvl.className = "badge " + level;
+  lvl.textContent = level;
+  lvl.title = when || LEVEL_TIP[level] || "";
   flags.append(chg, lvl);
-  head.append(tw, label, name, flags);
+  head.append(name, msg, flags);
+  return { head, tw, msg, chg, openKey };
+}
 
-  const ctl = document.createElement("div");
-  ctl.className = "tctl";
-  const r = { row, chg, tw };
-  if (c.type === "bool") {
-    const lab = document.createElement("label");
-    lab.className = "tog";
-    const chk = document.createElement("input");
-    chk.type = "checkbox";
-    const txt = document.createElement("span");
-    lab.append(chk, txt);
-    chk.addEventListener("change", () => sendSet(c.name, chk.checked));
-    r.chk = chk; r.chkTxt = txt;
-    ctl.appendChild(lab);
-  } else {
-    const sl = document.createElement("input");
-    sl.type = "range";
-    sl.min = "0"; sl.max = String(SLIDER_STEPS); sl.step = "1";
-    sl.setAttribute("aria-label", c.label);
-    const num = document.createElement("input");
-    num.type = "text";
-    num.inputMode = "decimal";
-    num.className = "num";
-    num.setAttribute("aria-label", c.label + " value");
-    num.spellcheck = false;
-    const unit = document.createElement("span");
-    unit.className = "unit";
-    unit.textContent = c.unit;
-    sl.addEventListener("pointerdown", () => { tun.dragging = c.name; });
-    sl.addEventListener("pointerup", () => { tun.dragging = null; });
-    sl.addEventListener("change", () => { tun.dragging = null; });   // drag released anywhere
-    sl.addEventListener("input", () => {
-      const cc = tun.byName.get(c.name);
-      const v = fromPos(cc, +sl.value);
-      if (document.activeElement !== num) num.value = fmtNum(v, cc.unit, cc.type, true);
-      sendSet(c.name, v);
-    });
-    const commit = () => {
-      const cc = tun.byName.get(c.name);
-      const v = parseNum(num.value);
-      if (!isFinite(v)) { showMsg(c.name, "Not a number: " + num.value); updateRow(c.name, true); return; }
-      if (cc.type === "int" && v !== Math.round(v)) { showMsg(c.name, "Whole numbers only."); updateRow(c.name, true); return; }
-      const [lo, hi] = cc.range || [-Infinity, Infinity];
-      if (v < lo || v > hi) {
-        showMsg(c.name, "Outside the range " + fmtWithUnit(lo, cc.unit, cc.type) + " .. " + fmtWithUnit(hi, cc.unit, cc.type) + ".");
-        updateRow(c.name, true);
-        return;
-      }
-      sendSet(c.name, v);
-    };
-    num.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); commit(); num.select(); }
-      if (e.key === "Escape") { updateRow(c.name, true); num.blur(); }
-    });
-    num.addEventListener("change", commit);
-    num.addEventListener("blur", () => updateRow(c.name, true));
-    r.slider = sl; r.num = num;
-    sl.hidden = !c.range;   // (a constant without @range: number field only; devtool flags the tag)
-    ctl.append(sl, num, unit);
-  }
-  const def = document.createElement("span");
-  def.className = "def";
-  def.textContent = "default " + fmtWithUnit(c.default, c.unit, c.type);
-  def.title = "Compiled default: " + c.default_text + "  (" + c.file + ":" + c.line + ")";
-  const rst = document.createElement("button");
-  rst.type = "button";
-  rst.className = "rst";
-  rst.textContent = "Reset";
-  rst.title = "Back to the compiled default";
-  rst.addEventListener("click", () => sendReset(c.name));
-  r.rst = rst;
-  ctl.append(def, rst);
+function wireExpander(h, exp) {
+  const setOpen = (o) => {
+    exp.hidden = !o;
+    h.tw.textContent = o ? "▾" : "▸";
+    h.head.setAttribute("aria-expanded", String(o));
+  };
+  setOpen(tun.open.has(h.openKey));
+  h.head.tabIndex = 0;
+  h.head.setAttribute("role", "button");
+  const toggle = () => {
+    const o = exp.hidden;
+    if (o) tun.open.add(h.openKey); else tun.open.delete(h.openKey);
+    store("devtool.openRows", JSON.stringify([...tun.open]));
+    setOpen(o);
+  };
+  h.head.addEventListener("click", (e) => { if (!e.target.closest("button")) toggle(); });
+  h.head.addEventListener("keydown", (e) => {
+    if (e.target === h.head && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); }
+  });
+}
 
-  const msg = document.createElement("div");
-  msg.className = "tmsg";
-  r.msg = msg;
-
-  const exp = document.createElement("div");
-  exp.className = "texp";
+// The explanation of one constant (note, the shared comment block above it, source + range).
+function explainInto(exp, c, prefix) {
   const docs = (tun.snap && tun.snap.docs) || {};
+  if (prefix) {
+    const t = document.createElement("div");
+    t.className = "doc-h";
+    t.textContent = prefix;
+    exp.appendChild(t);
+  }
   if (c.note) {
     const n = document.createElement("pre");
     n.className = "note-txt";
     n.textContent = c.note;
     exp.appendChild(n);
   }
-  if (c.doc_of && docs[c.doc_of]) {
+  if (c.doc_of && docs[c.doc_of] && !exp._docs.has(c.doc_of)) {
+    exp._docs.add(c.doc_of);
     const dh = document.createElement("div");
     dh.className = "doc-h";
     dh.textContent = c.doc_of === c.name ? "Notes above it:" : "Notes above " + c.doc_of + " (shared by the constants below it):";
@@ -841,32 +861,247 @@ function makeTRow(c) {
   src.textContent = c.file + ":" + c.line + "   default " + c.default_text +
     (c.range ? "   range " + fmtNum(c.range[0], c.unit, c.type) + " .. " + fmtNum(c.range[1], c.unit, c.type) + " (" + c.taper + ")" : "");
   exp.appendChild(src);
-  r.exp = exp;
-  const setOpen = (o) => {
-    exp.hidden = !o;
-    tw.textContent = o ? "▾" : "▸";
-    head.setAttribute("aria-expanded", String(o));
-  };
-  setOpen(tun.open.has(c.name));
-  head.tabIndex = 0;
-  head.setAttribute("role", "button");
-  const toggle = () => {
-    const o = exp.hidden;
-    if (o) tun.open.add(c.name); else tun.open.delete(c.name);
-    store("devtool.openRows", JSON.stringify([...tun.open]));
-    setOpen(o);
-  };
-  head.addEventListener("click", (e) => { if (!e.target.closest("button")) toggle(); });
-  head.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+}
 
-  row.append(head, ctl, msg, exp);
+// A typed number -> sendSet, or a message (range / type checks as devtool's).
+function commitNum(c, num) {
+  const cc = tun.byName.get(c.name);
+  const v = parseNum(num.value);
+  if (!isFinite(v)) { showMsg(c.name, "Not a number: " + num.value); updateRow(c.name, true); return; }
+  if (cc.type === "int" && v !== Math.round(v)) { showMsg(c.name, "Whole numbers only."); updateRow(c.name, true); return; }
+  const [lo, hi] = cc.range || [-Infinity, Infinity];
+  if (v < lo || v > hi) {
+    showMsg(c.name, "Outside the range " + fmtWithUnit(lo, cc.unit, cc.type) + " .. " + fmtWithUnit(hi, cc.unit, cc.type) + ".");
+    updateRow(c.name, true);
+    return;
+  }
+  sendSet(c.name, v);
+}
+
+function makeNum(c, aria) {
+  const num = document.createElement("input");
+  num.type = "text";
+  num.inputMode = "decimal";
+  num.className = "num";
+  num.setAttribute("aria-label", aria);
+  num.spellcheck = false;
+  num.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commitNum(c, num); num.select(); }
+    if (e.key === "Escape") { updateRow(c.name, true); num.blur(); }
+  });
+  num.addEventListener("change", () => commitNum(c, num));
+  num.addEventListener("blur", () => updateRow(c.name, true));
+  return num;
+}
+
+function makeReset(c, text, aria) {
+  const rst = document.createElement("button");
+  rst.type = "button";
+  rst.className = "rst";
+  rst.textContent = text;
+  rst.title = "Back to the compiled default (" + fmtWithUnit(c.default, c.unit, c.type) + ")";
+  rst.setAttribute("aria-label", aria);
+  rst.addEventListener("click", () => sendReset(c.name));
+  return rst;
+}
+
+function makeTRow(c) {
+  const row = document.createElement("div");
+  row.className = "trow";
+  row.dataset.name = c.name;
+  const h = makeHead(c.name, c.label, "", c.name, c.level, c.when);
+  const ctl = document.createElement("div");
+  ctl.className = "tctl";
+  const r = { row, chg: h.chg, msg: h.msg, tw: h.tw };
+  if (c.type === "bool") {
+    const lab = document.createElement("label");
+    lab.className = "tog";
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.setAttribute("role", "switch");
+    chk.setAttribute("aria-label", c.label);
+    const txt = document.createElement("span");
+    txt.className = "tog-txt";
+    lab.append(chk, txt);
+    chk.addEventListener("change", () => sendSet(c.name, chk.checked));
+    r.chk = chk; r.chkTxt = txt;
+    ctl.appendChild(lab);
+  } else {
+    const sl = document.createElement("input");
+    sl.type = "range";
+    sl.min = "0"; sl.max = String(SLIDER_STEPS); sl.step = "1";
+    sl.setAttribute("aria-label", c.label);
+    const num = makeNum(c, c.label + " value");
+    const unit = document.createElement("span");
+    unit.className = "unit";
+    unit.textContent = c.unit === "bool" ? "" : c.unit;
+    sl.addEventListener("pointerdown", () => { tun.dragging = c.name; });
+    sl.addEventListener("pointerup", () => { tun.dragging = null; });
+    sl.addEventListener("change", () => { tun.dragging = null; });   // drag released anywhere
+    sl.addEventListener("input", () => {
+      const cc = tun.byName.get(c.name);
+      const v = fromPos(cc, +sl.value);
+      if (document.activeElement !== num) num.value = fmtNum(v, cc.unit, cc.type, true);
+      sendSet(c.name, v);
+    });
+    r.slider = sl; r.num = num;
+    sl.style.visibility = c.range ? "" : "hidden";   // (no @range: number field only; devtool flags the tag)
+    ctl.append(sl, num, unit);
+  }
+  const def = document.createElement("span");
+  def.className = "def";
+  def.textContent = "default " + fmtWithUnit(c.default, c.unit, c.type);
+  def.title = "Compiled default: " + c.default_text + "  (" + c.file + ":" + c.line + ")";
+  r.rst = makeReset(c, "Reset", "Reset " + c.label);
+  ctl.append(def, r.rst);
+
+  const exp = document.createElement("div");
+  exp.className = "texp";
+  exp._docs = new Set();
+  explainInto(exp, c, "");
+  wireExpander(h, exp);
+  row.append(h.head, ctl, exp);
   tun.rowEls.set(c.name, r);
+  return row;
+}
+
+// --- pair row --------------------------------------------------------------
+// The slider axis of a pair: the union of the members' ranges, their (shared) taper.
+function pairAxis(members) {
+  const c0 = members[0];
+  let lo = Infinity, hi = -Infinity;
+  for (const c of members) { lo = Math.min(lo, c.range[0]); hi = Math.max(hi, c.range[1]); }
+  return { range: [lo, hi], taper: c0.taper, unit: c0.unit, type: c0.type };
+}
+function axisFrac(ax, v) { return toPos(ax, v) / SLIDER_STEPS; }
+function memberValueAt(c, ax, frac) {
+  const v = fromPos(ax, Math.round(Math.min(1, Math.max(0, frac)) * SLIDER_STEPS));
+  return Math.min(c.range[1], Math.max(c.range[0], snapNum(v, c.unit, c.type)));
+}
+
+function makePairRow(id, P) {
+  const members = P.members.map((n) => tun.byName.get(n));
+  const c0 = members[0];
+  const row = document.createElement("div");
+  row.className = "trow prow";
+  row.dataset.pair = id;
+  const kind = P.kind === "knob" ? "knob ends" : "range";
+  const h = makeHead("pair:" + id, P.label, kind, P.members.join(" · "), c0.level, c0.when);
+  const ctl = document.createElement("div");
+  ctl.className = "tctl pctl";
+  const rec = { row, chg: h.chg, msg: h.msg, tw: h.tw, members: P.members, ends: [], ax: pairAxis(members) };
+
+  const ms = document.createElement("div");
+  ms.className = "mslider";
+  ms.setAttribute("role", "group");
+  ms.setAttribute("aria-label", P.label);
+  rec.ms = ms;
+
+  members.forEach((c, i) => {
+    const endLab = c.pair.end_label;
+    const wrap = document.createElement("span");
+    wrap.className = "end";
+    const lab = document.createElement("span");
+    lab.className = "end-lab";
+    lab.textContent = endLab;
+    const num = makeNum(c, P.label + " " + endLab + " value");
+    num.title = c.name + " - " + c.label;
+    const unit = document.createElement("span");
+    unit.className = "unit";
+    unit.textContent = c.unit;
+    const rst = makeReset(c, "↺", "Reset " + P.label + " " + endLab);
+    wrap.append(lab, num, unit, rst);
+
+    // its lane in the multi-handle slider
+    const lane = document.createElement("div");
+    lane.className = "mlane";
+    lane.title = endLab + ": " + c.name;
+    const track = document.createElement("div");
+    track.className = "mtrack";
+    const span = document.createElement("div");
+    span.className = "mspan";
+    const a = axisFrac(rec.ax, c.range[0]), b = axisFrac(rec.ax, c.range[1]);
+    span.style.left = (a * 100) + "%";
+    span.style.width = ((b - a) * 100) + "%";
+    const hd = document.createElement("div");
+    hd.className = "mhandle";
+    hd.tabIndex = 0;
+    hd.setAttribute("role", "slider");
+    hd.setAttribute("aria-label", P.label + " " + endLab);
+    hd.setAttribute("aria-valuemin", String(c.range[0]));
+    hd.setAttribute("aria-valuemax", String(c.range[1]));
+    lane.append(track, span, hd);
+    ms.appendChild(lane);
+
+    const setFrac = (frac) => {
+      const cc = tun.byName.get(c.name);
+      const v = memberValueAt(cc, rec.ax, frac);
+      hd.style.left = (axisFrac(rec.ax, v) * 100) + "%";
+      if (document.activeElement !== num) num.value = fmtNum(v, cc.unit, cc.type, true);
+      sendSet(c.name, v);
+    };
+    const fracAt = (e) => {
+      const rc = lane.getBoundingClientRect();
+      return rc.width > 0 ? (e.clientX - rc.left) / rc.width : 0;
+    };
+    lane.addEventListener("pointerdown", (e) => {
+      if (ms.classList.contains("off") || e.button !== 0) return;
+      e.preventDefault();
+      lane.setPointerCapture(e.pointerId);
+      tun.dragging = c.name;
+      hd.focus({ preventScroll: true });
+      setFrac(fracAt(e));
+    });
+    lane.addEventListener("pointermove", (e) => {
+      if (tun.dragging === c.name && lane.hasPointerCapture(e.pointerId)) setFrac(fracAt(e));
+    });
+    const release = (e) => {
+      if (lane.hasPointerCapture(e.pointerId)) lane.releasePointerCapture(e.pointerId);
+      if (tun.dragging === c.name) { tun.dragging = null; updateRow(c.name); }
+    };
+    lane.addEventListener("pointerup", release);
+    lane.addEventListener("pointercancel", release);
+    hd.addEventListener("keydown", (e) => {
+      if (ms.classList.contains("off")) return;
+      const cc = tun.byName.get(c.name);
+      const cur = cc.value !== null && cc.value !== undefined ? cc.value : cc.default;
+      const f = axisFrac(rec.ax, cur);
+      const step = e.shiftKey ? 0.1 : 0.01;
+      let nf = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") nf = f + step;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") nf = f - step;
+      else if (e.key === "PageUp") nf = f + 0.1;
+      else if (e.key === "PageDown") nf = f - 0.1;
+      else if (e.key === "Home") nf = axisFrac(rec.ax, cc.range[0]);
+      else if (e.key === "End") nf = axisFrac(rec.ax, cc.range[1]);
+      if (nf === null) return;
+      e.preventDefault();
+      setFrac(nf);
+    });
+    rec.ends.push({ name: c.name, label: endLab, wrap, num, rst, lane, hd });
+    tun.rowEls.set(c.name, { pair: rec, i });
+  });
+
+  ctl.appendChild(rec.ends[0].wrap);
+  ctl.appendChild(ms);
+  for (let i = 1; i < rec.ends.length; i++) ctl.appendChild(rec.ends[i].wrap);
+
+  const exp = document.createElement("div");
+  exp.className = "texp";
+  exp._docs = new Set();
+  members.forEach((c) => explainInto(exp, c, c.pair.end_label + " - " + c.name + " - " + c.label));
+  wireExpander(h, exp);
+  row.append(h.head, ctl, exp);
   return row;
 }
 
 function showMsg(name, text) {
   const r = tun.rowEls.get(name);
-  if (r) r.msg.textContent = text || "";
+  if (!r) return;
+  const tgt = r.pair ? r.pair : r;
+  const t = text ? (r.pair ? r.pair.ends[r.i].label + ": " : "") + text : "";
+  tgt.msg.textContent = t;
+  tgt.msg.title = t;
 }
 
 // Value -> controls of one row (skips a field the user is typing in / a slider being dragged).
@@ -874,6 +1109,7 @@ function updateRow(name, forceNum) {
   const r = tun.rowEls.get(name);
   const c = tun.byName.get(name);
   if (!r || !c) return;
+  if (r.pair) { updatePairEnd(r.pair, r.i, forceNum); return; }
   const has = c.value !== null && c.value !== undefined;
   const v = has ? c.value : c.default;
   const off = c.in_firmware === false;
@@ -881,7 +1117,7 @@ function updateRow(name, forceNum) {
   r.row.classList.toggle("changed", isChanged(c));
   r.row.classList.toggle("off", off);
   r.row.classList.toggle("pending", tun.inflight.has(name) || tun.queued.has(name));
-  r.chg.hidden = !isChanged(c);
+  r.chg.classList.toggle("no", !isChanged(c));
   if (r.chk) {
     r.chk.checked = !!v;
     r.chk.disabled = !can;
@@ -894,6 +1130,35 @@ function updateRow(name, forceNum) {
   }
   r.rst.disabled = !(tun.snap && tun.snap.state === "synced" && state.online) || !isChanged(c);
   r.row.title = off ? "Not live in this firmware" : "";
+}
+
+function updatePairEnd(rec, i, forceNum) {
+  const e = rec.ends[i];
+  const c = tun.byName.get(e.name);
+  const has = c.value !== null && c.value !== undefined;
+  const v = has ? c.value : c.default;
+  const off = c.in_firmware === false;
+  const can = writable() && !off;
+  const ch = isChanged(c);
+  e.wrap.classList.toggle("changed", ch);
+  e.lane.classList.toggle("changed", ch);
+  e.wrap.classList.toggle("pending", tun.inflight.has(e.name) || tun.queued.has(e.name));
+  if (tun.dragging !== e.name) e.hd.style.left = (axisFrac(rec.ax, v) * 100) + "%";
+  e.hd.setAttribute("aria-valuenow", String(v));
+  e.hd.setAttribute("aria-valuetext", fmtWithUnit(v, c.unit, c.type));
+  e.hd.setAttribute("aria-disabled", String(!can));
+  e.num.disabled = !can;
+  if (forceNum || document.activeElement !== e.num) e.num.value = fmtNum(v, c.unit, c.type, true);
+  e.rst.disabled = !(tun.snap && tun.snap.state === "synced" && state.online) || !ch;
+  // whole row: changed if any end is, off / not writable if every end is
+  const all = rec.members.map((n) => tun.byName.get(n));
+  const any = all.some(isChanged);
+  const allOff = all.every((x) => x.in_firmware === false);
+  rec.row.classList.toggle("changed", any);
+  rec.row.classList.toggle("off", allOff);
+  rec.chg.classList.toggle("no", !any);
+  rec.ms.classList.toggle("off", !can);
+  rec.row.title = allOff ? "Not live in this firmware" : "";
 }
 
 // --- sending: one request per constant in flight, latest value wins -------------
@@ -969,7 +1234,7 @@ function renderChanges() {
 
 function revealRow(name) {
   const r = tun.rowEls.get(name);
-  if (r) r.row.scrollIntoView({ block: "center" });
+  if (r) (r.pair ? r.pair.row : r.row).scrollIntoView({ block: "center" });
 }
 
 let resetArmTimer = 0;
@@ -1001,23 +1266,12 @@ function setChangesOpen(o) {
 }
 el.changesBtn.addEventListener("click", () => setChangesOpen(el.changesPanel.hidden));
 
-// --- tabs / search / narrow-pane section menu ----------------------------------
-function setTab(which) {
-  const isLog = which === "log";
-  el.viewLog.hidden = !isLog;
-  el.viewConst.hidden = isLog;
-  el.tabLog.setAttribute("aria-selected", String(isLog));
-  el.tabConst.setAttribute("aria-selected", String(!isLog));
-  store("devtool.tab", which);
-  if (isLog && state.stick) scrollToBottom();
-}
-el.tabConst.addEventListener("click", () => setTab("const"));
-el.tabLog.addEventListener("click", () => setTab("log"));
-el.navToggle.addEventListener("click", () => {
-  const o = !el.sidebar.classList.contains("open");
+// --- narrow pane: the tree as an overlay; search -----------------------------------
+function setTreeOpen(o) {
   el.sidebar.classList.toggle("open", o);
   el.navToggle.setAttribute("aria-expanded", String(o));
-});
+}
+el.navToggle.addEventListener("click", () => setTreeOpen(!el.sidebar.classList.contains("open")));
 let searchTimer = 0;
 el.search.addEventListener("input", () => {
   clearTimeout(searchTimer);
@@ -1027,12 +1281,82 @@ el.search.addEventListener("input", () => {
     if (!tun.snap) return;
     updateTreeCounts();
     renderRows(true);
-    if (tun.search.trim()) setTab("const");
   }, 120);
 });
 el.search.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { el.search.value = ""; el.search.dispatchEvent(new Event("input")); }
 });
+
+// --- panes: tree | values | log, sizes by the two splitters ---------------------------
+// Pointer drag or keyboard (arrows 16 px, Shift 64 px, Home / End = min / max, double-click = default);
+// the values pane keeps PANE_MIN.values; sizes remembered per browser (localStorage, try/catch in store()).
+const PANE_MIN = { tree: 160, values: 360, log: 260 };
+const PANE_DEF = { tree: 260, log: 520 };
+const SPLIT_W = 7;
+const panes = {
+  tree: Number(store("devtool.treeW")) || PANE_DEF.tree,
+  log: Number(store("devtool.logW")) || PANE_DEF.log,
+};
+function paneMax(which) {
+  const total = el.panes.clientWidth;
+  const other = which === "tree" ? panes.log : panes.tree;
+  return Math.max(PANE_MIN[which], total - 2 * SPLIT_W - PANE_MIN.values - other);
+}
+function applyPanes() {
+  const total = el.panes.clientWidth;
+  if (total > 0) {
+    // the log gives way first, then the tree, so the values pane keeps its minimum
+    panes.log = Math.max(PANE_MIN.log, Math.min(panes.log, total - 2 * SPLIT_W - PANE_MIN.values - PANE_MIN.tree));
+    panes.tree = Math.max(PANE_MIN.tree, Math.min(panes.tree, paneMax("tree")));
+  }
+  el.panes.style.setProperty("--tree-w", Math.round(panes.tree) + "px");
+  el.panes.style.setProperty("--log-w", Math.round(panes.log) + "px");
+  for (const [sp, which] of [[el.splitTree, "tree"], [el.splitLog, "log"]]) {
+    sp.setAttribute("aria-valuemin", String(PANE_MIN[which]));
+    sp.setAttribute("aria-valuemax", String(Math.round(paneMax(which))));
+    sp.setAttribute("aria-valuenow", String(Math.round(panes[which])));
+  }
+}
+function setPane(which, w) {
+  panes[which] = Math.max(PANE_MIN[which], Math.min(w, paneMax(which)));
+  applyPanes();
+  store(which === "tree" ? "devtool.treeW" : "devtool.logW", String(Math.round(panes[which])));
+}
+function initSplitter(sp, which) {
+  const dir = which === "tree" ? 1 : -1;      // dragging right widens the tree, narrows the log
+  let x0 = 0, w0 = 0;
+  sp.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    sp.setPointerCapture(e.pointerId);
+    sp.classList.add("drag");
+    x0 = e.clientX; w0 = panes[which];
+  });
+  sp.addEventListener("pointermove", (e) => {
+    if (sp.hasPointerCapture(e.pointerId)) setPane(which, w0 + dir * (e.clientX - x0));
+  });
+  const end = (e) => {
+    if (sp.hasPointerCapture(e.pointerId)) sp.releasePointerCapture(e.pointerId);
+    sp.classList.remove("drag");
+  };
+  sp.addEventListener("pointerup", end);
+  sp.addEventListener("pointercancel", end);
+  sp.addEventListener("dblclick", () => setPane(which, PANE_DEF[which]));
+  sp.addEventListener("keydown", (e) => {
+    const st = e.shiftKey ? 64 : 16;
+    let w = null;
+    if (e.key === "ArrowRight") w = panes[which] + dir * st;
+    else if (e.key === "ArrowLeft") w = panes[which] - dir * st;
+    else if (e.key === "Home") w = PANE_MIN[which];
+    else if (e.key === "End") w = paneMax(which);
+    if (w === null) return;
+    e.preventDefault();
+    setPane(which, w);
+  });
+}
+initSplitter(el.splitTree, "tree");
+initSplitter(el.splitLog, "log");
+window.addEventListener("resize", applyPanes);
 
 // ---------------------------------------------------------------------------
 // Server-Sent Events (reconnects by itself, also across a devtool restart)
@@ -1076,7 +1400,7 @@ const savedFilter = store("devtool.filter");
 if (savedFilter) { el.filter.value = savedFilter; }
 setFilter(el.filter.value);
 el.search.value = tun.search;
-setTab(store("devtool.tab") === "log" ? "log" : "const");
+applyPanes();
 setChangesOpen(store("devtool.changesOpen") === "1");
 fillPedals();
 renderStatus();

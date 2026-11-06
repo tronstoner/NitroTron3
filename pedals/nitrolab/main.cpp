@@ -235,12 +235,12 @@ int main() {
         // lpf .. sub .. gd<decay g> Td<s> gr<rise g> Tr<s> w<blend> tr<travel> L<live level> o<openness>` (no fc / lfo part), DOWN `LAB ADD-<zone> <K2 name> <knob>
         // > <with LFO> <K3 name> <knob value> fc ..` (names h harmonics / I index rad / u unison / d stretch; UNISON:
         // `u <knob> bt <beat Hz> prop|hz|off`); + the SW1 UP touch env / `fce` / `lfo` part (fce = the applied index fc; DOWN)
-        // SW3 MID SW1 MID audition bank (EXP_TB_LEGACY = false): `tab <n>/18 <NAME> LFO|ANALOG m<knob> pos<frame
+        // SW3 MID SW1 MID audition bank (EXP_TB_LEGACY = false): `tab <n>/16 <NAME> LFO|ANALOG m<knob> pos<frame
         // position>` (ANALOG: `Q<LP Q at the K2 knob>`) `lp .. eff ..` + the K4 touch env + `lfo ..` (the K5 LFO on the
-        // morph / on the LP cutoff); JOURNEY `tab <n>/18 <NAME> JOURNEY lp .. eff ..` + the K4 touch env + ` S<start
+        // morph / on the LP cutoff); JOURNEY `tab <n>/16 <NAME> JOURNEY lp .. eff ..` + the K4 touch env + ` S<start
         // = K2 knob> dir fwd|back|still rate <s for the whole journey at the K5 knob; 0 = still>s pos<applied morph now>`
-        // (no lfo part); LOFI `tab <n>/18 <NAME> LOFI BITS|RATE|TABLE k2 <morph knob> amt <K5 knob a> bits <b> | rate
-        // <f_h> Hz | interp <a>` (`off` with EXP_TB_LOFI_ENABLE false) `lp .. eff ..` + the K4 touch env (no lfo / journey part).
+        // (no lfo part); LOFI `tab 16/16 LOFI LOFI k2 <K2 knob> step <n>/16|morph sb <bits|off> sr <Hz|off> tb <bits|off>
+        // ti <i>` (each stage `off` at its bypass value / EXP_TB_LOFI_ENABLE false) `lp .. eff ..` + the K4 touch env (no lfo / journey part).
         // Legacy zones: `WT/<zone> m.. pos.. dmp .. lp .. eff ..` as before.
         const Explorer::DiagSnap& d = diag_xsnap;
         float cpu_pk = g_cpu.GetMaxCpuLoad();
@@ -317,16 +317,15 @@ int main() {
           diag_link::PrintLine("tab %d/%d %s %s lp %d eff %d%s mute %d cpu %u%%",   // preset, kind, LP fc knob /
                             d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk),   // effective (S / pos: the
                             (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);   // journey part)
-        else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // audition bank LOFI:
-          char lv[32];                                        // variant value at the K5 knob (off: lofi disabled)
-          if (!d.ton)                                 snprintf(lv, sizeof lv, "off");
-          else if (d.tlv == explorer_k::kLofiBits || d.tlv == explorer_k::kLofiTableBits)    snprintf(lv, sizeof lv, "bits" D2F, D2V(d.tv));
-          else if (d.tlv == explorer_k::kLofiRate)    snprintf(lv, sizeof lv, "rate %d Hz", (int)(d.tv + 0.5f));
-          else                                        snprintf(lv, sizeof lv, "interp" D2F, D2V(d.tv));
-          diag_link::PrintLine("tab %d/%d %s %s %s k2" D2F " amt" D2F " %s lp %d eff %d%s mute %d cpu %u%%",
-                            d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk),
-                            Explorer::TbLofiName(d.tlv), D2V(d.b), D2V(d.ta), lv,
-                            (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);
+        else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // audition bank LOFI slot:
+          char st[32], sb[24], sr[24], tb[24];                // K2 step / morph, the four stages (off = bypassed)
+          if (d.tdst > 0) snprintf(st, sizeof st, "step %d/%d", d.tdst, d.tnst); else snprintf(st, sizeof st, "morph");
+          if (d.tsb > 0.f) snprintf(sb, sizeof sb, D2F, D2V(d.tsb)); else snprintf(sb, sizeof sb, " off");
+          if (d.tsr > 0.f) snprintf(sr, sizeof sr, " %d", (int)(d.tsr + 0.5f)); else snprintf(sr, sizeof sr, " off");
+          if (d.ttb > 0.f) snprintf(tb, sizeof tb, D2F, D2V(d.ttb)); else snprintf(tb, sizeof tb, " off");
+          diag_link::PrintLine("tab %d/%d %s %s k2" D2F " %s sb%s sr%s tb%s ti" D2F " lp %d eff %d%s mute %d cpu %u%%",
+                            d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), st,
+                            sb, sr, tb, D2V(d.tti), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);
         }
         else if (d.model == Explorer::kWT && d.tbz >= 0)      // audition bank LFO: preset, kind, morph m at the
           diag_link::PrintLine("tab %d/%d %s %s m" D2F " pos" D2F " lp %d eff %d%s mute %d cpu %u%%",   // knob (B), frame
