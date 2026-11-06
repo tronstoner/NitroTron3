@@ -36,7 +36,7 @@
 namespace explorer_k {
 
 enum : uint8_t { kTbLfo = 0, kTbJourney = 1, kTbAnalog = 2, kTbLofi = 3 };  // preset kind
-enum : uint8_t { kLofiNone = 0, kLofiBits = 1, kLofiRate = 2, kLofiTable = 3 };   // LOFI preset variant
+enum : uint8_t { kLofiNone = 0, kLofiBits = 1, kLofiRate = 2, kLofiTable = 3, kLofiTableBits = 4 };   // LOFI preset variant
 // Generators: spectral (harmonic amplitudes, sine phase) or time domain (DFT at EXP_TB_TD_SIZE, as legacy). Legacy
 // recipes are reused 1:1 (explorer.h TbStageSpec maps them onto the legacy TbSpectral / TbTimeDomain cases).
 enum : uint8_t {
@@ -189,6 +189,7 @@ constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
   { "LOFI BITS",  kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiBits,  -1 },
   { "LOFI RATE",  kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiRate,  15 },
   { "LOFI TABLE", kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiTable, 15 },
+  { "LOFI TBITS", kTbLofi, 31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, kLofiTableBits, 15 },
 };
 #undef EXP_TB_L
 #undef EXP_TB_S
@@ -212,7 +213,7 @@ constexpr bool ExpTbPresetOk(const ExpTbPreset& P, int z) {
     if (P.st[i].gen == kTbgList && (P.st[i].list == nullptr || P.st[i].n < 1)) return false;
     if (i > 0 && !(P.st[i].pos > P.st[i - 1].pos)) return false;
   }
-  if ((P.kind == kTbLofi) != (P.lofi != kLofiNone) || P.lofi > kLofiTable) return false;
+  if ((P.kind == kTbLofi) != (P.lofi != kLofiNone) || P.lofi > kLofiTableBits) return false;
   if (P.share >= 0) {
     if (P.share >= z) return false;
     const ExpTbPreset& Q = EXP_TB_PRESETS[P.share];

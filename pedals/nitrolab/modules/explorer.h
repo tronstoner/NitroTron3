@@ -1134,7 +1134,8 @@ class Explorer : public Module {
   }
   static const char* TbLofiName(int v) {         // DIAG: LOFI preset variant
     return (v == explorer_k::kLofiBits) ? "BITS" : (v == explorer_k::kLofiRate) ? "RATE"
-         : (v == explorer_k::kLofiTable) ? "TABLE" : "-";
+         : (v == explorer_k::kLofiTable) ? "TABLE"
+         : (v == explorer_k::kLofiTableBits) ? "TBITS" : "-";
   }
   // LOFI laws at the amount a (0..1): BITS b = MAX - (MAX - MIN) a; RATE f_h = HI (LO / HI)^a Hz.
   static inline float LofiBits(float a) {
@@ -3082,9 +3083,13 @@ class Explorer : public Module {
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
     // audition bank LOFI TABLE (tables only; TABLES LOFI): K5 amount ta (smoothed) of nearest <-> linear, fixed rounding
     // step lq (2^(16 - TABLE_BITS) int16 units); off: every other preset, EXP_TB_LOFI_ENABLE false, legacy, EXP_TB_BLEND.
-    const bool  ltab = (M == kWT && !EXP_TB_BLEND && ExpTbLofiVariant(p.zone) == kLofiTable);
-    const float ta = ltab ? Clamp01(k5s_) : 0.f;
-    constexpr float lq = (float)(1 << (16 - EXP_TB_LOFI_TABLE_BITS)), lqi = 1.f / lq;
+    // LOFI TBITS (2026-11-06): nearest sample fixed, K5 = the rounding bits LofiBits(K5) (16 CCW = clean .. 4 CW).
+    const int   lvar = (M == kWT && !EXP_TB_BLEND) ? ExpTbLofiVariant(p.zone) : kLofiNone;
+    const bool  ltab = (lvar == kLofiTable || lvar == kLofiTableBits);
+    const float ta = (lvar == kLofiTable) ? Clamp01(k5s_) : (lvar == kLofiTableBits) ? 1.f : 0.f;
+    const float lq = (lvar == kLofiTableBits) ? exp2f(16.f - LofiBits(k5s_))
+                                              : (float)(1 << (16 - EXP_TB_LOFI_TABLE_BITS));
+    const float lqi = 1.f / lq;
     float acc = 0.f;
     for (int k = 0; k < kBands; k++) {
       const float a = mg[k];
@@ -3912,7 +3917,7 @@ class Explorer : public Module {
     s.tlv = (s.tbk == kTbLofi) ? EXP_TB_PRESETS[diag_tbz_].lofi : kLofiNone;
     s.ton = EXP_TB_LOFI_ENABLE;
     s.ta = kv[4];
-    s.tv = (s.tlv == kLofiBits) ? LofiBits(kv[4]) : (s.tlv == kLofiRate) ? LofiRateHz(kv[4]) : Clamp01(kv[4]);
+    s.tv = (s.tlv == kLofiBits || s.tlv == kLofiTableBits) ? LofiBits(kv[4]) : (s.tlv == kLofiRate) ? LofiRateHz(kv[4]) : Clamp01(kv[4]);
     {                                            // JOURNEY K5 at the knob: direction, whole-journey time (0 = still)
       const float r = JrnRate(2.f * kv[4] - 1.f);
       s.jdir = (r > 0.f) ? 1 : (r < 0.f) ? -1 : 0;

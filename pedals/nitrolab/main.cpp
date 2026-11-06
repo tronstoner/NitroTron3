@@ -320,7 +320,7 @@ int main() {
         else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // audition bank LOFI:
           char lv[32];                                        // variant value at the K5 knob (off: lofi disabled)
           if (!d.ton)                                 snprintf(lv, sizeof lv, "off");
-          else if (d.tlv == explorer_k::kLofiBits)    snprintf(lv, sizeof lv, "bits" D2F, D2V(d.tv));
+          else if (d.tlv == explorer_k::kLofiBits || d.tlv == explorer_k::kLofiTableBits)    snprintf(lv, sizeof lv, "bits" D2F, D2V(d.tv));
           else if (d.tlv == explorer_k::kLofiRate)    snprintf(lv, sizeof lv, "rate %d Hz", (int)(d.tv + 0.5f));
           else                                        snprintf(lv, sizeof lv, "interp" D2F, D2V(d.tv));
           diag_link::PrintLine("tab %d/%d %s %s %s k2" D2F " amt" D2F " %s lp %d eff %d%s mute %d cpu %u%%",

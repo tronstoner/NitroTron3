@@ -277,7 +277,7 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
   else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // LOFI: variant, k2, amount, value
     char lv[32];
     if (!d.ton)                              snprintf(lv, sizeof lv, "off");
-    else if (d.tlv == explorer_k::kLofiBits) snprintf(lv, sizeof lv, "bits %.2f", d.tv);
+    else if (d.tlv == explorer_k::kLofiBits || d.tlv == explorer_k::kLofiTableBits) snprintf(lv, sizeof lv, "bits %.2f", d.tv);
     else if (d.tlv == explorer_k::kLofiRate) snprintf(lv, sizeof lv, "rate %d Hz", (int)(d.tv + 0.5f));
     else                                     snprintf(lv, sizeof lv, "interp %.2f", d.tv);
     snprintf(line, sizeof line, "tab %d/%d %s %s %s k2 %.2f amt %.2f %s lp %d eff %d%s mute %s", d.tbz + 1,
