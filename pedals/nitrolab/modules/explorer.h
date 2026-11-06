@@ -2869,7 +2869,7 @@ class Explorer : public Module {
         if (!EXP_TB_LEGACY) {
           const float t0 = explorer_tb_tone[p.n0], b0 = explorer_tb_blow[p.n0];
           p.p2 = t0 + p.p0 * (explorer_tb_tone[p.n1] - t0);
-          p.p3 = b0 + p.p0 * (explorer_tb_blow[p.n1] - b0);
+          p.p3 = EXP_TB_BLOW_SCALE * (b0 + p.p0 * (explorer_tb_blow[p.n1] - b0));   // x global blow scale (2026-11-06)
         }
         p.a = pos; p.b = mm; break;
       }
