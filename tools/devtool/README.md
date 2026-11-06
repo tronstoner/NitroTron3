@@ -16,6 +16,13 @@ It prints `devtool: http://localhost:<port>` - open that in the Claude app's
 browser pane or any browser. The port is 8765 (http://localhost:8765); only
 if that is taken does it count up (8766, ...). `--port N` forces one. Ctrl-C quits and closes the port.
 
+No restarts needed: when devtool's own Python code changes (`devtool.py`,
+`registry.py`, `tools/diag/log.py`) it restarts itself on the same port (after a
+running flash, and only if the new code loads - else it says so in the log and
+keeps running). The page reconnects by itself; the note and the override carry
+over. Constants files, wavetables and `web/` are re-read anyway (after each
+flash / on demand / on a page reload).
+
 Python 3 standard library only. The page (`web/`) is plain HTML/CSS/JS, no
 build step, no external assets.
 

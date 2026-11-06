@@ -32,6 +32,10 @@
     a previous non-empty file that a re-sync would drop is kept in tune/history/.
 
   tools/devtool/devtool.py              run it (Ctrl-C quits)
+    Self-restart: when its own Python code changes (devtool.py, registry.py,
+    tools/diag/log.py) it re-execs itself on the same port (after a running flash,
+    only if the new code imports); the page reconnects by itself, the note and
+    the override carry over, the pedal's live values are re-read from the pedal.
   tools/devtool/devtool.py --selftest   offline self-test (pty pair, no pedal)
 
 Python 3 stdlib only. Only one program can hold the port: while devtool runs it
@@ -336,8 +340,8 @@ class Tuner:
         self.list_seen = []
         self.pending = collections.OrderedDict()   # name|"*" -> command line (latest wins)
         self.last_send = 0.0
-        self.override = False
-        self.note = ""
+        self.override = os.environ.pop("DEVTOOL_OVERRIDE", "") == "1"   # carried over a self-restart
+        self.note = os.environ.pop("DEVTOOL_NOTE", "")
         self.guard = {"ok": False, "reasons": ["no pedal"], "warnings": []}
         self.repo_head = None
         self.last_err = None
@@ -1635,6 +1639,40 @@ def selftest():
     return 0 if ok else 1
 
 
+# Self-restart on a code change: the files whose code the running process holds. The constants files, the
+# wavetables and web/ need none (re-read after each BUILD / on demand / per request).
+WATCH = [os.path.join(HERE, "devtool.py"), os.path.join(HERE, "registry.py"),
+         os.path.join(REPO, "tools", "diag", "log.py")]
+
+
+def watch_stamp():
+    out = []
+    for f in WATCH:
+        try:
+            out.append(os.stat(f).st_mtime_ns)
+        except OSError:
+            out.append(None)
+    return out
+
+
+def code_loads():
+    """'' if the changed code imports cleanly in a fresh interpreter, else the error's last lines."""
+    probe = ("import sys; sys.dont_write_bytecode = True; sys.path.insert(0, %r); import devtool" % HERE)
+    try:
+        r = subprocess.run([sys.executable, "-I", "-c", probe], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return str(e)
+    return "" if r.returncode == 0 else _tail(r.stderr)
+
+
+def restart_argv(port):
+    a = [x for x in sys.argv]
+    if "--port" in a:
+        i = a.index("--port")
+        del a[i:i + 2]
+    return [sys.executable, os.path.abspath(a[0])] + a[1:] + ["--port", str(port)]
+
+
 def main():
     if "--selftest" in sys.argv:
         sys.exit(selftest())
@@ -1649,14 +1687,35 @@ def main():
     print("devtool: http://localhost:%d" % app.port, flush=True)
     print("serial: /dev/cu.usbmodem* (auto-reconnect); logs in %s; Ctrl-C quits"
           % os.path.relpath(diaglog.LOG_DIR, os.getcwd()), flush=True)
+    stamp, bad = watch_stamp(), None
+    restart = False
     try:
         while True:
             time.sleep(0.5)
+            now = watch_stamp()
+            if now == stamp or now == bad or app.flasher.active:
+                continue
+            time.sleep(0.3)                 # let an editor finish writing
+            now = watch_stamp()
+            err = code_loads()
+            if err:
+                bad = now
+                msg = "devtool: code changed but does not load - still running the old code: " + err.replace("\n", " | ")
+                print(msg, flush=True)
+                app.hub.publish("line", {"t": now_ms(), "text": msg})
+                continue
+            restart = True
+            break
     except KeyboardInterrupt:
         pass
     finally:
+        if restart:
+            os.environ["DEVTOOL_NOTE"] = app.tuner.note
+            os.environ["DEVTOOL_OVERRIDE"] = "1" if app.tuner.override else ""
         app.close()
-        print("devtool: stopped", flush=True)
+        print("devtool: " + ("code changed, restarting on port %d" % app.port if restart else "stopped"), flush=True)
+    if restart:
+        os.execv(sys.executable, restart_argv(app.port))
 
 
 if __name__ == "__main__":
