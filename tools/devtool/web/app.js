@@ -441,6 +441,7 @@ function scheduleStatePaint(moved) {
     statePaintMoved = false;
     renderWhere();
     paintStrip();
+    paintWt();
     if (m) { renderNavActive(); renderPresetNow(); renderViewTitle(); }
   });
 }
@@ -1356,6 +1357,8 @@ function renderPresetBody(force) {
   dropTag("preset");
   const body = presetEd.body, vk = presetEd.viewKey;
   body.textContent = "";
+  body.appendChild(buildWtPanel(name));
+  paintWt();
   const fm = presetEd.byPreset.get(name);
   if (!fm) return;
   tagged("preset", () => {
@@ -1384,6 +1387,167 @@ function renderPresetBody(force) {
   for (const c of fm.values()) updateName(c.name);
 }
 function renderPresetNow() { renderPresetBody(false); }
+
+// ---------------------------------------------------------------------------
+// Wavetable panel (preset editor, above the knob groups): the shown preset's frames as the pedal builds them
+// (GET /api/tables = tools/hostsim/tbdump: full-band version, engine amplitude, 128 points). Left a stacked
+// waterfall (frame 0 in front, later frames back / up, fading), right one tile per frame (key stages marked).
+// The frame K2 plays (core.js tablePlay from the `tab` state line) is highlighted live: paintWt only toggles
+// classes / moves one polyline, the panel is built once per shown preset (no rebuild, no layout change).
+// ---------------------------------------------------------------------------
+const wt = { status: "idle", data: null, reason: "", byName: new Map(), panel: null };
+const WF = { w: 360, h: 220, dx: 96, dy: 104, pad: 6 };     // waterfall viewBox; depth offset of the last frame
+const TILE = { w: 84, h: 48, pad: 3 };
+async function loadTables() {
+  if (wt.status === "loading") return;
+  wt.status = "loading";
+  let res = null;
+  try {
+    const r = await fetch("/api/tables", { cache: "no-store" });
+    res = r.ok ? await r.json() : { ok: false, reason: "HTTP " + r.status };
+  } catch (e) { res = { ok: false, reason: "devtool not reachable" }; }
+  wt.byName = new Map();
+  if (res && res.ok && res.data && Array.isArray(res.data.presets)) {
+    wt.status = "ok"; wt.data = res.data; wt.reason = "";
+    for (const p of res.data.presets) wt.byName.set(p.name, p);
+  } else {
+    wt.status = "err"; wt.data = null; wt.reason = (res && res.reason) || "unknown error";
+  }
+  if (wt.panel && wt.panel.box.isConnected) fillWtPanel(wt.panel.box, wt.panel.name);
+}
+function buildWtPanel(name) {
+  const box = h("div", "wt");
+  box.dataset.target = "timbre";
+  wt.panel = { box, name, frames: null };
+  if (wt.status === "idle") loadTables();
+  fillWtPanel(box, name);
+  return box;
+}
+function wavePoints(w, x0, y0, xw, amp) {
+  const n = w.length, out = new Array(n + 1);
+  for (let i = 0; i <= n; i++) out[i] = (x0 + xw * i / n).toFixed(1) + "," + (y0 - amp * w[i % n]).toFixed(1);
+  return out.join(" ");   // one full cycle, closed at the start value
+}
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function fillWtPanel(box, name) {
+  box.textContent = "";
+  const head = h("div", "wt-head");
+  head.appendChild(h("span", "ped-gtitle", "Wavetable"));
+  const info = h("span", "wt-info");
+  const play = h("span", "wt-play");
+  head.append(info, play);
+  box.appendChild(head);
+  const P = wt.byName.get(name);
+  if (!P) {
+    const msg = wt.status === "err" ? "tables unavailable: " + wt.reason
+      : wt.status === "ok" ? "no table data for " + name : "loading tables …";
+    const m = h("div", "wt-msg", msg);
+    if (wt.status === "err") {
+      const b = h("button", "wt-retry", "retry");
+      b.type = "button";
+      b.addEventListener("click", () => { wt.status = "idle"; loadTables(); fillWtPanel(box, name); });
+      m.appendChild(b);
+    }
+    box.appendChild(m);
+    wt.panel = { box, name, frames: null };
+    return;
+  }
+  const F = P.waves.length;
+  let peak = 0;
+  for (const w of P.waves) for (const v of w) peak = Math.max(peak, Math.abs(v));
+  const g = peak > 0 ? 1 / peak : 1;
+  info.textContent = P.kind + " · " + fmtNum(F, "", "int") + (F === 1 ? " frame" : " frames") + " · peak "
+    + fmtNum(peak, "0..1") + " (drawn at full height)";
+  info.title = "Full-band version (harmonics 1.." + wt.data.harmonics + "), engine amplitude = int16 / scale "
+    + fmtNum(P.scale, "") + ", before the tonal gain; " + wt.data.size + " points. Table hash " + wt.data.hash + ".";
+  // key stages -> frames (a stage between two frames marks both, as "between")
+  const keyAt = new Map();   // frame -> "key" | "half"
+  for (const k of P.key_stages) {
+    const f0 = Math.floor(k + 1e-6), t = k - f0;
+    if (t < 1e-3) keyAt.set(f0, "key");
+    else { for (const f of [f0, f0 + 1]) if (!keyAt.has(f)) keyAt.set(f, "half"); }
+  }
+  const row = h("div", "wt-row");
+  // waterfall: back (last frame) first, each frame a filled-under polyline that hides what is behind it
+  const svg = svgEl("svg", { viewBox: "0 0 " + WF.w + " " + WF.h, class: "wt-wf", role: "img",
+    "aria-label": name + " wavetable, " + F + " frames" });
+  const xw = WF.w - WF.dx - 2 * WF.pad;
+  const amp = Math.min(48, (WF.h - WF.dy - 2 * WF.pad) / 2) ;
+  const base = WF.h - WF.pad - amp;                          // frame 0's zero line
+  const at = (f) => (F > 1 ? f / (F - 1) : 0);
+  const lines = new Array(F);
+  for (let f = F - 1; f >= 0; f--) {
+    const u = at(f);
+    const x0 = WF.pad + WF.dx * u, y0 = base - WF.dy * u;
+    const pts = wavePoints(P.waves[f].map((v) => v * g), x0, y0, xw, amp);
+    const grp = svgEl("g", { class: "wf-f" + (keyAt.get(f) === "key" ? " key" : ""), style: "opacity:" + (1 - 0.7 * u).toFixed(3) });
+    grp.appendChild(svgEl("polygon", { class: "wf-fill", points: pts + " " + (x0 + xw).toFixed(1) + "," + (y0 + amp + 2).toFixed(1)
+      + " " + x0.toFixed(1) + "," + (y0 + amp + 2).toFixed(1) }));
+    grp.appendChild(svgEl("polyline", { class: "wf-line", points: pts }));
+    svg.appendChild(grp);
+    lines[f] = grp;
+  }
+  const playLine = svgEl("polyline", { class: "wf-play", points: "" });
+  svg.appendChild(playLine);
+  row.appendChild(svg);
+  // tiles: one per frame, frame number under it, key stage marker
+  const grid = h("div", "wt-tiles");
+  const tiles = new Array(F);
+  for (let f = 0; f < F; f++) {
+    const t = h("div", "wt-tile");
+    const k = keyAt.get(f);
+    if (k) t.classList.add(k === "key" ? "key" : "half");
+    t.title = "frame " + f + (k === "key" ? " · key stage" : k === "half" ? " · next to a key stage between two frames" : "");
+    const ts = svgEl("svg", { viewBox: "0 0 " + TILE.w + " " + TILE.h, width: TILE.w, height: TILE.h, "aria-hidden": "true" });
+    ts.appendChild(svgEl("line", { class: "wt-zero", x1: 0, x2: TILE.w, y1: TILE.h / 2, y2: TILE.h / 2 }));
+    ts.appendChild(svgEl("polyline", { class: "wt-wave",
+      points: wavePoints(P.waves[f].map((v) => v * g), TILE.pad, TILE.h / 2, TILE.w - 2 * TILE.pad, TILE.h / 2 - TILE.pad) }));
+    t.appendChild(ts);
+    const cap = h("div", "wt-cap");
+    cap.appendChild(h("span", "wt-n", fmtNum(f, "", "int")));
+    if (k) cap.appendChild(h("span", "wt-key", k === "key" ? "◆" : "◇"));
+    t.appendChild(cap);
+    grid.appendChild(t);
+    tiles[f] = t;
+  }
+  row.appendChild(grid);
+  box.appendChild(row);
+  wt.panel = { box, name, frames: F, P, g, lines, tiles, playLine, play, xw, amp, base, last: null };
+  paintWt(true);
+}
+// Live highlight: the frame K2 plays on the shown preset (only while the pedal is on it).
+function paintWt(force) {
+  const W = wt.panel;
+  if (!W || !W.frames || !W.box.isConnected) return;
+  const p = state.st && state.st.bench === "2" && state.st.preset === W.name
+    ? tablePlay(state.st, W.P.kind, W.frames, W.P.key_stages) : null;
+  const key = p ? p.pos.toFixed(3) + "|" + p.stage : "";
+  if (!force && key === W.last) return;
+  W.last = key;
+  for (const t of W.tiles) t.classList.remove("play", "play2");
+  for (const l of W.lines) l.classList.remove("play");
+  W.box.classList.toggle("playing", !!p);
+  if (!p) {
+    W.play.textContent = state.st && state.st.preset === W.name ? "" : "not playing";
+    W.playLine.setAttribute("points", "");
+    return;
+  }
+  const F = W.frames, f0 = Math.min(F - 1, Math.floor(p.pos)), t = p.pos - f0;
+  const near = t < 0.5 ? f0 : Math.min(F - 1, f0 + 1), other = t < 0.5 ? f0 + 1 : f0;
+  W.tiles[near].classList.add("play");
+  W.lines[near].classList.add("play");
+  if (t > 1e-3 && other < F && other !== near) W.tiles[other].classList.add("play2");
+  // the read wave: linear blend of the two frames (as the engine's morph), drawn at its depth
+  const a = W.P.waves[f0], b = W.P.waves[Math.min(F - 1, f0 + 1)];
+  const u = F > 1 ? p.pos / (F - 1) : 0;
+  const w = a.map((v, i) => (v + t * (b[i] - v)) * W.g);
+  W.playLine.setAttribute("points", wavePoints(w, WF.pad + WF.dx * u, W.base - WF.dy * u, W.xw, W.amp));
+  W.play.textContent = (p.stage ? "K2 step " + p.stage + " · " : "") + "plays frame " + fmtNum(p.pos, "knob");
+}
 
 // ---------------------------------------------------------------------------
 // Sending: one request per constant in flight, latest value wins (devtool throttles the serial side)
@@ -1528,6 +1692,7 @@ function connect() {
     el.flashOut.textContent = "";
     flashLast = "";
     loadMeta();
+    if (wt.status === "err") loadTables();
     fullRender();
     renderBanner();
   });

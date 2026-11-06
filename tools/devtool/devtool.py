@@ -20,6 +20,8 @@
     after BUILD devtool sends `list` and merges the pedal's values (the pedal is
     the truth; re-synced after every reconnect / flash).
       GET  /api/registry   registry + values + guard state
+      GET  /api/tables     the SW1 MID audition bank's wavetables as the pedal builds them
+                           (tools/hostsim/tbdump, built on demand; cached per HEAD + explorer*.h state)
       POST /api/set        {"name": N, "value": V}   (throttled, latest wins, <= ~30 sends/s)
       POST /api/reset      {"name": N} | {"name": "all"}
       POST /api/note       {"text": "what I heard"}
@@ -37,6 +39,8 @@ is the logger (do not run `task log` at the same time).
 """
 import codecs
 import collections
+import glob
+import hashlib
 import http.client
 import json
 import math
@@ -818,6 +822,103 @@ class Flasher:
 
 
 # ---------------------------------------------------------------------------
+# Wavetables (preset editor): tools/hostsim/tbdump = the exact tables the pedal builds (explorer.h Init ->
+# BuildBank), as JSON. Built with `make -C tools/hostsim tbdump` when missing or older than explorer*.h; the
+# JSON is cached per (repo HEAD, explorer*.h dirty state + contents). Failure = {"ok": false, "reason": ...}.
+# ---------------------------------------------------------------------------
+HOSTSIM_DIR = os.path.join(REPO, "tools", "hostsim")
+TBDUMP = os.path.join(HOSTSIM_DIR, "tbdump")
+EXPLORER_GLOB = os.path.join(REPO, "pedals", "nitrolab", "modules", "explorer*.h")
+
+
+def _tail(text, n=6):
+    lines = [l for l in (text or "").strip().splitlines() if l.strip()]
+    return " | ".join(lines[-n:])
+
+
+class Tables:
+    def __init__(self, head=diaglog.git_head, dirty=files_dirty):
+        self.head = head
+        self.dirty = dirty
+        self.lock = threading.Lock()
+        self.key = None
+        self.result = None
+
+    def _sources(self):
+        return sorted(glob.glob(EXPLORER_GLOB))
+
+    def _key(self, srcs):
+        rel = [os.path.relpath(p, REPO) for p in srcs]
+        d = self.dirty(rel)
+        key = [self.head() or "?", "dirty" if d else ("clean" if d is False else "unknown")]
+        if d is not False:                          # dirty (or git failed): the contents decide
+            hs = hashlib.sha1()
+            for p in srcs:
+                try:
+                    with open(p, "rb") as f:
+                        hs.update(f.read())
+                except OSError:
+                    hs.update(b"?")
+            key.append(hs.hexdigest()[:12])
+        return ":".join(key)
+
+    def _build(self, srcs):
+        try:
+            newest = max(os.path.getmtime(p) for p in srcs) if srcs else 0.0
+            stale = not os.path.exists(TBDUMP) or os.path.getmtime(TBDUMP) < newest
+        except OSError as e:
+            return "explorer sources: %s" % e
+        if not stale:
+            return None
+        try:
+            r = subprocess.run(["make", "-C", HOSTSIM_DIR, "tbdump"], capture_output=True, text=True, timeout=600)
+        except (OSError, subprocess.SubprocessError) as e:
+            return "make -C tools/hostsim tbdump: %s" % e
+        if r.returncode != 0:
+            return "make -C tools/hostsim tbdump failed (exit %d): %s" % (r.returncode, _tail(r.stdout + r.stderr))
+        return None
+
+    def _run(self, srcs):
+        if not srcs:
+            return {"ok": False, "reason": "no pedals/nitrolab/modules/explorer*.h found"}
+        err = self._build(srcs)
+        if err:
+            return {"ok": False, "reason": err}
+        try:
+            r = subprocess.run([TBDUMP], capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError) as e:
+            return {"ok": False, "reason": "tbdump: %s" % e}
+        if r.returncode != 0:
+            return {"ok": False, "reason": "tbdump failed (exit %d): %s" % (r.returncode, _tail(r.stderr))}
+        try:
+            data = json.loads(r.stdout)
+        except ValueError as e:
+            return {"ok": False, "reason": "tbdump output is not JSON: %s" % e}
+        if not isinstance(data, dict) or not isinstance(data.get("presets"), list):
+            return {"ok": False, "reason": "tbdump output has no presets list"}
+        return {"ok": True, "data": data}
+
+    def get(self):
+        """The cached result for the current key; rebuilt when the key changed (blocking, one at a time)."""
+        with self.lock:
+            try:
+                srcs = self._sources()
+                key = self._key(srcs)
+                if key != self.key or self.result is None:
+                    t0 = time.time()
+                    res = self._run(srcs)
+                    res["key"] = key
+                    res["ms"] = int((time.time() - t0) * 1000)
+                    self.key, self.result = key, res
+                return self.result
+            except Exception as e:                  # never crash the server over the tables
+                return {"ok": False, "reason": "tables: %s" % e, "key": None}
+
+    def prefetch(self):
+        threading.Thread(target=self.get, name="tables", daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
@@ -872,6 +973,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, st)
         elif path == "/api/registry":
             self._json(200, app.tuner.snapshot())
+        elif path == "/api/tables":
+            self._json(200, app.tables.get())
         elif path == "/events":
             self._events()
         else:
@@ -991,7 +1094,8 @@ def bind_server(port=None):
 
 
 class App:
-    def __init__(self, sess_kw=None, flasher_kw=None, tuner_kw=None, port=None, remember_port=True):
+    def __init__(self, sess_kw=None, flasher_kw=None, tuner_kw=None, port=None, remember_port=True,
+                 tables=None):
         self.hub = Hub()
         self.sess = DevSession(self.hub, **(sess_kw or {}))
         self.tuner = Tuner(self.hub, self.sess, **(tuner_kw or {}))
@@ -999,6 +1103,8 @@ class App:
         self.hub.tun_provider = self.tuner.snapshot
         self.serial = SerialLoop(self.sess, tick=self.tuner.tick)
         self.flasher = Flasher(self.hub, self.serial, **(flasher_kw or {}))
+        self.prefetch_tables = tables is None       # the real tool builds them at startup (background)
+        self.tables = tables if tables is not None else Tables()
         self.stopping = threading.Event()
         self.httpd = bind_server(port)
         self.httpd.app = self
@@ -1016,6 +1122,8 @@ class App:
     def start(self):
         self.serial.start()
         self.http_thread.start()
+        if self.prefetch_tables:
+            self.tables.prefetch()
 
     def close(self):
         self.stopping.set()
@@ -1106,13 +1214,33 @@ def selftest():
                 "File downloaded successfully\\n') if 'program-dfu' in sys.argv else None")
         return [sys.executable, "-c", code] + list(args)
 
+    # 0) wavetables: the real tbdump (built if missing / stale), JSON, 16 presets, frame counts = EXP_TB_PRESETS
+    tables = Tables()
+    tres = tables.get()
+    check(tres.get("ok") is True, "tables: tbdump builds + runs (%s)" % (tres.get("reason") or "%d ms" % tres.get("ms", 0)))
+    tdata = tres.get("data") or {}
+    tpres = tdata.get("presets") or []
+    check(len(tpres) == 16, "tables: 16 presets")
+    with open(os.path.join(REPO, "pedals", "nitrolab", "modules", "explorer_tables.h")) as fh:
+        rows = re.findall(r'^\s*\{\s*"(\w+)",\s*kTb\w+,\s*(\d+),', fh.read(), re.M)
+    check(len(rows) == 16 and [(p["name"], p["frames"]) for p in tpres] == [(n, int(f)) for n, f in rows]
+          and all(len(p["waves"]) == p["frames"] and all(len(w) == tdata.get("size") for w in p["waves"])
+                  for p in tpres), "tables: names / frame counts match EXP_TB_PRESETS, waves complete")
+    check(tables.get() is tres, "tables: cached for the same HEAD / explorer*.h state")
+
+    class NoSrcTables(Tables):
+        def _sources(self):
+            return []
+    bad = NoSrcTables().get()
+    check(bad.get("ok") is False and bad.get("reason"), "tables: failure -> ok false + reason")
+
     app = App(sess_kw={"log_dir": tmp, "finder": lambda: dev["path"], "head": lambda: head["h"],
                        "query_timeout": 0.3},
               flasher_kw={"argv": fake_argv, "dfu_check": lambda: pedal["dfu"],
                           "hint_s": 0.4, "max_s": 5.0, "poll_s": 0.05, "jobs": 2},
               tuner_kw={"head": lambda: head["h"], "dirty": lambda files: False, "tune_dir": tune_dir,
                         "list_timeout": 0.5},
-              port=0, remember_port=False)
+              port=0, remember_port=False, tables=tables)
     app.start()
     port = app.port
 
@@ -1193,6 +1321,8 @@ def selftest():
     pstop = threading.Event()
     threading.Thread(target=pedal_pump, args=(m1, pstop), daemon=True).start()
     check(has("status", lambda d: d.get("build_state") == "ok"), "connect + `?` -> BUILD parsed")
+    st, body = req("GET", "/api/tables")
+    check(st == 200 and json.loads(body).get("key") == tres.get("key"), "/api/tables: served (cached)")
     st, body = req("GET", "/api/status")
     js = json.loads(body)
     check(st == 200 and js["build"] == {"pedal": "nitrolab", "hash": "abc1234", "dirty": True,

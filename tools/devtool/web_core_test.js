@@ -59,5 +59,15 @@ const iv = "XP auto K1 0.76 K2 0.82 K3 0.24 K4 0.48 K5 0.46 SW1 DOWN oct up | IN
 check(C.parseState(iv).sel === "INTERVAL" && C.knobShow("{lfo}", C.parseState(iv), 5) === "off", "interval line, lfo off");
 check(C.parseState("hello") === null, "other lines ignored");
 
+// tablePlay: the frame K2 plays, from the tab line
+const lfoL = C.parseState("XP auto K1 0.40 K2 0.50 K3 0.00 K4 0.50 K5 0.50 SW1 MID oct played | tab 7/16 REED LFO k2 0.50 pos 7.53 src lfo td 0.15 fd 0.00 fs 0.00 pd 0 lp 900 eff 900 mute 0 cpu 60%");
+check(lfoL.preset === "REED" && near(C.tablePlay(lfoL, "LFO", 16, [0, 7.5, 15]).pos, 7.53) && C.tablePlay(lfoL, "LFO", 16, [0, 7.5, 15]).stage === 0, "tablePlay: LFO pos");
+const lofiS = C.parseState("XP auto K1 0.99 K2 0.30 K3 0.00 K4 0.50 K5 0.50 SW1 MID oct played | tab 16/16 LOFI LOFI k2 0.30 step 5/16 sb 12.00 sr 22050 tb 6.00 ti 0.00 src lfo td 0.00 fd 0.00 fs 0.00 pd 0 lp 900 eff 900 mute 0 cpu 60%");
+const ks = Array.from({ length: 16 }, (_, i) => 2 * i);
+check(C.tablePlay(lofiS, "LOFI", 31, ks).pos === 8 && C.tablePlay(lofiS, "LOFI", 31, ks).stage === 5, "tablePlay: LOFI step -> key stage frame");
+const lofiM = C.parseState("XP auto K1 0.99 K2 0.50 K3 0.00 K4 0.50 K5 0.50 SW1 MID oct played | tab 16/16 LOFI LOFI k2 0.50 morph sb off sr off tb off ti 0.00 src lfo td 0.00 fd 0.00 fs 0.00 pd 0 lp 900 eff 900 mute 0 cpu 60%");
+check(C.tablePlay(lofiM, "LOFI", 31, ks).pos === 15 && C.tablePlay(lofiM, "LOFI", 31, ks).stage === 0, "tablePlay: LOFI morph -> K2 x (frames - 1)");
+check(C.tablePlay(s, "ANALOG", 1, [0]).pos === 0, "tablePlay: ANALOG = frame 0");
+
 console.log(fails ? fails + " FAILED" : "all passed");
 process.exit(fails ? 1 : 0);

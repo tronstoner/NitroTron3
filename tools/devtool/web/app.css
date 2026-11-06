@@ -537,3 +537,32 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .ped-gtitle { font-weight: 700; font-size: 14px; color: var(--tc); margin-bottom: 4px; }
 .ped-group .bank { border: 0; padding: 0; background: none; }
 .ped-group .bank-head { display: none; }
+
+/* preset editor: wavetable panel (waterfall + frame tiles), the shown preset's frames; the playing frame live */
+.ped { flex: 1 1 100%; min-width: 0; }
+.wt { flex: 1 1 100%; min-width: 0; border: 1px solid var(--line); border-top: 3px solid var(--tc); border-radius: 0 0 6px 6px; padding: 8px 10px 10px; }
+.wt-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: 6px; }
+.wt-head .ped-gtitle { margin-bottom: 0; }
+.wt-info { color: var(--dim); font-size: 13px; }
+.wt-play { margin-left: auto; min-width: 24ch; text-align: right; font-size: 13px; font-weight: 600; color: var(--tc); font-variant-numeric: tabular-nums; }
+.wt-msg { color: var(--dim); font-size: 13px; overflow-wrap: anywhere; }
+.wt-retry { margin-left: 10px; padding: 2px 9px; font-size: 13px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.wt-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.wt-wf { width: 360px; height: 220px; flex: none; max-width: 100%; display: block; }
+.wf-fill { fill: var(--surface); stroke: none; }
+.wf-line { fill: none; stroke: var(--tc); stroke-width: 1; stroke-linejoin: round; }
+.wf-f.key .wf-line { stroke-width: 1.6; }
+.wf-f.play { opacity: 1 !important; }
+.wf-f.play .wf-line { stroke-width: 2.2; }
+.wf-play { fill: none; stroke: var(--fg); stroke-width: 1.4; stroke-dasharray: 4 3; stroke-linejoin: round; }
+.wt.playing .wf-f:not(.play) .wf-line { stroke-opacity: .55; }
+.wt-tiles { flex: 1 1 300px; min-width: 0; display: grid; grid-template-columns: repeat(auto-fill, 84px); gap: 8px 6px; }
+.wt-tile { width: 84px; border-radius: 4px; outline: 1px solid var(--line); background: var(--surface); }
+.wt-tile svg { display: block; width: 84px; height: 48px; }
+.wt-zero { stroke: var(--line); stroke-width: 1; }
+.wt-wave { fill: none; stroke: var(--tc); stroke-width: 1.3; stroke-linejoin: round; }
+.wt-cap { display: flex; justify-content: center; gap: 4px; font-size: 12px; line-height: 16px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.wt-key { color: var(--tc); font-size: 10px; }
+.wt-tile.play { outline: 2px solid var(--tc); background: color-mix(in srgb, var(--tc) 14%, var(--surface)); }
+.wt-tile.play .wt-cap { color: var(--fg); font-weight: 700; }
+.wt-tile.play2 { outline: 1px dashed var(--tc); }

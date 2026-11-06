@@ -1,6 +1,7 @@
 # Host simulator for the NitroLab modules (armitage, explorer, FM LAB; shell = nl_shell.h). `make` here (or
 # `make -C tools/hostsim` from the repo root) builds ./armsim (offline renderer)
-# and ./armlive (real-time + WebSocket control, ui.html).
+# and ./armlive (real-time + WebSocket control, ui.html), and ./tbdump (the SW1 MID
+# audition bank's tables as JSON, for tools/devtool).
 # Same include layout as tools/host: hardware stubs first, then the pedal
 # shell headers, then the shared core; the modules compile unmodified.
 ROOT     := ../..
@@ -23,10 +24,13 @@ MODDEPS  := nl_shell.h armitage_host.h host_tunables.h wav.h \
 LIVEDEFS := -DCT3_DIAG_BUILD
 LDLIVE   := -framework CoreFoundation -framework CoreAudio -framework AudioToolbox -lpthread -lm
 
-all: armsim armlive
+all: armsim armlive tbdump
 
 armsim: armsim.cpp $(MODDEPS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ armsim.cpp
+
+tbdump: tbdump.cpp $(MODDEPS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ tbdump.cpp
 
 miniaudio_impl.o: miniaudio_impl.c third_party/miniaudio.h
 	$(CC) $(CFLAGS) -c -o $@ miniaudio_impl.c
@@ -36,4 +40,4 @@ armlive: armlive.cpp ws_server.h json_mini.h const_docs.h miniaudio_impl.o $(MOD
 
 .PHONY: all clean
 clean:
-	rm -f armsim armlive miniaudio_impl.o
+	rm -f armsim armlive tbdump miniaudio_impl.o
