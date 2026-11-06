@@ -1350,10 +1350,10 @@ function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.pre
 // values, grouped by target (timbre / filter / pitch knobs, LFO rates as a CCW / CW fader pair, source switch).
 // ---------------------------------------------------------------------------
 const PRESET_GROUPS = [
-  { title: "Timbre", target: "timbre", fields: ["TIMBRE", "TIMBRE_ENV", "STEPPED"] },
-  { title: "Filter", target: "filter", fields: ["FILTER", "FILTER_SWELL", "RES", "FILTER_ENV"] },
+  { title: "Timbre (K2)", target: "timbre", fields: ["TIMBRE", "TIMBRE_ENV", "STEPPED"] },
+  { title: "Filter (K3)", target: "filter", fields: ["FILTER", "FILTER_SWELL", "RES", "FILTER_TOUCH", "FILTER_ENV"] },
   { title: "Pitch", target: "pitch", fields: ["PITCH", "PITCH_ENV"] },
-  { title: "LFO speed", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
+  { title: "LFO speed (K5)", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
   { title: "Lofi", target: "lofi", fields: ["LOFI"] },
 ];
 let presetEd = null;     // {presets, byPreset, viewKey, chips, body, follow}
@@ -1427,7 +1427,7 @@ function renderPresetBody(force) {
         const items = mem.map((c) => {
           const cap = h("span");
           if (c.pair && DIR_ENDS[c.pair.end]) cap.appendChild(icon(DIR_ENDS[c.pair.end]));
-          cap.appendChild(document.createTextNode(c.pair ? c.pair.end_label : c.label));
+          cap.appendChild(document.createTextNode(c.label));   // the field label (e.g. "LFO max, CCW")
           return { c, cap };
         });
         box.appendChild(buildBank("", items, "", vk));

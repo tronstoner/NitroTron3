@@ -422,8 +422,8 @@
 //          ANALOG   SAW PULSE (1 frame): K2 = LP Q (TfUpdate / TabFilter)
 //          LOFI     LOFI (the 31-frame LOFI SPECTRA table): K2 = morph; Lofi + Stepped flags on by default
 //          (JOURNEY - K5 = direction + speed of a morph travel - was removed 2026-11-06; its presets are LFO presets.)
-//   MOD    per preset (explorer_tables.h Presets: EXP_TB_<NAME>_TIMBRE / _FILTER / _FILTER_SWELL / _RES / _PITCH / _RATE_CCW /
-//          _RATE_CW / _TIMBRE_ENV / _FILTER_ENV / _PITCH_ENV / _STEPPED / _LOFI, live in DIAG builds; defaults in the
+//   MOD    per preset (explorer_tables.h Presets: EXP_TB_<NAME>_TIMBRE / _FILTER / _FILTER_SWELL / _RES / _FILTER_TOUCH / _PITCH /
+//          _RATE_CCW / _RATE_CW / _TIMBRE_ENV / _FILTER_ENV / _PITCH_ENV / _STEPPED / _LOFI, live in DIAG builds; defaults in the
 //          EXP_TB_PRESETS rows). SOURCE PER TARGET (2026-11-06): each target's _ENV flag picks its source s:
 //          LFO (flag false, default): s = the K5 LFO (LfoUpdate; CCW triangle up to RATE_CCW, noon off, CW steps up to RATE_CW, bottom
 //                         EXP_LFO_HZ_MIN; depth fade-in EXP_LFO_DEPTH_FRAC)
@@ -441,6 +441,11 @@
 //          RES (not a source target, static): the LP Q of a non-ANALOG preset (TbResQ -> TfUpdate -> TabFilter); the two
 //            sides of a zone crossfade weighted by it (equal values: exact), ANALOG sides left out (K2 sets their Q,
 //            blended in by the ANALOG weight). Default EXP_TF_Q everywhere = the former fixed Q.
+//          FILTER_TOUCH (not a source target, static): the ENV AMOUNT on the LP - the share a of the K4 touch env travel
+//            (ONE-SHOT: bottom lb .. the K3 knob value lk, log) that moves the cutoff: ln fc = lk - (1 - o) a (lk - lb)
+//            (+ the MOD filter octaves on top, unchanged). a = 1: the former law exactly (lb + o (lk - lb), same float
+//            expression); a = 0: the cutoff sits at the K3 value. ANALOG too; zone crossfade: weighted by mg_ (equal
+//            values: exact); a side that is no bank preset counts 1 (TbFtA -> tb_ft_ -> TfUpdate).
 //          Defaults = the former behaviour: LFO presets TIMBRE .15 (former EXP_LFO_MORPH_SWING), ANALOG FILTER 2.6 /
 //          FILTER_SWELL 1.0 (former EXP_LFO_FM_FC_OCT_DEC / _OCT), LOFI none; PITCH 0, rates 20 / 20 Hz, source LFO.
 //   K2 DISCRETE (the preset's Stepped flag EXP_TB_<NAME>_STEPPED; TbDiscMorph): the morph snaps to the preset's key stages
@@ -790,7 +795,7 @@ class Explorer : public Module {
     }
     lr_ph_ = 0.f; lr_y_ = 0.f; lr_on_ = false;   // LOFI SUM_RATE hold state (reset again whenever the stage starts)
     tbd_[0].z = tbd_[1].z = -1;                  // K2 DISCRETE slides: fresh (TbDiscMorph jumps on first use)
-    tb_aw_ = 0.f; tb_rq_ = EXP_TF_Q; tb_m_now_ = 0.f;
+    tb_aw_ = 0.f; tb_rq_ = EXP_TF_Q; tb_ft_ = 1.f; tb_m_now_ = 0.f;
     tb_fon_ = false; tb_fo_ = 0.f; tb_pg_ = 0.f; tb_pc_ = 0.f;   // MOD: filter octaves off, pitch step 0
     TbModLoad();                                 // per-preset MOD values (live tunables in DIAG builds)
     lab_m_t_ = -1;                               // FM LAB 2-OP: no UP mode until Controls (ratio slide at rest, r 1)
@@ -1063,6 +1068,7 @@ class Explorer : public Module {
     int   tnst;       //   its key-stage count
     float tq;         // ANALOG: LP Q at the K2 knob (TbAnalogQ), else 0
     float tres;       // the LP Q this preset sets: ANALOG = tq, else its RES (live value); 0 = no bank preset
+    float tft;        // the preset's FILTER_TOUCH (env amount on the LP travel, live value); 0 = no bank preset
     float tm;         // applied morph m now (K2 + the timbre offset: LFO l / env o), latest 8 kHz sample
     uint8_t tsrc;     // MOD source per target, bit set = the K4 touch env o, clear = the K5 LFO: 1 timbre, 2 filter, 4 pitch
     float ttd, tfd, tfs, tpd;   // MOD depths: timbre (morph units), filter / filter swell (octaves), pitch (cents)
@@ -1335,6 +1341,7 @@ class Explorer : public Module {
       // the zone crossfade (mg_) when one enters / leaves; 0 otherwise (and always with EXP_TB_LEGACY / FM LAB)
       tb_aw_ = (!EXP_TB_LEGACY && !lab_ && !loop_) ? TbAnalogW(fading) : 0.f;
       tb_rq_ = (!EXP_TB_LEGACY && !lab_ && !loop_) ? TbResQ(fading) : EXP_TF_Q;   // RES of the non-ANALOG sides
+      tb_ft_ = (!EXP_TB_LEGACY && !lab_ && !loop_) ? TbFtA(fading) : 1.f;         // FILTER_TOUCH (env amount)
       if (!EXP_TB_LEGACY && !lab_ && !loop_) {   // audition bank MOD: cutoff octaves (TfUpdate), pitch step (RunSlot)
         TbFcMod(fading, Clamp01(k3s_));
         TbPitchStep();
@@ -2638,6 +2645,19 @@ class Explorer : public Module {
     if (IsTbKind(var_, kTbAnalog)) return b;     // current side ANALOG: only the fading side's RES
     return (a == b) ? a : mg_ * a + (1.f - mg_) * b;
   }
+  // Audition bank FILTER_TOUCH (the env amount on the LP travel) this 8 kHz sample: a bank preset side (TbModZone, ANALOG
+  // too) -> its value, a side that is no bank preset -> 1 (the full travel); two sides of a zone crossfade weighted with
+  // mg_ (equal values: that value, exact).
+  inline float TbFtZ(int var) const {
+    const int z = TbModZone(var);
+    return (z < 0) ? 1.f : tbm_[z].filter_touch;
+  }
+  inline float TbFtA(bool fading) const {
+    const float a = TbFtZ(var_);
+    if (!fading) return a;
+    const float b = TbFtZ(vfrom_);
+    return (a == b) ? a : mg_ * a + (1.f - mg_) * b;
+  }
   // Audition bank Lofi engine weight this 8 kHz sample (as TbAnalogW), per side by the preset's Lofi flag: the current
   // preset flagged (ExpTbLofiOn) -> 1 (mg_ while a zone crossfade runs), the fading one flagged -> + (1 - mg_); neither -> 0.
   inline float TbLofiW(bool fading) const {
@@ -2827,14 +2847,16 @@ class Explorer : public Module {
     } else {                                     // ONE-SHOT: touch env o between the bottom and the knob value (octaves)
       const float lk = (k3s_ >= 1.f) ? tf_lnr_ : (k3s_ <= 0.f) ? 0.f : k3s_ * tf_lnr_;   // ln(fc_knob / TF_FMIN)
       const float lb = tf_lnb_ + k3s_ * (EXP_TF_ENV_BOTTOM_OCT * 0.6931472f);          // bottom rises with K3
+      // FILTER_TOUCH (tb_ft_ = a): the env moves a share a of the travel lb .. lk; a = 1 keeps the former expression
+      const float le = (tb_ft_ == 1.f) ? lb + o3_ * (lk - lb) : lk - (1.f - o3_) * tb_ft_ * (lk - lb);
       if (tb_fon_) {
         // Audition bank MOD on the cutoff (TbFcMod: the preset's filter depths - LFO: the SW3 MID FM placement, pluck side
         // x the K3 position in the LP's log range = k3, as DampFmUpdate scales by DampCurve(k3); ENV: + filter x o),
         // crossfade-weighted; capped at EXP_TF_FMAX (the SVF needs fc < Nyquist).
-        fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb) + tb_fo_ * 0.6931472f);
+        fc = EXP_TF_FMIN * expf(le + tb_fo_ * 0.6931472f);
         if (fc > EXP_TF_FMAX) fc = EXP_TF_FMAX;
       } else {
-        fc = EXP_TF_FMIN * expf(lb + o3_ * (lk - lb));
+        fc = EXP_TF_FMIN * expf(le);
       }
       // Q: ANALOG = TbAnalogQ(K2) (smoothed), linear toward the other side's RES (tb_rq_) by the weight; else the
       // preset RES (tb_rq_, TbResQ). tb_rq_ = EXP_TF_Q leaves q 0 (= EXP_TF_Q in TabFilter, as before RES).
@@ -4074,6 +4096,7 @@ class Explorer : public Module {
       s.ttd = ok ? M.timbre : 0.f; s.tfd = ok ? M.filter : 0.f; s.tfs = ok ? M.filter_swell : 0.f;
       s.tpd = ok ? M.pitch : 0.f;
       s.tres = !ok ? 0.f : (s.tbk == kTbAnalog) ? s.tq : M.res;
+      s.tft = ok ? M.filter_touch : 0.f;
     }
     s.mute = mute_;
     if (cs.Foot(0).rising) {
@@ -4325,6 +4348,7 @@ class Explorer : public Module {
   float tb_poff_[kSlots][kBands];  // per slot / band phase offset (cycles, [0, 1)) of the MOD pitch
   float tb_aw_ = 0.f;              // ANALOG weight on the LP this 8 kHz sample (TbAnalogW; 0 = not ANALOG)
   float tb_rq_ = explorer_k::EXP_TF_Q;   // RES (LP Q) of the non-ANALOG sides this 8 kHz sample (TbResQ)
+  float tb_ft_ = 1.f;              // FILTER_TOUCH (env amount on the LP travel) this 8 kHz sample (TbFtA; 1 = full)
   float lr_ph_ = 0.f, lr_y_ = 0.f;  // LOFI SUM_RATE: hold phase, held value (LofiStage)
   bool  lr_on_ = false;            // LOFI SUM_RATE: stage running last sample (false -> reset on the next start)
   struct TbDisc { DSlide s; int z = -1; };   // K2 DISCRETE: slid key-stage position of table zone z (-1 = fresh)

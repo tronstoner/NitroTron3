@@ -283,9 +283,9 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
       if (d.ttb > 0.f) snprintf(tb, sizeof tb, "%.2f", d.ttb); else snprintf(tb, sizeof tb, "off");
       snprintf(lf, sizeof lf, " sb %s sr %s tb %s ti %.2f", sb, sr, tb, d.tti);
     }
-    snprintf(mod, sizeof mod, " src %c%c%c td %.2f fd %.2f fs %.2f pd %d", (d.tsrc & 1) ? 'E' : 'L',
+    snprintf(mod, sizeof mod, " src %c%c%c td %.2f fd %.2f fs %.2f pd %d ft %.2f", (d.tsrc & 1) ? 'E' : 'L',
              (d.tsrc & 2) ? 'E' : 'L', (d.tsrc & 4) ? 'E' : 'L', d.ttd, d.tfd, d.tfs,
-             (int)(d.tpd + 0.5f));
+             (int)(d.tpd + 0.5f), d.tft);
     snprintf(line, sizeof line, "tab %d/%d %s %s k2 %.2f%s lofi %d stp %d%s%s lp %d eff %d%s mute %s", d.tbz + 1,
              explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), d.b, kp, d.tlf ? 1 : 0, d.tstp ? 1 : 0, lf, mod,
              (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
@@ -794,7 +794,7 @@ int main(int argc, char** argv) {
                  ",\"tbz\":" + std::to_string(x.tbz) + ",\"tbk\":" + json::Esc(x.tbz >= 0 ? Explorer::TbKindName(x.tbk) : "") +
                  ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) +
                  ",\"tsrc\":\"" + std::string(1, (x.tsrc & 1) ? 'E' : 'L') + ((x.tsrc & 2) ? 'E' : 'L') + ((x.tsrc & 4) ? 'E' : 'L') + "\"" +
-                 ",\"ttd\":" + N(x.ttd) + ",\"tfd\":" + N(x.tfd) + ",\"tfs\":" + N(x.tfs) + ",\"tpd\":" + N(x.tpd) +
+                 ",\"ttd\":" + N(x.ttd) + ",\"tfd\":" + N(x.tfd) + ",\"tfs\":" + N(x.tfs) + ",\"tpd\":" + N(x.tpd) + ",\"tft\":" + N(x.tft) +
                  ",\"tdst\":" + std::to_string(x.tdst) + ",\"tnst\":" + std::to_string(x.tnst) +
                  ",\"tlf\":" + std::string(x.tlf ? "true" : "false") + ",\"tstp\":" + std::string(x.tstp ? "true" : "false") +
                  ",\"ton\":" + std::string(x.ton ? "true" : "false") + ",\"tsb\":" + N(x.tsb) + ",\"tsr\":" + N(x.tsr) +

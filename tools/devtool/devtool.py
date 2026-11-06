@@ -1419,7 +1419,7 @@ def selftest():
             mrow = re.match(r'^\s*\{\s*"(\w+)"\s*,\s*kTb', ln)
             if mrow:
                 rows[mrow.group(1)] = n
-    check(len(presets) == 16 and len(fam) == 16 * 12
+    check(len(presets) == 16 and len(fam) == 16 * 13
           and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_PWM_TIMBRE"]["default"] == 0.15
           and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] is False and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
                   for _i, pn in presets for t in ("TIMBRE", "FILTER", "PITCH"))
@@ -1427,7 +1427,7 @@ def selftest():
           and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn == "AIR") for _i, pn in presets)
           and all(byn["EXP_TB_%s_STEPPED" % pn]["default"] is (pn == "LOFI") for _i, pn in presets)
           and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
-          "registry: @family per-preset tunables (16 presets x 12 fields, defaults from the EXP_TB_MOD rows; Lofi on AIR, Stepped on LOFI only; per-target sources all LFO)")
+          "registry: @family per-preset tunables (16 presets x 13 fields, defaults from the EXP_TB_MOD rows; Lofi on AIR, Stepped on LOFI only; per-target sources all LFO)")
     check(all(byn["EXP_TB_%s_RES" % pn]["default"] == 1.5 and byn["EXP_TB_%s_RES" % pn]["unit"] == "Q"
               and byn["EXP_TB_%s_RES" % pn]["taper"] == "log" and byn["EXP_TB_%s_RES" % pn]["target"] == "filter"
               and (byn["EXP_TB_%s_RES" % pn]["inert"] == "K2 sets Q on ANALOG") == (pn in ("SAW", "PULSE"))

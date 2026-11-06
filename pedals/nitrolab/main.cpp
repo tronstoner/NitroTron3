@@ -256,7 +256,8 @@ int main() {
         // SW3 MID SW1 MID audition bank (EXP_TB_LEGACY = false): `tab <n>/16 <NAME> LFO|ANALOG|LOFI k2 <K2 knob>` then
         // LFO `pos <frame position>`, ANALOG `Q <LP Q at the K2 knob>`, LOFI `step <n>/16|morph`; then the preset's MOD
         // `src <t><f><p> td <timbre depth> fd <filter depth oct> fs <filter swell oct> q <LP Q: RES,
-        // ANALOG the K2 Q; 1.50 / 5.5e6 / 4.0e-8> pd <pitch depth cents>` (src: one char per target timbre / filter /
+        // ANALOG the K2 Q; 1.50 / 5.5e6 / 4.0e-8> pd <pitch depth cents> ft <FILTER_TOUCH: env amount on the LP travel>`
+        // (src: one char per target timbre / filter /
         // pitch, L = the K5 LFO drives it, E = the K4 touch env o - m = K2 + td o, cutoff + fd o oct, pitch + pd o cents),
         // LOFI also `sb <bits|off> sr <Hz|off> tb <bits|off> ti <i>` (each stage `off` at its bypass value /
         // EXP_TB_LOFI_ENABLE false); `lp .. eff ..` + the K4 touch env + `lfo ..` (K5 LFO shape, depth, rate at the knob
@@ -325,7 +326,7 @@ int main() {
           diag_link::PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
                             (int)(d.a + 0.5f), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
         else if (d.model == Explorer::kWT && d.tbz >= 0) {    // audition bank: preset, kind, K2 knob, kind part, flags,
-          char kp[64], lf[96], mod[96];                       // Lofi stages, MOD
+          char kp[64], lf[96], mod[128];                      // Lofi stages, MOD
           if (d.tbk == explorer_k::kTbAnalog)                 // ANALOG: LP Q at the K2 knob
             snprintf(kp, sizeof kp, " Q" D2F, D2V(d.tq));
           else if (d.tbk == explorer_k::kTbLofi) {            // LOFI: K2 step / morph
@@ -344,9 +345,9 @@ int main() {
           }
           char qs[16];                                        // the LP Q this preset sets (RES / ANALOG K2 Q), compact
           DiagCompact(qs, sizeof qs, d.tres);
-          snprintf(mod, sizeof mod, " src %c%c%c td" D2F " fd" D2F " fs" D2F " q %s pd %d",
+          snprintf(mod, sizeof mod, " src %c%c%c td" D2F " fd" D2F " fs" D2F " q %s pd %d ft" D2F,
                    (d.tsrc & 1) ? 'E' : 'L', (d.tsrc & 2) ? 'E' : 'L', (d.tsrc & 4) ? 'E' : 'L',
-                   D2V(d.ttd), D2V(d.tfd), D2V(d.tfs), qs, (int)(d.tpd + 0.5f));
+                   D2V(d.ttd), D2V(d.tfd), D2V(d.tfs), qs, (int)(d.tpd + 0.5f), D2V(d.tft));
           diag_link::PrintLine("tab %d/%d %s %s k2" D2F "%s lofi %d stp %d%s%s lp %d eff %d%s mute %d cpu %u%%",
                             d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), kp,
                             d.tlf ? 1 : 0, d.tstp ? 1 : 0, lf, mod,
