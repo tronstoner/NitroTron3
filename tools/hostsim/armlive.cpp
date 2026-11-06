@@ -242,14 +242,14 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
   else if (d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // audition bank JOURNEY: + start S, K5 direction /
     snprintf(env, sizeof env, "%s S%.2f dir %s rate%.2fs pos%.2f", te, d.b,   // whole-journey s, morph now
              d.jdir > 0 ? "fwd" : d.jdir < 0 ? "back" : "still", d.jT, d.tm);
+  else if (d.tbz >= 0 && d.tbk == explorer_k::kTbLofi)      // audition bank LOFI: touch env only
+    snprintf(env, sizeof env, "%s", te);
   else if (d.sw1 == 1)
     snprintf(env, sizeof env, "%s lfo %s d%.2f %.2fHz", te, lfo, d.lfod, d.lfohz);
   else
     snprintf(env, sizeof env, " ps - lfo -");
   const char* zn = Explorer::ZoneName(d.model, d.zone);
   const char* mu = d.mute ? "1" : "0";
-  char lofi[32];                                            // audition bank: the preset's LOFI mode
-  Explorer::TbLofiText(d.tbz, lofi, (int)sizeof lofi);
   if (d.addz >= 0 && Explorer::AddK2Name(d.addz)[0] == 'u')
     snprintf(line, sizeof line, "LAB %s u%.2f bt%.2f %s %s%.2f fc %d%s mute %s", Explorer::AddZoneName(d.addz), d.a, d.b,
              d.bm == 1 ? "prop" : d.bm == 2 ? "hz" : "off", Explorer::AddK3Name(d.addz), d.c3, (int)(d.fc + 0.5f), env, mu);
@@ -269,14 +269,24 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
   else if (d.model == Explorer::kXFM)
     snprintf(line, sizeof line, "XBAND-FM n%d I%.2f fc %d%s mute %s", (int)(d.a + 0.5f), d.b, (int)(d.fc + 0.5f), env, mu);
   else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbAnalog)   // audition bank ANALOG: Q (K2)
-    snprintf(line, sizeof line, "tab %d/%d %s %s %s Q%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
-             Explorer::TbKindName(d.tbk), lofi, d.tq, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+    snprintf(line, sizeof line, "tab %d/%d %s %s Q%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
+             Explorer::TbKindName(d.tbk), d.tq, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbJourney)   // JOURNEY: S / pos in env
-    snprintf(line, sizeof line, "tab %d/%d %s %s %s lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
-             Explorer::TbKindName(d.tbk), lofi, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+    snprintf(line, sizeof line, "tab %d/%d %s %s lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES, zn,
+             Explorer::TbKindName(d.tbk), (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+  else if (d.model == Explorer::kWT && d.tbz >= 0 && d.tbk == explorer_k::kTbLofi) {   // LOFI: variant, k2, amount, value
+    char lv[32];
+    if (!d.ton)                              snprintf(lv, sizeof lv, "off");
+    else if (d.tlv == explorer_k::kLofiBits) snprintf(lv, sizeof lv, "bits %.2f", d.tv);
+    else if (d.tlv == explorer_k::kLofiRate) snprintf(lv, sizeof lv, "rate %d Hz", (int)(d.tv + 0.5f));
+    else                                     snprintf(lv, sizeof lv, "interp %.2f", d.tv);
+    snprintf(line, sizeof line, "tab %d/%d %s %s %s k2 %.2f amt %.2f %s lp %d eff %d%s mute %s", d.tbz + 1,
+             explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), Explorer::TbLofiName(d.tlv), d.b, d.ta, lv,
+             (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+  }
   else if (d.model == Explorer::kWT && d.tbz >= 0)          // audition bank LFO: morph m at the knob, position
-    snprintf(line, sizeof line, "tab %d/%d %s %s %s m%.2f pos%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES,
-             zn, Explorer::TbKindName(d.tbk), lofi, d.b, d.a, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+    snprintf(line, sizeof line, "tab %d/%d %s %s m%.2f pos%.2f lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES,
+             zn, Explorer::TbKindName(d.tbk), d.b, d.a, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   else if (d.model == Explorer::kWT)
     snprintf(line, sizeof line, "WT/%s m%.2f pos%.2f dmp %d lp %d eff %d%s mute %s", zn, d.b, d.a, (int)(d.dfc + 0.5f),
              (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
@@ -294,11 +304,9 @@ static std::string ExplorerZone(const Explorer::DiagSnap& d) {
   if (d.specz >= 0) return Explorer::SpecZoneName(d.specz);
   if (d.labz >= 0) return Explorer::LabZoneName(d.labz);
   const char* zn = Explorer::ZoneName(d.model, d.zone);
-  if (d.tbz >= 0) {                                         // audition bank: "tab n/15 NAME kind lofi .."
-    char lofi[32];
+  if (d.tbz >= 0)                                           // audition bank: "tab n/18 NAME kind"
     return "tab " + std::to_string(d.tbz + 1) + "/" + std::to_string(explorer_k::EXP_TB_ZONES) + " " + zn + " " +
-           Explorer::TbKindName(d.tbk) + " " + Explorer::TbLofiText(d.tbz, lofi, (int)sizeof lofi);
-  }
+           Explorer::TbKindName(d.tbk);
   return std::string(Explorer::ModelName(d.model)) + (zn[0] ? std::string("/") + zn : std::string());
 }
 
@@ -782,7 +790,8 @@ int main(int argc, char** argv) {
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"tbz\":" + std::to_string(x.tbz) + ",\"tbk\":" + json::Esc(x.tbz >= 0 ? Explorer::TbKindName(x.tbk) : "") +
                  ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"jdir\":" + std::to_string(x.jdir) +
-                 ",\"jT\":" + N(x.jT) +
+                 ",\"jT\":" + N(x.jT) + ",\"tlv\":" + json::Esc(Explorer::TbLofiName(x.tlv)) +
+                 ",\"ton\":" + std::string(x.ton ? "true" : "false") + ",\"ta\":" + N(x.ta) + ",\"tv\":" + N(x.tv) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +
                  ",\"sn\":" + N(x.sn) + ",\"sgd\":" + N(x.sgd) + ",\"sTd\":" + N(x.sTd) + ",\"sgr\":" + N(x.sgr) +
                  ",\"sTr\":" + N(x.sTr) + ",\"sw\":" + N(x.sw) + ",\"str\":" + N(x.str) + ",\"sL\":" + N(x.sL) + ",\"so\":" + N(x.so) +

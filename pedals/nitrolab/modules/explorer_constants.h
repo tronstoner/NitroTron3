@@ -60,15 +60,15 @@ constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number
 // SW1 MID tables. TWO BANKS, one compile switch (2026-11-06):
 //   EXP_TB_LEGACY = true  -> WaveMorph's 10 zones (2026-10-26, step 2), COPIED (not shared) from wavemorph_constants.h,
 //                            values exact (approved, tuned there) - exactly the tables of 45c2f4e (byte-identical render).
-//   EXP_TB_LEGACY = false -> the AUDITION BANK (default): 15 data-driven presets, recipes in explorer_tables.h (one place;
-//                            a new preset / journey = data, not code), kinds LFO / JOURNEY / ANALOG (K2 / K5 per kind,
-//                            see explorer.h TABLES), per-preset LOFI mode (EXP_TB_LOFI_*).
+//   EXP_TB_LEGACY = false -> the AUDITION BANK (default): 18 data-driven presets, recipes in explorer_tables.h (one place;
+//                            a new preset / journey = data, not code), kinds LFO / JOURNEY / ANALOG / LOFI (K2 / K5 per
+//                            kind, see explorer.h TABLES); the 3 LOFI presets: EXP_TB_LOFI_*.
 // K1 = zone / preset (equal stepped zones, EXP_TB_ZONE_XFADE_MS crossfade on a change), K2 = morph m: position
 // (F_z - 1) m through the zone's frames, linear crossfade between the two adjacent frames (ANALOG: K2 = LP Q).
 // Built at Init into SDRAM (explorer_tb, int16, packed [frame][version][sample]). See explorer.h TABLES.
 constexpr bool  EXP_TB_LEGACY         = false;   // true = the 10 legacy zones below; false = the audition bank (explorer_tables.h)
 constexpr int   EXP_TB_LEGACY_ZONES   = 10;      // legacy K1 equal zones on SW1 MID (= WM_ZONES)
-constexpr int   EXP_TB_BANK_N         = 15;      // audition bank: presets = K1 equal zones (EXP_TB_PRESETS, explorer_tables.h)
+constexpr int   EXP_TB_BANK_N         = 18;      // audition bank: presets = K1 equal zones (EXP_TB_PRESETS, explorer_tables.h)
 constexpr int   EXP_TB_ZONES          = EXP_TB_LEGACY ? EXP_TB_LEGACY_ZONES : EXP_TB_BANK_N;   // K1 zones on SW1 MID
 constexpr int   EXP_N_MID             = EXP_TB_ZONES + (EXP_BITTAB_ENABLE ? 1 : 0);   // SW1 MID K1 zones (+ bit table last)
 constexpr int   EXP_TB_CORNERS        = 4;       // waves of the 4-wave zones 2, 6..10 (= WM_CORNERS)
@@ -162,7 +162,7 @@ constexpr float EXP_TB_CLIP_H1        = 0.3f;    // clipper: 1: H1; 2..KNEE: FLA
 constexpr float EXP_TB_CLIP_FLAT      = 0.8f;    // (= WM_CLIP_FLAT)
 constexpr int   EXP_TB_CLIP_KNEE      = 24;      // (= WM_CLIP_KNEE)
 constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n without harmonics 1 .. this (= WM_PPGFB_SKIP)
-// --- AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): recipes / stages / lofi per preset in explorer_tables.h ---
+// --- AUDITION BANK (EXP_TB_LEGACY = false; 2026-11-06): recipes / stages per preset in explorer_tables.h ---
 // Build (BuildBank, Init): every frame goes through the legacy pipeline (time-domain DFT or harmonic list -> peak 1 ->
 // the preset's re-phase / RMS-match / storage-cap rules -> 14 band-limited int16 versions). A frame between two key
 // stages: same generator (and list) at both stages -> the generator's PARAMETER is interpolated (a real sweep: formant
@@ -170,23 +170,22 @@ constexpr int   EXP_TB_PPGFB_SKIP     = 2;       // PPG feedback: saw 1/n withou
 // are interpolated in dB per harmonic (moving harmonic amplitudes; an absent partial grows from the floor below).
 constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spectrum: floor of the per-harmonic dB interpolation
                                                    // (a partial absent at one stage starts / ends here; at / below it: 0)
-// LOFI MODE (wet only; SW3 MID SW1 MID audition bank; 2026-11-06, replaces BLOW): an 80s / 90s digital-wavetable read,
-// switched PER PRESET (explorer_tables.h ExpTbLofi: foldover / bits / no-interp / roll-off; all 0 / off = the clean read)
-// and globally by EXP_TB_LOFI_ENABLE (false = every preset clean = bit-identical to the tables without lofi). Stateless:
-// no runtime state, no tables; only a per-band weight w_k per lofi preset and SW2 slot, computed once at Init.
-//   FOLDOVER fo  the lofi read takes the band-limited version fo levels BRIGHTER than the anti-fold pick (the K3 dampener's
-//                version, min(4000, fc) / f'_k), clamped to the brightest (127 harmonics): partials above the band
-//                engine's 4 kHz limit fold back inharmonically (steady aliasing, PPG style).
-//   BITS     N   the lofi read W (int16 table units, after the frame morph) rounded to the nearest of 2^(N-1) steps of
-//                the table's full scale (step 2^(16 - N) int16 units; round half up); 0 = off. The band amplitude
-//                multiplies after it, so the grain follows the signal.
-//   NO INTERP    nearest-sample read (index round(phi 256) mod 256) instead of the linear one (the frame morph stays linear).
-//   ROLL-OFF     w_k from the band's played frequency f'_k (SW2 slot: x2 / x1 / x0.5): 1 at / below F_LO, 0 at / above F_HI,
-//                log-linear in between (ln F_HI - ln f) / (ln F_HI - ln F_LO). Per band: W = W_clean + w_k (W_lofi - W_clean);
-//                w_k = 1 -> the lofi read only, w_k = 0 -> the clean read only (no extra cost); in between both reads.
-constexpr bool  EXP_TB_LOFI_ENABLE    = true;    // false = every audition-bank preset reads clean (lofi data ignored)
-constexpr float EXP_TB_LOFI_F_LO      = 400.f;   // Hz; default roll-off start (w = 1 at / below)
-constexpr float EXP_TB_LOFI_F_HI      = 2000.f;  // Hz; default roll-off end (w = 0 at / above)
+// LOFI presets (wet only; SW3 MID SW1 MID audition bank; 2026-11-06, replaces the per-band LOFI mode of 57f7bfc): LOFI
+// BITS / LOFI RATE / LOFI TABLE, all on the LOFI SPECTRA table (explorer_tables.h). K2 = static morph position, K5 =
+// lofi amount a (smoothed K5, 0 CCW .. 1 CW = more lofi; no LFO / journey). explorer.h TABLES LOFI.
+//   BITS   the summed table wet (48 kHz, after the DC blocker, before the K3 2-pole LP) quantised: b = MAX - (MAX - MIN) a
+//          bits (continuous), step q = 2^(1 - b) of the wet's digital full scale +-1: y = q floor(x / q + 0.5). No level
+//          compensation.
+//   RATE   sample-and-hold of the summed table wet (48 kHz, same place): hold rate f_h = HI (LO / HI)^a (log), phase
+//          accumulator += f_h / 48000, a new sample on each wrap, else hold. No smoothing / anti-alias.
+//   TABLE  per-band table read rounded to 2^(TABLE_BITS - 1) steps of the int16 full scale, nearest <-> linear:
+//          W = W_lin + a (W_nn - W_lin) (rounded after the blend), every band, the clean read's version.
+constexpr bool  EXP_TB_LOFI_ENABLE     = true;     // false = the 3 LOFI presets read clean, no lofi stage
+constexpr float EXP_TB_LOFI_BITS_MAX   = 16.f;     // bits at K5 CCW (LOFI BITS)
+constexpr float EXP_TB_LOFI_BITS_MIN   = 4.f;      // bits at K5 CW
+constexpr float EXP_TB_LOFI_RATE_HI    = 8000.f;   // Hz; hold rate at K5 CCW (LOFI RATE)
+constexpr float EXP_TB_LOFI_RATE_LO    = 1000.f;   // Hz; hold rate at K5 CW
+constexpr int   EXP_TB_LOFI_TABLE_BITS = 6;        // LOFI TABLE: fixed table-read resolution (bits of the int16 full scale)
 // JOURNEY presets: K5 = DIRECTION + constant SPEED of the morph travel (2026-11-06; replaces the second touch env).
 // t5 = 2 k5 - 1 (smoothed, lands exactly), a = |t5|:
 //   s = max(0, (a - ZERO_FRAC) / (1 - ZERO_FRAC)), T = T_SLOW (T_FAST / T_SLOW)^s   (time for the whole journey 0 -> 1)
