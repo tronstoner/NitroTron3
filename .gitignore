@@ -11,3 +11,7 @@ demos/
 
 # devtool live-constant changes (tools/devtool, docs/DEV_INTERFACE.md)
 tune/
+
+# serial logs (task log / devtool) and local research material
+log/
+research/
