@@ -13,9 +13,8 @@ python3 tools/devtool/devtool.py --selftest   # offline (pty pair, fake make / d
 ```
 
 It prints `devtool: http://localhost:<port>` - open that in the Claude app's
-browser pane or any browser. The port is the last one used if it is still
-free (kept in `log/.devtoolport`, so an open page reconnects after a restart),
-otherwise a free one. `--port N` forces one. Ctrl-C quits and closes the port.
+browser pane or any browser. The port is 8765 (http://localhost:8765); only
+if that is taken does it count up (8766, ...). `--port N` forces one. Ctrl-C quits and closes the port.
 
 Python 3 standard library only. The page (`web/`) is plain HTML/CSS/JS, no
 build step, no external assets.

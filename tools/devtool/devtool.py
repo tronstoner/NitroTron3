@@ -1110,16 +1110,12 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+DEFAULT_PORT = 8765         # http://localhost:8765; the next free one (8766, ...) only when it is taken
+
+
 def bind_server(port=None):
-    """`port` given -> that port. Else the last port if free, else a free one."""
-    tries = [port] if port is not None else []
-    if port is None:
-        try:
-            with open(PORT_FILE) as f:
-                tries.append(int(f.read().strip()))
-        except (OSError, ValueError):
-            pass
-        tries.append(0)
+    """`port` given -> exactly that port (0 = any, tests). Else DEFAULT_PORT, counting up while taken."""
+    tries = [port] if port is not None else list(range(DEFAULT_PORT, DEFAULT_PORT + 20))
     err = None
     for p in tries:
         try:
