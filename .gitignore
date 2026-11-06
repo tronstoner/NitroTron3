@@ -8,3 +8,6 @@ build/
 sprawl-*.log
 vestige-*.log
 demos/
+
+# devtool live-constant changes (tools/devtool, docs/DEV_INTERFACE.md)
+tune/

@@ -36,6 +36,10 @@ endif
 DIAG ?= 0
 ifeq ($(DIAG),1)
 C_DEFS += -DCT3_DIAG_BUILD
+# Live constants (src/core/util/tunable.h): TUNABLE(...) constants become RAM
+# variables the diag link can list / set (firmware DIAG builds only; host builds
+# never define it, so their constants stay constexpr).
+C_DEFS += -DLIVE_TUNABLES
 endif
 BUILD_PROFILE := $(PEDAL)-$(INSTRUMENT)-diag$(DIAG)
 

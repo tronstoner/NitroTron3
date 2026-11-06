@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local dev interface for the pedals (`task dev`) - step 1 of docs/DEV_INTERFACE.md.
+"""Local dev interface for the pedals (`task dev`) - steps 1 + 2 of docs/DEV_INTERFACE.md.
 
   * Owns the USB serial port (the connection, `?`/BUILD query, reconnect and
     log-file code is tools/diag/log.py's Session, imported, not copied): log
@@ -13,6 +13,21 @@
       POST /api/flash    {"pedal": "nitrolab"|"chronotron3"|"nitrotron3m"}
   * Flash: make (DIAG=1) -> `dfu` over serial (or the footswitch gesture) ->
     wait for the DFU device -> make program-dfu. Only on a click, one at a time.
+    Tool output is split like a terminal does it: a '\r' without '\n' (dfu-util's
+    progress bar) replaces the current line (`flashout` event with replace: true).
+  * Live constants (step 2): the registry is parsed from the connected pedal's
+    constants files (tools/devtool/registry.py: TUNABLE(...) lines + @ tags);
+    after BUILD devtool sends `list` and merges the pedal's values (the pedal is
+    the truth; re-synced after every reconnect / flash).
+      GET  /api/registry   registry + values + guard state
+      POST /api/set        {"name": N, "value": V}   (throttled, latest wins, <= ~30 sends/s)
+      POST /api/reset      {"name": N} | {"name": "all"}
+      POST /api/note       {"text": "what I heard"}
+      POST /api/override   {"on": true|false}   (allow `set` despite the mismatch guard, this session)
+    SSE: tun (snapshot), tval (a value echo from the pedal), terr (pedal error).
+    tune/changes.json is rewritten on every change (changed constants vs the
+    compiled defaults + the note), for the agent to apply to the constants files;
+    a previous non-empty file that a re-sync would drop is kept in tune/history/.
 
   tools/devtool/devtool.py              run it (Ctrl-C quits)
   tools/devtool/devtool.py --selftest   offline self-test (pty pair, no pedal)
@@ -20,15 +35,19 @@
 Python 3 stdlib only. Only one program can hold the port: while devtool runs it
 is the logger (do not run `task log` at the same time).
 """
+import codecs
 import collections
 import http.client
 import json
+import math
 import os
 import queue
 import re
 import select
+import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -41,6 +60,8 @@ WEB_DIR = os.path.join(HERE, "web")
 sys.path.insert(0, os.path.join(REPO, "tools", "diag"))
 sys.dont_write_bytecode = True      # no __pycache__ in tools/diag
 import log as diaglog  # noqa: E402  (tools/diag/log.py: Session, find_device, git_head)
+sys.path.insert(0, HERE)
+import registry as reglib  # noqa: E402  (tools/devtool/registry.py)
 
 PORT_FILE = os.path.join(diaglog.LOG_DIR, ".devtoolport")
 BACKLOG = 5000            # log lines replayed to a (re)connecting page
@@ -65,6 +86,22 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8")}
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 
+# Live constants: where each pedal's TUNABLE(...) constants files live (dirs are
+# scanned for .h files with TUNABLE( lines). nitrotron3m's explorer slot uses
+# NitroLab's explorer module.
+CONST_SOURCES = {
+    "nitrolab": ["pedals/nitrolab"],
+    "chronotron3": ["pedals/chronotron3"],
+    "nitrotron3m": ["pedals/nitrotron3m", "pedals/nitrolab/modules/explorer_constants.h"],
+}
+TUNE_DIR = os.path.join(REPO, "tune")
+SEND_MIN_S = 1.0 / 30.0   # throttle: at most ~30 command writes per second
+LIST_TIMEOUT_S = 2.0      # no `T END` after this -> ask once more, then give up
+CHANGES_WRITE_S = 0.25    # tune/changes.json at most this often (last change always lands)
+T_VAL_RE = re.compile(r"^T (\S+) ([fib]) (\S+)$")
+T_END_RE = re.compile(r"^T END (\d+)$")
+T_ERR_RE = re.compile(r"^T ERR (.*)$")
+
 
 def now_ms(t=None):
     return int(round((time.time() if t is None else t) * 1000))
@@ -82,13 +119,18 @@ class Hub:
         self.status = {}
         self.flash = {}
         self.instance = "%x" % now_ms()
+        self.tun_provider = None    # () -> current live-constants snapshot (Tuner.snapshot)
 
     def publish(self, kind, data):
         with self.lock:
             if kind in ("line", "sep"):
                 self.backlog.append((kind, data))
             elif kind == "flashout":
-                self.flash_out.append((kind, data))
+                if data.get("replace") and self.flash_out:
+                    # '\r' line: the backlog keeps only the latest state of the line
+                    self.flash_out[-1] = (kind, dict(data, replace=False))
+                else:
+                    self.flash_out.append((kind, dict(data, replace=False)))
             elif kind == "status":
                 self.status = data
             elif kind == "flash":
@@ -110,10 +152,13 @@ class Hub:
 
     def subscribe(self):
         q = queue.Queue(maxsize=20000)
+        tun = self.tun_provider() if self.tun_provider else None
         with self.lock:
             snap = [("hello", {"instance": self.instance})]
             snap.append(("status", self.status))
             snap.append(("flash", self.flash))
+            if tun is not None:
+                snap.append(("tun", tun))
             snap.extend(self.backlog)
             snap.extend(self.flash_out)
             self.clients.add(q)
@@ -132,6 +177,7 @@ class DevSession(diaglog.Session):
 
     def __init__(self, hub, **kw):
         self.hub = hub
+        self.tuner = None            # set by App (live constants)
         super().__init__(**kw)
 
     def _show(self, text):
@@ -144,9 +190,14 @@ class DevSession(diaglog.Session):
         t = self.clock()
         had_build = self.build
         super()._line(text)
-        self.hub.publish("line", {"t": now_ms(t), "text": text.rstrip("\r")})
+        text = text.rstrip("\r")
+        quiet = self.tuner.on_line(text) if self.tuner else False
+        if not quiet:   # `T <name> ..` value lines go to the file, not the page log (the rows show them)
+            self.hub.publish("line", {"t": now_ms(t), "text": text})
         if self.build != had_build:
             self.publish_status()
+            if self.build and self.tuner:
+                self.tuner.on_build(self.build[0], self.build[1])
 
     def _connect(self, dev):
         super()._connect(dev)
@@ -155,6 +206,8 @@ class DevSession(diaglog.Session):
     def _disconnect(self):
         super()._disconnect()
         self.publish_status()
+        if self.tuner:
+            self.tuner.on_disconnect()
 
     def _resolve_build(self):
         super()._resolve_build()
@@ -193,8 +246,9 @@ class DevSession(diaglog.Session):
 class SerialLoop:
     """Runs DevSession.step() in its own thread; other threads go through the lock."""
 
-    def __init__(self, sess):
+    def __init__(self, sess, tick=None):
         self.sess = sess
+        self.tick = tick             # called after every step, under the lock (serial thread)
         self.lock = threading.RLock()
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self._run, name="serial", daemon=True)
@@ -203,6 +257,8 @@ class SerialLoop:
         while not self.stop.is_set():
             with self.lock:
                 self.sess.step(timeout=0.02)
+                if self.tick:
+                    self.tick()
             time.sleep(0.005)       # let other threads take the lock
 
     def start(self):
@@ -223,6 +279,354 @@ class SerialLoop:
 
 
 # ---------------------------------------------------------------------------
+# Live constants (step 2): registry + pedal values + changes file
+# ---------------------------------------------------------------------------
+def f32(x):
+    """x as the float32 the pedal stores (the firmware's TUNABLE floats)."""
+    return struct.unpack("<f", struct.pack("<f", float(x)))[0]
+
+
+def files_dirty(paths):
+    """True if any of the repo-relative paths differ from HEAD (None: git failed)."""
+    if not paths:
+        return False
+    try:
+        r = subprocess.run(["git", "-C", REPO, "diff", "--quiet", "HEAD", "--"] + list(paths),
+                           capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.returncode != 0
+
+
+def local_iso(t=None):
+    """ISO 8601 local time with UTC offset (the one time format of tune/changes.json)."""
+    t = time.time() if t is None else t
+    z = time.strftime("%z", time.localtime(t))
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t)) + (z[:3] + ":" + z[3:] if z else "")
+
+
+class Tuner:
+    """Registry (from the constants files), the pedal's values (`list` / echoes),
+    the throttled command queue, the mismatch guard and tune/changes.json.
+    on_line / on_build / on_disconnect / tick run in the serial thread (under its
+    lock); request_* come from HTTP threads and only queue. One internal lock."""
+
+    def __init__(self, hub, sess, repo=REPO, head=diaglog.git_head, dirty=files_dirty,
+                 tune_dir=TUNE_DIR, clock=time.time, list_timeout=LIST_TIMEOUT_S):
+        self.hub, self.sess, self.repo = hub, sess, repo
+        self.head, self.dirty, self.tune_dir, self.clock = head, dirty, tune_dir, clock
+        self.list_timeout = list_timeout
+        self.lock = threading.RLock()
+        self.pedal = DEFAULT_PEDAL       # registry shown before a pedal answered
+        self.firmware = None             # BUILD hash as sent ("abc1234[-dirty]")
+        self.reg = None
+        self.by_name = {}
+        self.values = {}                 # name -> value as the pedal reported it
+        self.fw_names = None             # names in the pedal's last full `list`
+        self.state = "offline"           # offline | asking | synced | no-answer
+        self.list_at = None
+        self.list_tries = 0
+        self.list_seen = []
+        self.pending = collections.OrderedDict()   # name|"*" -> command line (latest wins)
+        self.last_send = 0.0
+        self.override = False
+        self.note = ""
+        self.guard = {"ok": False, "reasons": ["no pedal"], "warnings": []}
+        self.repo_head = None
+        self.last_err = None
+        self.changes_due = False
+        self.changes_at = 0.0
+        self.resync_archive = False
+        self._load_registry(self.pedal)
+        self._compute_guard()
+
+    # ---- registry / guard ------------------------------------------------
+    def _load_registry(self, pedal):
+        self.reg = reglib.build(self.repo, pedal, CONST_SOURCES.get(pedal, ["pedals/" + pedal]))
+        self.by_name = {c["name"]: c for c in self.reg["constants"]}
+
+    def _compute_guard(self):
+        reasons, warnings = [], []
+        if self.state == "offline":
+            reasons.append("no pedal connected")
+        elif self.state == "no-answer":
+            reasons.append("the pedal does not answer `list` (firmware without live constants? flash a current DIAG build)")
+        self.repo_head = head = self.head()
+        if self.firmware:
+            built = self.firmware.split("-")[0]
+            if head and built != head:
+                reasons.append("firmware %s is not the repo HEAD %s: the constants files may not match the "
+                               "firmware (flash, or allow changes)" % (built, head))
+            if self.firmware.endswith("-dirty"):
+                warnings.append("firmware was built from a dirty tree")
+        d = self.dirty(self.reg["files"])
+        if d:
+            reasons.append("constants file(s) changed since HEAD (uncommitted): the firmware may not match "
+                           "them (commit + flash, or allow changes)")
+        elif d is None:
+            warnings.append("git status unknown")
+        if self.fw_names is not None:
+            fw, rg = set(self.fw_names), set(self.by_name)
+            extra = sorted(fw - rg)
+            miss = sorted(rg - fw)
+            if extra:     # the firmware knows constants the files do not: files and firmware disagree
+                reasons.append("the pedal has live constants the files do not declare (%s%s)" % (
+                    ", ".join(extra[:4]), ", ..." if len(extra) > 4 else ""))
+            if miss:      # e.g. a module not compiled into this build: those rows are shown as off
+                warnings.append("%d constant(s) from the files are not live in this firmware (%s%s)" % (
+                    len(miss), ", ".join(miss[:3]), ", ..." if len(miss) > 3 else ""))
+        if self.reg["problems"]:
+            warnings.append("registry: " + "; ".join(self.reg["problems"][:3]))
+        self.guard = {"ok": not reasons, "reasons": reasons, "warnings": warnings}
+
+    def writable(self):
+        if self.state != "synced":
+            return False
+        return self.guard["ok"] or (self.override and self.state == "synced")
+
+    # ---- serial side (serial thread) --------------------------------------
+    def on_build(self, pedal, hsh):
+        with self.lock:
+            self.pedal = pedal
+            self.firmware = hsh
+            self._load_registry(pedal)
+            self.values = {}
+            self.fw_names = None
+            self.pending.clear()
+            self.state = "asking"
+            self.list_tries = 0
+            self._ask_list()
+            self._compute_guard()
+        self.publish()
+
+    def on_disconnect(self):
+        with self.lock:
+            self.state = "offline"
+            self.firmware = None
+            self.pending.clear()
+            self._compute_guard()
+        self.publish()
+
+    def _ask_list(self):
+        self.list_seen = []
+        self.list_at = self.clock()
+        self.list_tries += 1
+        self.sess.send(b"list\n")
+
+    def _parse_value(self, ty, text):
+        if ty == "b":
+            return text in ("1", "true")
+        if ty == "i":
+            return int(text)
+        return float(text)      # the pedal's shortest text (compared as float32, written as sent)
+
+    def on_line(self, text):
+        """A pedal line. Returns True for `T <name>` / `T END` lines (kept off the page log)."""
+        if not text.startswith("T "):
+            return False
+        m = T_VAL_RE.match(text)
+        if m and m.group(1) not in ("END", "ERR"):
+            name, ty, val = m.groups()
+            try:
+                v = self._parse_value(ty, val)
+            except ValueError:
+                return False
+            with self.lock:
+                self.values[name] = v
+                if self.state == "asking":
+                    self.list_seen.append(name)
+                self.changes_due = True
+            self.hub.publish("tval", {"name": name, "value": v, "t": now_ms(self.clock())})
+            return True
+        m = T_END_RE.match(text)
+        if m:
+            with self.lock:
+                if self.state in ("asking", "no-answer"):
+                    self.fw_names = list(self.list_seen)
+                    self.state = "synced"
+                    self.resync_archive = True
+                    self.changes_due = True
+                    self._compute_guard()
+            self.publish()
+            return True
+        m = T_ERR_RE.match(text)
+        if m:
+            with self.lock:
+                self.last_err = {"text": m.group(1), "t": now_ms(self.clock())}
+            self.hub.publish("terr", self.last_err)
+            return False     # errors stay in the page log too
+        return False
+
+    def tick(self):
+        """Serial thread, every loop: `list` timeout, throttled sends, changes file."""
+        now = self.clock()
+        with self.lock:
+            if self.state == "asking" and self.list_at is not None and now - self.list_at >= self.list_timeout:
+                if self.list_tries < 2:
+                    self._ask_list()
+                else:
+                    self.state = "no-answer"
+                    self._compute_guard()
+                    self.hub.publish("tun", self._snapshot())
+            if self.pending and now - self.last_send >= SEND_MIN_S and self.sess.fd is not None:
+                data = "".join(self.pending.values()).encode()
+                self.pending.clear()
+                self.last_send = now
+                self.sess.send(data)
+            if self.changes_due and now - self.changes_at >= CHANGES_WRITE_S:
+                self.changes_due = False
+                self.changes_at = now
+                self._write_changes()
+
+    # ---- requests (HTTP threads) -------------------------------------------
+    def request_set(self, name, value):
+        """Returns (http code, message)."""
+        with self.lock:
+            c = self.by_name.get(name)
+            if c is None:
+                return 404, "unknown constant %s" % name
+            if not self.writable():
+                return 409, "changes are blocked: " + "; ".join(self.guard["reasons"] or [self.state])
+            if self.fw_names is not None and name not in self.fw_names:
+                return 409, "%s is not live in this firmware" % name
+            ty = c["type"]
+            if ty == "bool":
+                if value in (True, False, 0, 1, "true", "false", "0", "1"):
+                    v = value in (True, 1, "true", "1")
+                else:
+                    return 400, "bool expected"
+                text = "1" if v else "0"
+            else:
+                try:
+                    x = float(value)
+                except (TypeError, ValueError):
+                    return 400, "number expected"
+                if not math.isfinite(x):
+                    return 400, "not finite"
+                if ty == "int":
+                    if x != int(x):
+                        return 400, "integer expected"
+                    x = int(x)
+                rng = c["range"]
+                if rng and not (rng[0] - 1e-9 * abs(rng[0]) <= x <= rng[1] + 1e-9 * abs(rng[1])):
+                    return 400, "outside the range %g .. %g" % (rng[0], rng[1])
+                text = str(x) if ty == "int" else ("%.9g" % x)
+            self.pending[name] = "set %s %s\n" % (name, text)
+            self.pending.move_to_end(name)
+            return 202, "queued"
+
+    def request_reset(self, name):
+        with self.lock:
+            if self.state != "synced":
+                return 409, "pedal not synced (%s)" % self.state
+            if name == "all":
+                self.pending.clear()
+                self.pending["*"] = "reset all\n"
+                return 202, "queued"
+            if name not in self.by_name:
+                return 404, "unknown constant %s" % name
+            # (a reset is allowed even while `set` is blocked: it only returns to the firmware's default)
+            self.pending[name] = "reset %s\n" % name
+            self.pending.move_to_end(name)
+            return 202, "queued"
+
+    def set_note(self, text):
+        with self.lock:
+            self.note = str(text)[:4000]
+            self.changes_due = True
+        self.publish()
+
+    def set_override(self, on):
+        with self.lock:
+            self.override = bool(on)
+            self._compute_guard()
+        self.publish()
+
+    # ---- state out -------------------------------------------------------------
+    def _changed(self, c):
+        name = c["name"]
+        if name not in self.values or c["default"] is None:
+            return False
+        v, d = self.values[name], c["default"]
+        if c["type"] == "float":
+            return f32(v) != f32(d)
+        return v != d
+
+    def _changes(self):
+        out = []
+        for c in self.reg["constants"]:
+            if self._changed(c):
+                out.append({"name": c["name"], "label": c["label"], "module": c["module"],
+                            "section": c["section"], "file": c["file"], "line": c["line"],
+                            "default_text": c["default_text"], "default": c["default"],
+                            "value": self.values[c["name"]], "unit": c["unit"]})
+        return out
+
+    def _write_changes(self):
+        try:
+            os.makedirs(self.tune_dir, exist_ok=True)
+        except OSError:
+            return
+        path = os.path.join(self.tune_dir, "changes.json")
+        changes = self._changes()
+        if self.resync_archive:
+            # after a (re)connect the pedal is the truth; keep an older record it would drop
+            self.resync_archive = False
+            try:
+                with open(path) as f:
+                    old = json.load(f)
+                old_ch = [(x.get("name"), x.get("value")) for x in old.get("changes", [])]
+                if old_ch and old_ch != [(x["name"], x["value"]) for x in changes]:
+                    hist = os.path.join(self.tune_dir, "history")
+                    os.makedirs(hist, exist_ok=True)
+                    shutil.copyfile(path, os.path.join(
+                        hist, "changes-%s.json" % time.strftime("%Y%m%d-%H%M%S", time.localtime(self.clock()))))
+            except (OSError, ValueError, AttributeError, TypeError):
+                pass
+        doc = {
+            "about": "Live constant changes made with tools/devtool (docs/DEV_INTERFACE.md): every constant whose "
+                     "value on the pedal differs from its compiled default. Apply them to the constants files "
+                     "(file / line / name); devtool never edits source files.",
+            "pedal": self.pedal, "firmware": self.firmware, "repo_head": self.repo_head,
+            "updated": local_iso(self.clock()), "synced": self.state == "synced",
+            "guard": {"ok": self.guard["ok"], "reasons": self.guard["reasons"], "override": self.override},
+            "note": self.note, "changes": changes,
+        }
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(doc, f, indent=2)
+                f.write("\n")
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+    def _snapshot(self):
+        docs = {}
+        consts = []
+        for c in self.reg["constants"]:
+            d = dict(c)
+            if c["doc_of"]:
+                docs[c["doc_of"]] = c["doc"]
+            d.pop("doc", None)
+            d["value"] = self.values.get(c["name"])
+            d["in_firmware"] = None if self.fw_names is None else c["name"] in self.fw_names
+            consts.append(d)
+        return {"pedal": self.pedal, "firmware": self.firmware, "head": self.repo_head,
+                "files": self.reg["files"], "problems": self.reg["problems"],
+                "state": self.state, "guard": self.guard, "override": self.override,
+                "writable": self.writable(), "note": self.note, "constants": consts, "docs": docs,
+                "last_err": self.last_err}
+
+    def snapshot(self):
+        with self.lock:
+            return self._snapshot()
+
+    def publish(self):
+        self.hub.publish("tun", self.snapshot())
+
+
+# ---------------------------------------------------------------------------
 # Flash: make -> dfu -> wait for the DFU device -> make program-dfu
 # ---------------------------------------------------------------------------
 def make_argv(args):
@@ -235,6 +639,43 @@ def dfu_present():
     except (OSError, subprocess.SubprocessError):
         return False
     return ("[%s]" % DFU_ID) in out
+
+
+class TermLines:
+    """Splits a tool's output into lines the way a terminal shows them: '\n' ends a
+    line, '\r\n' too, a lone '\r' ends a line that the NEXT text replaces (progress
+    bars). emit(text, replace): replace = True -> the text replaces the last line."""
+
+    def __init__(self, emit):
+        self.emit = emit
+        self.buf = []
+        self.cr = False          # the last char was '\r' (a following '\n' just completes it)
+        self.overwrite = False   # the next emitted line replaces the last one
+
+    def feed(self, text):
+        for ch in text:
+            if self.cr:
+                self.cr = False
+                if ch == "\n":          # '\r\n': the line is already out and stays
+                    self.overwrite = False
+                    continue
+            if ch == "\r":              # shown at once; the next text replaces it
+                self.emit("".join(self.buf), self.overwrite)
+                self.buf = []
+                self.overwrite = True
+                self.cr = True
+            elif ch == "\n":
+                self.emit("".join(self.buf), self.overwrite)
+                self.buf = []
+                self.overwrite = False
+            else:
+                self.buf.append(ch)
+
+    def close(self):
+        if self.buf:
+            self.emit("".join(self.buf), self.overwrite)
+            self.buf = []
+        self.cr = self.overwrite = False
 
 
 class Flasher:
@@ -269,24 +710,39 @@ class Flasher:
         self.state = st
         self.hub.publish("flash", st)
 
-    def _out(self, text, stream):
-        self.hub.publish("flashout", {"t": now_ms(), "text": text, "stream": stream})
+    def _out(self, text, stream, replace=False):
+        self.hub.publish("flashout", {"t": now_ms(), "text": text, "stream": stream,
+                                      "replace": replace})
 
     def _cmd(self, args, stream):
         """Run a command, stream its output. Returns (exit code, all output)."""
         self._out("$ " + " ".join(args), "info")
         lines = []
+
+        def emit(text, replace):
+            if replace and lines:
+                lines[-1] = text
+            else:
+                lines.append(text)
+            self._out(text, stream, replace)
+
         try:
             p = subprocess.Popen(args, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 stdin=subprocess.DEVNULL, text=True, errors="replace", bufsize=1)
+                                 stdin=subprocess.DEVNULL, bufsize=0)
         except OSError as e:
             self._out("cannot run %s: %s" % (args[0], e), "info")
             return -1, ""
         self.proc = p
-        for line in p.stdout:
-            line = line.rstrip("\n")
-            lines.append(line)
-            self._out(line, stream)
+        split = TermLines(emit)
+        dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        fd = p.stdout.fileno()
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            split.feed(dec.decode(chunk))
+        split.feed(dec.decode(b"", final=True))
+        split.close()
         rc = p.wait()
         self.proc = None
         return rc, "\n".join(lines)
@@ -407,6 +863,8 @@ class Handler(BaseHTTPRequestHandler):
             st.update({"flash": app.flasher.state, "pedals": list(PEDALS),
                        "default_pedal": DEFAULT_PEDAL, "head": diaglog.git_head()})
             self._json(200, st)
+        elif path == "/api/registry":
+            self._json(200, app.tuner.snapshot())
         elif path == "/events":
             self._events()
         else:
@@ -417,8 +875,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(n) if n > 0 else b""
-        if path != "/api/flash":
+        body = self.rfile.read(n) if 0 < n <= 65536 else b""
+        if path not in ("/api/flash", "/api/set", "/api/reset", "/api/note", "/api/override"):
             self._send(404, b"not found\n", "text/plain")
             return
         # application/json only: a cross-site form post cannot send it without a
@@ -427,10 +885,30 @@ class Handler(BaseHTTPRequestHandler):
             self._json(415, {"ok": False, "message": "send application/json"})
             return
         try:
-            pedal = json.loads(body.decode() or "{}").get("pedal")
-        except (ValueError, AttributeError):
+            req = json.loads(body.decode() or "{}")
+            if not isinstance(req, dict):
+                raise ValueError
+        except (ValueError, UnicodeDecodeError):
             self._json(400, {"ok": False, "message": "bad JSON"})
             return
+        tuner = self.server.app.tuner
+        if path == "/api/set":
+            code, msg = tuner.request_set(req.get("name"), req.get("value"))
+            self._json(code, {"ok": code < 300, "message": msg})
+            return
+        if path == "/api/reset":
+            code, msg = tuner.request_reset(req.get("name"))
+            self._json(code, {"ok": code < 300, "message": msg})
+            return
+        if path == "/api/note":
+            tuner.set_note(req.get("text") or "")
+            self._json(200, {"ok": True, "message": "saved"})
+            return
+        if path == "/api/override":
+            tuner.set_override(bool(req.get("on")))
+            self._json(200, {"ok": True, "message": "override %s" % ("on" if req.get("on") else "off")})
+            return
+        pedal = req.get("pedal")
         if pedal not in PEDALS:
             self._json(400, {"ok": False, "message": "unknown pedal %r" % (pedal,)})
             return
@@ -506,10 +984,13 @@ def bind_server(port=None):
 
 
 class App:
-    def __init__(self, sess_kw=None, flasher_kw=None, port=None, remember_port=True):
+    def __init__(self, sess_kw=None, flasher_kw=None, tuner_kw=None, port=None, remember_port=True):
         self.hub = Hub()
         self.sess = DevSession(self.hub, **(sess_kw or {}))
-        self.serial = SerialLoop(self.sess)
+        self.tuner = Tuner(self.hub, self.sess, **(tuner_kw or {}))
+        self.sess.tuner = self.tuner
+        self.hub.tun_provider = self.tuner.snapshot
+        self.serial = SerialLoop(self.sess, tick=self.tuner.tick)
         self.flasher = Flasher(self.hub, self.serial, **(flasher_kw or {}))
         self.stopping = threading.Event()
         self.httpd = bind_server(port)
@@ -557,18 +1038,73 @@ def selftest():
         ok = ok and bool(cond)
 
     tmp = tempfile.mkdtemp()
+    tune_dir = os.path.join(tmp, "tune")
     dev = {"path": None}
-    pedal = {"got": b"", "dfu": False}
+    pedal = {"got": b"", "dfu": False, "rx": b"", "sets": []}
     calls = []
+    head = {"h": "abc1234"}
+
+    # The fake pedal's live constants: the real nitrolab registry, compiled defaults.
+    reg = reglib.build(REPO, "nitrolab", CONST_SOURCES["nitrolab"])
+    tys = {"float": "f", "int": "i", "bool": "b"}
+
+    def ptext(c, v):
+        if c["type"] == "bool":
+            return "1" if v else "0"
+        if c["type"] == "int":
+            return str(int(v))
+        x = f32(v)
+        for prec in range(1, 10):
+            t = "%.*g" % (prec, x)
+            if f32(float(t)) == x:
+                return t
+        return repr(x)
+
+    def fresh_values():
+        return {c["name"]: c["default"] for c in reg["constants"]}
+
+    pedal["vals"] = fresh_values()
+    byname = {c["name"]: c for c in reg["constants"]}
+
+    def tline(name):
+        c = byname[name]
+        return ("T %s %s %s\r\n" % (name, tys[c["type"]], ptext(c, pedal["vals"][name]))).encode()
+
+    def pedal_cmd(m, line):
+        parts = line.split()
+        if not parts:
+            return
+        if parts[0] == "list":
+            os.write(m, b"".join(tline(c["name"]) for c in reg["constants"])
+                     + b"T END %d\r\n" % len(reg["constants"]))
+        elif parts[0] == "set" and len(parts) == 3 and parts[1] in byname:
+            c = byname[parts[1]]
+            pedal["sets"].append((parts[1], parts[2]))
+            v = parts[2]
+            pedal["vals"][parts[1]] = (v == "1") if c["type"] == "bool" else (
+                int(v) if c["type"] == "int" else float(v))
+            os.write(m, tline(parts[1]))
+        elif parts[0] == "reset" and len(parts) == 2:
+            names = list(byname) if parts[1] == "all" else [parts[1]]
+            for n in names:
+                pedal["vals"][n] = byname[n]["default"]
+            os.write(m, b"".join(tline(n) for n in names))
+        elif parts[0] in ("set", "reset", "get"):
+            os.write(m, b"T ERR unknown name %s\r\n" % parts[1].encode())
 
     def fake_argv(args):
         calls.append(list(args))
-        return [sys.executable, "-c", "import sys; print('fake make', *sys.argv[1:])"] + list(args)
+        code = ("import sys; print('fake make', *sys.argv[1:]);"
+                "sys.stdout.write('Download [=  ] 10%\\rDownload [== ] 50%\\rDownload [===] 100%\\r\\n"
+                "File downloaded successfully\\n') if 'program-dfu' in sys.argv else None")
+        return [sys.executable, "-c", code] + list(args)
 
-    app = App(sess_kw={"log_dir": tmp, "finder": lambda: dev["path"], "head": lambda: "abc1234",
+    app = App(sess_kw={"log_dir": tmp, "finder": lambda: dev["path"], "head": lambda: head["h"],
                        "query_timeout": 0.3},
               flasher_kw={"argv": fake_argv, "dfu_check": lambda: pedal["dfu"],
                           "hint_s": 0.4, "max_s": 5.0, "poll_s": 0.05, "jobs": 2},
+              tuner_kw={"head": lambda: head["h"], "dirty": lambda files: False, "tune_dir": tune_dir,
+                        "list_timeout": 0.5},
               port=0, remember_port=False)
     app.start()
     port = app.port
@@ -622,6 +1158,10 @@ def selftest():
             pedal["got"] += got
             if b"?" in got:
                 os.write(m, b"BUILD nitrolab abc1234-dirty DIAG 2026-11-06T10:00\r\n")
+            pedal["rx"] += got
+            while b"\n" in pedal["rx"]:
+                line, pedal["rx"] = pedal["rx"].split(b"\n", 1)
+                pedal_cmd(m, line.decode())
             if b"dfu\n" in pedal["got"] and not pedal["dfu"]:
                 os.write(m, b"DFU entering bootloader\r\n")
                 time.sleep(0.05)
@@ -667,7 +1207,86 @@ def selftest():
                 headers={"Content-Type": "application/json"})
     check(st == 400, "flash: unknown pedal refused")
 
-    # 3) flash flow: build -> dfu over serial -> DFU device -> program-dfu
+    # 2b) live constants: list -> synced, set / reset / note / guard, changes file
+    J = {"Content-Type": "application/json"}
+
+    def post(path, obj):
+        st, body = req("POST", path, body=json.dumps(obj).encode(), headers=J)
+        return st, json.loads(body or b"{}")
+
+    def changes_file():
+        try:
+            with open(os.path.join(tune_dir, "changes.json")) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    def wait_for(fn, timeout=3.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            if fn():
+                return True
+            time.sleep(0.03)
+        return False
+
+    check(reg["constants"] and not reg["problems"], "registry: TUNABLE constants parsed, no tag problems (%d)"
+          % len(reg["constants"]))
+    check(has("tun", lambda d: d.get("state") == "synced" and d.get("writable") is True),
+          "connect: `list` sent, synced, writable (guard ok)")
+    check(b"list\n" in pedal["got"], "devtool sent `list` after BUILD")
+    st, body = req("GET", "/api/registry")
+    js = json.loads(body)
+    c0 = js["constants"][0]
+    check(st == 200 and all(c["value"] == c["default"] for c in js["constants"])
+          and {"label", "unit", "range", "taper", "level", "file", "line", "section", "module"} <= set(c0),
+          "/api/registry: values merged (= defaults), metadata fields")
+    check("firmware was built from a dirty tree" in js["guard"]["warnings"], "guard: dirty firmware is a warning")
+    check(not has("line", lambda d: d["text"].startswith("T EXP_"), timeout=0.2),
+          "`T` value lines kept off the page log")
+    name = "EXP_LFO_HZ_MAX"
+    st, r = post("/api/set", {"name": name, "value": 35})
+    check(st == 202, "set: accepted")
+    check(has("tval", lambda d: d["name"] == name and d["value"] == 35), "set: pedal echo -> tval event")
+    check(wait_for(lambda: (changes_file() or {}).get("changes") and changes_file()["changes"][0]["name"] == name),
+          "changes.json written")
+    ch = changes_file()["changes"][0]
+    check(ch["value"] == 35 and ch["default_text"] == "20.f" and ch["unit"] == "Hz"
+          and ch["file"].endswith("explorer_constants.h") and ch["line"] > 0, "changes.json: name/file/line/default/value/unit")
+    n0 = len(pedal["sets"])
+    for i in range(60):
+        post("/api/set", {"name": "EXP_LFO_HZ_MIN", "value": round(0.1 + i * 0.01, 2)})
+    check(wait_for(lambda: pedal["vals"]["EXP_LFO_HZ_MIN"] == 0.69), "throttle: latest value wins")
+    sent = len(pedal["sets"]) - n0
+    check(sent < 45, "throttle: %d sends for 60 requests" % sent)
+    st, _ = post("/api/set", {"name": name, "value": 500})
+    check(st == 400, "set: outside @range refused")
+    st, _ = post("/api/set", {"name": "NOPE", "value": 1})
+    check(st == 404, "set: unknown constant refused")
+    st, _ = post("/api/set", {"name": "EXP_TB_LOFI_ENABLE", "value": False})
+    check(st == 202 and has("tval", lambda d: d["name"] == "EXP_TB_LOFI_ENABLE" and d["value"] is False),
+          "set: bool")
+    st, _ = post("/api/set", {"name": "EXP_TB_LOFI_TABLE_BITS", "value": 4.5})
+    check(st == 400, "set: int refuses a fraction")
+    post("/api/note", {"text": "faster LFO sounds better"})
+    check(wait_for(lambda: (changes_file() or {}).get("note") == "faster LFO sounds better"), "note -> changes.json")
+    st, _ = post("/api/reset", {"name": "EXP_TB_LOFI_ENABLE"})
+    check(st == 202 and has("tval", lambda d: d["name"] == "EXP_TB_LOFI_ENABLE" and d["value"] is True),
+          "reset one -> default echoed")
+    # guard: firmware hash != HEAD blocks set until the override
+    head["h"] = "fff0000"
+    with app.tuner.lock:
+        app.tuner._compute_guard()
+    st, _ = post("/api/set", {"name": name, "value": 30})
+    check(st == 409, "guard: firmware != HEAD blocks set")
+    post("/api/override", {"on": True})
+    st, _ = post("/api/set", {"name": name, "value": 30})
+    check(st == 202, "guard: override for this session allows set")
+    post("/api/override", {"on": False})
+    head["h"] = "abc1234"
+    with app.tuner.lock:
+        app.tuner._compute_guard()
+    check(has("tval", lambda d: d["name"] == name and d["value"] == 30), "set after override echoed")
+
     st, _ = req("POST", "/api/flash", body=b'{"pedal":"nitrolab"}',
                 headers={"Content-Type": "application/json"})
     st2, _ = req("POST", "/api/flash", body=b'{"pedal":"nitrolab"}',
@@ -683,6 +1302,15 @@ def selftest():
           "SSE: make output streamed")
     check(not has("flash", lambda d: d.get("state") == "gesture", timeout=0.1),
           "flash: no gesture prompt when `dfu` worked")
+    with ev_lock:
+        fo = [d for k, d in events if k == "flashout" and d["text"].startswith("Download")]
+    check([(d["text"][-4:], d["replace"]) for d in fo] == [(" 10%", False), (" 50%", True), ("100%", True)],
+          "flash output: '\\r' progress replaces the line, '\\r\\n' ends it")
+    check(has("flashout", lambda d: d["text"] == "File downloaded successfully" and d["replace"] is False),
+          "flash output: next line appended after the progress line")
+    with app.hub.lock:
+        bl = [d["text"] for k, d in app.hub.flash_out if d["text"].startswith("Download")]
+    check(len(bl) == 1 and bl[0].endswith("100%"), "flash backlog keeps only the last progress state")
 
     # 4) pedal gone
     pstop.set()
@@ -692,6 +1320,31 @@ def selftest():
     check(has("sep", lambda d: d["what"] == "gone"), "SSE: pedal gone separator")
     check(has("status", lambda d: d.get("connected") is False and d.get("build_state") == "waiting"),
           "status: disconnected")
+    check(has("tun", lambda d: d.get("state") == "offline" and d.get("writable") is False),
+          "live constants: offline, not writable")
+    st, _ = post("/api/set", {"name": name, "value": 31})
+    check(st == 409, "set refused while offline")
+
+    # 4b) the pedal comes back flashed (all defaults): re-sync from `list`, old record archived
+    pedal["vals"] = fresh_values()
+    with ev_lock:
+        events.clear()
+    m2, s2 = os.openpty()
+    dev["path"] = os.ttyname(s2)
+    pstop2 = threading.Event()
+    threading.Thread(target=pedal_pump, args=(m2, pstop2), daemon=True).start()
+    check(has("tun", lambda d: d.get("state") == "synced"
+              and all(c["value"] == c["default"] for c in d["constants"])), "reconnect: re-synced to defaults")
+    check(wait_for(lambda: (changes_file() or {}).get("changes") == []), "reconnect: changes.json now empty")
+    hist = os.path.join(tune_dir, "history")
+    check(os.path.isdir(hist) and len(os.listdir(hist)) == 1, "reconnect: previous changes kept in tune/history/")
+    st, _ = post("/api/reset", {"name": "all"})
+    check(st == 202, "reset all accepted")
+    pstop2.set()
+    dev["path"] = None
+    os.close(m2)
+    os.close(s2)
+    check(has("status", lambda d: d.get("connected") is False), "fresh pedal gone again")
 
     # 5) flash without a pedal -> gesture prompt, then DFU appears
     pedal["dfu"] = False

@@ -17,10 +17,15 @@
     <div><dt>Firmware</dt><dd id="b-hash">–</dd></div>
     <div><dt>Built</dt><dd id="b-time">–</dd></div>
   </dl>
-  <div class="flash-ctl">
-    <label class="visually-hidden" for="flash-pedal">Pedal to flash</label>
-    <select id="flash-pedal"></select>
-    <button id="flash-btn" class="primary" type="button">Flash</button>
+  <div class="top-actions">
+    <button id="changes-btn" type="button" aria-expanded="false" aria-controls="changes-panel" title="Constants that differ from the compiled defaults">
+      Changes <span class="count-badge" id="changes-count">0</span>
+    </button>
+    <div class="flash-ctl">
+      <label class="visually-hidden" for="flash-pedal">Pedal to flash</label>
+      <select id="flash-pedal"></select>
+      <button id="flash-btn" class="primary" type="button">Flash</button>
+    </div>
   </div>
   <p class="note" id="b-note" hidden></p>
 </header>
@@ -34,27 +39,56 @@
   <pre class="flash-out" id="flash-out"></pre>
 </details>
 
+<section class="changes-panel" id="changes-panel" hidden aria-label="Changes">
+  <div class="changes-head">
+    <h2>Changes <span class="dim" id="changes-sub"></span></h2>
+    <button id="reset-all-btn" type="button" class="danger-quiet">Reset all</button>
+  </div>
+  <ul class="changes-list" id="changes-list"></ul>
+  <label class="note-label" for="note">What I heard</label>
+  <textarea id="note" rows="2" placeholder="Notes for the agent: what changed in the sound, what to keep…" spellcheck="true"></textarea>
+  <p class="changes-foot dim" id="changes-foot">Written to tune/changes.json on every change. The agent applies it to the constants files.</p>
+</section>
+
 <div class="layout">
-  <aside class="sidebar" aria-label="Constants">
-    <h2>Constants</h2>
-    <p class="placeholder">Live constants arrive in step 2.</p>
+  <aside class="sidebar" id="sidebar" aria-label="Constants">
+    <div class="side-search">
+      <label class="visually-hidden" for="search">Search constants</label>
+      <input id="search" type="search" placeholder="Search name, label, explanation" spellcheck="false" autocomplete="off">
+    </div>
+    <nav class="tree" id="tree" aria-label="Sections"></nav>
   </aside>
 
-  <main class="logpanel">
-    <div class="toolbar">
-      <div class="filter">
-        <label class="visually-hidden" for="filter">Filter</label>
-        <input id="filter" type="search" placeholder="Filter (regex, case-insensitive)" spellcheck="false" autocomplete="off">
-        <span class="filter-mode" id="filter-mode"></span>
-      </div>
-      <div class="tools">
-        <span class="count" id="count">0 lines</span>
-        <button id="pause-btn" type="button" aria-pressed="false">Pause</button>
-        <button id="clear-btn" type="button">Clear view</button>
-      </div>
+  <main class="main">
+    <div class="tabs" role="tablist">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Sections</button>
+      <button role="tab" id="tab-const" aria-selected="true" aria-controls="view-const" type="button">Constants</button>
+      <button role="tab" id="tab-log" aria-selected="false" aria-controls="view-log" type="button">Log <span class="tab-count" id="tab-log-count"></span></button>
     </div>
-    <div class="log" id="log" tabindex="0" aria-live="off"></div>
-    <button class="jump" id="jump" type="button" hidden>Jump to latest</button>
+
+    <section class="view-const" id="view-const" role="tabpanel" aria-labelledby="tab-const">
+      <div class="tun-state" id="tun-state"></div>
+      <div class="guard" id="guard" hidden></div>
+      <div class="sec-head" id="sec-head"></div>
+      <div class="rows" id="rows"></div>
+    </section>
+
+    <section class="logpanel" id="view-log" role="tabpanel" aria-labelledby="tab-log" hidden>
+      <div class="toolbar">
+        <div class="filter">
+          <label class="visually-hidden" for="filter">Filter</label>
+          <input id="filter" type="search" placeholder="Filter (regex, case-insensitive)" spellcheck="false" autocomplete="off">
+          <span class="filter-mode" id="filter-mode"></span>
+        </div>
+        <div class="tools">
+          <span class="count" id="count">0 lines</span>
+          <button id="pause-btn" type="button" aria-pressed="false">Pause</button>
+          <button id="clear-btn" type="button">Clear view</button>
+        </div>
+      </div>
+      <div class="log" id="log" tabindex="0" aria-live="off"></div>
+      <button class="jump" id="jump" type="button" hidden>Jump to latest</button>
+    </section>
   </main>
 </div>
 

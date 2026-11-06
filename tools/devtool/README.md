@@ -1,8 +1,9 @@
-# devtool - local dev interface (step 1)
+# devtool - local dev interface (steps 1 + 2)
 
-Step 1 ("spike") of [docs/DEV_INTERFACE.md](../../docs/DEV_INTERFACE.md):
-serial log, BUILD info and a Flash button in a browser page. No live
-constants yet (step 2).
+Steps 1 and 2 of [docs/DEV_INTERFACE.md](../../docs/DEV_INTERFACE.md):
+serial log, BUILD info and a Flash button in a browser page (step 1), and live
+constants on a DIAG build (step 2: tree, rows, changes panel,
+`tune/changes.json`).
 
 ## Run
 
@@ -35,6 +36,43 @@ one section per connection.
 | `GET /events` | Server-Sent Events: `hello`, `status`, `line`, `sep` (pedal gone/back), `flash` (state), `flashout` (make / dfu-util output). A new connection gets the backlog first. Times are epoch ms; the page formats them. |
 | `GET /api/status` | connection, build, flash state as JSON |
 | `POST /api/flash` | `{"pedal": "nitrolab" \| "chronotron3" \| "nitrotron3m"}`, `Content-Type: application/json`. 202 started, 409 a flash is running, 400 bad pedal |
+| `GET /api/registry` | live constants: registry (from the constants files) + the pedal's values + guard state |
+| `POST /api/set` | `{"name": N, "value": V}`: 202 queued (sent throttled, latest wins, <= ~30 writes/s), 400 type / range, 404 unknown, 409 blocked (guard, no pedal) |
+| `POST /api/reset` | `{"name": N}` or `{"name": "all"}` |
+| `POST /api/note` | `{"text": "what I heard"}` (goes into `tune/changes.json`) |
+| `POST /api/override` | `{"on": true}`: allow `set` despite the mismatch guard, this devtool session |
+
+SSE also carries `tun` (registry + values snapshot), `tval` (one value echo
+from the pedal) and `terr` (a `T ERR` line).
+
+## Live constants (step 2)
+
+- **Firmware:** a constant declared `TUNABLE(type, NAME, value);`
+  (`src/core/util/tunable.h`) is `constexpr` in normal builds (byte-identical)
+  and a registered RAM variable in DIAG builds (`DIAG=1` adds
+  `-DLIVE_TUNABLES`). The diag link (`src/core/io/diag_link.h`) answers
+  `list`, `get <name>`, `set <name> <value>`, `reset <name>|all` with
+  `T <name> <f|i|b> <value>` lines (`T END <n>` after a list, `T ERR <reason>`).
+- **Registry:** `registry.py` parses the connected pedal's constants files
+  (`CONST_SOURCES` in `devtool.py`): section headers `// --- Title ---`, the
+  comment block above, the inline note, and the tag at the start of the note:
+  `// @unit Hz @range 0.05 0.8 @taper log @level live  <note>`.
+  Levels: `live` (heard at the next audio block), `reactivate` (after the next
+  mode / zone change).
+- **Sync:** after `BUILD`, devtool sends `list`; the pedal is the truth
+  (re-synced after every reconnect / flash; a flash restores the defaults).
+  `T <name>` lines go to the log file, not the page log.
+- **Guard:** `set` is blocked when the firmware hash is not the repo HEAD,
+  when the constants files differ from HEAD (uncommitted), or when the pedal
+  reports live constants the files do not declare. "Allow changes anyway"
+  overrides it for the session. Warnings only: a dirty firmware, and file
+  constants the firmware does not have (e.g. a module not in this build; those
+  rows are shown disabled).
+- **`tune/changes.json`** (gitignored): rewritten on every change - pedal,
+  firmware, HEAD, time, note, guard, and per changed constant name, file, line,
+  default text, value, unit. devtool never edits source files; the agent
+  applies the file. When a re-sync would drop a non-empty record (e.g. after a
+  flash), the old file is kept in `tune/history/`.
 
 ## Flash flow (only on a click, one at a time)
 
@@ -48,6 +86,9 @@ one section per connection.
 4. `make <same args> program-dfu`. If dfu-util exits non-zero after
    "File downloaded successfully" (usual with `:leave`), it counts as done.
 5. The serial loop picks the pedal up again by itself.
+
+Tool output is shown the way a terminal shows it: a `\r` without `\n`
+(dfu-util's progress bar) replaces the current line instead of adding one.
 
 The `dfu` command exists only in DIAG firmware built from this change on
 (`src/core/io/diag_link.h`); older firmware needs the gesture once.

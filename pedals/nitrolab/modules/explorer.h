@@ -1152,9 +1152,40 @@ class Explorer : public Module {
     return EXP_TF_Q_MIN * expf(Clamp01(k2) * logf(EXP_TF_Q_MAX / EXP_TF_Q_MIN));
   }
 
+#ifdef LIVE_TUNABLES
+  // DIAG live constants (src/core/util/tunable.h, docs/DEV_INTERFACE.md step 2): Init derives a few values once from
+  // tunables (ln ratios, dB -> level factors, the slide coefficient). When a tunable was set / reset since the last
+  // block (tunable::Gen() moved), re-derive them with Init's exact expressions and force the caches keyed on them
+  // (touch env T / coefficients / L_d fall / depths, LFO rate / depth) to recompute on the next sample. No state is
+  // reset (envelope levels, phases, smoothed knobs run on). Normal builds: not compiled (Init's values are final).
+  uint32_t tun_gen_ = 0;
+  void TunableRefresh() {
+    using namespace explorer_k;
+    const uint32_t g = tunable::Gen();
+    if (g == tun_gen_) return;
+    tun_gen_ = g;
+    te_lnfl_ = EXP_SPEC_DYN_FLOOR_DB * (logf(10.f) / 20.f);                  // = Init
+    te_flin_ = expf(te_lnfl_);
+    te_iLr_ = 20.f / ((EXP_SPEC_DYN_TOP_DB - EXP_SPEC_DYN_FLOOR_DB) * logf(10.f));
+    te_iGr_ = 20.f / (EXP_SPEC_DYN_GATE_DB * logf(10.f));
+    ps_a_ = 1.f - expf(-1000.f / (EXP_PS_SLIDE_MS * sr8_));
+    ln_ps_dec_  = logf(EXP_PS_DEC_SLOW_S / EXP_PS_DEC_FAST_S);
+    ln_ps_rise_ = logf(EXP_PS_RISE_SLOW_S / EXP_PS_RISE_FAST_S);
+    ln_lfo_ = logf(EXP_LFO_HZ_MAX / EXP_LFO_HZ_MIN);
+    ln_lfo_ccw_ = logf(EXP_LFO_HZ_MAX_CCW / EXP_LFO_HZ_MIN);
+    te_.t = 2.f; te_.Td = te_.Tr = -1.f;         // TouchEnvUpdate: T_d / T_r / w and their coefficients
+    te_.LdT = -1.f;                              // TouchOpenUpdate: the L_d fall coefficient
+    te_.kTd = te_.kTr = -1.f;                    // TouchTravel: depth_d / depth_r
+    lfo_u_ = 2.f;                                // LfoUpdate: rate / depth
+  }
+#endif
+
   void Process(const float* in, float* wet, size_t size) override {
     using namespace explorer_k;
     const float ca = ctrl_a_;
+#ifdef LIVE_TUNABLES
+    TunableRefresh();
+#endif
     DampUpdate();                                // K3 dampener: table picks (smoothed K3), per block
     for (size_t i = 0; i + kFactor <= size; i += kFactor) {
       for (size_t j = 0; j < kFactor; j++) {     // onset detector (+ parked live follower), 48 kHz, pre-decimator
@@ -1679,7 +1710,7 @@ class Explorer : public Module {
   //   g_ds / g_rs = one-pole slid (ps_a_, tau EXP_PS_SLIDE_MS), land exactly. No LEAVE, no side state.
   inline void TouchEnvUpdate(ExpTouchEnv& e, bool onset, float t4) {   // e = te_ (t4; the instance is a parameter)
     using namespace explorer_k;
-    constexpr float Z = EXP_SPEC_MORPH_ZONE;
+    TUNABLE_CONSTEXPR float Z = EXP_SPEC_MORPH_ZONE;   // (const in DIAG builds: a live tunable, src/core/util/tunable.h)
     if (t4 != e.t) {
       e.t = t4;
       const float Td = (t4 < 0.f) ? EXP_PS_DEC_FAST_S * expf((1.f - fabsf(t4)) * ln_ps_dec_) : EXP_PS_DEC_SLOW_S;

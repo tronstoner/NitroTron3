@@ -5,6 +5,8 @@
 
 #include <cstdint>
 
+#include "tunable.h"   // src/core/util: TUNABLE(type, NAME, value) - constexpr, or a live RAM variable in DIAG builds
+
 namespace explorer_k {
 
 // --- Families / K1 zones (SW1 = family, K1 = equal zones) -------------------------------
@@ -180,12 +182,12 @@ constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spect
 //          accumulator += f_h / 48000, a new sample on each wrap, else hold. No smoothing / anti-alias.
 //   TABLE  per-band table read rounded to 2^(TABLE_BITS - 1) steps of the int16 full scale, nearest <-> linear:
 //          W = W_lin + a (W_nn - W_lin) (rounded after the blend), every band, the clean read's version.
-constexpr bool  EXP_TB_LOFI_ENABLE     = true;     // false = the 3 LOFI presets read clean, no lofi stage
-constexpr float EXP_TB_LOFI_BITS_MAX   = 16.f;     // bits at K5 CCW (LOFI BITS)
-constexpr float EXP_TB_LOFI_BITS_MIN   = 4.f;      // bits at K5 CW
-constexpr float EXP_TB_LOFI_RATE_HI    = 8000.f;   // Hz; hold rate at K5 CCW (LOFI RATE)
-constexpr float EXP_TB_LOFI_RATE_LO    = 1000.f;   // Hz; hold rate at K5 CW
-constexpr int   EXP_TB_LOFI_TABLE_BITS = 6;        // LOFI TABLE: fixed table-read resolution (bits of the int16 full scale)
+TUNABLE(bool, EXP_TB_LOFI_ENABLE,     true);     // @unit bool @level live  false = the 3 LOFI presets read clean, no lofi stage
+TUNABLE(float, EXP_TB_LOFI_BITS_MAX,   16.f);     // @unit bits @range 4 24 @taper lin @level live  bits at K5 CCW (LOFI BITS)
+TUNABLE(float, EXP_TB_LOFI_BITS_MIN,   4.f);      // @unit bits @range 1 16 @taper lin @level live  bits at K5 CW
+TUNABLE(float, EXP_TB_LOFI_RATE_HI,    8000.f);   // @unit Hz @range 1000 48000 @taper log @level live  Hz; hold rate at K5 CCW (LOFI RATE)
+TUNABLE(float, EXP_TB_LOFI_RATE_LO,    1000.f);   // @unit Hz @range 100 8000 @taper log @level live  Hz; hold rate at K5 CW
+TUNABLE(int, EXP_TB_LOFI_TABLE_BITS, 6);        // @unit bits @range 1 16 @taper lin @level live  LOFI TABLE: fixed table-read resolution (bits of the int16 full scale)
 // JOURNEY presets: K5 = DIRECTION + constant SPEED of the morph travel (2026-11-06; replaces the second touch env).
 // t5 = 2 k5 - 1 (smoothed, lands exactly), a = |t5|:
 //   s = max(0, (a - ZERO_FRAC) / (1 - ZERO_FRAC)), T = T_SLOW (T_FAST / T_SLOW)^s   (time for the whole journey 0 -> 1)
@@ -333,14 +335,14 @@ constexpr bool  EXP_TB_DAMP_ENABLE = false;   // tables: K3 dampener (2026-10-28
 //                 (98 %), holds.
 // Both always running, both retriggered by every onset, 1 before the first onset; g_ds / g_rs = each one-pole slid over
 // EXP_PS_SLIDE_MS (lands exactly). t4 = 2 k4 - 1 (smoothed, lands exactly). No side state, no LEAVE, no hysteresis.
-constexpr float    EXP_PS_SLIDE_MS         = 5.0f;     // ms (2026-10-28: was EXP_ENV_FM_SLIDE_MS 1 ms; clicks between short notes); one-pole tau (8 kHz) on the touch env's g_d / g_r (-> g_ds / g_rs), lands exactly
-constexpr float    EXP_PS_DEC_FAST_S       = 0.45f;    // s (back to 0.45 with the one-pole decay; 1.0 + linear was not snappy); decay time T_d at K4 full CCW (pluck)
-constexpr bool     EXP_PS_DEC_2POLE        = true;     // decay shape D (2026-10-28): 2-pole, rounded start, still snappy (false: one-pole)
-constexpr float    EXP_PS_DEC_2P_TAUS      = 5.834f;   // per-stage taus per travel: (1 + x) e^-x = 0.02 at x = 5.834 (98 % at T)
-constexpr bool     EXP_PS_DEC_LINEAR       = false;    // decay shape: false = one-pole (snappy, as before afc62a9), true = linear in octaves (rejected by ear)
-constexpr float    EXP_PS_DEC_SLOW_S       = 8.0f;     // s (2026-10-28: 60 -> 8, bass notes rarely sustain that long); decay time T_d just CCW of noon (exponential over |t4|)
-constexpr float    EXP_PS_RISE_FAST_S      = 0.01f;    // s; rise time T_r at noon (~ the knob value at once)
-constexpr float    EXP_PS_RISE_SLOW_S      = 4.0f;     // s (2026-10-28: 36 -> 4); rise time T_r at K4 full CW (swell)
+TUNABLE(float, EXP_PS_SLIDE_MS,         5.0f);     // @unit ms @range 0.5 20 @taper log @level live  ms (2026-10-28: was EXP_ENV_FM_SLIDE_MS 1 ms; clicks between short notes); one-pole tau (8 kHz) on the touch env's g_d / g_r (-> g_ds / g_rs), lands exactly
+TUNABLE(float, EXP_PS_DEC_FAST_S,       0.45f);    // @unit s @range 0.1 1.8 @taper log @level live  s (back to 0.45 with the one-pole decay; 1.0 + linear was not snappy); decay time T_d at K4 full CCW (pluck)
+TUNABLE(bool, EXP_PS_DEC_2POLE,        true);     // @unit bool @level live  decay shape D (2026-10-28): 2-pole, rounded start, still snappy (false: one-pole)
+TUNABLE(float, EXP_PS_DEC_2P_TAUS,      5.834f);   // @unit x @range 2 12 @taper lin @level live  per-stage taus per travel: (1 + x) e^-x = 0.02 at x = 5.834 (98 % at T)
+TUNABLE(bool, EXP_PS_DEC_LINEAR,       false);    // @unit bool @level live  decay shape: false = one-pole (snappy, as before afc62a9), true = linear in octaves (rejected by ear)
+TUNABLE(float, EXP_PS_DEC_SLOW_S,       8.0f);     // @unit s @range 2.5 30 @taper log @level live  s (2026-10-28: 60 -> 8, bass notes rarely sustain that long); decay time T_d just CCW of noon (exponential over |t4|)
+TUNABLE(float, EXP_PS_RISE_FAST_S,      0.01f);    // @unit s @range 0.002 0.1 @taper log @level live  s; rise time T_r at noon (~ the knob value at once)
+TUNABLE(float, EXP_PS_RISE_SLOW_S,      4.0f);     // @unit s @range 0.5 16 @taper log @level live  s (2026-10-28: 36 -> 4); rise time T_r at K4 full CW (swell)
 constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimum travel time after a K4 side change until the next onset (retired PsUpdate only, unused)
 
 // --- SW3 MID + SW3 DOWN FM LAB (ONE-SHOT, both instances): K5 = LFO (2026-10-28; FM LAB 2-OP: on b, as UP FM) -
@@ -359,20 +361,20 @@ constexpr float    EXP_PS_LEAVE_S          = 0.5f;     // s (2026-10-28); minimu
 //   MID tables          K2 morph m = m_knob + l EXP_LFO_MORPH_SWING, [0, 1]   (parked BITTAB: no effect)
 //   DOWN                no effect
 // Coexists with K4 (touch env on the K3 fc / ladder cutoff): K4 moves fc, K5 moves feedback / morph.
-constexpr float    EXP_LFO_DEPTH_FRAC      = 0.3f;     // share of each K5 side over which the depth fades in
-constexpr float    EXP_LFO_HZ_MIN          = 0.2f;     // Hz; LFO rate at u = 0 (just off noon)
-constexpr float    EXP_LFO_HZ_MAX          = 20.f;     // Hz; LFO rate at u = 1 (K5 at either end)
-constexpr float    EXP_LFO_HZ_MAX_CCW      = 20.f;     // Hz; CCW (triangle) rate at K5 full CCW (2026-10-28: 20 -> 80; 2026-11-05: 80 -> 20, too fast along the way); CW keeps EXP_LFO_HZ_MAX
-constexpr float    EXP_LFO_INDEX_SWING     = 0.0f;     // UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
+TUNABLE(float, EXP_LFO_DEPTH_FRAC,      0.3f);     // @unit 0..1 @range 0.01 1 @taper lin @level live  share of each K5 side over which the depth fades in
+TUNABLE(float, EXP_LFO_HZ_MIN,          0.2f);     // @unit Hz @range 0.05 0.8 @taper log @level live  Hz; LFO rate at u = 0 (just off noon)
+TUNABLE(float, EXP_LFO_HZ_MAX,          20.f);     // @unit Hz @range 5 80 @taper log @level live  Hz; LFO rate at u = 1 (K5 at either end)
+TUNABLE(float, EXP_LFO_HZ_MAX_CCW,      20.f);     // @unit Hz @range 5 80 @taper log @level live  Hz; CCW (triangle) rate at K5 full CCW (2026-10-28: 20 -> 80; 2026-11-05: 80 -> 20, too fast along the way); CW keeps EXP_LFO_HZ_MAX
+TUNABLE(float, EXP_LFO_INDEX_SWING,     0.0f);     // @unit rad @range 0 6 @taper lin @level live  UP FM: K5 LFO swing on the index (+-, after the envelope cap; 2026-10-28)
 constexpr float    EXP_FM_ENV_INDEX_FLOOR  = 0.0f;     // UP FM: the envelope closes the index only down to this (2026-10-28: 2 -> 0, fully closes again)
-constexpr float    EXP_LFO_FM_FC_OCT       = 1.0f;     // SW3 MID UP FM, SWELL side: the LFO swings the FM cutoff +- this many octaves
+TUNABLE(float, EXP_LFO_FM_FC_OCT,       1.0f);     // @unit oct @range 0 4 @taper lin @level live  SW3 MID UP FM, SWELL side: the LFO swings the FM cutoff +- this many octaves
                                                      // around the envelope, faded in with the swell (x o_r)
-constexpr float    EXP_LFO_FM_FC_OCT_DEC   = 2.6f;     // PLUCK side: upward only, 0 .. this x depth, x (1 - o_d): grows as the pluck closes
+TUNABLE(float, EXP_LFO_FM_FC_OCT_DEC,   2.6f);     // @unit oct @range 0 6 @taper lin @level live  PLUCK side: upward only, 0 .. this x depth, x (1 - o_d): grows as the pluck closes
                                                      // (both also the audition bank ANALOG presets' K5 LFO on the tables LP cutoff,
                                                      // same placement - LfoFcOct; there the pluck side x k3 = the K3 position in the
                                                      // LP's log range; fc capped at EXP_TF_FMAX)
-constexpr float    EXP_LFO_FB_SWING        = 0.3f;     // UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
-constexpr float    EXP_LFO_MORPH_SWING     = 0.15f;    // MID tables (legacy zones, audition bank LFO presets): morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
+TUNABLE(float, EXP_LFO_FB_SWING,        0.3f);     // @unit b @range 0 1.5 @taper lin @level live  UP FM: feedback b swing at full depth (+-, b units; FB_MAX 1.5; 2026-10-28: 0.75 -> 0.3, too much)
+TUNABLE(float, EXP_LFO_MORPH_SWING,     0.15f);    // @unit 0..1 @range 0 1 @taper lin @level live  MID tables (legacy zones, audition bank LFO presets): morph m swing at full depth (+-, m units 0..1; 2026-10-28: 0.5 -> 0.15, travelled too far)
 constexpr uint32_t EXP_LFO_SEED            = 0x2545F491u;   // (unused since the staircase replaced S&H, 2026-10-28)
 // K5 CW shape (2026-10-28, replaces S&H): downward staircase 100 % / 50 % / 0 % of the swing (+1 / 0 / -1 around the
 // knob value), equal parts of the cycle, repeating. A square = { +1, -1 } with N 2.
@@ -496,11 +498,11 @@ constexpr float EXP_SPEC_K_SHIFT    = 0.5f;    // partial shift at this "k4" (0.
 // Exact noon = pure decay at DEC_SLOW (continuous with just CCW of noon).
 constexpr float EXP_SPEC_ENV_T_LO      = 0.01f;   // s (unused since 2026-11-05: depth per side over EXP_PS_* ranges)
 constexpr float EXP_SPEC_ENV_T_HI      = 8.0f;    // s
-constexpr float EXP_SPEC_ENV_DEPTH_MIN = 0.08f;   // K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
-constexpr float EXP_SPEC_ENV_DEPTH_MAX = 0.5f;   // K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
+TUNABLE(float, EXP_SPEC_ENV_DEPTH_MIN, 0.08f);   // @unit 0..1 @range 0 1 @taper lin @level live  K2 knob units travelled by the FASTEST env of each side (~7:00 -> 8:00)
+TUNABLE(float, EXP_SPEC_ENV_DEPTH_MAX, 0.5f);   // @unit 0..1 @range 0 1 @taper lin @level live  K2 knob units travelled by the SLOWEST env of each side (~7:00 -> 11:00)
 constexpr bool  EXP_SPEC_K2_REVERSE   = true;    // 2026-11-05 test: SPECTRAL density mirrored, nu = NU_MAX clamp(1 - (k2 + travel)):
                                                // K2 CW = old CCW, the envelope travels the opposite way. false = original.
-constexpr float EXP_SPEC_MORPH_ZONE    = 0.2f;   // t4 units: decay -> rise blend zone CW of noon (noon -> ~1:00); T_r fast there (touch env, every K4 mode)
+TUNABLE(float, EXP_SPEC_MORPH_ZONE,    0.2f);   // @unit 0..1 @range 0.02 0.9 @taper lin @level live  t4 units: decay -> rise blend zone CW of noon (noon -> ~1:00); T_r fast there (touch env, every K4 mode)
 // Comb recompute while nu moves: at most every EXP_SPEC_NU_DIV 8 kHz samples (8 -> 1 kHz), and on the sample nu
 // stops (lands exactly). Exponent / bank changes recompute at once.
 constexpr int   EXP_SPEC_NU_DIV        = 8;
@@ -514,10 +516,10 @@ constexpr int   EXP_SPEC_NU_DIV        = 8;
 //   RISE envelope:   o_r = g_rs G, G = clamp((dB(env) - FLOOR_DB) / GATE_DB, 0, 1) (soft gate: 1 while the string
 //                    rings, -> 0 only near silence)
 // blended by w (above): o = (1 - w) o_d + w o_r. No law switch, no slide on o (g_ds / g_rs keep EXP_PS_SLIDE_MS).
-constexpr float EXP_SPEC_DYN_FLOOR_DB = -60.f;  // dBFS: L = 0 and G = 0 at / below (keep low: guitar env sits far below bass)
-constexpr float EXP_SPEC_DYN_TOP_DB   = -20.f;  // dBFS: L = 1 at / above
-constexpr float EXP_SPEC_DYN_GATE_DB  = 12.f;   // dB above FLOOR_DB where the RISE side's soft gate G reaches 1
-constexpr float EXP_SPEC_DYN_REL_FRAC = 0.05f;  // DECAY side: the live level's FALL tau = this x T_d (8 s -> 400 ms,
+TUNABLE(float, EXP_SPEC_DYN_FLOOR_DB, -60.f);  // @unit dB @range -96 -42 @taper lin @level live  dBFS: L = 0 and G = 0 at / below (keep low: guitar env sits far below bass)
+TUNABLE(float, EXP_SPEC_DYN_TOP_DB,   -20.f);  // @unit dB @range -40 0 @taper lin @level live  dBFS: L = 1 at / above
+TUNABLE(float, EXP_SPEC_DYN_GATE_DB,  12.f);   // @unit dB @range 1 40 @taper lin @level live  dB above FLOOR_DB where the RISE side's soft gate G reaches 1
+TUNABLE(float, EXP_SPEC_DYN_REL_FRAC, 0.05f);  // @unit x @range 0.005 0.5 @taper log @level live  DECAY side: the live level's FALL tau = this x T_d (8 s -> 400 ms,
                                               // 4.5 s -> 225 ms, 0.45 s -> 22 ms); rise unchanged (at once)
 // K3 = SPECTRAL LPF (2026-11-05, replaces the per-member weight-factor filter of 7b58cbf): the SW1 MID tables' 2-pole
 // lowpass type (ExpSVF, one TPT SVF stage, LP output, 12 dB/oct) on the 48 kHz wet while SPECTRAL is the model, no
@@ -607,7 +609,7 @@ constexpr uint32_t EXP_ONSET_REFRACTORY_MS = 100;      // one pluck = one onset 
 // ONE-SHOT time law (the former FM envelope's, = ARM_ENV_*):
 constexpr float    EXP_ENV_TAU_SLOW_S      = 4.0f;     // s; time law just off noon (= ARM_ENV_TAU_SLOW_S)
 constexpr float    EXP_ENV_TAU_FAST_S      = 0.05f;    // s; at the knob ends (= ARM_ENV_TAU_FAST_S)
-constexpr float    EXP_ENV_TRAVEL_TAUS     = 3.9f;     // one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
+TUNABLE(float, EXP_ENV_TRAVEL_TAUS,     3.9f);     // @unit x @range 1 8 @taper lin @level live  one-pole time constants per full travel (= ARM_ENV_TRAVEL_TAUS)
 constexpr float    EXP_ENV_FM_TIME_RATIO   = 3.0f;     // T = this x the time law (= ARM_ENV_FM_TIME_RATIO)
 constexpr float    EXP_ENV_FM_DECAY_RATIO  = 3.0f;     // rise travel time / T (= ARM_ENV_FM_DECAY_RATIO)
 constexpr float    EXP_ENV_FM_SLIDE_MS     = 1.0f;     // ms; one-pole tau (8 kHz) on the applied v = dir e, lands exactly (= ARM_ENV_FM_SLIDE_MS)

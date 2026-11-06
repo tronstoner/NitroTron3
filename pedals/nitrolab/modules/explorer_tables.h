@@ -226,7 +226,7 @@ constexpr bool ExpTbBankOk(int i = 0) { return (i >= EXP_TB_BANK_N) ? true : Exp
 static_assert(ExpTbBankOk(), "EXP_TB_PRESETS: invalid stage data (positions 0 .. 1 ascending, ANALOG 1 frame / stage, lists, lofi, share)");
 static_assert(EXP_TB_BANK_N < 64, "VarKey holds the zone in 6 bits");
 // LOFI variant of preset z that runs (kLofiNone: not a LOFI preset, EXP_TB_LOFI_ENABLE false, legacy, out of range).
-constexpr int ExpTbLofiVariant(int z) {
+TUNABLE_CONSTEXPR_FN int ExpTbLofiVariant(int z) {   // (inline in DIAG builds: EXP_TB_LOFI_ENABLE is a live tunable)
   return (EXP_TB_LEGACY || !EXP_TB_LOFI_ENABLE || z < 0 || z >= EXP_TB_BANK_N) ? kLofiNone : EXP_TB_PRESETS[z].lofi;
 }
 
