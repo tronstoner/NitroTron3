@@ -182,7 +182,7 @@ constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spect
 // h5 -62), h1 / h2 keep a breathy carrier (-2.5 / -10 dB), their noise bands (~1 kHz at h3) keep the surface's lowest
 // resonances. (0.35 would take h1 to -21 dB too, but then b 0.4 / 0.8 = already broadband hiss on every surface.)
 constexpr float    EXP_TB_BLOW_FC    = 100.f;   // Hz; noise one-pole cutoff = width of the noise band around every partial (2026-11-06: 200 -> 30, amplitude jitter; 30 -> 10, too rough)
-constexpr float    EXP_TB_BLOW_SCALE = 0.5f;   // global x on every stage's blow amount b (2026-11-06: too intense; 1 = the recipe values)
+constexpr float    EXP_TB_BLOW_SCALE = 0.3f;   // global x on every stage's blow amount b (2026-11-06: too intense; 1 = the recipe values)
 constexpr uint32_t EXP_TB_BLOW_SEED  = 0x6D2B79F5u;   // LCG start state (x = 1664525 x + 1013904223)
 // JOURNEY presets: K5 = DIRECTION + constant SPEED of the morph travel (2026-11-06; replaces the second touch env).
 // t5 = 2 k5 - 1 (smoothed, lands exactly), a = |t5|:
