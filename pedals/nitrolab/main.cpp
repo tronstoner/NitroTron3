@@ -305,23 +305,29 @@ int main() {
         else if (d.model == Explorer::kXFM)                   // A = partner n, B = index I
           diag_link::PrintLine("XBAND-FM n%d I" D2F " fc %d%s mute %d cpu %u%%",
                             (int)(d.a + 0.5f), D2V(d.b), (int)(d.fc + 0.5f), env, d.mute ? 1 : 0, cpu);
-        else if (d.model == Explorer::kWT && d.tbz >= 0) {    // audition bank: preset, kind, K2 knob, kind part, MOD
-          char kp[128], mod[96];
+        else if (d.model == Explorer::kWT && d.tbz >= 0) {    // audition bank: preset, kind, K2 knob, kind part, flags,
+          char kp[64], lf[96], mod[96];                       // Lofi stages, MOD
           if (d.tbk == explorer_k::kTbAnalog)                 // ANALOG: LP Q at the K2 knob
             snprintf(kp, sizeof kp, " Q" D2F, D2V(d.tq));
-          else if (d.tbk == explorer_k::kTbLofi) {            // LOFI: K2 step / morph, the four stages (off = bypassed)
-            char st[32], sb[24], sr[24], tb[24];
-            if (d.tdst > 0) snprintf(st, sizeof st, "step %d/%d", d.tdst, d.tnst); else snprintf(st, sizeof st, "morph");
+          else if (d.tbk == explorer_k::kTbLofi) {            // LOFI: K2 step / morph
+            if (d.tdst > 0) snprintf(kp, sizeof kp, " step %d/%d", d.tdst, d.tnst); else snprintf(kp, sizeof kp, " morph");
+          } else if (d.tdst > 0)                              // LFO: frame position at the K2 knob (+ the key stage, stepped)
+            snprintf(kp, sizeof kp, " pos" D2F " step %d/%d", D2V(d.a), d.tdst, d.tnst);
+          else
+            snprintf(kp, sizeof kp, " pos" D2F, D2V(d.a));
+          lf[0] = 0;
+          if (d.tlf) {                                        // Lofi flag on: the four stages (off = bypassed / master off)
+            char sb[24], sr[24], tb[24];
             if (d.tsb > 0.f) snprintf(sb, sizeof sb, D2F, D2V(d.tsb)); else snprintf(sb, sizeof sb, " off");
             if (d.tsr > 0.f) snprintf(sr, sizeof sr, " %d", (int)(d.tsr + 0.5f)); else snprintf(sr, sizeof sr, " off");
             if (d.ttb > 0.f) snprintf(tb, sizeof tb, D2F, D2V(d.ttb)); else snprintf(tb, sizeof tb, " off");
-            snprintf(kp, sizeof kp, " %s sb%s sr%s tb%s ti" D2F, st, sb, sr, tb, D2V(d.tti));
-          } else                                              // LFO: frame position at the K2 knob
-            snprintf(kp, sizeof kp, " pos" D2F, D2V(d.a));
+            snprintf(lf, sizeof lf, " sb%s sr%s tb%s ti" D2F, sb, sr, tb, D2V(d.tti));
+          }
           snprintf(mod, sizeof mod, " src %s td" D2F " fd" D2F " fs" D2F " pd %d", d.tenv ? "env" : "lfo",
                    D2V(d.ttd), D2V(d.tfd), D2V(d.tfs), (int)(d.tpd + 0.5f));
-          diag_link::PrintLine("tab %d/%d %s %s k2" D2F "%s%s lp %d eff %d%s mute %d cpu %u%%",
-                            d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), kp, mod,
+          diag_link::PrintLine("tab %d/%d %s %s k2" D2F "%s lofi %d stp %d%s%s lp %d eff %d%s mute %d cpu %u%%",
+                            d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), kp,
+                            d.tlf ? 1 : 0, d.tstp ? 1 : 0, lf, mod,
                             (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, d.mute ? 1 : 0, cpu);
         }
         else if (d.model == Explorer::kWT)                    // MID tables: zone, morph m (B), frame position (A),

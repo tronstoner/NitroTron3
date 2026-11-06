@@ -828,7 +828,7 @@ function buildSection(titleText, list, viewKey, where) {
     sec.classList.add("full");
     body.appendChild(buildPresetEditor(presets, viewKey));
   }
-  // pairs -> fader banks (knob-end pairs of one unit / taper share a bank: one axis, comparable heights)
+  // pairs -> fader banks (knob-end pairs of one unit / taper share a bank, side by side; each fader its own range)
   const inList = new Set(rest.map((c) => c.name));
   const done = new Set();
   const banks = new Map();
@@ -864,7 +864,7 @@ function buildSection(titleText, list, viewKey, where) {
   if (faders && nums.length) {
     const axis = nums.map((c) => c.unit).join("") ? "each its own range" : "";
     body.appendChild(buildBank(titleText.split(" · ")[0] + " stages",
-      nums.map((c) => ({ c, cap: c.label.split(":")[0], wide: true })), null, axis, viewKey));
+      nums.map((c) => ({ c, cap: c.label.split(":")[0], wide: true })), axis, viewKey));
     count += nums.length;
   }
   if (count > 8 && !presets.length) sec.classList.add("wide");
@@ -897,10 +897,16 @@ function explainInto(box, c, viewKey, heading) {
   const code = h("code", "", c.name);
   meta.append(code, document.createTextNode(
     "  ·  default " + fmtWithUnit(c.default, c.unit, c.type) +
-    (c.range ? "  ·  range " + fmtWithUnit(c.range[0], c.unit, c.type) + " – " + fmtWithUnit(c.range[1], c.unit, c.type) + " (" + c.taper + ")" : "") +
+    (c.range ? "  ·  " + c.taper + " taper" : "") +
     "  ·  " + (LEVEL_TIP[c.level] || c.level) + (c.when ? " " + c.when : "") +
     (c.target ? "  ·  acts on: " + targetName(c.target) : "")));
   ex.appendChild(meta);
+  if (c.range) ex.appendChild(h("p", "ex-meta", "Range: " + fmtWithUnit(c.range[0], c.unit, c.type) + " .. "
+    + fmtWithUnit(c.range[1], c.unit, c.type) + (c.why ? " - " + c.why : "")));
+  if (c.below) {
+    const o = tun.byName.get(c.below);
+    ex.appendChild(h("p", "ex-meta", "Must stay below " + (o ? o.label : c.below) + " (the code divides by their difference / ratio)."));
+  }
   const sh = sharedWith(c, viewKey);
   if (sh.length) ex.appendChild(h("p", "ex-meta", "Also acts on " + sh.join(", ") + " - one value, changed everywhere."));
   ex.appendChild(h("p", "ex-meta", c.file + ":" + c.line + (c.in_firmware === false ? "  ·  not live in this firmware" : "")));
@@ -983,14 +989,26 @@ function updateAll() {
   renderNavCounts();
 }
 
-// value from a control position on `axis` (the constant itself, or a bank's shared axis), kept in its own range
-function valueAt(c, axis, f) {
-  let v = fromFrac(axis, f);
+// value from a control position (0..1 over the constant's own range and taper), kept in its range
+function valueAt(c, f) {
+  let v = fromFrac(c, f);
   if (c.type === "int") v = Math.round(v);
   return Math.min(c.range[1], Math.max(c.range[0], v));
 }
-function attachValueInput(target, c, axis, opts) {
-  // opts: {paint(v), frac(e) -> absolute position for a click on the track (faders) or null, sens: px per full travel}
+// The page zoom (top bar A- / A+ = CSS zoom on <html>).
+function pageZoom() {
+  const z = parseFloat(getComputedStyle(document.documentElement).zoom);
+  return z > 0 && isFinite(z) ? z : 1;
+}
+// Drag geometry. Pointer events report clientY in viewport pixels; with Chrome's standardized CSS zoom (128+)
+// getBoundingClientRect() is in the same viewport pixels (the zoom applied), so a fader's rect height at drag start
+// is exactly the on-screen distance its cap travels: frac = pixels moved / that height -> the cap stays under the
+// pointer at any page zoom. A dial has no track: its full travel is DIAL_TRAVEL_PX at zoom 1, x the page zoom (the
+// same on-screen feel as the drawn size). Shift = DRAG_FINE x finer, for both.
+const DIAL_TRAVEL_PX = 200, DRAG_FINE = 10;
+function attachValueInput(target, c, opts) {
+  // opts: {paint(v), frac(e) -> absolute position for a click on the track (faders) or null,
+  //        travel() -> on-screen px for the full range (read at drag start)}
   let drag = null;
   const set = (v) => {
     if (v === drag.last) return;
@@ -1003,7 +1021,7 @@ function attachValueInput(target, c, axis, opts) {
     const v0 = cur(c);
     let v;
     if (c.type === "int") v = Math.min(c.range[1], Math.max(c.range[0], v0 + dir * (big ? Math.max(1, Math.round((c.range[1] - c.range[0]) / 10)) : 1)));
-    else v = valueAt(c, axis, toFrac(axis, v0) + dir * (big ? 0.1 : fine ? 0.002 : 0.01));
+    else v = valueAt(c, toFrac(c, v0) + dir * (big ? 0.1 : fine ? 0.002 : 0.01));
     if (v === v0) return;
     opts.paint(v);
     sendSet(c.name, v);
@@ -1015,18 +1033,19 @@ function attachValueInput(target, c, axis, opts) {
     target.setPointerCapture(e.pointerId);
     tun.dragging = c.name;
     const abs = opts.frac ? opts.frac(e) : null;
-    drag = { y0: e.clientY, f0: abs === null ? toFrac(axis, cur(c)) : abs, fine: e.shiftKey, last: undefined };
-    if (abs !== null) set(valueAt(c, axis, abs));
+    drag = { y0: e.clientY, f0: abs === null ? toFrac(c, cur(c)) : abs, fine: e.shiftKey, last: undefined,
+             px: Math.max(1, opts.travel()) };
+    if (abs !== null) set(valueAt(c, abs));
   });
   target.addEventListener("pointermove", (e) => {
     if (!drag || !target.hasPointerCapture(e.pointerId)) return;
     if (e.shiftKey !== drag.fine) {           // fine on / off mid-drag: continue from here
-      drag.f0 = toFrac(axis, drag.last === undefined ? cur(c) : drag.last);
+      drag.f0 = toFrac(c, drag.last === undefined ? cur(c) : drag.last);
       drag.y0 = e.clientY;
       drag.fine = e.shiftKey;
     }
-    const sens = opts.sens * (drag.fine ? 10 : 1);
-    set(valueAt(c, axis, drag.f0 + (drag.y0 - e.clientY) / sens));
+    const sens = drag.px * (drag.fine ? DRAG_FINE : 1);
+    set(valueAt(c, drag.f0 + (drag.y0 - e.clientY) / sens));
   });
   const end = (e) => {
     if (!drag) return;
@@ -1142,7 +1161,7 @@ function buildDialCell(c, viewKey) {
   const def = h("div", "def", "default " + fmtWithUnit(c.default, c.unit, c.type));
   cell.append(lab, resetButton(c), infoButton((box) => explainInto(box, c, viewKey, c.label)), d.svg, valueRow(c, num), def);
   const paint = (v) => { d.paint(v); if (document.activeElement !== num) num.value = fmtNum(v, c.unit, c.type, true); };
-  if (c.range) attachValueInput(d.svg, c, c, { paint, sens: 180 });
+  if (c.range) attachValueInput(d.svg, c, { paint, travel: () => DIAL_TRAVEL_PX * pageZoom() });
   register(c.name, {
     update() {
       const ok = canEdit(c), ch = isChanged(c);
@@ -1191,33 +1210,28 @@ function buildToggleCell(c, viewKey) {
   return cell;
 }
 
-// vertical fader (in a bank); axis = the bank's shared axis or the constant itself
-const FADER_H = 132;
-function buildFader(c, axis, capNode, viewKey, wide) {
+// vertical fader (in a bank): its own full range (and taper) over the whole track
+function buildFader(c, capNode, viewKey, wide) {
   const fd = h("div", "fd" + (wide ? " wide" : ""));
   fd.dataset.target = c.target || c.section_target || "";
   fd.dataset.name = c.name;
   const fader = h("div", "fader");
   fader.setAttribute("aria-label", c.label);
-  const trk = h("div", "f-trk"), own = h("div", "f-own"), fill = h("div", "f-fill"), cap = h("div", "f-cap");
-  fader.append(trk, own, fill, cap);
-  if (axis !== c) {                  // the constant's own range on the shared axis
-    const a = toFrac(axis, c.range[0]), b = toFrac(axis, c.range[1]);
-    own.style.top = ((1 - b) * 100) + "%";
-    own.style.height = ((b - a) * 100) + "%";
-  } else own.hidden = true;
-  const o = originFrac(axis);
+  const trk = h("div", "f-trk"), fill = h("div", "f-fill"), cap = h("div", "f-cap");
+  fader.append(trk, fill, cap);
+  const o = originFrac(c);
   const num = makeNum(c, c.label + " value");
   const paint = (v) => {
-    const f = toFrac(axis, v);
+    const f = toFrac(c, v);
     cap.style.top = ((1 - f) * 100) + "%";
     fill.style.top = ((1 - Math.max(f, o)) * 100) + "%";
     fill.style.height = (Math.abs(f - o) * 100) + "%";
     ariaValue(fader, c, v);
     if (document.activeElement !== num) num.value = fmtNum(v, c.unit, c.type, true);
   };
-  attachValueInput(fader, c, axis, {
-    paint, sens: FADER_H,
+  attachValueInput(fader, c, {
+    paint,
+    travel: () => fader.getBoundingClientRect().height,
     frac: (e) => {
       if (e.target === cap) return null;     // grab the cap: relative; click the track: jump there
       const r = fader.getBoundingClientRect();
@@ -1243,8 +1257,8 @@ function buildFader(c, axis, capNode, viewKey, wide) {
   });
   return fd;
 }
-// items: [{c, cap (text or node), wide}]; axis: shared axis or null (each its own range)
-function buildBank(title, items, axis, axisText, viewKey) {
+// items: [{c, cap (text or node), wide}]; every fader on its own range
+function buildBank(title, items, axisText, viewKey) {
   const bank = h("div", "bank");
   const tg = items.map((x) => x.c.target || x.c.section_target).filter(Boolean);
   bank.dataset.target = tg.length && tg.every((t) => t === tg[0]) ? tg[0] : "";
@@ -1254,22 +1268,13 @@ function buildBank(title, items, axis, axisText, viewKey) {
   const row = h("div", "bank-row");
   for (const it of items) {
     const cap = typeof it.cap === "string" ? document.createTextNode(it.cap) : it.cap;
-    row.appendChild(buildFader(it.c, axis || it.c, cap, viewKey, it.wide));
+    row.appendChild(buildFader(it.c, cap, viewKey, it.wide));
   }
   bank.append(head, row);
   return bank;
 }
 // pairs: one fader per end, captioned with the manual's direction icon (knob ends) or the end's name
 function buildPairBank(group, viewKey) {
-  const all = group.flatMap((g) => g.mem);
-  const knob = group[0].P.kind === "knob";
-  let axis = null, axisText = "";
-  if (knob) {
-    let lo = Infinity, hi = -Infinity;
-    for (const c of all) { lo = Math.min(lo, c.range[0]); hi = Math.max(hi, c.range[1]); }
-    axis = { range: [lo, hi], taper: all[0].taper, unit: all[0].unit, type: all[0].type };
-    axisText = "one scale " + fmtWithUnit(lo, axis.unit, axis.type) + " – " + fmtWithUnit(hi, axis.unit, axis.type) + (axis.taper === "log" ? " (log)" : "");
-  }
   const items = [];
   for (const g of group) {
     for (const c of g.mem) {
@@ -1283,7 +1288,7 @@ function buildPairBank(group, viewKey) {
     }
   }
   const title = group.map((g) => g.P.label).join("  ·  ");
-  return buildBank(title, items, axis, axisText, viewKey);
+  return buildBank(title, items, "", viewKey);
 }
 function shortPairLabel(l) { return l.split(" ")[0]; }
 
@@ -1295,11 +1300,12 @@ function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.pre
 // values, grouped by target (timbre / filter / pitch knobs, LFO rates as a CCW / CW fader pair, source switch).
 // ---------------------------------------------------------------------------
 const PRESET_GROUPS = [
-  { title: "Timbre", target: "timbre", fields: ["TIMBRE"] },
+  { title: "Timbre", target: "timbre", fields: ["TIMBRE", "STEPPED"] },
   { title: "Filter", target: "filter", fields: ["FILTER", "FILTER_SWELL"] },
   { title: "Pitch", target: "pitch", fields: ["PITCH"] },
   { title: "LFO speed", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
   { title: "Source", target: "env", fields: ["ENV"] },
+  { title: "Lofi", target: "lofi", fields: ["LOFI"] },
 ];
 let presetEd = null;     // {presets, byPreset, viewKey, chips, body, follow}
 function presetShown() {
@@ -1375,7 +1381,7 @@ function renderPresetBody(force) {
           cap.appendChild(document.createTextNode(c.pair ? c.pair.end_label : c.label));
           return { c, cap };
         });
-        box.appendChild(buildBank("", items, null, "", vk));
+        box.appendChild(buildBank("", items, "", vk));
       } else {
         const row = h("div", "ctl-grid");
         for (const c of mem) row.appendChild(c.type === "bool" ? buildToggleCell(c, vk) : buildDialCell(c, vk));

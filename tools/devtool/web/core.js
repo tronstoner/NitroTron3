@@ -228,24 +228,27 @@ function knobShow(template, st, k) {
   return missing ? posText : out.replace(/ {2,}/g, " ").trim();
 }
 
-// The frame a table preset plays, from its `tab` state line (explorer.h DIAG, pedals/nitrolab/main.cpp):
-//   LFO     `... k2 <K2> pos <frame position>`        -> pos (0 .. frames - 1, fractional = blend of two frames)
-//   LOFI    `... step <n>/<N>` (K2 discrete)          -> key stage n: pos = keyStages[n - 1], stage = n
-//           `... morph` (continuous)                  -> pos = K2 x (frames - 1)
-//   ANALOG  one frame                                 -> pos 0
+// The frame a table preset plays, from its `tab` state line (explorer.h DIAG, pedals/nitrolab/main.cpp). The preset's
+// Stepped flag (`stp 1|0`, every preset) decides; a line without `stp` (older firmware): stepped = a `step` token.
+//   stepped `... step <n>/<N>` (K2 discrete)            -> key stage n: pos = keyStages[n - 1], stage = n
+//   LFO     `... k2 <K2> pos <frame position>`         -> pos (0 .. frames - 1, fractional = blend of two frames)
+//   LOFI    `... morph` (continuous)                   -> pos = K2 x (frames - 1)
+//   ANALOG  one frame                                  -> pos 0
 // -> {pos, stage (0 = not stepped)} or null when the line lacks the value.
 function tablePlay(st, kind, frames, keyStages) {
   if (!st || !(frames >= 1)) return null;
   const top = frames - 1;
   const clampPos = (x) => Math.min(top, Math.max(0, x));
   if (kind === "ANALOG" || frames === 1) return { pos: 0, stage: 0 };
+  const stp = tokNum(st.rest, "stp");
+  const m = /(?:^|\s)step (\d+)\/(\d+)(?=\s|$)/.exec(st.rest);
+  if (stp === 1 || (stp === null && m)) {
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (!keyStages || n < 1 || n > keyStages.length) return null;
+    return { pos: clampPos(keyStages[n - 1]), stage: n };
+  }
   if (kind === "LOFI") {
-    const m = /(?:^|\s)step (\d+)\/(\d+)(?=\s|$)/.exec(st.rest);
-    if (m) {
-      const n = Number(m[1]);
-      if (!keyStages || n < 1 || n > keyStages.length) return null;
-      return { pos: clampPos(keyStages[n - 1]), stage: n };
-    }
     const k2 = tokNum(st.rest, "k2");
     return k2 === null ? null : { pos: clampPos(k2 * top), stage: 0 };
   }

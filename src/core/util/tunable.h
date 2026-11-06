@@ -27,7 +27,8 @@
 //
 // The registry metadata (unit, range, taper, level) is a comment tag on the
 // declaration line, read by tools/devtool (never compiled in):
-//   TUNABLE(float, X, 0.3f);   // @unit s @range 0.1 1 @taper log @level live  <note>
+//   TUNABLE(float, X, 0.3f);   // @unit s @range 0.1 1 @taper log @level live @why <the engine limit>  <note>
+// (@range = the real engine limit, @why = which one; tools/devtool/registry.py lists every tag.)
 //
 // C++14: no inline variables. The constants files are included by exactly one
 // translation unit per pedal (the shell's main.cpp), so `static` variables and

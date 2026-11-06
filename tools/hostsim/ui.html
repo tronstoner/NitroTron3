@@ -194,7 +194,7 @@ const LFO_SHAPES = "CCW triangle | noon off | CW staircase 100/50/0 %; rate 0.2 
 const XMEAN = {
   explorer: {
     up:   ["FM ratio zone (14 ratios) | XBAND at full CW", "feedback b 0 → 1.5 (XBAND: inert)", "index: per-band cap, fc 150 Hz → 4 kHz (k3^0.5)", PS_UP, "LFO on feedback ±0.3: " + LFO_SHAPES, "dry → wet"],
-    mid:  ["audition bank, 16 presets (stepped, 1 ms crossfade): SAW PULSE (ANALOG) | PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY BREATH AIR (LFO) | LOFI (LOFI slot)", "timbre: morph m 0 → 1 through the preset's frames | ANALOG: LP resonance Q 0.3 → 3 | LOFI: morph through LOFI SPECTRA (31 frames; stepped through its 16 key stages with EXP_TB_LOFI_K2_DISCRETE)", "2-pole LP 250 Hz → 16 kHz (dampener: static open)", PS_UP.replace("the K3 fc", "the 2-pole LP cutoff"), "LFO on the preset's targets (per-preset depths: timbre ±0.15 on LFO presets, LP cutoff on ANALOG (pluck side up × K3, swell side down), pitch 0 by default; per-preset top rates): " + LFO_SHAPES + " | presets with source ENV: no effect (the K4 touch env drives the targets) | LOFI: no job with its defaults", "dry → wet"],
+    mid:  ["audition bank, 16 presets (stepped, 1 ms crossfade): SAW PULSE (ANALOG) | PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY BREATH AIR (LFO) | LOFI (Lofi engine on by its flag)", "timbre: morph m 0 → 1 through the preset's frames (stepped through the key stages when the preset's Stepped flag is on; default LOFI) | ANALOG: LP resonance Q 0.3 → 3 | LOFI: morph through LOFI SPECTRA (31 frames, 16 key stages)", "2-pole LP 250 Hz → 16 kHz (dampener: static open)", PS_UP.replace("the K3 fc", "the 2-pole LP cutoff"), "LFO on the preset's targets (per-preset depths: timbre ±0.15 on LFO presets, LP cutoff on ANALOG (pluck side up × K3, swell side down), pitch 0 by default; per-preset top rates): " + LFO_SHAPES + " | presets with source ENV: no effect (the K4 touch env drives the targets) | LOFI: no job with its defaults", "dry → wet"],
     down: ["model: HARMONICS / FREQ SHIFT / INTERVAL", "HARMONICS n 1 → 6 | FREQ SHIFT ±800 Hz (noon 0) | INTERVAL −12 → +12 st", "HARMONICS blend to the fundamental | FREQ SHIFT fixed → proportional | INTERVAL ±50 cents", "inert on SW1 DOWN", "inert on SW1 DOWN", "dry → wet"],
   },
   lab: {
@@ -475,14 +475,15 @@ function explorerNow(m) {
     r[4] = lfo;
   } else if (m.sw1 === "mid" && m.tbz >= 0) {   // audition bank: "tab n/16 NAME kind" (m.zone)
     r[1] = m.tbk === "ANALOG" ? `LP Q ${fmt(m.tq, 2)}`
-      : m.tbk === "LOFI" ? (m.tdst > 0 ? `key stage ${m.tdst}/${m.tnst} (K2 ${fmt(m.b, 2)})` : `morph ${fmt(m.b, 2)} (static)`)
+      : m.tdst > 0 ? `key stage ${m.tdst}/${m.tnst} (K2 ${fmt(m.b, 2)}, stepped)${m.tbk === "LOFI" ? "" : ` · now ${fmt(m.tm, 2)}`}`
+      : m.tbk === "LOFI" ? `morph ${fmt(m.b, 2)} (static)`
       : `timbre (morph) ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)} · now ${fmt(m.tm, 2)}`;
     r[2] = `LP ${hz(m.fc)}`;
     r[3] = `${ps} · LP now ${hz(m.lfe)}`;
     const mod = `timbre ${fmt(m.ttd, 2)} · filter ${fmt(m.tfd, 2)} / swell ${fmt(m.tfs, 2)} oct · pitch ${fmt(m.tpd, 0)} ct`;
     r[4] = (m.tenv ? `source ENV (K4 openness; K5 no effect) · ${mod}` : `${lfo} · ${mod}`)
-      + (m.tbk === "LOFI"
-        ? " · " + (!m.ton ? "lofi off" : `sum ${m.tsb > 0 ? fmt(m.tsb, 2) + " bits" : "bits off"} · ${m.tsr > 0 ? "hold " + fmt(m.tsr, 0) + " Hz" : "hold off"} · table ${m.ttb > 0 ? fmt(m.ttb, 2) + " bits" : "bits off"} · nearest ${fmt(m.tti, 2)}`)
+      + (m.tlf
+        ? " · " + (!m.ton ? "lofi off (master)" : `sum ${m.tsb > 0 ? fmt(m.tsb, 2) + " bits" : "bits off"} · ${m.tsr > 0 ? "hold " + fmt(m.tsr, 0) + " Hz" : "hold off"} · table ${m.ttb > 0 ? fmt(m.ttb, 2) + " bits" : "bits off"} · nearest ${fmt(m.tti, 2)}`)
         : "");
   } else if (m.sw1 === "mid") {
     r[1] = `morph ${fmt(m.b, 2)} · pos ${fmt(m.a, 2)}`;

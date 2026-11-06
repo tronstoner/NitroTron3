@@ -56,7 +56,12 @@ from the pedal) and `terr` (a `T ERR` line).
 - **Registry:** `registry.py` parses the connected pedal's constants files
   (`CONST_SOURCES` in `devtool.py`): section headers `// --- Title ---`, the
   comment block above, the inline note, and the tag at the start of the note:
-  `// @unit Hz @range 0.05 0.8 @taper log @level live  <note>`.
+  `// @unit Hz @range 0.001 4000 @taper log @level live @why <engine limit>  <note>`.
+  `@range` = the real engine limit (where the code stops working or the value
+  stops meaning anything), never an invented bracket; `@why` (free text up to
+  the next ` @tag` or a double space) says which limit - the info popover shows
+  "Range: a .. b - <why>". `@below <NAME>`: an ordering the code needs (it
+  divides by the difference / log ratio); devtool refuses a set that breaks it.
   Levels: `live` (heard at the next audio block), `reactivate` (after the next
   mode / zone change).
 - **Sync:** after `BUILD`, devtool sends `list`; the pedal is the truth

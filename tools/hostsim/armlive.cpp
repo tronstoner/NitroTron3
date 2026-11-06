@@ -265,23 +265,29 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(line, sizeof line, "FM r%.2f b%.2f fc %d%s mute %s", d.a, d.b, (int)(d.fc + 0.5f), env, mu);
   else if (d.model == Explorer::kXFM)
     snprintf(line, sizeof line, "XBAND-FM n%d I%.2f fc %d%s mute %s", (int)(d.a + 0.5f), d.b, (int)(d.fc + 0.5f), env, mu);
-  else if (d.model == Explorer::kWT && d.tbz >= 0) {       // audition bank: K2 knob, kind part, MOD (as main.cpp)
-    char kp[96], mod[96];
+  else if (d.model == Explorer::kWT && d.tbz >= 0) {       // audition bank: K2 knob, kind part, flags, Lofi, MOD (as main.cpp)
+    char kp[64], lf[96], mod[96];
     if (d.tbk == explorer_k::kTbAnalog)
       snprintf(kp, sizeof kp, " Q %.2f", d.tq);
     else if (d.tbk == explorer_k::kTbLofi) {
-      char st[32], sb[24], sr[24], tb[24];
-      if (d.tdst > 0) snprintf(st, sizeof st, "step %d/%d", d.tdst, d.tnst); else snprintf(st, sizeof st, "morph");
+      if (d.tdst > 0) snprintf(kp, sizeof kp, " step %d/%d", d.tdst, d.tnst); else snprintf(kp, sizeof kp, " morph");
+    } else if (d.tdst > 0)
+      snprintf(kp, sizeof kp, " pos %.2f step %d/%d", d.a, d.tdst, d.tnst);
+    else
+      snprintf(kp, sizeof kp, " pos %.2f", d.a);
+    lf[0] = 0;
+    if (d.tlf) {
+      char sb[24], sr[24], tb[24];
       if (d.tsb > 0.f) snprintf(sb, sizeof sb, "%.2f", d.tsb); else snprintf(sb, sizeof sb, "off");
       if (d.tsr > 0.f) snprintf(sr, sizeof sr, "%d", (int)(d.tsr + 0.5f)); else snprintf(sr, sizeof sr, "off");
       if (d.ttb > 0.f) snprintf(tb, sizeof tb, "%.2f", d.ttb); else snprintf(tb, sizeof tb, "off");
-      snprintf(kp, sizeof kp, " %s sb %s sr %s tb %s ti %.2f", st, sb, sr, tb, d.tti);
-    } else
-      snprintf(kp, sizeof kp, " pos %.2f", d.a);
+      snprintf(lf, sizeof lf, " sb %s sr %s tb %s ti %.2f", sb, sr, tb, d.tti);
+    }
     snprintf(mod, sizeof mod, " src %s td %.2f fd %.2f fs %.2f pd %d", d.tenv ? "env" : "lfo", d.ttd, d.tfd, d.tfs,
              (int)(d.tpd + 0.5f));
-    snprintf(line, sizeof line, "tab %d/%d %s %s k2 %.2f%s%s lp %d eff %d%s mute %s", d.tbz + 1, explorer_k::EXP_TB_ZONES,
-             zn, Explorer::TbKindName(d.tbk), d.b, kp, mod, (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
+    snprintf(line, sizeof line, "tab %d/%d %s %s k2 %.2f%s lofi %d stp %d%s%s lp %d eff %d%s mute %s", d.tbz + 1,
+             explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), d.b, kp, d.tlf ? 1 : 0, d.tstp ? 1 : 0, lf, mod,
+             (int)(d.fc + 0.5f), (int)(d.lfe + 0.5f), env, mu);
   }
   else if (d.model == Explorer::kWT)
     snprintf(line, sizeof line, "WT/%s m%.2f pos%.2f dmp %d lp %d eff %d%s mute %s", zn, d.b, d.a, (int)(d.dfc + 0.5f),
@@ -788,6 +794,7 @@ int main(int argc, char** argv) {
                  ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) + ",\"tenv\":" + std::string(x.tenv ? "true" : "false") +
                  ",\"ttd\":" + N(x.ttd) + ",\"tfd\":" + N(x.tfd) + ",\"tfs\":" + N(x.tfs) + ",\"tpd\":" + N(x.tpd) +
                  ",\"tdst\":" + std::to_string(x.tdst) + ",\"tnst\":" + std::to_string(x.tnst) +
+                 ",\"tlf\":" + std::string(x.tlf ? "true" : "false") + ",\"tstp\":" + std::string(x.tstp ? "true" : "false") +
                  ",\"ton\":" + std::string(x.ton ? "true" : "false") + ",\"tsb\":" + N(x.tsb) + ",\"tsr\":" + N(x.tsr) +
                  ",\"ttb\":" + N(x.ttb) + ",\"tti\":" + N(x.tti) +
                  ",\"lb\":" + N(x.lb) + ",\"lue\":" + N(x.lue) + ",\"llfd\":" + N(x.llfd) + ",\"lside\":" + std::to_string(x.lside) +

@@ -354,7 +354,6 @@ button.danger-quiet.armed { background: var(--bad); border-color: var(--bad); co
 .fd .info svg { width: 12px; height: 12px; }
 .fader { position: relative; width: 44px; height: var(--fh); touch-action: none; cursor: ns-resize; color: var(--tc); border-radius: 4px; }
 .fader .f-trk { position: absolute; left: 20px; width: 4px; top: 0; bottom: 0; border-radius: 2px; background: var(--track); }
-.fader .f-own { position: absolute; left: 18px; width: 8px; border-radius: 3px; background: color-mix(in srgb, var(--tc) 18%, var(--track)); }
 .fader .f-fill { position: absolute; left: 19px; width: 6px; border-radius: 3px; background: currentColor; }
 .fader .f-cap {
   position: absolute; left: 4px; width: 36px; height: 14px; margin-top: -7px; border-radius: 3px;

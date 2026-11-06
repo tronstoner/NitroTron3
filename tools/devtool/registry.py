@@ -18,6 +18,11 @@ Per `TUNABLE(type, NAME, value);` line:
               @target <id>       (optional; what the constant acts on, one of TARGETS: the page's colour;
                                   default = the section's `// @target` directive, else none)
               @states <off> <on> (optional, bool: the words for false / true, e.g. `@states LFO env`)
+              @below <NAME>      (optional ordering: this value must stay below NAME's current value - the code
+                                  divides by their difference / log ratio; not a range: devtool refuses a set
+                                  that breaks it, with the reason)
+              @why <reason>      (with @range: why the range ends where it does - the engine limit; free text
+                                  up to the next ` @` tag or a double space; the page shows "Range: a..b - <why>")
               (written first in the inline comment, before the note text)
   label       readable label from the note's first clause (parentheses and a
               leading unit like `Hz;` removed), else the doc's first sentence,
@@ -188,6 +193,11 @@ def parse_tags(comment):
     tags = {}
     rest = comment.strip()
     while rest.startswith("@"):
+        wm = re.match(r"@why\s+(.*?)(?=\s@\w|\s{2,}|$)", rest)
+        if wm:                               # free text: up to the next ` @tag` or a double space
+            tags["why"] = [wm.group(1).strip()]
+            rest = rest[wm.end():].strip()
+            continue
         m = TAG_RE.match(rest)
         if not m:
             break
@@ -215,9 +225,8 @@ def strip_parens(s):
 # Short display labels (the page's row titles). The constant's comments stay the explanation (info popover);
 # a name missing here falls back to make_label(). Keep them short: what it is, not how it works.
 LABELS = {
-    "EXP_TB_LOFI_ENABLE": "Lofi on", "EXP_TB_LOFI_SUM_BITS": "Output bits", "EXP_TB_LOFI_SUM_RATE_HZ": "Output rate",
+    "EXP_TB_LOFI_ENABLE": "Lofi master", "EXP_TB_LOFI_SUM_BITS": "Output bits", "EXP_TB_LOFI_SUM_RATE_HZ": "Output rate",
     "EXP_TB_LOFI_TABLE_BITS": "Table bits", "EXP_TB_LOFI_TABLE_INTERP": "Table steps",
-    "EXP_TB_LOFI_K2_DISCRETE": "Stepped on Lofi", "EXP_TB_K2_DISCRETE": "Stepped on others",
     "EXP_PS_SLIDE_MS": "Knob glide", "EXP_PS_DEC_FAST_S": "Pluck, fastest", "EXP_PS_DEC_SLOW_S": "Pluck, slowest",
     "EXP_PS_RISE_FAST_S": "Swell, fastest", "EXP_PS_RISE_SLOW_S": "Swell, slowest",
     "EXP_PS_DEC_2POLE": "Pluck shape: 2-pole", "EXP_PS_DEC_2P_TAUS": "2-pole steepness", "EXP_PS_DEC_LINEAR": "Pluck shape: linear",
@@ -229,7 +238,8 @@ LABELS = {
     "EXP_SPEC_DYN_GATE_DB": "Swell gate", "EXP_SPEC_DYN_REL_FRAC": "Mute damping", "EXP_ENV_TRAVEL_TAUS": "Swell curve",
 }
 FIELD_LABELS = {"TIMBRE": "Depth", "FILTER": "Pluck side", "FILTER_SWELL": "Swell side", "PITCH": "Vibrato depth",
-                "RATE_CCW": "Fastest CCW", "RATE_CW": "Fastest CW", "ENV": "Driven by"}
+                "RATE_CCW": "Fastest CCW", "RATE_CW": "Fastest CW", "ENV": "Driven by", "STEPPED": "Stepped",
+                "LOFI": "Lofi"}
 
 
 def make_label(name, note, doc, unit):
@@ -284,6 +294,8 @@ def make_entry(name, ty, value, comment, ctx, rel, lineno, problems):
         e["default"] = None
         problems.append("%s:%d %s: default %r is not a plain number" % (rel, lineno, name, value))
     e["unit"] = (tags.get("unit") or [""])[0]
+    e["why"] = (tags.get("why") or [""])[0]
+    e["below"] = (tags.get("below") or [None])[0]
     rng = tags.get("range")
     e["range"] = None
     if ty != "bool":
@@ -294,6 +306,8 @@ def make_entry(name, ty, value, comment, ctx, rel, lineno, problems):
             e["range"] = [lo, hi]
         except (TypeError, ValueError, IndexError):
             problems.append("%s:%d %s: missing / bad @range" % (rel, lineno, name))
+        if not e["why"]:
+            problems.append("%s:%d %s: @range without @why (the engine limit it stops at)" % (rel, lineno, name))
     taper = (tags.get("taper") or ["lin"])[0]
     if taper not in TAPERS or (taper == "log" and e["range"] and e["range"][0] <= 0):
         problems.append("%s:%d %s: bad @taper %s" % (rel, lineno, name, taper))
@@ -512,6 +526,9 @@ def build(repo, pedal, sources):
         if c["name"] in seen:
             problems.append("%s: declared twice" % c["name"])
         seen.add(c["name"])
+    for c in consts:
+        if c.get("below") and c["below"] not in seen:
+            problems.append("%s: @below %s is not a constant" % (c["name"], c["below"]))
     layout = LAYOUT.get(pedal)
     lp = layout_places(layout)
     for b in (layout or {}).get("benches", []):

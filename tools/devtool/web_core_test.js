@@ -68,6 +68,13 @@ check(C.tablePlay(lofiS, "LOFI", 31, ks).pos === 8 && C.tablePlay(lofiS, "LOFI",
 const lofiM = C.parseState("XP auto K1 0.99 K2 0.50 K3 0.00 K4 0.50 K5 0.50 SW1 MID oct played | tab 16/16 LOFI LOFI k2 0.50 morph sb off sr off tb off ti 0.00 src lfo td 0.00 fd 0.00 fs 0.00 pd 0 lp 900 eff 900 mute 0 cpu 60%");
 check(C.tablePlay(lofiM, "LOFI", 31, ks).pos === 15 && C.tablePlay(lofiM, "LOFI", 31, ks).stage === 0, "tablePlay: LOFI morph -> K2 x (frames - 1)");
 check(C.tablePlay(s, "ANALOG", 1, [0]).pos === 0, "tablePlay: ANALOG = frame 0");
+// per-preset Stepped flag (`stp 1|0` on every tab line)
+const lfoStp = C.parseState("XP auto K1 0.40 K2 0.50 K3 0.00 K4 0.50 K5 0.50 SW1 MID oct played | tab 7/16 REED LFO k2 0.50 pos 7.53 step 2/3 lofi 0 stp 1 src lfo td 0.15 fd 0.00 fs 0.00 pd 0 lp 900 eff 900 mute 0 cpu 60%");
+check(C.tablePlay(lfoStp, "LFO", 16, [0, 7.5, 15]).pos === 7.5 && C.tablePlay(lfoStp, "LFO", 16, [0, 7.5, 15]).stage === 2, "tablePlay: LFO preset stepped (stp 1) -> key stage");
+const lfoNo = C.parseState("XP auto K1 0.40 K2 0.50 K3 0.00 K4 0.50 K5 0.50 SW1 MID oct played | tab 7/16 REED LFO k2 0.50 pos 7.53 lofi 1 stp 0 sb 12.00 sr 22050 tb 6.00 ti 1.00 src lfo td 0.15 fd 0.00 fs 0.00 pd 0 lp 900 eff 900 mute 0 cpu 60%");
+check(near(C.tablePlay(lfoNo, "LFO", 16, [0, 7.5, 15]).pos, 7.53) && C.tablePlay(lfoNo, "LFO", 16, [0, 7.5, 15]).stage === 0, "tablePlay: stp 0 -> continuous pos");
+const lofiSm = C.parseState("XP auto K1 0.99 K2 0.50 K3 0.00 K4 0.50 K5 0.50 SW1 MID oct played | tab 16/16 LOFI LOFI k2 0.50 morph lofi 1 stp 0 sb 12.00 sr 22050 tb 6.00 ti 1.00 src lfo td 0.00 fd 0.00 fs 0.00 pd 0 lp 900 eff 900 mute 0 cpu 60%");
+check(C.tablePlay(lofiSm, "LOFI", 31, ks).pos === 15 && C.tablePlay(lofiSm, "LOFI", 31, ks).stage === 0, "tablePlay: LOFI smooth (stp 0) -> K2 x (frames - 1)");
 
 console.log(fails ? fails + " FAILED" : "all passed");
 process.exit(fails ? 1 : 0);

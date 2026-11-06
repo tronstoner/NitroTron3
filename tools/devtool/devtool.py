@@ -519,10 +519,46 @@ class Tuner:
                 rng = c["range"]
                 if rng and not (rng[0] - 1e-9 * abs(rng[0]) <= x <= rng[1] + 1e-9 * abs(rng[1])):
                     return 400, "outside the range %g .. %g" % (rng[0], rng[1])
+                why = self._order_problem(name, x)
+                if why:
+                    return 400, why
                 text = str(x) if ty == "int" else ("%.9g" % x)
             self.pending[name] = "set %s %s\n" % (name, text)
             self.pending.move_to_end(name)
             return 202, "queued"
+
+    def _cur(self, name):
+        """The value the pedal will have once queued sets land: queued `set` text, else the pedal's, else the default."""
+        q = self.pending.get(name)
+        if q is None and "*" in self.pending:
+            q = "reset"
+        if q:
+            if q.startswith("reset"):
+                return self.by_name[name]["default"]
+            try:
+                return float(q.split()[2])
+            except (IndexError, ValueError):
+                pass
+        v = self.values.get(name)
+        if v is None:
+            v = self.by_name[name]["default"]
+        return v
+
+    def _order_problem(self, name, x):
+        """@below ordering (registry): the code divides by the difference / log ratio of the two, so the lower one
+        must stay strictly below the upper one. Returns the refusal text or ""."""
+        c = self.by_name[name]
+        hi = c.get("below")
+        if hi and hi in self.by_name:
+            v = self._cur(hi)
+            if v is not None and not x < v:
+                return "must stay below %s (%g): the code divides by their difference / ratio" % (self.by_name[hi]["label"], v)
+        for o in self.by_name.values():
+            if o.get("below") == name:
+                v = self._cur(o["name"])
+                if v is not None and not v < x:
+                    return "must stay above %s (%g): the code divides by their difference / ratio" % (o["label"], v)
+        return ""
 
     def request_reset(self, name):
         with self.lock:
@@ -1381,10 +1417,18 @@ def selftest():
     for _i, pn in presets:      # per-preset LFO rate pairs (explorer_tables.h @family)
         want_pairs["%s_LFO_rate" % pn] = ["EXP_TB_%s_RATE_CCW" % pn, "EXP_TB_%s_RATE_CW" % pn]
     byn = {c["name"]: c for c in reg["constants"]}
-    check(len(presets) == 16 and len(fam) == 16 * 7
+    check(len(presets) == 16 and len(fam) == 16 * 9
           and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_PWM_TIMBRE"]["default"] == 0.15
-          and byn["EXP_TB_LOFI_ENV"]["default"] is False and byn["EXP_TB_AIR_PITCH"]["default"] == 0.0,
-          "registry: @family per-preset tunables (16 presets x 7 fields, defaults from the EXP_TB_MOD rows)")
+          and byn["EXP_TB_LOFI_ENV"]["default"] is False and byn["EXP_TB_AIR_PITCH"]["default"] == 0.0
+          and byn["EXP_TB_LOFI_LOFI"]["default"] is True and byn["EXP_TB_LOFI_STEPPED"]["default"] is True
+          and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is False and byn["EXP_TB_%s_STEPPED" % pn]["default"] is False
+                  for _i, pn in presets if pn != "LOFI")
+          and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
+          "registry: @family per-preset tunables (16 presets x 9 fields, defaults from the EXP_TB_MOD rows; Lofi / Stepped on LOFI only)")
+    check(all(c["why"] for c in reg["constants"] if c["range"])
+          and byn["EXP_PS_DEC_FAST_S"]["below"] == "EXP_PS_DEC_SLOW_S" and byn["EXP_SPEC_DYN_FLOOR_DB"]["below"] == "EXP_SPEC_DYN_TOP_DB"
+          and "Nyquist" in byn["EXP_LFO_HZ_MAX"]["why"] and byn["EXP_LFO_HZ_MAX"]["note"].startswith("Hz;"),
+          "registry: every @range has its @why (free text, note kept), @below ordering parsed")
     check(reg["layout"] and [p["key"] for p in byn["EXP_PS_SLIDE_MS"]["places"]] ==
           ["2/fm/Touch env \u00b7 K4", "2/wt/Touch env \u00b7 K4", "3/2op/Touch env \u00b7 K4",
            "3/spectral/Touch env \u00b7 K4", "3/additive/Touch env \u00b7 K4"]
@@ -1442,8 +1486,12 @@ def selftest():
     check(wait_for(lambda: pedal["vals"]["EXP_LFO_HZ_MIN"] == 0.69), "throttle: latest value wins")
     sent = len(pedal["sets"]) - n0
     check(sent < 45, "throttle: %d sends for 60 requests" % sent)
-    st, _ = post("/api/set", {"name": name, "value": 500})
+    st, _ = post("/api/set", {"name": name, "value": 5000})
     check(st == 400, "set: outside @range refused")
+    st, r = post("/api/set", {"name": "EXP_PS_DEC_FAST_S", "value": 9})
+    check(st == 400 and "below" in r.get("message", ""), "set: @below ordering refused (FAST >= SLOW)")
+    st, r = post("/api/set", {"name": "EXP_SPEC_DYN_TOP_DB", "value": -70})
+    check(st == 400 and "above" in r.get("message", ""), "set: @below ordering refused from the upper side (TOP <= FLOOR)")
     st, _ = post("/api/set", {"name": "NOPE", "value": 1})
     check(st == 404, "set: unknown constant refused")
     st, _ = post("/api/set", {"name": "EXP_TB_LOFI_ENABLE", "value": False})
@@ -1451,7 +1499,7 @@ def selftest():
           "set: bool")
     st, _ = post("/api/set", {"name": "EXP_TB_LOFI_TABLE_BITS", "value": 4.5})
     check(st == 202, "set: fractional bits accepted (float)")
-    st, _ = post("/api/set", {"name": "EXP_TB_LOFI_SUM_RATE_HZ", "value": 50})
+    st, _ = post("/api/set", {"name": "EXP_TB_LOFI_SUM_RATE_HZ", "value": 0.001})
     check(st == 400, "set: below @range refused")
     post("/api/note", {"text": "faster LFO sounds better"})
     check(wait_for(lambda: (changes_file() or {}).get("note") == "faster LFO sounds better"), "note -> changes.json")
