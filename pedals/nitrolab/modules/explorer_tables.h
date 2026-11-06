@@ -13,7 +13,7 @@
 //                   on the LP cutoff (the SW3 MID FM placement: DampFmUpdate's octaves, explorer.h)
 // STAGE  = position on the morph (0..1, first 0, last 1, ascending), generator + parameter p (or a harmonic list),
 //          tonal gain (render-time factor on the table output, 1 = the frame at the preset's level), blow amount b
-//          (0 = clean tone .. 1 = wind: per-band phase jitter of the table read, EXP_TB_BLOW_*, explorer.h BLOW).
+//          (0 = clean tone .. 1 = wind: per-band amplitude jitter of the table read, EXP_TB_BLOW_*, explorer.h BLOW).
 //   Frame f of F sits at u = f / (F - 1). Between stage i and i + 1 (t = (u - pos_i) / (pos_i+1 - pos_i)):
 //     same generator (and the same list) -> the parameter p = p_i + t (p_i+1 - p_i), generated directly (a sweep);
 //     different generators -> per harmonic h: a_h = exp((1 - t) ln max(a_ih, F) + t ln max(a_i+1,h, F)) with each
@@ -24,7 +24,7 @@
 //   Then the preset's level rules (legacy pipeline): peak 1 -> re-phase (sine phase, positive; magnitudes kept) ->
 //   RMS match to the plain saw + cap to the int16 headroom 32767 / scale -> 14 band-limited versions.
 // BLOW (2026-11-06; replaces the separate noise layer): the table = the SURFACE (its partial spectrum), b blows it into
-//   noise bands (carrier of table harmonic h at b: -4.34 (2 pi h b EXP_TB_BLOW_DEPTH)^2 dB, see explorer_constants.h).
+//   noise bands (2026-11-06 amplitude jitter: every table harmonic keeps (1 - b) carrier + a ~EXP_TB_BLOW_FC wide noise band of b).
 //   GLASS / BREATH / AIR are built on it; every other preset b = 0 (the plain read).
 
 #include "explorer_constants.h"

@@ -95,7 +95,7 @@
 //                open pick (hf = min(4000, fc) / f'_k, K3 dampener; + the 2-pole LP, see K3 2-POLE LOWPASS). A K1 zone
 //                change crossfades old -> new zone over EXP_TB_ZONE_XFADE_MS (each side its own morph m - its kind's K5
 //                offset - and the same per-band versions / blend). Bank kinds (K2 / K5): see TABLES. Bank BLOW (b > 0
-//                at the position): the read phase is phi_k + b EXP_TB_BLOW_DEPTH j_k (per-band jitter, see TABLES);
+//                at the position): W_k x ((1 - b) + b j_k) (per-band amplitude jitter, see TABLES);
 //                b = 0 (legacy, most presets): stateless, the plain read.
 //   BITTAB       (PARKED: EXP_BITTAB_ENABLE = false; true -> an 11th K1 zone on MID after the 10 table zones)
 //                16-step pattern v[0..15], one step per 1/16 of the band cycle; per step (position f in
@@ -434,7 +434,7 @@
 //   BLOW   (2026-11-06; replaces the separate noise layer; wet only, in the table read itself): b > 0 -> per SW2 slot and
 //          band k, while the band sounds, per 8 kHz sample: one LCG step (uniform x sqrt(3)) -> one-pole lowpass j_k
 //          (EXP_TB_BLOW_FC 200 Hz, explorer_tb_rt.jl) -> read phase phi_k + b DEPTH g j_k, wrapped (g = the one-pole's
-//          unit-RMS gain, DEPTH = EXP_TB_BLOW_DEPTH 0.12 cycles RMS at b = 1). Table harmonic h: carrier -4.34
+//          unit-RMS gain, 2026-11-06: AMPLITUDE jitter, no DEPTH; was phase jitter). Table harmonic h (old phase law): carrier -4.34
 //          (2 pi h b DEPTH)^2 dB, the rest a noise band around it (power kept), width ~BLOW_FC .. (2 pi h b DEPTH)^2
 //          BLOW_FC - grows with h. b = 0: the jitter is not run, the read is the plain one (bit-identical). Zone
 //          crossfade: the entering side advances the slot's jitter (the fading side only when the entering one has
@@ -524,14 +524,14 @@ struct ExplorerTbScratch {
 static ExplorerTbScratch DSY_SDRAM_BSS explorer_tb_scratch;
 // Audition bank runtime (SW3 MID instance only - tables never run on FM LAB; D2 SRAM, EXP_FAST_BSS, NOLOAD: Init sets
 // it). BLOW: the jitter one-pole state per SW2 slot and band, the LCG, the one-pole coefficient and the unit-RMS gain x
-// EXP_TB_BLOW_DEPTH (ShapeK<kWT>, only while b > 0); ANALOG LP Q per 8 kHz sample (TfUpdate -> TabFilter; 0 = not ANALOG).
+// amplitude jitter (ShapeK<kWT>, only while b > 0); ANALOG LP Q per 8 kHz sample (TfUpdate -> TabFilter; 0 = not ANALOG).
 struct ExplorerTbRt {
   static constexpr int kSub = 64;                // 8 kHz samples per block held (= Explorer::kLadSub)
   float q[kSub];                                 // ANALOG LP Q per 8 kHz sample (0 = not ANALOG: EXP_TF_Q)
   float jl[3][armbands::kArmBands];              // BLOW: one-pole state j per slot (up / played / down) and band
   uint32_t rng;                                  // BLOW: LCG state (one step per sounding band per 8 kHz sample, b > 0)
   float jc;                                      // BLOW: one-pole coefficient 1 - exp(-2 pi EXP_TB_BLOW_FC / sr8)
-  float jg;                                      // BLOW: EXP_TB_BLOW_DEPTH x unit-RMS gain sqrt((2 - jc) / jc)
+  float jg;                                      // BLOW: unit-RMS gain sqrt((2 - jc) / jc)
 };
 static ExplorerTbRt EXP_FAST_BSS explorer_tb_rt;
 // explorer_sin_tab + explorer_tb are filled by the first Init; further instances (SW3 DOWN) skip the build.
@@ -759,7 +759,7 @@ class Explorer : public Module {
     if (!EXP_TB_LEGACY && !lab_) {               // audition bank runtime (BLOW jitter, ANALOG Q), D2 SRAM (NOLOAD)
       ExplorerTbRt& R = explorer_tb_rt;
       R.jc = 1.f - expf(-6.283185307f * EXP_TB_BLOW_FC / sr8_);    // jitter one-pole (8 kHz)
-      R.jg = EXP_TB_BLOW_DEPTH * sqrtf((2.f - R.jc) / R.jc);         // unit RMS for unit-RMS white: var ratio c / (2 - c)
+      R.jg = sqrtf((2.f - R.jc) / R.jc);                             // unit RMS for unit-RMS white: var ratio c / (2 - c)
       for (int o = 0; o < kSlots; o++)
         for (int k = 0; k < kBands; k++) R.jl[o][k] = 0.f;
       R.rng = EXP_TB_BLOW_SEED;
@@ -2990,14 +2990,15 @@ class Explorer : public Module {
     const uint8_t* __restrict tlo  = tblo_[o];                // EXP_TB_BLEND: lower version, weight 1 - x
     const float*   __restrict tx   = tbx_[o];                 //               blend weight x toward lo + 1
     constexpr int ru = (M == kISH) ? kRotISH : kRotFSH;
-    // audition bank BLOW (tables only, b = p.p3 > 0; 0 = the plain read, nothing below runs): per sounding band one LCG
-    // step -> the slot's jitter one-pole j_k (only when p.adv: this side advances it), read phase phi_k + b jg j_k
-    // (jg = EXP_TB_BLOW_DEPTH x the unit-RMS gain), wrapped to [0, 1) (floorf; a rounding 1.0 reads index 256 & 255 = 0).
+    // audition bank BLOW (tables only, b = p.p3 > 0; 0 = the plain read, nothing below runs; 2026-11-06 AMPLITUDE jitter,
+    // was phase jitter): per sounding band one LCG step -> the slot's one-pole j_k (unit RMS, narrowband at
+    // EXP_TB_BLOW_FC; only when p.adv: this side advances it); W_k x ((1 - b) + b jg j_k), jg = the unit-RMS gain ->
+    // every partial of the table becomes a noise band ~FC wide at its own pitch, level from the table (b 1: only those).
     const float bl = (M == kWT && !EXP_TB_LEGACY) ? p.p3 : 0.f;
     ExplorerTbRt& R = explorer_tb_rt;
     float* __restrict jl = R.jl[o];
     const float jc = R.jc;
-    const float jk = bl * R.jg;                  // read offset per unit of j (cycles)
+    const float jk = bl * R.jg;                  // noise gain per unit of j (amplitude)
     const bool  jadv = p.adv;
     uint32_t    jx = R.rng;
     constexpr float kBlowU = 1.7320508f / 2147483648.f;   // int32 -> uniform [-1, 1) x sqrt(3) (unit RMS)
@@ -3010,7 +3011,8 @@ class Explorer : public Module {
       }
       const float cr = ur[k], ci = ui[k];
       float W;
-      float wph = 0.f;                           // tables: read phase (phi_k; BLOW: + the jitter)
+      float wph = 0.f;                           // tables: read phase phi_k
+      float jam = 1.f;                           // BLOW amplitude factor (1 - b) + b jg j_k
       if (M == kWT) {
         wph = phs[k];
         if (bl > 0.f) {
@@ -3020,8 +3022,7 @@ class Explorer : public Module {
             j += jc * ((float)(int32_t)jx * kBlowU - j);
             jl[k] = j;
           }
-          wph += jk * j;
-          wph -= floorf(wph);
+          jam = (1.f - bl) + jk * j;
         }
       }
       if (M == kFM) {
@@ -3146,6 +3147,7 @@ class Explorer : public Module {
           W = Wf + pkg * (W - Wf);
         }
       }
+      if (M == kWT) W *= jam;                    // BLOW (1 exactly when b = 0)
       acc += (played ? wmid_[k] : 1.f) * a * W;
     }
     if (M == kWT && bl > 0.f && jadv) R.rng = jx;   // BLOW: the LCG moved on

@@ -62,7 +62,7 @@ constexpr float EXP_HARM_MAX      = 6.f;     // exact harmonics: harmonic number
 //                            values exact (approved, tuned there) - exactly the tables of 45c2f4e (byte-identical render).
 //   EXP_TB_LEGACY = false -> the AUDITION BANK (default): 15 data-driven presets, recipes in explorer_tables.h (one place;
 //                            a new preset / journey = data, not code), kinds LFO / JOURNEY / ANALOG (K2 / K5 per kind,
-//                            see explorer.h TABLES), blow amount per frame (phase jitter, EXP_TB_BLOW_*).
+//                            see explorer.h TABLES), blow amount per frame (amplitude jitter, EXP_TB_BLOW_*).
 // K1 = zone / preset (equal stepped zones, EXP_TB_ZONE_XFADE_MS crossfade on a change), K2 = morph m: position
 // (F_z - 1) m through the zone's frames, linear crossfade between the two adjacent frames (ANALOG: K2 = LP Q).
 // Built at Init into SDRAM (explorer_tb, int16, packed [frame][version][sample]). See explorer.h TABLES.
@@ -173,7 +173,7 @@ constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spect
 // BLOW (wet only; SW3 MID SW1 MID audition bank; 2026-11-06, replaces the separate noise layer): per-band PHASE JITTER
 // of the table read. Per SW2 slot and band k: j_k = white noise (ONE 32-bit LCG, uniform x sqrt(3) = unit RMS, one step
 // per band) -> one-pole lowpass (cutoff EXP_TB_BLOW_FC, 8 kHz) -> unit RMS (fixed gain sqrt((2 - c) / c), c = the
-// one-pole coefficient). Read position = phi_k + b EXP_TB_BLOW_DEPTH j_k (cycles, wrapped), b = the blow amount at the
+// one-pole coefficient). 2026-11-06: AMPLITUDE jitter W_k x ((1 - b) + b j_k) (was phase jitter: smeared high partials into hiss), b = the blow amount at the
 // morph position (per-frame recipe value, explorer_tables.h; 0 = the plain read, bit-identical, jitter not run).
 // Table harmonic h is phase-modulated by 2 pi h b DEPTH j_k (RMS): its carrier falls to exp(-(2 pi h b DEPTH)^2 / 2)
 // = -4.34 (2 pi h b DEPTH)^2 dB, the rest of its power becomes a noise band around it - ~BLOW_FC wide while the carrier
@@ -181,8 +181,7 @@ constexpr float EXP_TB_JOURNEY_FLOOR_DB = -60.f;   // dB re unit-RMS stage spect
 // DEPTH = 0.12 (2026-11-06): b = 1 = wind - every table harmonic from h 3 up has lost its carrier (h3 -22 dB, h4 -40,
 // h5 -62), h1 / h2 keep a breathy carrier (-2.5 / -10 dB), their noise bands (~1 kHz at h3) keep the surface's lowest
 // resonances. (0.35 would take h1 to -21 dB too, but then b 0.4 / 0.8 = already broadband hiss on every surface.)
-constexpr float    EXP_TB_BLOW_FC    = 200.f;   // Hz; jitter one-pole cutoff (lower = narrower noise bands per partial)
-constexpr float    EXP_TB_BLOW_DEPTH = 0.12f;   // cycles; RMS read offset at b = 1 (see above)
+constexpr float    EXP_TB_BLOW_FC    = 30.f;    // Hz; noise one-pole cutoff = width of the noise band around every partial (2026-11-06: 200 -> 30, amplitude jitter)
 constexpr uint32_t EXP_TB_BLOW_SEED  = 0x6D2B79F5u;   // LCG start state (x = 1664525 x + 1013904223)
 // JOURNEY presets: K5 = DIRECTION + constant SPEED of the morph travel (2026-11-06; replaces the second touch env).
 // t5 = 2 k5 - 1 (smoothed, lands exactly), a = |t5|:
