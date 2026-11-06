@@ -346,6 +346,7 @@ nobody will find.
 ### Architecture & platform
 
 - `NITROLAB.md` — **current.** The NitroLab test-bench pedal: working method (one main module on SW3 UP, variation / breakout discovery slots with sweepable controls, overload switch-off) and the current slot assignment.
+- `ARMITAGE_ROADMAP.md` — **current.** Roadmap to Armitage milestone 1: benches (SW3), FM done, wavetable control simplification, Bench 3 decisions, port to Bench 1, catalogue of parked ideas.
 - `DEV_INTERFACE.md` — **current (concept, not built).** Local dev interface: devtool (Python) owns the pedal's USB serial, serves a page on localhost (log, live constants from a registry built from the constants files, flash button, changes file `tune/changes.json` for the agent to apply).
 - `ARCHITECTURE.md` — **current.** (Includes the nitrotron3m prototype: NitroTron3 carved onto the Module system, migration step 6.) Multi-pedal platform layout: `core/` blocks vs `pedals/<name>/` bundles, the `PEDAL=` selector, the block/module/mode/shell vocabulary, and the Module-interface migration.
 - `DSP_INVENTORY.md` — **current.** Measured inventory of every implemented DSP block: code size, CPU cost (host benchmark + M7 instruction counts + libm census), memory footprint, and per-mode budget estimates.
