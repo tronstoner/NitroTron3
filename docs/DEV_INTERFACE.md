@@ -1,6 +1,6 @@
 # Dev Interface — concept plan
 
-**Status: concept, for review (2026-11-06). Nothing built.**
+**Status: concept, decisions settled (2026-11-06). Nothing built.**
 
 ## 1. Why
 
@@ -162,13 +162,13 @@ Layout (desktop-first, also usable in the narrow app pane):
 
 Each step is its own go.
 
-## 8. Open questions
+## 8. Decisions (2026-11-06)
 
-- **Port:** a fixed number (e.g. 8765)?
-- **`dfu` command:** in debug builds only. Is a serial command allowed to
-  trigger the bootloader, or should the footswitch gesture stay the only
-  way? The pedal is sealed, so it would be a convenience, not a necessity.
-- **How many constants go live:** start with the sections we are tuning now,
-  or everything in a module?
-- **hostsim:** should its `armlive` page later be served by the same devtool
-  (same registry, the computer's audio instead of the pedal)?
+- **Port:** automatic free port, printed on each start.
+- **`dfu` command:** yes, in debug builds only. Release builds keep the
+  footswitch gesture as the only way in.
+- **Live scope for step 2:** the sections being tuned now (lofi, touch env,
+  FM LFO). Measure CPU and size, then widen.
+- **hostsim:** later, served by the same devtool (same registry and page;
+  the target is the pedal or the host).
+- **A/B snapshots:** yes, in step 3.
