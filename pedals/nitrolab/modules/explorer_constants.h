@@ -149,12 +149,6 @@ constexpr ExpTbHarm EXP_TB_W_MIXTURE[]  = { {1, 1.f}, {2, .7f}, {3, .35f}, {4, .
 // ORGAN Hammond registration (2026-11-08): 16' = h1, then 5 1/3' 8' 4' 2 2/3' 2' 1 3/5' 1 1/3' 1' = h 3 2 4 6 8 10 12 16;
 // drawbar 8 = 1.0. Name = the drawbar setting.
 constexpr ExpTbHarm EXP_TB_W_HAM_888888888[] = { {1, 1.f}, {3, 1.f}, {2, 1.f}, {4, 1.f}, {6, 1.f}, {8, 1.f}, {10, 1.f}, {12, 1.f}, {16, 1.f} };
-// ORGAN pipe-organ stops (2026-11-08, textbook proportions, starting points): stopped flute (odd), principal
-// (smoothly falling, with the third), sesquialtera (fifth + third), cornet (1..5 all strong).
-constexpr ExpTbHarm EXP_TB_W_GEDACKT[]      = { {1, 1.f}, {3, .3f}, {5, .08f} };
-constexpr ExpTbHarm EXP_TB_W_PRINCIPAL[]    = { {1, 1.f}, {2, .6f}, {3, .4f}, {4, .3f}, {5, .2f}, {6, .15f} };
-constexpr ExpTbHarm EXP_TB_W_SESQUIALTERA[] = { {1, 1.f}, {2, .5f}, {3, .8f}, {5, .7f} };
-constexpr ExpTbHarm EXP_TB_W_CORNET[]       = { {1, 1.f}, {2, .8f}, {3, .8f}, {4, .7f}, {5, .7f} };
 constexpr ExpTbHarm EXP_TB_W_GHOST5[]   = { {1, .05f}, {3, 1.f}, {5, .8f} };
 constexpr ExpTbHarm EXP_TB_W_BELL[]     = { {1, 1.f}, {2, .15f}, {4, .3f}, {7, .25f}, {11, .45f}, {12, .35f}, {17, .3f}, {18, .22f}, {23, .12f} };
 constexpr ExpTbHarm EXP_TB_W_BASSBELL[] = { {1, 1.f}, {2, .2f}, {7, .7f}, {14, .5f} };
