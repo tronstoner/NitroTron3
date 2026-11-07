@@ -85,13 +85,14 @@ struct ExpTbMod {
   float rate_ccw;          // K5 LFO top rate at K5 full CCW, Hz
   float rate_cw;           // K5 LFO top rate at K5 full CW, Hz
   float timbre_env;        // K4 touch env openness o -> morph, morph units (added to the LFO's)
-  float filter_env;        // K4 touch env openness o -> LP cutoff, octaves up (added to the LFO's)
+  bool  mirror;            // timbre border: false = clamp at the first / last frame, true = mirror (travel back)
   float pitch_env;         // pure pluck / swell envelope (no env follower) -> pitch, cents: onset = full, -> 0
   bool  stepped;           // K2 DISCRETE: K2 snaps to the key stages (1 ms slide)
   bool  lofi;              // the Lofi engine runs on this preset
+  bool  land;              // timbre env lands on K2: swell side starts at K2 - depth and rises into K2 (pluck as before)
 };
-#define EXP_TB_MOD(td, fd, fs, res, ft, pd, rccw, rcw, tenv, fenv, penv, stp, lofi) \
-  ExpTbMod{ td, fd, fs, res, ft, pd, rccw, rcw, tenv, fenv, penv, stp, lofi }
+#define EXP_TB_MOD(td, fd, fs, res, ft, pd, rccw, rcw, tenv, mir, penv, stp, lofi, land) \
+  ExpTbMod{ td, fd, fs, res, ft, pd, rccw, rcw, tenv, mir, penv, stp, lofi, land }
 struct ExpTbPreset {
   const char* name;
   uint8_t kind;            // kTbLfo / kTbAnalog / kTbLofi
@@ -195,21 +196,21 @@ constexpr ExpTbStage EXP_TB_ST_LOFISPEC[] = {
 // every other preset (AIR and LOFI SPECTRA too): re-phase + RMS match to the plain saw, scale EXP_TB_I16_SCALE_WIDE
 // (headroom 5.0, as legacy zones 3 / 10).
 constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
-  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, true) },
-  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, true) },
-  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.231f, 0.f, 0.f, 2.f, 1.f, 0.f, 18.f, 14.f, 0.f, 0.f, 0.f, false, false) },
-  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 0.f, 0.f, .7f, 0.f, 0.f, 20.f, 20.f, .577f, 0.f, 0.f, false, false) },
-  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, .7f, .594f, 0.f, 5.f, 10.f, 0.f, 0.f, 0.f, false, true) },
-  { "WOOD",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, false) },
-  { "REED",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, false) },
-  { "BRASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.f, 2.f, 1.5f, 1.f, 0.f, 20.f, 20.f, .178f, 0.f, 0.f, false, false) },
-  { "ORGAN",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .245f, 20.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, false) },
-  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.3f, 0.f, 0.f, .7f, 0.f, 0.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, false) },
-  { "METAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.203f, .39f, .74f, .7f, .71f, 15.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, false) },
-  { "GLASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.153f, 3.33f, 1.96f, .746f, .372f, 0.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, false) },
-  { "RASPY",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, 0.f, 0.f, false, false) },
-  { "AIR",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.047f, .54f, .64f, 1.5f, 1.f, 15.f, 5.228f, 20.f, 0.f, 0.f, 0.f, false, true) },
-  { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.114f, 0.f, 0.f, 1.5f, 1.f, 0.f, .4552f, 20.f, 0.f, 0.f, 0.f, true, false) },
+  { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, true, false) },
+  { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, true, false) },
+  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.231f, 0.f, 0.f, 2.f, 1.f, 0.f, 18.f, 14.f, 0.f, false, 0.f, false, false, false) },
+  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 0.f, 0.f, .7f, 0.f, 0.f, 20.f, 20.f, .577f, false, 0.f, false, false, false) },
+  { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, .7f, .594f, 0.f, 5.f, 10.f, 0.f, false, 0.f, false, true, false) },
+  { "WOOD",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "REED",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "BRASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.f, 2.f, 1.5f, 1.f, 0.f, 20.f, 20.f, .178f, false, 0.f, false, false, false) },
+  { "ORGAN",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .245f, 20.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.3f, 0.f, 0.f, .7f, 0.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "METAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.203f, .39f, .74f, .7f, .71f, 15.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "GLASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.153f, 3.33f, 1.96f, .746f, .372f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "RASPY",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_RASPY),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "AIR",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_AIR),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.047f, .54f, .64f, 1.5f, 1.f, 15.f, 5.228f, 20.f, 0.f, false, 0.f, false, true, false) },
+  { "LOFI",   kTbLofi,   31, EXP_TB_S(EXP_TB_ST_LOFISPEC), true, true, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.114f, 0.f, 0.f, 1.5f, 1.f, 0.f, .4552f, 20.f, 0.f, false, 0.f, true, false, false) },
 };
 #undef EXP_TB_L
 #undef EXP_TB_S
@@ -234,7 +235,7 @@ constexpr bool ExpTbPresetOk(const ExpTbPreset& P, int z) {
     if (i > 0 && !(P.st[i].pos > P.st[i - 1].pos)) return false;
   }
   if (!(P.mod.rate_ccw > 0.f) || !(P.mod.rate_cw > 0.f) || P.mod.pitch < 0.f) return false;   // MOD: rates > 0
-  if (P.mod.timbre_env < 0.f || P.mod.filter_env < 0.f || P.mod.pitch_env < 0.f) return false; // MOD: env depths >= 0
+  if (P.mod.timbre_env < 0.f || P.mod.pitch_env < 0.f) return false;                          // MOD: env depths >= 0
   if (!(P.mod.res > 0.f)) return false;                                                        // MOD: Q > 0 (k = 1 / Q)
   if (!(P.mod.filter_touch >= 0.f && P.mod.filter_touch <= 1.f)) return false;                 // MOD: env amount 0..1
   if (P.share >= 0) {
@@ -260,18 +261,19 @@ static_assert(EXP_TB_BANK_N < 64, "VarKey holds the zone in 6 bits");
 // EXP_TB_MOD arguments) and shows one panel per preset.
 // @family EXP_TB_ EXP_TB_MOD EXP_TB_PRESET_MODS
 // @field TIMBRE float @unit 0..1 @range 0 1 @taper lin @level live @why the morph m = K2 + offset is clamped to 0 .. 1: a swing of 1 already spans it all @target timbre  Timbre <- LFO: how far the K5 LFO swings the K2 wave position (morph), +- this at full LFO depth. Unit: morph units, 1 = the whole K2 range. Adds to 'Timbre <- env'. 0 = the LFO does not move the timbre
-// @field FILTER float @unit oct @range 0 8.06 @taper lin @level live @why the LP cutoff is capped at EXP_TF_FMAX (16 kHz); from its lowest point, the touch env bottom EXP_TF_ENV_BOTTOM (60 Hz), that is log2(16000 / 60) = 8.06 octaves @target filter  Filter <- LFO, pluck side: how far the K5 LFO moves the K3 LP cutoff on the K4 PLUCK side (CCW of noon), upward, in octaves, up to this x LFO depth x the K3 position. Adds to 'Filter <- env'. 0 = no LFO on the cutoff there
+// @field FILTER float @unit oct @range 0 8.06 @taper lin @level live @why the LP cutoff is capped at EXP_TF_FMAX (16 kHz); from its lowest point, the touch env bottom EXP_TF_ENV_BOTTOM (60 Hz), that is log2(16000 / 60) = 8.06 octaves @target filter  Filter <- LFO, pluck side: how far the K5 LFO moves the K3 LP cutoff on the K4 PLUCK side (CCW of noon), upward, in octaves, up to this x LFO depth x the K3 position. 0 = no LFO on the cutoff there
 // @field FILTER_SWELL float @unit oct @range 0 8.06 @taper lin @level live @why downward from the cap EXP_TF_FMAX (16 kHz) to the touch env bottom EXP_TF_ENV_BOTTOM (60 Hz) = 8.06 octaves; deeper leaves the cutoff law (uncapped below, toward 0 Hz) @target filter  Filter <- LFO, swell side: how far the K5 LFO moves the K3 LP cutoff on the K4 SWELL side (CW of noon), downward, in octaves. 0 = no LFO on the cutoff there
 // @field RES float @unit Q @range 4e-8 5.5e6 @taper log @level live @inert kTbAnalog K2_sets_Q_on_ANALOG @why the LP is one TPT SVF (ExpSVF, k = 1 / Q) at 48 kHz: stable for every Q > 0 in math, so the limits are float ones, measured on ExpSVF at the highest cutoff EXP_TF_FMAX 16 kHz (g = tan(pi 16000 / 48000) = 1.73) - above ~5.6e6 the ring stops decaying (pole damping g k / (1 + g^2) under 2^-24), below ~3.4e-8 the LP output stops moving (its step g^2 Q x under 1 ulp); lower cutoffs reach both sooner (60 Hz: ~2.4e5 / ~1.5e-5) @target filter  Resonance (Q) of the K3 lowpass: higher = a sharper peak at the cutoff (default 1.5, the former fixed Q). Must be > 0. ANALOG presets (SAW, PULSE): ignored, K2 sets the Q there
-// @field FILTER_TOUCH float @unit 0..1 @range 0 1 @taper lin @level live @why a fraction of the K4 touch env travel (bottom EXP_TF_ENV_BOTTOM .. the K3 knob value): 1 = all of it, 0 = none (the cutoff sits at the K3 value) @target filter  Touch env -> filter: how much of the K4 touch env's travel (from the bottom up to the K3 knob value) moves the LP cutoff. Unit: share 0..1. 1 = the full travel (default, the former behaviour); 0 = the cutoff sits at the K3 value, the touch env does not move it. 'Filter <- LFO' / 'Filter <- env' act on top either way
+// @field FILTER_TOUCH float @unit 0..1 @range 0 1 @taper lin @level live @why a fraction of the K4 touch env travel (bottom EXP_TF_ENV_BOTTOM .. the K3 knob value): 1 = all of it, 0 = none (the cutoff sits at the K3 value) @target filter  Touch env -> filter: how much of the K4 touch env's travel (from the bottom up to the K3 knob value) moves the LP cutoff. Unit: share 0..1. 1 = the full travel (default, the former behaviour); 0 = the cutoff sits at the K3 value, the touch env does not move it. 'Filter <- LFO' acts on top either way
 // @field PITCH float @unit cents @range 0 9960 @taper lin @level live @why the bands run at 8 kHz (Nyquist 4 kHz): at + 9960 cents even the lowest band of any slot (12.7 Hz, down slot) is past 4 kHz - every band folds @target pitch  Pitch <- LFO (vibrato): how far the K5 LFO moves the pitch, +- this in cents at full LFO depth. Adds to 'Pitch <- env'. 0 = no vibrato
 // @field RATE_CCW float @unit Hz @range 0.001 4000 @taper log @level live @why the LFO runs per 8 kHz sample: 4000 Hz = Nyquist of the control rate; min: phase += f / 8000 in float stalls below 0.0005 Hz (0.001 = 2 ulps) @target pitch @pair LFO_rate ccw  LFO max, CCW: the K5 LFO speed at K5 full CCW (triangle), in Hz; turning K5 toward noon slows it to the bottom rate, noon = LFO off
 // @field RATE_CW float @unit Hz @range 0.001 4000 @taper log @level live @why the LFO runs per 8 kHz sample: 4000 Hz = Nyquist of the control rate; min: phase += f / 8000 in float stalls below 0.0005 Hz (0.001 = 2 ulps) @target pitch @pair LFO_rate cw  LFO max, CW: the K5 LFO speed at K5 full CW (steps), in Hz; turning K5 toward noon slows it to the bottom rate, noon = LFO off
 // @field TIMBRE_ENV float @unit 0..1 @range 0 1 @taper lin @level live @why the morph m = K2 + offset is clamped to 0 .. 1: a swing of 1 already spans it all @target timbre  Timbre <- env: how far the K4 touch env moves the K2 wave position: adds this x the env openness (1 at the knob value, 0 = fully moved). Unit: morph units. Adds to 'Timbre <- LFO'. 0 = the env does not move the timbre
-// @field FILTER_ENV float @unit oct @range 0 8.06 @taper lin @level live @why the LP cutoff is capped at EXP_TF_FMAX (16 kHz); from its lowest point, the touch env bottom EXP_TF_ENV_BOTTOM (60 Hz), that is log2(16000 / 60) = 8.06 octaves @target filter  Filter <- env: adds this x the K4 touch env openness to the LP cutoff, in octaves upward (both K4 sides). On top of 'Touch env -> filter' (the cutoff's own travel) and 'Filter <- LFO'. 0 = off
+// @field BORDER bool @unit bool @level live @target timbre @states clamp mirror  Border: what the wave position does when K2 + 'Timbre <- LFO' + 'Timbre <- env' runs past the first / last frame. clamp = it stops there (dead zone: the modulation stops moving it); mirror = it turns around and travels back (always moving, always continuous; the same knob position always gives the same result)
 // @field PITCH_ENV float @unit cents @range 0 9960 @taper lin @level live @why the bands run at 8 kHz (Nyquist 4 kHz): at + 9960 cents even the lowest band of any slot (12.7 Hz, down slot) is past 4 kHz - every band folds @target pitch  Pitch <- env: the note starts this many cents off and glides to the played pitch - pluck side over the decay time, swell side over the rise time (the pure envelope, no env follower: how hard you play never moves the pitch). Adds to 'Pitch <- LFO'. 0 = off
 // @field STEPPED bool @unit bool @level live @target timbre @states smooth stepped  K2 stepped: smooth = K2 morphs continuously through the waves; stepped = K2 snaps to the preset's defined key waves (1 ms slide between them). ANALOG presets: no effect
 // @field LOFI bool @unit bool @level live @target lofi @states off on  Lofi engine: on = the Lofi engine's four stages (global values, section Lofi engine; master EXP_TB_LOFI_ENABLE) run on this preset; off = clean
+// @field LAND bool @unit bool @level live @target timbre @states off on  Env lands on K2: off = swell side starts at K2 and opens to K2 + 'Timbre <- env' (pluck side starts at K2 + depth, settles on K2); on = the swell side starts at K2 - depth and rises into K2, so K2 is always the timbre the note settles on (pluck side unchanged)
 constexpr bool ExpTbStrEq(const char* a, const char* b) {
   return (*a != *b) ? false : (*a == 0) ? true : ExpTbStrEq(a + 1, b + 1);
 }
@@ -302,10 +304,11 @@ constexpr bool ExpTbStrEq(const char* a, const char* b) {
   TUNABLE(float, EXP_TB_##N##_RATE_CCW, EXP_TB_PRESETS[Z].mod.rate_ccw);                              \
   TUNABLE(float, EXP_TB_##N##_RATE_CW, EXP_TB_PRESETS[Z].mod.rate_cw);                                \
   TUNABLE(float, EXP_TB_##N##_TIMBRE_ENV, EXP_TB_PRESETS[Z].mod.timbre_env);                          \
-  TUNABLE(float, EXP_TB_##N##_FILTER_ENV, EXP_TB_PRESETS[Z].mod.filter_env);                          \
+  TUNABLE(bool, EXP_TB_##N##_BORDER, EXP_TB_PRESETS[Z].mod.mirror);                                  \
   TUNABLE(float, EXP_TB_##N##_PITCH_ENV, EXP_TB_PRESETS[Z].mod.pitch_env);                            \
   TUNABLE(bool, EXP_TB_##N##_STEPPED, EXP_TB_PRESETS[Z].mod.stepped);                                \
-  TUNABLE(bool, EXP_TB_##N##_LOFI, EXP_TB_PRESETS[Z].mod.lofi);
+  TUNABLE(bool, EXP_TB_##N##_LOFI, EXP_TB_PRESETS[Z].mod.lofi);                                      \
+  TUNABLE(bool, EXP_TB_##N##_LAND, EXP_TB_PRESETS[Z].mod.land);
 EXP_TB_PRESET_MODS(EXP_TB_MOD_DECLARE)
 static_assert(EXP_TB_BANK_N == 15, "EXP_TB_PRESET_MODS lists 15 presets");
 // The current values of every preset's MOD tunables (explorer.h: Init, and DIAG TunableRefresh after a set).
@@ -314,7 +317,8 @@ inline void ExpTbModRead(ExpTbMod* out) {
   out[Z] = ExpTbMod{ EXP_TB_##N##_TIMBRE, EXP_TB_##N##_FILTER, EXP_TB_##N##_FILTER_SWELL, EXP_TB_##N##_RES,    \
                      EXP_TB_##N##_FILTER_TOUCH, EXP_TB_##N##_PITCH,                                         \
                      EXP_TB_##N##_RATE_CCW, EXP_TB_##N##_RATE_CW, EXP_TB_##N##_TIMBRE_ENV,                  \
-                     EXP_TB_##N##_FILTER_ENV, EXP_TB_##N##_PITCH_ENV, EXP_TB_##N##_STEPPED, EXP_TB_##N##_LOFI };
+                     EXP_TB_##N##_BORDER, EXP_TB_##N##_PITCH_ENV, EXP_TB_##N##_STEPPED, EXP_TB_##N##_LOFI,  \
+                     EXP_TB_##N##_LAND };
   EXP_TB_PRESET_MODS(EXP_TB_MOD_READ)
 #undef EXP_TB_MOD_READ
 }

@@ -1350,8 +1350,8 @@ function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.pre
 // values, grouped by target (LFO and env depth knobs per target, LFO rates as a CCW / CW fader pair).
 // ---------------------------------------------------------------------------
 const PRESET_GROUPS = [
-  { title: "Timbre (K2)", target: "timbre", fields: ["TIMBRE", "TIMBRE_ENV", "STEPPED"] },
-  { title: "Filter (K3)", target: "filter", fields: ["FILTER", "FILTER_SWELL", "FILTER_ENV", "FILTER_TOUCH", "RES"] },
+  { title: "Timbre (K2)", target: "timbre", fields: ["TIMBRE", "TIMBRE_ENV", "BORDER", "LAND", "STEPPED"] },
+  { title: "Filter (K3)", target: "filter", fields: ["FILTER", "FILTER_SWELL", "FILTER_TOUCH", "RES"] },
   { title: "Pitch", target: "pitch", fields: ["PITCH", "PITCH_ENV"] },
   { title: "LFO speed (K5)", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
   { title: "Lofi", target: "lofi", fields: ["LOFI"] },

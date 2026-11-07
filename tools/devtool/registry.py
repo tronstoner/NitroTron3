@@ -242,10 +242,10 @@ LABELS = {
     "EXP_SPEC_DYN_GATE_DB": "Swell gate", "EXP_SPEC_DYN_REL_FRAC": "Mute damping", "EXP_ENV_TRAVEL_TAUS": "Swell curve",
 }
 FIELD_LABELS = {"TIMBRE": "Timbre ← LFO", "TIMBRE_ENV": "Timbre ← env", "STEPPED": "K2 stepped",
-                "FILTER": "Filter ← LFO, pluck", "FILTER_SWELL": "Filter ← LFO, swell", "FILTER_ENV": "Filter ← env",
+                "FILTER": "Filter ← LFO, pluck", "FILTER_SWELL": "Filter ← LFO, swell", "BORDER": "Border",
                 "RES": "Resonance (Q)", "FILTER_TOUCH": "Touch env → filter",
                 "PITCH": "Pitch ← LFO", "PITCH_ENV": "Pitch ← env",
-                "RATE_CCW": "LFO max, CCW", "RATE_CW": "LFO max, CW", "LOFI": "Lofi engine"}
+                "RATE_CCW": "LFO max, CCW", "RATE_CW": "LFO max, CW", "LOFI": "Lofi engine", "LAND": "Env lands on K2"}
 
 
 def make_label(name, note, doc, unit):

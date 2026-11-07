@@ -1423,16 +1423,20 @@ def selftest():
             mrow = re.match(r'^\s*\{\s*"(\w+)"\s*,\s*kTb', ln)
             if mrow:
                 rows[mrow.group(1)] = n
-    check(len(presets) == 15 and len(fam) == 15 * 13
+    check(len(presets) == 15 and len(fam) == 15 * 14
           and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_WOOD_TIMBRE"]["default"] == 0.15
           and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] == {("BRASS", "TIMBRE"): 0.178, ("SYNC", "TIMBRE"): 0.577}.get((pn, t), 0.0)
                   and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["type"] == "float" and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
-                  for _i, pn in presets for t in ("TIMBRE", "FILTER", "PITCH"))
+                  for _i, pn in presets for t in ("TIMBRE", "PITCH"))
+          and "EXP_TB_SAW_FILTER_ENV" not in byn
+          and all(byn["EXP_TB_%s_BORDER" % pn]["default"] is False and byn["EXP_TB_%s_LAND" % pn]["default"] is False
+                  and byn["EXP_TB_%s_BORDER" % pn]["states"] == ["clamp", "mirror"] and byn["EXP_TB_%s_LAND" % pn]["target"] == "timbre"
+                  for _i, pn in presets)
           and "EXP_TB_SAW_ENV" not in byn and byn["EXP_TB_AIR_PITCH"]["default"] == 15.0
           and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn in ("SAW", "PULSE", "VOCAL", "AIR")) for _i, pn in presets)
           and all(byn["EXP_TB_%s_STEPPED" % pn]["default"] is (pn == "LOFI") for _i, pn in presets)
           and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
-          "registry: @family per-preset tunables (15 presets x 13 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / AIR, Stepped on LOFI only; LFO + env depths per target, env only on BRASS / SYNC timbre)")
+          "registry: @family per-preset tunables (15 presets x 14 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / AIR, Stepped on LOFI only; LFO + env depths on timbre / pitch, env only on BRASS / SYNC timbre; Border / Land off)")
     check(byn["EXP_TB_VOCAL_RES"]["default"] == 0.7 and byn["EXP_TB_SAW_RES"]["default"] == 1.5
           and all(byn["EXP_TB_%s_RES" % pn]["unit"] == "Q"
               and byn["EXP_TB_%s_RES" % pn]["taper"] == "log" and byn["EXP_TB_%s_RES" % pn]["target"] == "filter"

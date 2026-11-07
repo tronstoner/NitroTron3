@@ -423,7 +423,7 @@
 //          LOFI     LOFI (the 31-frame LOFI SPECTRA table): K2 = morph; Lofi + Stepped flags on by default
 //          (JOURNEY - K5 = direction + speed of a morph travel - was removed 2026-11-06; its presets are LFO presets.)
 //   MOD    per preset (explorer_tables.h Presets: EXP_TB_<NAME>_TIMBRE / _FILTER / _FILTER_SWELL / _RES / _FILTER_TOUCH / _PITCH /
-//          _RATE_CCW / _RATE_CW / _TIMBRE_ENV / _FILTER_ENV / _PITCH_ENV / _STEPPED / _LOFI, live in DIAG builds; defaults in the
+//          _RATE_CCW / _RATE_CW / _TIMBRE_ENV / _BORDER / _PITCH_ENV / _STEPPED / _LOFI / _LAND, live in DIAG builds; defaults in the
 //          EXP_TB_PRESETS rows). SOURCE PER TARGET (2026-11-06): each target's _ENV flag picks its source s:
 //          LFO (flag false, default): s = the K5 LFO (LfoUpdate; CCW triangle up to RATE_CCW, noon off, CW steps up to RATE_CW, bottom
 //                         EXP_LFO_HZ_MIN; depth fade-in EXP_LFO_DEPTH_FRAC)
@@ -1070,7 +1070,7 @@ class Explorer : public Module {
     float tres;       // the LP Q this preset sets: ANALOG = tq, else its RES (live value); 0 = no bank preset
     float tft;        // the preset's FILTER_TOUCH (env amount on the LP travel, live value); 0 = no bank preset
     float tm;         // applied morph m now (K2 + the timbre offset: LFO l / env o), latest 8 kHz sample
-    uint8_t tsrc;     // MOD sources in use (depth != 0): env 1 timbre, 2 filter, 4 pitch; LFO 8 timbre, 16 filter, 32 pitch
+    uint8_t tsrc;     // MOD sources in use (depth != 0): env 1 timbre, 2 filter (FILTER_TOUCH), 4 pitch; LFO 8 timbre, 16 filter, 32 pitch
     static char SrcChar(uint8_t src, int t) {   // per target t (0 timbre, 1 filter, 2 pitch): - none, L, E, B = both
       const bool e = src & (1 << t), l = src & (8 << t);
       return (e && l) ? 'B' : e ? 'E' : l ? 'L' : '-';
@@ -1653,8 +1653,19 @@ class Explorer : public Module {
   // K2 offset of the K5 LFO in knob units for model m (Derive: p = clamp(p_knob + o2 span)): FM b swing
   // EXP_LFO_FB_SWING / span EXP_FBFM_FB_MAX, table morph swing EXP_LFO_MORPH_SWING / span 1; XBAND, BITTAB, DOWN: 0.
   // Tables (zone z): legacy zones the LFO x EXP_LFO_MORPH_SWING; audition bank: the preset's MOD timbre depth td,
-  // o2 = timbre x l + timbre_env x o (l = the K5 LFO, o = the K4 touch env openness; both add, 2026-11-07), exactly 0
-  // with both depths 0 (ANALOG / LOFI defaults).
+  // o2 = timbre x l + timbre_env x e (l = the K5 LFO; both add, 2026-11-07), exactly 0 with both depths 0 (ANALOG /
+  // LOFI defaults). e = o, the K4 touch env openness; LAND: e = o - w (= (1 - w) o_d - w (1 - o_r)): the swell side
+  // starts at - depth and rises into 0, so the note settles on K2 on both sides.
+  // BORDER (audition bank, per preset): mirror the morph at 0 / 1 instead of clamping. Fold01: a triangle fold of x
+  // into [0, 1] (x = 1.2 -> 0.8, -0.3 -> 0.3, 2.4 -> 0.4), continuous, no state.
+  inline bool TbMirror(int z) const {
+    return !explorer_k::EXP_TB_LEGACY && z >= 0 && z < explorer_k::EXP_TB_BANK_N && tbm_[z].mirror;
+  }
+  static inline float Fold01(float x) {
+    float r = fmodf(x, 2.f);
+    if (r < 0.f) r += 2.f;
+    return (r > 1.f) ? 2.f - r : r;
+  }
   inline float LfoO2(int m, int z) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
@@ -1666,7 +1677,8 @@ class Explorer : public Module {
       if (EXP_TB_LEGACY || z < 0 || z >= EXP_TB_BANK_N) return lfo_s_ * EXP_LFO_MORPH_SWING;   // legacy zones
       const ExpTbMod& M = tbm_[z];
       if (M.timbre == 0.f && M.timbre_env == 0.f) return 0.f;          // no timbre target (ANALOG / LOFI defaults)
-      return lfo_s_ * M.timbre + te_.o * M.timbre_env;                 // MOD timbre: LFO l + touch env o
+      const float e = M.land ? te_.o - te_.w : te_.o;                 // LAND: swell side rises INTO K2
+      return lfo_s_ * M.timbre + e * M.timbre_env;                     // MOD timbre: LFO l + touch env
     }
     return 0.f;
   }
@@ -2600,21 +2612,21 @@ class Explorer : public Module {
     lo = -te_.w * te_.orr * up * oct;            // swell: DOWNWARD only, 0 .. -OCT x depth (2026-11-05)
     ld = (1.f - te_.w) * up * oct_dec * (1.f - te_.od);
   }
-  // Audition bank MOD on the LP cutoff (TfUpdate), per 8 kHz sample: does preset z move the cutoff (any of filter /
-  // filter swell / filter env != 0), and by how many octaves (LFO: LfoFcOct with its depths, lo + ld k3; + env:
-  // filter_env x o; both add, 2026-11-07). TbFcMod: tb_fon_ = the current or the fading side moves it, tb_fo_ = the octaves, the sides weighted
+  // Audition bank MOD on the LP cutoff (TfUpdate), per 8 kHz sample: does preset z move the cutoff (filter or filter
+  // swell != 0), and by how many octaves (LfoFcOct with its depths, lo + ld k3). The env on the cutoff is the touch
+  // env's own travel (FILTER_TOUCH, TfUpdate). TbFcMod: tb_fon_ = the current or the fading side moves it, tb_fo_ = the octaves, the sides weighted
   // with the zone crossfade (mg_; equal octaves: (w_a + w_b) x, the former ANALOG weight law); kc = the smoothed K3 0..1.
   inline bool TbFcHas(int var) const {
     const int z = TbModZone(var);
     if (z < 0) return false;
     const explorer_k::ExpTbMod& M = tbm_[z];
-    return M.filter != 0.f || M.filter_swell != 0.f || M.filter_env != 0.f;
+    return M.filter != 0.f || M.filter_swell != 0.f;
   }
   inline float TbFcOctZ(int z, float kc) const {
     const explorer_k::ExpTbMod& M = tbm_[z];
     float lo, ld;
     LfoFcOct(lo, ld, M.filter_swell, M.filter);
-    return lo + ld * kc + M.filter_env * te_.o;
+    return lo + ld * kc;
   }
   inline void TbFcMod(bool fading, float kc) {
     const bool an = TbFcHas(var_), ao = fading && TbFcHas(vfrom_);
@@ -3114,7 +3126,7 @@ class Explorer : public Module {
                                            // scale (WaveMorph MorphPos / Shape); audition bank: p2 = tonal gain at
                                            // the position (linear between the two frames)
         const int nf = TbFrames(zone);
-        const float mm = Clamp01(k2 + o2);                // morph m in [0, 1]
+        const float mm = TbMirror(zone) ? Fold01(k2 + o2) : Clamp01(k2 + o2);   // morph m in [0, 1] (BORDER)
         const float pos = (float)(nf - 1) * mm;
         int f0 = (int)pos;
         if (f0 > nf - 2) f0 = nf - 2;
@@ -4108,7 +4120,7 @@ class Explorer : public Module {
     {                                            // MOD of the preset (live values)
       const bool ok = (diag_tbz_ >= 0 && diag_tbz_ < EXP_TB_BANK_N);
       const ExpTbMod& M = tbm_[ok ? diag_tbz_ : 0];
-      s.tsrc = !ok ? 0 : (uint8_t)((M.timbre_env != 0.f ? 1 : 0) | (M.filter_env != 0.f ? 2 : 0) | (M.pitch_env != 0.f ? 4 : 0) |
+      s.tsrc = !ok ? 0 : (uint8_t)((M.timbre_env != 0.f ? 1 : 0) | (M.filter_touch != 0.f ? 2 : 0) | (M.pitch_env != 0.f ? 4 : 0) |
                                    (M.timbre != 0.f ? 8 : 0) | ((M.filter != 0.f || M.filter_swell != 0.f) ? 16 : 0) |
                                    (M.pitch != 0.f ? 32 : 0));
       s.ttd = ok ? M.timbre : 0.f; s.tfd = ok ? M.filter : 0.f; s.tfs = ok ? M.filter_swell : 0.f;
