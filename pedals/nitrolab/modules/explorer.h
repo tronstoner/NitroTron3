@@ -3955,7 +3955,17 @@ class Explorer : public Module {
   static void TbStageSpec(const explorer_k::ExpTbStage& S, float p, float* A, float* B, bool peak1) {
     using namespace explorer_k;
     constexpr int N = EXP_TB_TD_SIZE;
-    if (S.gen == kTbgPwm || S.gen == kTbgSync || S.gen == kTbgPpgBit || S.gen == kTbgLoRes) {
+    if (S.gen == kTbgPwm) {                      // PWM (2026-11-07, builder's pick 'C'): exact Fourier series of the
+      const float w = TbPwmWidth(p);             // +-1 pulse high on [0, w), DC removed, fixed rails = no per-frame
+      for (int h = 1; h <= EXP_TB_HMAX; h++) {   // rescale (peak1 ignored): narrow pulses keep their analog level,
+        const float k = 2.f / (3.14159265f * (float)h);   // width 0 = silence. a_h = k (1 - cos 2 pi h w),
+        const float x = 6.283185307f * (float)h * w;      // b_h = k sin 2 pi h w (sin / cos parts as TbAnalyse)
+        A[h] = k * (1.f - cosf(x));
+        B[h] = k * sinf(x);
+      }
+      return;
+    }
+    if (S.gen == kTbgSync || S.gen == kTbgPpgBit || S.gen == kTbgLoRes) {
       float* x = explorer_tb_scratch.x;
       for (int i = 0; i < N; i++) x[i] = TbGenTime(S.gen, p, (float)i / (float)N);
       TbAnalyse(x, A, B);

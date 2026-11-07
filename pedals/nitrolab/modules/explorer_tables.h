@@ -59,7 +59,7 @@ enum : uint8_t {
   kTbgPpgRes,      // spectral: legacy HARD A 1, PPG resonant (EXP_TB_PPGRES_*)
   kTbgPpgFb,       // spectral: legacy HARD B 4, PPG feedback (saw without harmonics 1 .. EXP_TB_PPGFB_SKIP)
   kTbgVocal,       // spectral: legacy zone 5 vocal at position p (0 a .. 1 u)
-  kTbgPwm,         // time: legacy zone 4 PWM at position p (width 0.5 (1 - p)^EXP_TB_PWM_CURVE; p = 1: silence)
+  kTbgPwm,         // exact pulse at position p (width 0.5 (1 - p)^EXP_TB_PWM_CURVE; fixed +-1 rails, DC removed; p = 1: silence)
   kTbgSync,        // time: hard-sync saw 2 frac(p phi) - 1 (ratio p; legacy HARD B 1 at p = EXP_TB_SYNCSAW_R)
   kTbgPpgBit,      // time: legacy PPG CLASSIC 3, bit pattern
   kTbgLoRes,       // time: legacy SOFT B 4, stepped lo-res sine (EXP_TB_LORES_STEPS)
@@ -189,13 +189,15 @@ constexpr ExpTbStage EXP_TB_ST_LOFISPEC[] = {
   { 15.f / 15.f, kTbgClip,  0.f, nullptr, 0, 1.f } };                    // 16 clipper
 
 // --- the bank, K1 order (CCW -> CW); the LOFI slot at the CW end (2026-11-06) ---
-// level rules: PWM / VOCAL keep their legacy zones' rules (peak 1, no re-phase, scale EXP_TB_I16_SCALE: PWM falls to
-// silence at the narrow end) -> their frames are the legacy zone 4 / 5 frames; every other preset (AIR and LOFI SPECTRA
-// too): re-phase + RMS match to the plain saw, scale EXP_TB_I16_SCALE_WIDE (headroom 5.0, as legacy zones 3 / 10).
+// level rules: VOCAL keeps its legacy zone's rules (peak 1, no re-phase, scale EXP_TB_I16_SCALE) -> legacy zone 5 frames;
+// PWM (2026-11-07): exact pulse, fixed +-1 rails (no rescale per frame, louder toward the narrow end than the legacy
+// peak-1 frames, silence at width 0), no re-phase / RMS match, scale EXP_TB_I16_SCALE_WIDE (its spikes reach ~2.2);
+// every other preset (AIR and LOFI SPECTRA too): re-phase + RMS match to the plain saw, scale EXP_TB_I16_SCALE_WIDE
+// (headroom 5.0, as legacy zones 3 / 10).
 constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
   { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, true) },
   { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, true) },
-  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .572f, 0.f, 20.f, 20.f, false, false, false, false, false) },
+  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .572f, 0.f, 20.f, 20.f, false, false, false, false, false) },
   { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
   { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, .7f, .594f, 0.f, 5.f, 10.f, false, false, false, false, true) },
   { "WOOD",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
