@@ -155,10 +155,14 @@ constexpr ExpTbStage EXP_TB_ST_AIR[]    = { { 0.f,       kTbgVocal, 1.f,   nullp
                                             { 1.f / 3.f, kTbgVocal, 0.f,   nullptr, 0, 1.f },
                                             { 2.f / 3.f, kTbgVocal, .25f,  nullptr, 0, 1.f },
                                             { 1.f,       kTbgVocal, 1.f,   nullptr, 0, 1.f } };
-// ORGAN (2026-11-08): the original DRAWBAR -> MIXTURE, the harmonium at CW replaced by Hammond 888888888.
-constexpr ExpTbStage EXP_TB_ST_ORGAN[]  = { { 0.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_DRAWBAR), 1.f },
-                                            { .5f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_MIXTURE), 1.f },
-                                            { 1.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_HAM_888888888), 1.f } };
+// ORGAN (2026-11-08): stops sparse -> dense, dB-blended; 36 frames = 7 steps per pair, every stop on a frame
+// (the original DRAWBAR -> MIXTURE had 7.5). Harmonium removed.
+constexpr ExpTbStage EXP_TB_ST_ORGAN[]  = { { 0.f / 5.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GEDACKT), 1.f },
+                                            { 1.f / 5.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_DRAWBAR), 1.f },
+                                            { 2.f / 5.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_MIXTURE), 1.f },
+                                            { 3.f / 5.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_SESQUIALTERA), 1.f },
+                                            { 4.f / 5.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_CORNET), 1.f },
+                                            { 5.f / 5.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_HAM_888888888), 1.f } };
 constexpr ExpTbStage EXP_TB_ST_PPG[]    = { { 0.f,         kTbgPpgRes, 0.f, nullptr, 0, 1.f },
                                             { 1.f / 3.f,   kTbgPpgFb,  0.f, nullptr, 0, 1.f },
                                             { 2.f / 3.f,   kTbgPpgBit, 0.f, nullptr, 0, 1.f },
@@ -205,7 +209,7 @@ constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
   { "WOOD",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
   { "REED",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
   { "BRASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_BRASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.f, 2.f, 1.5f, 1.f, 0.f, 20.f, 20.f, .178f, false, 0.f, false, false, false) },
-  { "ORGAN",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .245f, 20.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
+  { "ORGAN",  kTbLfo,    36, EXP_TB_S(EXP_TB_ST_ORGAN),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .245f, 20.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
   { "PPG",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PPG),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.3f, 0.f, 0.f, .7f, 0.f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
   { "METAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_METAL),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.203f, .39f, .74f, .7f, .71f, 15.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
   { "GLASS",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_GLASS),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.153f, 3.33f, 1.96f, .746f, .372f, 0.f, 20.f, 20.f, 0.f, false, 0.f, false, false, false) },
