@@ -197,8 +197,8 @@ constexpr ExpTbStage EXP_TB_ST_LOFISPEC[] = {
 constexpr ExpTbPreset EXP_TB_PRESETS[EXP_TB_BANK_N] = {
   { "SAW",    kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_SAW),    true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, true) },
   { "PULSE",  kTbAnalog,  1, EXP_TB_S(EXP_TB_ST_PULSE),  true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(0.f, 2.6f, 1.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, true) },
-  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, .572f, 0.f, 20.f, 20.f, false, false, false, false, false) },
-  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
+  { "PWM",    kTbLfo,    16, EXP_TB_S(EXP_TB_ST_PWM),    false, false, EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.231f, 0.f, 0.f, 2.f, 1.f, 0.f, 18.f, 14.f, false, false, false, false, false) },
+  { "SYNC",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_SYNC),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.577f, 0.f, 0.f, .7f, 0.f, 0.f, 20.f, 20.f, true, false, false, false, false) },
   { "VOCAL",  kTbLfo,    16, EXP_TB_S(EXP_TB_ST_VOCAL),  false, false, EXP_TB_I16_SCALE,      -1, EXP_TB_MOD(.15f, 0.f, 0.f, .7f, .594f, 0.f, 5.f, 10.f, false, false, false, false, true) },
   { "WOOD",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_WOOD),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },
   { "REED",   kTbLfo,    16, EXP_TB_S(EXP_TB_ST_REED),   true,  true,  EXP_TB_I16_SCALE_WIDE, -1, EXP_TB_MOD(.15f, 0.f, 0.f, 1.5f, 1.f, 0.f, 20.f, 20.f, false, false, false, false, false) },

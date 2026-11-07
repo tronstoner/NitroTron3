@@ -1424,14 +1424,14 @@ def selftest():
             if mrow:
                 rows[mrow.group(1)] = n
     check(len(presets) == 15 and len(fam) == 15 * 13
-          and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_PWM_TIMBRE"]["default"] == 0.15
-          and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] is ((pn, t) == ("BRASS", "TIMBRE")) and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
+          and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_WOOD_TIMBRE"]["default"] == 0.15
+          and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] is ((pn, t) in (("BRASS", "TIMBRE"), ("SYNC", "TIMBRE"))) and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
                   for _i, pn in presets for t in ("TIMBRE", "FILTER", "PITCH"))
           and "EXP_TB_SAW_ENV" not in byn and byn["EXP_TB_AIR_PITCH"]["default"] == 15.0
           and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn in ("SAW", "PULSE", "VOCAL", "AIR")) for _i, pn in presets)
           and all(byn["EXP_TB_%s_STEPPED" % pn]["default"] is (pn == "LOFI") for _i, pn in presets)
           and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
-          "registry: @family per-preset tunables (15 presets x 13 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / AIR, Stepped on LOFI only; per-target sources LFO except BRASS timbre = env)")
+          "registry: @family per-preset tunables (15 presets x 13 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / AIR, Stepped on LOFI only; per-target sources LFO except BRASS / SYNC timbre = env)")
     check(byn["EXP_TB_VOCAL_RES"]["default"] == 0.7 and byn["EXP_TB_SAW_RES"]["default"] == 1.5
           and all(byn["EXP_TB_%s_RES" % pn]["unit"] == "Q"
               and byn["EXP_TB_%s_RES" % pn]["taper"] == "log" and byn["EXP_TB_%s_RES" % pn]["target"] == "filter"
@@ -1505,14 +1505,14 @@ def selftest():
     check(sent < 45, "throttle: %d sends for 60 requests" % sent)
     st, _ = post("/api/set", {"name": name, "value": 5000})
     check(st == 400, "set: outside @range refused")
-    st, r = post("/api/set", {"name": "EXP_PS_DEC_FAST_S", "value": 9})
+    st, r = post("/api/set", {"name": "EXP_PS_DEC_FAST_S", "value": 20})
     check(st == 400 and "below" in r.get("message", ""), "set: @below ordering refused (FAST >= SLOW)")
     st, r = post("/api/set", {"name": "EXP_SPEC_DYN_TOP_DB", "value": -70})
     check(st == 400 and "above" in r.get("message", ""), "set: @below ordering refused from the upper side (TOP <= FLOOR)")
     st, _ = post("/api/set", {"name": "NOPE", "value": 1})
     check(st == 404, "set: unknown constant refused")
-    st, _ = post("/api/set", {"name": "EXP_TB_LOFI_ENABLE", "value": False})
-    check(st == 202 and has("tval", lambda d: d["name"] == "EXP_TB_LOFI_ENABLE" and d["value"] is False),
+    st, _ = post("/api/set", {"name": "EXP_TB_LOFI_ENABLE", "value": True})
+    check(st == 202 and has("tval", lambda d: d["name"] == "EXP_TB_LOFI_ENABLE" and d["value"] is True),
           "set: bool")
     st, _ = post("/api/set", {"name": "EXP_TB_LOFI_TABLE_BITS", "value": 4.5})
     check(st == 202, "set: fractional bits accepted (float)")
@@ -1521,7 +1521,7 @@ def selftest():
     post("/api/note", {"text": "faster LFO sounds better"})
     check(wait_for(lambda: (changes_file() or {}).get("note") == "faster LFO sounds better"), "note -> changes.json")
     st, _ = post("/api/reset", {"name": "EXP_TB_LOFI_ENABLE"})
-    check(st == 202 and has("tval", lambda d: d["name"] == "EXP_TB_LOFI_ENABLE" and d["value"] is True),
+    check(st == 202 and has("tval", lambda d: d["name"] == "EXP_TB_LOFI_ENABLE" and d["value"] is False),
           "reset one -> default echoed")
     # guard: firmware hash != HEAD blocks set until the override
     head["h"] = "fff0000"
