@@ -59,6 +59,7 @@ enum : uint8_t {
   kTbgPpgRes,      // spectral: legacy HARD A 1, PPG resonant (EXP_TB_PPGRES_*)
   kTbgPpgFb,       // spectral: legacy HARD B 4, PPG feedback (saw without harmonics 1 .. EXP_TB_PPGFB_SKIP)
   kTbgVocal,       // spectral: legacy zone 5 vocal at position p (0 a .. 1 u)
+  kTbgDrawbar,     // spectral: drawbar registers EXP_TB_W_ORGAN_REG pulled in order, p 0 (first only) .. 1 (all full)
   kTbgPwm,         // exact pulse at position p (width 0.5 (1 - p)^EXP_TB_PWM_CURVE; fixed +-1 rails, DC removed; p = 1: silence)
   kTbgSync,        // time: hard-sync saw 2 frac(p phi) - 1 (ratio p; legacy HARD B 1 at p = EXP_TB_SYNCSAW_R)
   kTbgPpgBit,      // time: legacy PPG CLASSIC 3, bit pattern
@@ -155,9 +156,9 @@ constexpr ExpTbStage EXP_TB_ST_AIR[]    = { { 0.f,       kTbgVocal, 1.f,   nullp
                                             { 1.f / 3.f, kTbgVocal, 0.f,   nullptr, 0, 1.f },
                                             { 2.f / 3.f, kTbgVocal, .25f,  nullptr, 0, 1.f },
                                             { 1.f,       kTbgVocal, 1.f,   nullptr, 0, 1.f } };
-constexpr ExpTbStage EXP_TB_ST_ORGAN[]  = { { 0.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_DRAWBAR), 1.f },
-                                            { .5f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_MIXTURE), 1.f },
-                                            { 1.f,  kTbgHarmonium, 0.f, nullptr, 0, 1.f } };
+// ORGAN (2026-11-07): drawbar registers sparse -> dense, one generator (a sweep: in-between = a drawbar part out).
+constexpr ExpTbStage EXP_TB_ST_ORGAN[]  = { { 0.f,  kTbgDrawbar, 0.f, nullptr, 0, 1.f },
+                                            { 1.f,  kTbgDrawbar, 1.f, nullptr, 0, 1.f } };
 constexpr ExpTbStage EXP_TB_ST_PPG[]    = { { 0.f,         kTbgPpgRes, 0.f, nullptr, 0, 1.f },
                                             { 1.f / 3.f,   kTbgPpgFb,  0.f, nullptr, 0, 1.f },
                                             { 2.f / 3.f,   kTbgPpgBit, 0.f, nullptr, 0, 1.f },

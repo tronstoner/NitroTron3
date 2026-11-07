@@ -4018,6 +4018,16 @@ class Explorer : public Module {
         for (int i = 0; i < S.n; i++) if (S.list[i].h >= 1 && S.list[i].h <= EXP_TB_HMAX) A[S.list[i].h] += S.list[i].a;
         break;
       case kTbgHarmonium: TbSpectral(7, 0, 0.f, A, B); break;
+      case kTbgDrawbar: {                        // registers pulled in order: register k at clamp(p (n - 1) - (k - 1), 0, 1)
+        for (int h = 0; h <= EXP_TB_HMAX; h++) { A[h] = 0.f; B[h] = 0.f; }
+        constexpr int n = (int)(sizeof(EXP_TB_W_ORGAN_REG) / sizeof(EXP_TB_W_ORGAN_REG[0]));
+        const float x = p * (float)(n - 1);
+        for (int k = 0; k < n; k++) {
+          const float g = (k == 0) ? 1.f : Clamp01(x - (float)(k - 1));
+          A[EXP_TB_W_ORGAN_REG[k].h] += g * EXP_TB_W_ORGAN_REG[k].a;
+        }
+        break;
+      }
       case kTbgOboe:      TbSpectral(8, 1, 0.f, A, B); break;
       case kTbgBrass:
         for (int h = 0; h <= EXP_TB_HMAX; h++) { A[h] = 0.f; B[h] = 0.f; }
