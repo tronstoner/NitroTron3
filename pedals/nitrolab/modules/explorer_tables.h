@@ -155,13 +155,14 @@ constexpr ExpTbStage EXP_TB_ST_AIR[]    = { { 0.f,       kTbgVocal, 1.f,   nullp
                                             { 1.f / 3.f, kTbgVocal, 0.f,   nullptr, 0, 1.f },
                                             { 2.f / 3.f, kTbgVocal, .25f,  nullptr, 0, 1.f },
                                             { 1.f,       kTbgVocal, 1.f,   nullptr, 0, 1.f } };
-// ORGAN (2026-11-08): registrations sparse -> dense (drawbar count), dB-blended as before; harmonium removed.
-constexpr ExpTbStage EXP_TB_ST_ORGAN[]  = { { 0.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_HAM_800000008), 1.f },
-                                            { .2f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_HAM_888000000), 1.f },
-                                            { .4f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_HAM_888800000), 1.f },
-                                            { .6f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_DRAWBAR), 1.f },
-                                            { .8f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_MIXTURE), 1.f },
-                                            { 1.f,  kTbgList, 0.f, EXP_TB_L(EXP_TB_W_HAM_888888888), 1.f } };
+// ORGAN (2026-11-08): stops sparse -> dense, dB-blended; one stop per 5 frames (31 frames). Harmonium removed.
+constexpr ExpTbStage EXP_TB_ST_ORGAN[]  = { { 0.f / 6.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_GEDACKT), 1.f },
+                                            { 1.f / 6.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_DRAWBAR), 1.f },
+                                            { 2.f / 6.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_PRINCIPAL), 1.f },
+                                            { 3.f / 6.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_SESQUIALTERA), 1.f },
+                                            { 4.f / 6.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_MIXTURE), 1.f },
+                                            { 5.f / 6.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_CORNET), 1.f },
+                                            { 6.f / 6.f, kTbgList, 0.f, EXP_TB_L(EXP_TB_W_HAM_888888888), 1.f } };
 constexpr ExpTbStage EXP_TB_ST_PPG[]    = { { 0.f,         kTbgPpgRes, 0.f, nullptr, 0, 1.f },
                                             { 1.f / 3.f,   kTbgPpgFb,  0.f, nullptr, 0, 1.f },
                                             { 2.f / 3.f,   kTbgPpgBit, 0.f, nullptr, 0, 1.f },
