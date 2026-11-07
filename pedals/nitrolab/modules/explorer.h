@@ -1070,7 +1070,11 @@ class Explorer : public Module {
     float tres;       // the LP Q this preset sets: ANALOG = tq, else its RES (live value); 0 = no bank preset
     float tft;        // the preset's FILTER_TOUCH (env amount on the LP travel, live value); 0 = no bank preset
     float tm;         // applied morph m now (K2 + the timbre offset: LFO l / env o), latest 8 kHz sample
-    uint8_t tsrc;     // MOD source per target, bit set = the K4 touch env o, clear = the K5 LFO: 1 timbre, 2 filter, 4 pitch
+    uint8_t tsrc;     // MOD sources in use (depth != 0): env 1 timbre, 2 filter, 4 pitch; LFO 8 timbre, 16 filter, 32 pitch
+    static char SrcChar(uint8_t src, int t) {   // per target t (0 timbre, 1 filter, 2 pitch): - none, L, E, B = both
+      const bool e = src & (1 << t), l = src & (8 << t);
+      return (e && l) ? 'B' : e ? 'E' : l ? 'L' : '-';
+    }
     float ttd, tfd, tfs, tpd;   // MOD depths: timbre (morph units), filter / filter swell (octaves), pitch (cents)
     bool  mute;
   };
@@ -1185,16 +1189,18 @@ class Explorer : public Module {
     }
   }
   // MOD PITCH (vibrato) of the current bank preset, per 8 kHz sample (Process, after the LFO / touch env, before the
-  // slots run): c = pitch x l cents (PITCH_ENV false; l = lfo_s_, the applied K5 LFO -1..1, as the timbre target) or
-  // pitch x o (PITCH_ENV true; o = the K4 touch env openness 0..1); tb_pg_ = (2^(c / 1200) - 1) / sr8. Pitch depth 0: tb_pg_
-  // = 0 and no per-band work (RunSlot skips TbPitchAdvance).
+  // slots run): c = pitch x l + pitch_env x e cents (l = lfo_s_, the applied K5 LFO -1..1, as the timbre target; e = the
+  // PURE pluck / swell envelope, no env follower (2026-11-07): (1 - w) g_ds + w (1 - g_rs) - 1 at the onset, -> 0 over
+  // T_d / T_r, so the note glides from the set detune to the played pitch; playing harder never moves it);
+  // tb_pg_ = (2^(c / 1200) - 1) / sr8. Both depths 0: tb_pg_ = 0 and no per-band work (RunSlot skips TbPitchAdvance).
   inline void TbPitchStep() {
     tb_pg_ = 0.f; tb_pc_ = 0.f;
     const int z = TbModZone(var_);
     if (z < 0) return;
     const explorer_k::ExpTbMod& M = tbm_[z];
-    if (M.pitch == 0.f) return;
-    const float c = M.pitch * (M.pitch_env ? te_.o : lfo_s_);
+    if (M.pitch == 0.f && M.pitch_env == 0.f) return;
+    const float e = (1.f - te_.w) * te_.gds + te_.w * (1.f - te_.grs);
+    const float c = M.pitch * lfo_s_ + M.pitch_env * e;
     tb_pc_ = c;
     tb_pg_ = (exp2f(c * (1.f / 1200.f)) - 1.f) / sr8_;
   }
@@ -1647,7 +1653,8 @@ class Explorer : public Module {
   // K2 offset of the K5 LFO in knob units for model m (Derive: p = clamp(p_knob + o2 span)): FM b swing
   // EXP_LFO_FB_SWING / span EXP_FBFM_FB_MAX, table morph swing EXP_LFO_MORPH_SWING / span 1; XBAND, BITTAB, DOWN: 0.
   // Tables (zone z): legacy zones the LFO x EXP_LFO_MORPH_SWING; audition bank: the preset's MOD timbre depth td,
-  // o2 = td l (TIMBRE_ENV false) or td o (TIMBRE_ENV true, o = the K4 touch env openness), exactly 0 at td 0 (ANALOG / LOFI defaults).
+  // o2 = timbre x l + timbre_env x o (l = the K5 LFO, o = the K4 touch env openness; both add, 2026-11-07), exactly 0
+  // with both depths 0 (ANALOG / LOFI defaults).
   inline float LfoO2(int m, int z) const {
     using namespace explorer_k;
     if (m == kFM) return 0.f;                    // FM: the LFO is added after the cap in ShapeK (2026-10-28)
@@ -1658,8 +1665,8 @@ class Explorer : public Module {
       if (EXP_TF_Q_ON_K5) return 0.f;                                  // K5 = LP Q on tables (temp)
       if (EXP_TB_LEGACY || z < 0 || z >= EXP_TB_BANK_N) return lfo_s_ * EXP_LFO_MORPH_SWING;   // legacy zones
       const ExpTbMod& M = tbm_[z];
-      if (M.timbre == 0.f) return 0.f;                                 // no timbre target (ANALOG / LOFI defaults)
-      return M.timbre_env ? te_.o * M.timbre : lfo_s_ * M.timbre;     // MOD timbre: LFO l or touch env o
+      if (M.timbre == 0.f && M.timbre_env == 0.f) return 0.f;          // no timbre target (ANALOG / LOFI defaults)
+      return lfo_s_ * M.timbre + te_.o * M.timbre_env;                 // MOD timbre: LFO l + touch env o
     }
     return 0.f;
   }
@@ -2593,22 +2600,21 @@ class Explorer : public Module {
     lo = -te_.w * te_.orr * up * oct;            // swell: DOWNWARD only, 0 .. -OCT x depth (2026-11-05)
     ld = (1.f - te_.w) * up * oct_dec * (1.f - te_.od);
   }
-  // Audition bank MOD on the LP cutoff (TfUpdate), per 8 kHz sample: does preset z move the cutoff (FILTER_ENV false =
-  // LFO: filter or filter swell != 0; true = env: filter != 0), and by how many octaves (LFO: LfoFcOct with its depths,
-  // lo + ld k3; env: filter x o). TbFcMod: tb_fon_ = the current or the fading side moves it, tb_fo_ = the octaves, the sides weighted
+  // Audition bank MOD on the LP cutoff (TfUpdate), per 8 kHz sample: does preset z move the cutoff (any of filter /
+  // filter swell / filter env != 0), and by how many octaves (LFO: LfoFcOct with its depths, lo + ld k3; + env:
+  // filter_env x o; both add, 2026-11-07). TbFcMod: tb_fon_ = the current or the fading side moves it, tb_fo_ = the octaves, the sides weighted
   // with the zone crossfade (mg_; equal octaves: (w_a + w_b) x, the former ANALOG weight law); kc = the smoothed K3 0..1.
   inline bool TbFcHas(int var) const {
     const int z = TbModZone(var);
     if (z < 0) return false;
     const explorer_k::ExpTbMod& M = tbm_[z];
-    return M.filter_env ? (M.filter != 0.f) : (M.filter != 0.f || M.filter_swell != 0.f);
+    return M.filter != 0.f || M.filter_swell != 0.f || M.filter_env != 0.f;
   }
   inline float TbFcOctZ(int z, float kc) const {
     const explorer_k::ExpTbMod& M = tbm_[z];
-    if (M.filter_env) return M.filter * te_.o;
     float lo, ld;
     LfoFcOct(lo, ld, M.filter_swell, M.filter);
-    return lo + ld * kc;
+    return lo + ld * kc + M.filter_env * te_.o;
   }
   inline void TbFcMod(bool fading, float kc) {
     const bool an = TbFcHas(var_), ao = fading && TbFcHas(vfrom_);
@@ -4102,7 +4108,9 @@ class Explorer : public Module {
     {                                            // MOD of the preset (live values)
       const bool ok = (diag_tbz_ >= 0 && diag_tbz_ < EXP_TB_BANK_N);
       const ExpTbMod& M = tbm_[ok ? diag_tbz_ : 0];
-      s.tsrc = !ok ? 0 : (uint8_t)((M.timbre_env ? 1 : 0) | (M.filter_env ? 2 : 0) | (M.pitch_env ? 4 : 0));
+      s.tsrc = !ok ? 0 : (uint8_t)((M.timbre_env != 0.f ? 1 : 0) | (M.filter_env != 0.f ? 2 : 0) | (M.pitch_env != 0.f ? 4 : 0) |
+                                   (M.timbre != 0.f ? 8 : 0) | ((M.filter != 0.f || M.filter_swell != 0.f) ? 16 : 0) |
+                                   (M.pitch != 0.f ? 32 : 0));
       s.ttd = ok ? M.timbre : 0.f; s.tfd = ok ? M.filter : 0.f; s.tfs = ok ? M.filter_swell : 0.f;
       s.tpd = ok ? M.pitch : 0.f;
       s.tres = !ok ? 0.f : (s.tbk == kTbAnalog) ? s.tq : M.res;

@@ -1425,13 +1425,14 @@ def selftest():
                 rows[mrow.group(1)] = n
     check(len(presets) == 15 and len(fam) == 15 * 13
           and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_WOOD_TIMBRE"]["default"] == 0.15
-          and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] is ((pn, t) in (("BRASS", "TIMBRE"), ("SYNC", "TIMBRE"))) and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
+          and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] == {("BRASS", "TIMBRE"): 0.178, ("SYNC", "TIMBRE"): 0.577}.get((pn, t), 0.0)
+                  and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["type"] == "float" and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
                   for _i, pn in presets for t in ("TIMBRE", "FILTER", "PITCH"))
           and "EXP_TB_SAW_ENV" not in byn and byn["EXP_TB_AIR_PITCH"]["default"] == 15.0
           and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn in ("SAW", "PULSE", "VOCAL", "AIR")) for _i, pn in presets)
           and all(byn["EXP_TB_%s_STEPPED" % pn]["default"] is (pn == "LOFI") for _i, pn in presets)
           and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
-          "registry: @family per-preset tunables (15 presets x 13 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / AIR, Stepped on LOFI only; per-target sources LFO except BRASS / SYNC timbre = env)")
+          "registry: @family per-preset tunables (15 presets x 13 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / AIR, Stepped on LOFI only; LFO + env depths per target, env only on BRASS / SYNC timbre)")
     check(byn["EXP_TB_VOCAL_RES"]["default"] == 0.7 and byn["EXP_TB_SAW_RES"]["default"] == 1.5
           and all(byn["EXP_TB_%s_RES" % pn]["unit"] == "Q"
               and byn["EXP_TB_%s_RES" % pn]["taper"] == "log" and byn["EXP_TB_%s_RES" % pn]["target"] == "filter"
@@ -1479,8 +1480,7 @@ def selftest():
     check(tids and all(k["target"] in tids + [""] for b in js["layout"]["benches"] for m in b["modes"]
                        for k in m.get("knobs", []))
           and all(c["target"] in tids + [""] for c in js["constants"])
-          and all(next(c for c in js["constants"] if c["name"] == "EXP_TB_SAW_%s_ENV" % t)["states"] == ["LFO", "env"]
-                  for t in ("TIMBRE", "FILTER", "PITCH")),
+          and next(c for c in js["constants"] if c["name"] == "EXP_TB_SAW_LOFI")["states"] == ["off", "on"],
           "/api/registry: targets, knob strips, per-constant @target / @states")
     check(st == 200 and all(c["value"] == c["default"] for c in js["constants"])
           and {"label", "unit", "range", "taper", "level", "file", "line", "section", "module"} <= set(c0),

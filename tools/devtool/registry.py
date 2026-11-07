@@ -241,10 +241,10 @@ LABELS = {
     "EXP_SPEC_MORPH_ZONE": "Noon blend zone", "EXP_SPEC_DYN_FLOOR_DB": "Level floor", "EXP_SPEC_DYN_TOP_DB": "Level top",
     "EXP_SPEC_DYN_GATE_DB": "Swell gate", "EXP_SPEC_DYN_REL_FRAC": "Mute damping", "EXP_ENV_TRAVEL_TAUS": "Swell curve",
 }
-FIELD_LABELS = {"TIMBRE": "Mod → timbre", "STEPPED": "K2 stepped", "TIMBRE_ENV": "Timbre mod by",
-                "FILTER": "Mod → filter, pluck", "FILTER_SWELL": "Mod → filter, swell", "RES": "Resonance (Q)",
-                "FILTER_TOUCH": "Touch env → filter", "FILTER_ENV": "Filter mod by",
-                "PITCH": "Mod → pitch (vibrato)", "PITCH_ENV": "Pitch mod by",
+FIELD_LABELS = {"TIMBRE": "Timbre ← LFO", "TIMBRE_ENV": "Timbre ← env", "STEPPED": "K2 stepped",
+                "FILTER": "Filter ← LFO, pluck", "FILTER_SWELL": "Filter ← LFO, swell", "FILTER_ENV": "Filter ← env",
+                "RES": "Resonance (Q)", "FILTER_TOUCH": "Touch env → filter",
+                "PITCH": "Pitch ← LFO", "PITCH_ENV": "Pitch ← env",
                 "RATE_CCW": "LFO max, CCW", "RATE_CW": "LFO max, CW", "LOFI": "Lofi engine"}
 
 

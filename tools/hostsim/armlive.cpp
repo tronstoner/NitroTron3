@@ -239,7 +239,7 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
     snprintf(env, sizeof env, "%s lfo %s d%.2f >%.2f %.2fHz", te, lfo, d.lfod, d.llfd, d.lfohz);
   else if (d.sw1 == 0 || d.addz >= 0)
     snprintf(env, sizeof env, "%s fce %d lfo %s d%.2f %.2fHz", te, (int)(d.fce + 0.5f), lfo, d.lfod, d.lfohz);
-  else if (d.tbz >= 0 && d.tsrc == 7)                      // audition bank, all targets on env: K5 does nothing
+  else if (d.tbz >= 0 && (d.tsrc & 56) == 0)                      // audition bank, no LFO depth on any target: K5 does nothing
     snprintf(env, sizeof env, "%s lfo -", te);
   else if (d.sw1 == 1)
     snprintf(env, sizeof env, "%s lfo %s d%.2f %.2fHz", te, lfo, d.lfod, d.lfohz);
@@ -283,8 +283,8 @@ static std::string ExplorerDiagLine(const Explorer::DiagSnap& d) {
       if (d.ttb > 0.f) snprintf(tb, sizeof tb, "%.2f", d.ttb); else snprintf(tb, sizeof tb, "off");
       snprintf(lf, sizeof lf, " sb %s sr %s tb %s ti %.2f", sb, sr, tb, d.tti);
     }
-    snprintf(mod, sizeof mod, " src %c%c%c td %.2f fd %.2f fs %.2f pd %d ft %.2f", (d.tsrc & 1) ? 'E' : 'L',
-             (d.tsrc & 2) ? 'E' : 'L', (d.tsrc & 4) ? 'E' : 'L', d.ttd, d.tfd, d.tfs,
+    snprintf(mod, sizeof mod, " src %c%c%c td %.2f fd %.2f fs %.2f pd %d ft %.2f", Explorer::DiagSnap::SrcChar(d.tsrc, 0),
+             Explorer::DiagSnap::SrcChar(d.tsrc, 1), Explorer::DiagSnap::SrcChar(d.tsrc, 2), d.ttd, d.tfd, d.tfs,
              (int)(d.tpd + 0.5f), d.tft);
     snprintf(line, sizeof line, "tab %d/%d %s %s k2 %.2f%s lofi %d stp %d%s%s lp %d eff %d%s mute %s", d.tbz + 1,
              explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), d.b, kp, d.tlf ? 1 : 0, d.tstp ? 1 : 0, lf, mod,
@@ -793,7 +793,7 @@ int main(int argc, char** argv) {
                  ",\"fc\":" + N(x.fc) + ",\"lfe\":" + N(x.lfe) + ",\"dfc\":" + N(x.dfc) +
                  ",\"tbz\":" + std::to_string(x.tbz) + ",\"tbk\":" + json::Esc(x.tbz >= 0 ? Explorer::TbKindName(x.tbk) : "") +
                  ",\"tq\":" + N(x.tq) + ",\"tm\":" + N(x.tm) +
-                 ",\"tsrc\":\"" + std::string(1, (x.tsrc & 1) ? 'E' : 'L') + ((x.tsrc & 2) ? 'E' : 'L') + ((x.tsrc & 4) ? 'E' : 'L') + "\"" +
+                 ",\"tsrc\":\"" + std::string(1, Explorer::DiagSnap::SrcChar(x.tsrc, 0)) + Explorer::DiagSnap::SrcChar(x.tsrc, 1) + Explorer::DiagSnap::SrcChar(x.tsrc, 2) + "\"" +
                  ",\"ttd\":" + N(x.ttd) + ",\"tfd\":" + N(x.tfd) + ",\"tfs\":" + N(x.tfs) + ",\"tpd\":" + N(x.tpd) + ",\"tft\":" + N(x.tft) +
                  ",\"tdst\":" + std::to_string(x.tdst) + ",\"tnst\":" + std::to_string(x.tnst) +
                  ",\"tlf\":" + std::string(x.tlf ? "true" : "false") + ",\"tstp\":" + std::string(x.tstp ? "true" : "false") +

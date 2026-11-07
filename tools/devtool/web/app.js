@@ -1347,11 +1347,11 @@ function fieldOf(c) { return c.name.slice(c.name.indexOf(c.preset + "_") + c.pre
 // ---------------------------------------------------------------------------
 // Preset editor (registry @family): ONE preset at a time. A row of preset names on top; by default it
 // follows the pedal's K1 preset ("Follow K1"); clicking a name pins that preset. Below: only that preset's
-// values, grouped by target (timbre / filter / pitch knobs, LFO rates as a CCW / CW fader pair, source switch).
+// values, grouped by target (LFO and env depth knobs per target, LFO rates as a CCW / CW fader pair).
 // ---------------------------------------------------------------------------
 const PRESET_GROUPS = [
   { title: "Timbre (K2)", target: "timbre", fields: ["TIMBRE", "TIMBRE_ENV", "STEPPED"] },
-  { title: "Filter (K3)", target: "filter", fields: ["FILTER", "FILTER_SWELL", "RES", "FILTER_TOUCH", "FILTER_ENV"] },
+  { title: "Filter (K3)", target: "filter", fields: ["FILTER", "FILTER_SWELL", "FILTER_ENV", "FILTER_TOUCH", "RES"] },
   { title: "Pitch", target: "pitch", fields: ["PITCH", "PITCH_ENV"] },
   { title: "LFO speed (K5)", target: "pitch", fields: ["RATE_CCW", "RATE_CW"], faders: true },
   { title: "Lofi", target: "lofi", fields: ["LOFI"] },

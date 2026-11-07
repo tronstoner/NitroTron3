@@ -287,7 +287,7 @@ int main() {
                    " fce %d lfo %s d" D2F " " D2F "Hz",
                    D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so), (int)(d.fce + 0.5f),
                    d.lfo == 1 ? "tri" : d.lfo == 2 ? "stp" : "off", D2V(d.lfod), D2V(d.lfohz));
-        else if (d.tbz >= 0 && d.tsrc == 7)                   // SW1 MID audition bank, all targets on env: K5 does nothing
+        else if (d.tbz >= 0 && (d.tsrc & 56) == 0)                   // SW1 MID audition bank, no LFO depth on any target: K5 does nothing
           snprintf(env, sizeof(env), " gd" D2F " Td" D2F " gr" D2F " Tr" D2F " w" D2F " L" D2F " o" D2F " lfo -",
                    D2V(d.sgd), D2V(d.sTd), D2V(d.sgr), D2V(d.sTr), D2V(d.sw), D2V(d.sL), D2V(d.so));
         else if (d.sw1 == 1)                                  // SW3 MID, SW1 MID: the same without fce (= eff)
@@ -346,7 +346,7 @@ int main() {
           char qs[16];                                        // the LP Q this preset sets (RES / ANALOG K2 Q), compact
           DiagCompact(qs, sizeof qs, d.tres);
           snprintf(mod, sizeof mod, " src %c%c%c td" D2F " fd" D2F " fs" D2F " q %s pd %d ft" D2F,
-                   (d.tsrc & 1) ? 'E' : 'L', (d.tsrc & 2) ? 'E' : 'L', (d.tsrc & 4) ? 'E' : 'L',
+                   Explorer::DiagSnap::SrcChar(d.tsrc, 0), Explorer::DiagSnap::SrcChar(d.tsrc, 1), Explorer::DiagSnap::SrcChar(d.tsrc, 2),
                    D2V(d.ttd), D2V(d.tfd), D2V(d.tfs), qs, (int)(d.tpd + 0.5f), D2V(d.tft));
           diag_link::PrintLine("tab %d/%d %s %s k2" D2F "%s lofi %d stp %d%s%s lp %d eff %d%s mute %d cpu %u%%",
                             d.tbz + 1, explorer_k::EXP_TB_ZONES, zn, Explorer::TbKindName(d.tbk), D2V(d.b), kp,
