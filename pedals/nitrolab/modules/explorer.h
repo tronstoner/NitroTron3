@@ -337,8 +337,8 @@
 //
 // CONTROL MAP SW3 MID (Explorer(false))
 //   K1  selection    SW1 UP: FM ratio zone (14 EXP_FM_RATIOS) | XBAND at full CW; MID: audition bank preset (16,
-//                    stepped, 1 ms crossfade: SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY
-//                    AIR | LOFI; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
+//                    stepped, 1 ms crossfade: SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL
+//                    | LOFI; legacy: table zone, 10); DOWN: model (harmonics / freq shift / interval)
 //   K2  tone         UP: feedback b 0 -> 1.5 (XBAND: inert); MID: timbre = morph m 0..1 (smoothed, continuous) through
 //                    the preset's frames, ANALOG presets: LP resonance Q 0.3 -> 3;
 //                    stepped through the key stages with the preset's Stepped flag (EXP_TB_<NAME>_STEPPED, TbDiscMorph)
@@ -418,7 +418,7 @@
 //   interpolation of the two stages' magnitudes (EXP_TB_JOURNEY_FLOOR_DB). Per frame also a tonal gain
 //   (explorer_tb_tone), read at the morph position (Derive, linear between the two frames). A preset with share >= 0
 //   reads another preset's frames (no own build / storage).
-//   KINDS  LFO      PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY AIR: K2 = TIMBRE = morph
+//   KINDS  LFO      PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL: K2 = TIMBRE = morph
 //          ANALOG   SAW PULSE (1 frame): K2 = LP Q (TfUpdate / TabFilter)
 //          LOFI     LOFI (the 31-frame LOFI SPECTRA table): K2 = morph; Lofi + Stepped flags on by default
 //          (JOURNEY - K5 = direction + speed of a morph travel - was removed 2026-11-06; its presets are LFO presets.)
@@ -452,7 +452,7 @@
 //          (stage positions, not the in-between frames; a stage between two frames reads their blend), each step a
 //          linear slide over EXP_DISC_SLIDE_MS. LFO / LOFI: the K2 base = the key stage of K2's equal zone (raw knob),
 //          the MOD timbre offset swings around it; ANALOG: none (1 frame, K2 = Q).
-//   K1 order SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL GLASS RASPY AIR | LOFI.
+//   K1 order SAW PULSE PWM SYNC VOCAL WOOD REED BRASS ORGAN PPG METAL | LOFI.
 //   LOFI   (2026-11-06; replaces the per-band LOFI mode of 57f7bfc and the four BITS / RATE / TABLE / TBITS presets;
 //          laws: explorer_constants.h EXP_TB_LOFI_*, the "Lofi engine": global values, run on every preset whose Lofi
 //          flag EXP_TB_<NAME>_LOFI is on - default LOFI only). All four stages together, each skipped at its bypass value:

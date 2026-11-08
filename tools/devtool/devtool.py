@@ -1250,16 +1250,16 @@ def selftest():
                 "File downloaded successfully\\n') if 'program-dfu' in sys.argv else None")
         return [sys.executable, "-c", code] + list(args)
 
-    # 0) wavetables: the real tbdump (built if missing / stale), JSON, 15 presets, frame counts = EXP_TB_PRESETS
+    # 0) wavetables: the real tbdump (built if missing / stale), JSON, 12 presets, frame counts = EXP_TB_PRESETS
     tables = Tables()
     tres = tables.get()
     check(tres.get("ok") is True, "tables: tbdump builds + runs (%s)" % (tres.get("reason") or "%d ms" % tres.get("ms", 0)))
     tdata = tres.get("data") or {}
     tpres = tdata.get("presets") or []
-    check(len(tpres) == 15, "tables: 15 presets")
+    check(len(tpres) == 12, "tables: 12 presets")
     with open(os.path.join(REPO, "pedals", "nitrolab", "modules", "explorer_tables.h")) as fh:
         rows = re.findall(r'^\s*\{\s*"(\w+)",\s*kTb\w+,\s*(\d+),', fh.read(), re.M)
-    check(len(rows) == 15 and [(p["name"], p["frames"]) for p in tpres] == [(n, int(f)) for n, f in rows]
+    check(len(rows) == 12 and [(p["name"], p["frames"]) for p in tpres] == [(n, int(f)) for n, f in rows]
           and all(len(p["waves"]) == p["frames"] and all(len(w) == tdata.get("size") for w in p["waves"])
                   for p in tpres), "tables: names / frame counts match EXP_TB_PRESETS, waves complete")
     check(tables.get() is tres, "tables: cached for the same HEAD / explorer*.h state")
@@ -1423,20 +1423,21 @@ def selftest():
             mrow = re.match(r'^\s*\{\s*"(\w+)"\s*,\s*kTb', ln)
             if mrow:
                 rows[mrow.group(1)] = n
-    check(len(presets) == 15 and len(fam) == 15 * 14
+    check(len(presets) == 12 and len(fam) == 12 * 14
           and byn["EXP_TB_SAW_FILTER"]["default"] == 2.6 and byn["EXP_TB_WOOD_TIMBRE"]["default"] == 0.15
-          and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] == {("BRASS", "TIMBRE"): 0.178, ("SYNC", "TIMBRE"): 0.577}.get((pn, t), 0.0)
+          and all(byn["EXP_TB_%s_%s_ENV" % (pn, t)]["default"] == {("BRASS", "TIMBRE"): 0.178, ("SYNC", "TIMBRE"): 0.577, ("ORGAN", "TIMBRE"): 0.125,
+                                                                    ("PPG", "TIMBRE"): 0.3, ("METAL", "TIMBRE"): 0.538, ("LOFI", "TIMBRE"): 0.06}.get((pn, t), 0.0)
                   and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["type"] == "float" and byn["EXP_TB_%s_%s_ENV" % (pn, t)]["target"] == t.lower()
                   for _i, pn in presets for t in ("TIMBRE", "PITCH"))
           and "EXP_TB_SAW_FILTER_ENV" not in byn
-          and all(byn["EXP_TB_%s_BORDER" % pn]["default"] is False and byn["EXP_TB_%s_LAND" % pn]["default"] is False
+          and all(byn["EXP_TB_%s_BORDER" % pn]["default"] is (pn in ("ORGAN", "PPG", "METAL", "LOFI")) and byn["EXP_TB_%s_LAND" % pn]["default"] is False
                   and byn["EXP_TB_%s_BORDER" % pn]["states"] == ["clamp", "mirror"] and byn["EXP_TB_%s_LAND" % pn]["target"] == "timbre"
                   for _i, pn in presets)
-          and "EXP_TB_SAW_ENV" not in byn and byn["EXP_TB_AIR_PITCH"]["default"] == 15.0
-          and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn in ("SAW", "PULSE", "VOCAL", "AIR")) for _i, pn in presets)
+          and "EXP_TB_SAW_ENV" not in byn and byn["EXP_TB_METAL_PITCH"]["default"] == 15.0
+          and all(byn["EXP_TB_%s_LOFI" % pn]["default"] is (pn in ("SAW", "PULSE", "VOCAL", "PPG")) for _i, pn in presets)
           and all(byn["EXP_TB_%s_STEPPED" % pn]["default"] is (pn == "LOFI") for _i, pn in presets)
           and byn["EXP_TB_SAW_STEPPED"]["states"] == ["smooth", "stepped"] and byn["EXP_TB_SAW_LOFI"]["target"] == "lofi",
-          "registry: @family per-preset tunables (15 presets x 14 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / AIR, Stepped on LOFI only; LFO + env depths on timbre / pitch, env only on BRASS / SYNC timbre; Border / Land off)")
+          "registry: @family per-preset tunables (12 presets x 14 fields, defaults from the EXP_TB_MOD rows; Lofi on SAW / PULSE / VOCAL / PPG, Stepped on LOFI only; LFO + env depths on timbre / pitch, timbre env on BRASS / SYNC / ORGAN / PPG / METAL / LOFI; Border mirror on ORGAN / PPG / METAL / LOFI; Land off)")
     check(byn["EXP_TB_VOCAL_RES"]["default"] == 0.7 and byn["EXP_TB_SAW_RES"]["default"] == 1.5
           and all(byn["EXP_TB_%s_RES" % pn]["unit"] == "Q"
               and byn["EXP_TB_%s_RES" % pn]["taper"] == "log" and byn["EXP_TB_%s_RES" % pn]["target"] == "filter"
@@ -1444,7 +1445,7 @@ def selftest():
               for _i, pn in presets)
           and all(c["inert"] is None for c in fam if not c["name"].endswith("_RES")),
           "registry: RES per preset (from the rows, Q, log, filter), @inert on the ANALOG presets only")
-    check(len(rows) == 15 and all(c["line"] == rows[c["preset"]] for c in fam),
+    check(len(rows) == 12 and all(c["line"] == rows[c["preset"]] for c in fam),
           "registry: family constants' line = the preset's EXP_TB_PRESETS row")
     check(all(c["why"] for c in reg["constants"] if c["range"])
           and byn["EXP_PS_DEC_FAST_S"]["below"] == "EXP_PS_DEC_SLOW_S" and byn["EXP_SPEC_DYN_FLOOR_DB"]["below"] == "EXP_SPEC_DYN_TOP_DB"
