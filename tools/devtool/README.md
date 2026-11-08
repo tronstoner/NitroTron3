@@ -87,8 +87,16 @@ from the pedal) and `terr` (a `T ERR` line).
 - **`tune/changes.json`** (gitignored): rewritten on every change - pedal,
   firmware, HEAD, time, note, guard, and per changed constant name, file, line,
   default text, value, unit. devtool never edits source files; the agent
-  applies the file. When a re-sync would drop a non-empty record (e.g. after a
-  flash), the old file is kept in `tune/history/`.
+  applies the file.
+- **Carry-over** (after every re-sync: flash, reconnect, power cycle): the
+  previous file's unapplied tunings are sent to the pedal again when their
+  compiled default is unchanged, so they stay live and in the file. Dropped:
+  a tuning whose default changed since (applied / edited in code) or whose
+  constant is gone; the previous file is then kept in `tune/history/`. While
+  `set` is blocked (firmware != HEAD, uncommitted constants) nothing is sent
+  and the file is held as it was; turning the override on archives it to
+  `tune/history/` before the first rewrite. The page log says "carried over
+  N tuning(s), dropped M".
 
 ## Flash flow (only on a click, one at a time)
 

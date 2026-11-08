@@ -29,7 +29,13 @@
     SSE: tun (snapshot), tval (a value echo from the pedal), terr (pedal error).
     tune/changes.json is rewritten on every change (changed constants vs the
     compiled defaults + the note), for the agent to apply to the constants files;
-    a previous non-empty file that a re-sync would drop is kept in tune/history/.
+    Carry-over: after a (re)sync (flash, reconnect, power cycle) the unapplied
+    tunings of the previous changes.json are sent to the pedal again (the `set`
+    path) when their compiled default is unchanged; tunings whose default changed
+    (applied / edited) or whose constant is gone are dropped, and the previous file
+    is then kept in tune/history/. While `set` is blocked (guard) nothing is sent
+    and changes.json is held as it was (with the override on, it is archived to
+    tune/history/ before the first rewrite).
 
   tools/devtool/devtool.py              run it (Ctrl-C quits)
     Self-restart: when its own Python code changes (devtool.py, registry.py,
@@ -109,6 +115,7 @@ TUNE_DIR = os.path.join(REPO, "tune")
 SEND_MIN_S = 1.0 / 30.0   # throttle: at most ~30 command writes per second
 LIST_TIMEOUT_S = 2.0      # no `T END` after this -> ask once more, then give up
 CHANGES_WRITE_S = 0.25    # tune/changes.json at most this often (last change always lands)
+CARRY_ECHO_S = 3.0        # carried-over tunings: changes.json waits this long for the pedal's echoes
 T_VAL_RE = re.compile(r"^T (\S+) ([fib]) (\S+)$")
 T_END_RE = re.compile(r"^T END (\d+)$")
 T_ERR_RE = re.compile(r"^T ERR (.*)$")
@@ -348,6 +355,9 @@ class Tuner:
         self.changes_due = False
         self.changes_at = 0.0
         self.resync_archive = False
+        self.hold_record = False         # carry-over blocked by the guard: changes.json held as it was
+        self.carry_left = {}             # carried name -> value, until the pedal echoes it
+        self.carry_at = 0.0
         self._load_registry(self.pedal)
         self._compute_guard()
 
@@ -404,6 +414,7 @@ class Tuner:
             self.values = {}
             self.fw_names = None
             self.pending.clear()
+            self.carry_left = {}
             self.state = "asking"
             self.list_tries = 0
             self._ask_list()
@@ -415,6 +426,7 @@ class Tuner:
             self.state = "offline"
             self.firmware = None
             self.pending.clear()
+            self.carry_left = {}
             self._compute_guard()
         self.publish()
 
@@ -444,6 +456,8 @@ class Tuner:
                 return False
             with self.lock:
                 self.values[name] = v
+                if name in self.carry_left and self._same(self.by_name.get(name), self.carry_left[name], v):
+                    del self.carry_left[name]
                 if self.state == "asking":
                     self.list_seen.append(name)
                 self.changes_due = True
@@ -455,9 +469,9 @@ class Tuner:
                 if self.state in ("asking", "no-answer"):
                     self.fw_names = list(self.list_seen)
                     self.state = "synced"
-                    self.resync_archive = True
                     self.changes_due = True
                     self._compute_guard()
+                    self._carry_over()
             self.publish()
             return True
         m = T_ERR_RE.match(text)
@@ -490,6 +504,62 @@ class Tuner:
                 self.changes_due = False
                 self.changes_at = now
                 self._write_changes()
+
+    # ---- carry-over of unapplied tunings (serial thread, lock held) -----------
+    def _same(self, c, a, b):
+        if c is None or a is None or b is None:
+            return False
+        try:
+            if c["type"] == "float":
+                return f32(float(a)) == f32(float(b))
+            if c["type"] == "bool":
+                return bool(a) == bool(b)
+            return int(a) == int(b)
+        except (TypeError, ValueError):
+            return False
+
+    def _log(self, msg):
+        self.hub.publish("line", {"t": now_ms(self.clock()), "text": "devtool: " + msg})
+
+    def _carry_over(self):
+        """Right after a full `list`: send the previous changes.json's unapplied tunings back to the pedal.
+        Carried: compiled default unchanged since the tuning was made. Dropped: default changed (applied /
+        edited in code) or the constant is gone / not live. Blocked guard: nothing sent, the file held."""
+        self.hold_record = False
+        self.resync_archive = False
+        try:
+            with open(os.path.join(self.tune_dir, "changes.json")) as f:
+                entries = json.load(f).get("changes") or []
+        except (OSError, ValueError, AttributeError):
+            entries = []
+        if not entries:
+            return
+        if not self.writable():
+            self.hold_record = True
+            self._log("%d unapplied tuning(s) kept in changes.json, not sent (changes blocked: %s)"
+                      % (len(entries), "; ".join(self.guard["reasons"] or [self.state])))
+            return
+        carried, dropped = 0, []
+        for x in entries:
+            name = x.get("name") if isinstance(x, dict) else None
+            c = self.by_name.get(name)
+            if (c is None or (self.fw_names is not None and name not in self.fw_names)
+                    or not self._same(c, x.get("default"), c["default"])):
+                dropped.append(str(name))
+                continue
+            if self._same(c, x.get("value"), self.values.get(name)):
+                carried += 1             # already on the pedal (plain reconnect)
+                continue
+            code, why = self.request_set(name, x.get("value"))
+            if code == 202:
+                carried += 1
+                self.carry_left[name] = x.get("value")
+            else:
+                dropped.append("%s (%s)" % (name, why))
+        self.carry_at = self.clock()
+        self.resync_archive = bool(dropped)
+        self._log("carried over %d tuning(s), dropped %d%s" % (
+            carried, len(dropped), (": " + ", ".join(dropped[:6]) + (", ..." if len(dropped) > 6 else "")) if dropped else ""))
 
     # ---- requests (HTTP threads) -------------------------------------------
     def request_set(self, name, value):
@@ -589,6 +659,7 @@ class Tuner:
         with self.lock:
             self.override = bool(on)
             self._compute_guard()
+            self.changes_due = True      # a held record (carry-over blocked) is archived + rewritten now
         self.publish()
 
     # ---- state out -------------------------------------------------------------
@@ -617,20 +688,28 @@ class Tuner:
         except OSError:
             return
         path = os.path.join(self.tune_dir, "changes.json")
+        if self.hold_record:
+            if not self.writable():
+                return                   # blocked: the unapplied record stays as it was
+            self.hold_record = False     # override on: keep the held record before rewriting it
+            self.resync_archive = True
+        if self.carry_left:
+            if self.clock() - self.carry_at < CARRY_ECHO_S:
+                self.changes_due = True  # carried sets not echoed yet: write once they are
+                return
+            self._log("carry-over: no echo for %s" % ", ".join(sorted(self.carry_left)[:6]))
+            self.carry_left = {}
         changes = self._changes()
         if self.resync_archive:
-            # after a (re)connect the pedal is the truth; keep an older record it would drop
+            # tunings were dropped by the carry-over (or a held record is rewritten): keep the previous file
             self.resync_archive = False
             try:
-                with open(path) as f:
-                    old = json.load(f)
-                old_ch = [(x.get("name"), x.get("value")) for x in old.get("changes", [])]
-                if old_ch and old_ch != [(x["name"], x["value"]) for x in changes]:
+                if os.path.exists(path):
                     hist = os.path.join(self.tune_dir, "history")
                     os.makedirs(hist, exist_ok=True)
                     shutil.copyfile(path, os.path.join(
                         hist, "changes-%s.json" % time.strftime("%Y%m%d-%H%M%S", time.localtime(self.clock()))))
-            except (OSError, ValueError, AttributeError, TypeError):
+            except OSError:
                 pass
         doc = {
             "about": "Live constant changes made with tools/devtool (docs/DEV_INTERFACE.md): every constant whose "
@@ -1583,26 +1662,78 @@ def selftest():
     st, _ = post("/api/set", {"name": name, "value": 31})
     check(st == 409, "set refused while offline")
 
-    # 4b) the pedal comes back flashed (all defaults): re-sync from `list`, old record archived
-    pedal["vals"] = fresh_values()
-    with ev_lock:
-        events.clear()
-    m2, s2 = os.openpty()
-    dev["path"] = os.ttyname(s2)
-    pstop2 = threading.Event()
-    threading.Thread(target=pedal_pump, args=(m2, pstop2), daemon=True).start()
-    check(has("tun", lambda d: d.get("state") == "synced"
-              and all(c["value"] == c["default"] for c in d["constants"])), "reconnect: re-synced to defaults")
-    check(wait_for(lambda: (changes_file() or {}).get("changes") == []), "reconnect: changes.json now empty")
+    # 4b) carry-over: the pedal comes back flashed (all defaults); the previous changes.json's unapplied tunings
+    #     are sent again when their default is unchanged; changed default / unknown name -> dropped + archived
+    def connect():
+        with ev_lock:
+            events.clear()
+        m, s_ = os.openpty()
+        dev["path"] = os.ttyname(s_)
+        stop = threading.Event()
+        threading.Thread(target=pedal_pump, args=(m, stop), daemon=True).start()
+        return m, s_, stop
+
+    def disconnect(conn):
+        m, s_, stop = conn
+        stop.set()
+        dev["path"] = None
+        os.close(m)
+        os.close(s_)
+        check(has("status", lambda d: d.get("connected") is False), "pedal gone")
+
     hist = os.path.join(tune_dir, "history")
-    check(os.path.isdir(hist) and len(os.listdir(hist)) == 1, "reconnect: previous changes kept in tune/history/")
+    nhist = lambda: len(os.listdir(hist)) if os.path.isdir(hist) else 0
+    rec = changes_file()
+    old = {x["name"]: x for x in rec["changes"]}
+    keep = sorted(n for n in old if n != "EXP_LFO_HZ_MIN")
+    check("EXP_LFO_HZ_MIN" in old and "EXP_LFO_HZ_MAX" in keep, "carry: previous record has the test tunings")
+    for x in rec["changes"]:
+        if x["name"] == "EXP_LFO_HZ_MIN":
+            x["default"] = 999.0                       # its default 'changed' since (applied / edited)
+    rec["changes"].append({"name": "EXP_GONE_CONSTANT", "default": 1.0, "value": 2.0})
+    with open(os.path.join(tune_dir, "changes.json"), "w") as f:
+        json.dump(rec, f)
+    h0 = nhist()
+    pedal["vals"] = fresh_values()
+    n0 = len(pedal["sets"])
+    conn = connect()
+    check(wait_for(lambda: all(app.tuner._same(byname[n], pedal["vals"][n], old[n]["value"]) for n in keep)),
+          "carry: unchanged-default tunings sent to the flashed pedal")
+    check(pedal["vals"]["EXP_LFO_HZ_MIN"] == byname["EXP_LFO_HZ_MIN"]["default"], "carry: changed default dropped (not sent)")
+    check(has("line", lambda d: d["text"].startswith("devtool: carried over %d tuning(s), dropped 2" % len(keep))),
+          "carry: log line (carried / dropped)")
+    check(wait_for(lambda: sorted(x["name"] for x in (changes_file() or {}).get("changes", [])) == keep),
+          "carry: changes.json = the carried tunings")
+    check(nhist() == h0 + 1, "carry: previous record archived when something was dropped")
+    disconnect(conn)
+    # plain reconnect (values still on the pedal): nothing sent, nothing archived
+    n1 = len(pedal["sets"])
+    conn = connect()
+    check(has("line", lambda d: d["text"].startswith("devtool: carried over %d tuning(s), dropped 0" % len(keep))),
+          "carry: plain reconnect logged")
+    check(len(pedal["sets"]) == n1 and nhist() == h0 + 1, "carry: plain reconnect sends / archives nothing")
+    disconnect(conn)
+    # blocked guard: nothing sent, changes.json held; the override archives it before the first rewrite
+    with open(os.path.join(tune_dir, "changes.json")) as f:
+        held = f.read()
+    head["h"] = "fff0000"
+    pedal["vals"] = fresh_values()
+    n2 = len(pedal["sets"])
+    conn = connect()
+    check(has("line", lambda d: "not sent (changes blocked" in d["text"]), "carry: blocked guard logged")
+    time.sleep(0.6)
+    with open(os.path.join(tune_dir, "changes.json")) as f:
+        check(f.read() == held and len(pedal["sets"]) == n2, "carry: blocked -> nothing sent, changes.json held")
+    post("/api/override", {"on": True})
+    check(wait_for(lambda: nhist() == h0 + 2 and (changes_file() or {}).get("changes") == []),
+          "carry: override -> held record archived, then rewritten")
+    post("/api/override", {"on": False})
+    head["h"] = "abc1234"
+    with app.tuner.lock:
+        app.tuner._compute_guard()
     st, _ = post("/api/reset", {"name": "all"})
     check(st == 202, "reset all accepted")
-    pstop2.set()
-    dev["path"] = None
-    os.close(m2)
-    os.close(s2)
-    check(has("status", lambda d: d.get("connected") is False), "fresh pedal gone again")
+    disconnect(conn)
 
     # 5) flash without a pedal -> gesture prompt, then DFU appears
     pedal["dfu"] = False
